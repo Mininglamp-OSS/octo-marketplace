@@ -654,25 +654,17 @@ components:
           type: string
         file_name:
           type: string
-        file_sha256:
-          type: string
         file_size:
           type: integer
-        file_url:
-          type: string
         icon_url:
           type: string
         name:
-          type: string
-        owner_id:
           type: string
         owner_name:
           type: string
         readme_content:
           type: string
         skill_id:
-          type: string
-        space_id:
           type: string
         tags:
           items:

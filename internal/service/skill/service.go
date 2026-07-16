@@ -52,18 +52,21 @@ type SkillItem struct {
 	Description   string          `json:"description"`
 	CategoryID    string          `json:"category_id"`
 	Tags          json.RawMessage `json:"tags"`
-	OwnerID       string          `json:"owner_id"`
 	OwnerName     string          `json:"owner_name"`
-	SpaceID       string          `json:"space_id"`
 	Visibility    string          `json:"visibility"`
 	Version       string          `json:"version"`
 	ReadmeContent string          `json:"readme_content,omitempty"`
 	FileName      string          `json:"file_name"`
-	FileURL       string          `json:"file_url"`
 	FileSize      int64           `json:"file_size"`
-	FileSHA256    string          `json:"file_sha256"`
 	CreatedAt     string          `json:"created_at"`
 	UpdatedAt     string          `json:"updated_at"`
+
+	// Internal authorization and storage metadata. These fields are required
+	// by download handlers but must never be serialized in catalog responses.
+	OwnerID    string `json:"-"`
+	SpaceID    string `json:"-"`
+	FileURL    string `json:"-"`
+	FileSHA256 string `json:"-"`
 }
 
 // ListResult holds paginated skill items.

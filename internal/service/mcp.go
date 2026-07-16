@@ -52,10 +52,11 @@ type Caller struct {
 
 // Service implements the MCP catalog operations.
 type Service struct {
-	store   Store
-	now     func() time.Time
-	icons   IconStore
-	iconCfg IconConfig
+	store             Store
+	now               func() time.Time
+	icons             IconStore
+	iconCfg           IconConfig
+	probeAllowPrivate bool
 }
 
 // IconStore is the object-storage surface the icon upload needs. *blob.S3Client
@@ -77,6 +78,13 @@ type IconConfig struct {
 // New returns a Service backed by store. The clock is injectable for tests.
 func New(store Store) *Service {
 	return &Service{store: store, now: time.Now}
+}
+
+// WithProbeAllowPrivate permits MCP probes to reach private network targets.
+// It is intended only for trusted, self-hosted deployments and defaults false.
+func (s *Service) WithProbeAllowPrivate(allow bool) *Service {
+	s.probeAllowPrivate = allow
+	return s
 }
 
 // WithIconStore attaches the object-storage uploader + layout so POST

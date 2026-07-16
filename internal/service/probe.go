@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -95,7 +96,7 @@ func (s *Service) Probe(ctx context.Context, req ProbeRequest) (ProbeResponse, *
 		return ProbeResponse{}, apierr.ProbeUnsupported(
 			"stdio probing must run in the local runtime; the marketplace server does not spawn user commands")
 	}
-	endpoint, apiErr := validateProbeURL(req.URL)
+	endpoint, apiErr := validateProbeURL(req.URL, s.probeAllowPrivate)
 	if apiErr != nil {
 		return ProbeResponse{}, apiErr
 	}
@@ -103,8 +104,9 @@ func (s *Service) Probe(ctx context.Context, req ProbeRequest) (ProbeResponse, *
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
+	client := newProbeHTTPClient(s.probeAllowPrivate)
 	sess := &probeSession{
-		client:    &http.Client{Timeout: probeTimeout},
+		client:    client,
 		url:       endpoint,
 		headers:   sanitizedHeaders(req.Headers),
 		transport: req.Transport,
@@ -151,13 +153,10 @@ func (s *Service) Probe(ctx context.Context, req ProbeRequest) (ProbeResponse, *
 	}, nil
 }
 
-// validateProbeURL rejects non-http(s) schemes so the probe cannot be used to
-// hit file://, gopher://, or other unsafe destinations. Deeper SSRF filtering
-// (private CIDRs, link-local) is intentionally NOT applied in v1 because
-// self-hosted deployments legitimately point at internal RFC1918 MCP servers.
-// Add stricter filtering if/when the marketplace runs in a shared-hosting
-// posture.
-func validateProbeURL(raw string) (string, *apierr.Error) {
+// validateProbeURL rejects unsafe schemes, credentials, and literal private
+// addresses. Hostnames are resolved and checked by the transport immediately
+// before dialing so DNS rebinding cannot bypass the policy.
+func validateProbeURL(raw string, allowPrivate bool) (string, *apierr.Error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", apierr.InvalidRequest("url is required for remote transports",
@@ -174,7 +173,65 @@ func validateProbeURL(raw string) (string, *apierr.Error) {
 		return "", apierr.InvalidRequest("url must be http or https",
 			apierr.Detail{Field: "url", Reason: "scheme"})
 	}
+	if u.User != nil {
+		return "", apierr.InvalidRequest("url must not include credentials",
+			apierr.Detail{Field: "url", Reason: "credentials"})
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil && !allowPrivate && isUnsafeProbeIP(ip) {
+		return "", apierr.InvalidRequest("url targets a private or local network address",
+			apierr.Detail{Field: "url", Reason: "private_address"})
+	}
 	return u.String(), nil
+}
+
+func newProbeHTTPClient(allowPrivate bool) *http.Client {
+	dialer := &net.Dialer{Timeout: probeTimeout, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, fmt.Errorf("invalid probe address: %w", err)
+			}
+			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, fmt.Errorf("resolve probe host: %w", err)
+			}
+			for _, ip := range ips {
+				if !allowPrivate && isUnsafeProbeIP(ip) {
+					continue
+				}
+				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				if dialErr == nil {
+					return conn, nil
+				}
+				err = dialErr
+			}
+			if !allowPrivate {
+				return nil, errors.New("probe target resolves only to private or local network addresses")
+			}
+			return nil, fmt.Errorf("connect to probe target: %w", err)
+		},
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   probeTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			_, apiErr := validateProbeURL(req.URL.String(), allowPrivate)
+			if apiErr != nil {
+				return errors.New("redirect target is not permitted")
+			}
+			return nil
+		},
+	}
+}
+
+func isUnsafeProbeIP(ip net.IP) bool {
+	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
 }
 
 // sanitizedHeaders drops the reserved secret placeholder (frontend sends it
@@ -355,17 +412,13 @@ func (s *probeSession) openSSE(ctx context.Context) error {
 	for k, v := range s.headers {
 		req.Header.Set(k, v)
 	}
-	// The default client timeout would close the stream mid-handshake. Use
-	// a bare client so only the ctx deadline (probeTimeout) caps the stream.
-	streamClient := &http.Client{}
-	resp, err := streamClient.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
-		return fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return fmt.Errorf("probe target returned http %d", resp.StatusCode)
 	}
 	s.sseStream = resp.Body
 	s.sseReader = bufio.NewReader(resp.Body)
@@ -593,8 +646,7 @@ func (s *probeSession) rpc(ctx context.Context, id any, method string, params an
 		return nil, fmt.Errorf("server returned %d with no body for request %s", resp.StatusCode, method)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return nil, fmt.Errorf("probe target returned http %d", resp.StatusCode)
 	}
 
 	limited := io.LimitReader(resp.Body, probeMaxRespBytes)
@@ -640,9 +692,8 @@ func (s *probeSession) rpcSSE(ctx context.Context, id any, method string, params
 	}
 	// Legacy SSE uses the POST purely for delivery; drain and close.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
-		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return nil, fmt.Errorf("probe target returned http %d", resp.StatusCode)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	resp.Body.Close()

@@ -20,6 +20,7 @@ Environment variables configure the API service.
 | `HTTP_READ_TIMEOUT` | no | `15s` | Request read timeout |
 | `HTTP_WRITE_TIMEOUT` | no | `30s` | Response write timeout |
 | `HTTP_IDLE_TIMEOUT` | no | `60s` | Keep-alive idle timeout |
+| `PROBE_ALLOW_PRIVATE` | no | `false` | Allow MCP probes to private/local network targets; enable only in trusted self-hosted deployments |
 | `SKIP_MIGRATION` | no | `false` | Skip embedded SQL migrations when `true` |
 
 ## Storage Settings

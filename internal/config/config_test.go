@@ -59,6 +59,13 @@ func TestAuthDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestProbeAllowPrivateFromEnv(t *testing.T) {
+	t.Setenv("PROBE_ALLOW_PRIVATE", "true")
+	if !Load().ProbeAllowPrivate {
+		t.Fatal("ProbeAllowPrivate=false want=true")
+	}
+}
+
 func TestAuthEnabledRequiresOctoAPIURL(t *testing.T) {
 	cfg := Config{MySQLDSN: "dsn", APIPort: "8092", AuthEnabled: true}
 	if err := cfg.ValidateAPI(); err == nil {

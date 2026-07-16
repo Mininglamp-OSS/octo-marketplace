@@ -86,7 +86,7 @@ func main() {
 		model.Identity{UID: adminUID, Name: adminName},
 	)
 
-	mcpSvc := service.New(repository.New(database))
+	mcpSvc := service.New(repository.New(database)).WithProbeAllowPrivate(cfg.ProbeAllowPrivate)
 	if cfg.Storage.Enabled() {
 		mcpSvc.WithIconStore(
 			blob.NewS3Client(blob.S3Config{

@@ -191,7 +191,7 @@ func TestProbeRouteEndToEnd(t *testing.T) {
 	defer fake.Close()
 
 	// Real service (nil store — Probe doesn't touch persistence).
-	realSvc := service.New(nil)
+	realSvc := service.New(nil).WithProbeAllowPrivate(true)
 	engine := Public(stubPinger{}, testAuthenticator(), testAdminAuthenticator(), testStorageConfig(), handler.NewMCP(realSvc), testAdminHandler())
 
 	body, _ := json.Marshal(map[string]any{
@@ -232,7 +232,7 @@ func TestProbeRouteEndToEnd(t *testing.T) {
 // TestProbeRouteStdioRejected asserts the wire-level 400 for stdio via the
 // standard §2 error envelope.
 func TestProbeRouteStdioRejected(t *testing.T) {
-	realSvc := service.New(nil)
+	realSvc := service.New(nil).WithProbeAllowPrivate(true)
 	engine := Public(stubPinger{}, testAuthenticator(), testAdminAuthenticator(), testStorageConfig(), handler.NewMCP(realSvc), testAdminHandler())
 
 	body, _ := json.Marshal(map[string]any{

@@ -33,6 +33,7 @@ type Config struct {
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
+	ProbeAllowPrivate bool
 
 	// Object storage for MCP icons (S3-compatible). Independent of the skill
 	// archive storage below.
@@ -92,6 +93,7 @@ func Load() Config {
 		ReadTimeout:       envDuration("HTTP_READ_TIMEOUT", 15*time.Second),
 		WriteTimeout:      envDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 		IdleTimeout:       envDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
+		ProbeAllowPrivate: envBool("PROBE_ALLOW_PRIVATE", false),
 		Storage: StorageConfig{
 			Endpoint:      strings.TrimRight(env("STORAGE_ENDPOINT", ""), "/"),
 			Region:        env("STORAGE_REGION", "us-east-1"),

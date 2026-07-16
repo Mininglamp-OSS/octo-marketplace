@@ -19,7 +19,7 @@ import (
 // persistence, so the store methods are unused. Using nil surfaces any
 // accidental store call as an immediate nil deref instead of hiding it.
 func newProbeService() *Service {
-	return &Service{store: nil, now: time.Now}
+	return (&Service{store: nil, now: time.Now}).WithProbeAllowPrivate(true)
 }
 
 // mcpFakeServer stubs out an MCP streamable-http server that can serve
@@ -328,6 +328,50 @@ func TestProbe_InvalidURL(t *testing.T) {
 				t.Fatalf("expected invalid_request, got %q", apiErr.Code)
 			}
 		})
+	}
+}
+
+func TestProbe_BlocksPrivateTargetsByDefault(t *testing.T) {
+	svc := New(nil)
+	for _, rawURL := range []string{
+		"http://127.0.0.1:8080/mcp",
+		"http://[::1]:8080/mcp",
+		"http://169.254.169.254/latest/meta-data",
+		"http://10.0.0.1/mcp",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			_, apiErr := svc.Probe(context.Background(), ProbeRequest{
+				Transport: model.TransportStreamableHTTP,
+				URL:       rawURL,
+			})
+			if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
+				t.Fatalf("expected private target rejection, got %v", apiErr)
+			}
+		})
+	}
+}
+
+func TestProbeTransport_BlocksDNSResolvedLoopback(t *testing.T) {
+	client := newProbeHTTPClient(false)
+	req, err := http.NewRequest(http.MethodGet, "http://localhost:8080/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(req)
+	if err == nil || !strings.Contains(err.Error(), "private or local") {
+		t.Fatalf("expected DNS-resolved loopback rejection, got %v", err)
+	}
+}
+
+func TestProbeTransport_BlocksPrivateRedirect(t *testing.T) {
+	client := newProbeHTTPClient(false)
+	req, err := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.CheckRedirect(req, []*http.Request{{}})
+	if err == nil {
+		t.Fatal("expected private redirect rejection")
 	}
 }
 
