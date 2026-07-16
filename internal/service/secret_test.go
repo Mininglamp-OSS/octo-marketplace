@@ -11,6 +11,9 @@ func TestIsSecretKey(t *testing.T) {
 		"Authorization", "authorization", "token", "TOKEN",
 		"GITHUB_TOKEN", "access_token", "api_key", "API-KEY", "apikey",
 		"my_secret", "password", "PWD", "openai_key",
+		"DB_PASSWORD", "MYSQL_PWD", "user_password", "passwd", "pass",
+		"passphrase", "Cookie", "credentials", "credential", "auth",
+		"x-auth", "bearer", "session", "sessionid", "PAT",
 	}
 	for _, k := range secret {
 		if !isSecretKey(k) {
@@ -54,6 +57,19 @@ func TestRedactSecretsRejectsPlaintext(t *testing.T) {
 	_, leaks := redactSecrets(in, "headers")
 	if len(leaks) != 1 || leaks[0].Field != "headers.my_secret" || leaks[0].Reason != "non_empty" {
 		t.Fatalf("expected one leak headers.my_secret/non_empty, got %#v", leaks)
+	}
+}
+
+func TestRedactSecretsRejectsCommonCredentialAliases(t *testing.T) {
+	in := map[string]string{
+		"DB_PASSWORD": "hunter2",
+		"Cookie":      "session=abc",
+		"credentials": "secret",
+		"PAT":         "ghp_xxx",
+	}
+	_, leaks := redactSecrets(in, "env")
+	if len(leaks) != len(in) {
+		t.Fatalf("expected %d leaks, got %#v", len(in), leaks)
 	}
 }
 

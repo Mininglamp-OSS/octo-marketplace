@@ -82,7 +82,7 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	}
 
 	if f.Query != "" {
-		searchTerm := "%" + f.Query + "%"
+		searchTerm := "%" + escapeLike(f.Query) + "%"
 		conditions = append(conditions, `(
 			s.name LIKE ? OR s.description LIKE ? OR s.owner_name LIKE ?
 			OR JSON_CONTAINS(s.tags, ?)
@@ -165,4 +165,13 @@ func parseCursor(cursor string) (time.Time, string, error) {
 
 func buildCursor(t time.Time, id string) string {
 	return t.UTC().Format(time.RFC3339Nano) + "," + id
+}
+
+// escapeLike neutralizes MySQL LIKE wildcards in user keywords so search uses
+// literal substring semantics.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "%", "\\%")
+	s = strings.ReplaceAll(s, "_", "\\_")
+	return s
 }

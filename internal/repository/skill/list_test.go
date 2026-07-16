@@ -50,3 +50,11 @@ func TestBuildCursor(t *testing.T) {
 		t.Errorf("id mismatch after round-trip")
 	}
 }
+
+func TestEscapeLike(t *testing.T) {
+	got := escapeLike(`100%_match\literal`)
+	want := `100\%\_match\\literal`
+	if got != want {
+		t.Fatalf("escapeLike() = %q, want %q", got, want)
+	}
+}
