@@ -518,6 +518,13 @@ components:
       type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_service_parse.IconUploadResult:
       properties:
+        download_url:
+          description: |-
+            DownloadURL is the persistent (non-signed) URL where the icon will be
+            reachable once the PUT completes. Callers store this on the record so
+            that later reads never touch a signed URL. Filled by InitMcpIconUpload;
+            legacy skill InitIconUpload leaves it empty for backwards compatibility.
+          type: string
         expires_in:
           type: integer
         headers:
@@ -585,6 +592,18 @@ components:
           type: string
         status:
           type: string
+      type: object
+    internal_api_handler.MCPIconUploadRequest:
+      properties:
+        content_type:
+          type: string
+        file_name:
+          type: string
+        file_size:
+          type: integer
+      required:
+      - file_name
+      - file_size
       type: object
     internal_api_handler_category.AdminCategoryRequest:
       properties:
@@ -1331,6 +1350,70 @@ paths:
       security:
       - Bearer: []
       summary: List MCP categories
+      tags:
+      - mcp
+  /mcp_icon_uploads:
+    post:
+      description: Create a presigned upload target and persistent URL for an MCP
+        icon.
+      operationId: mcp_icon_upload.create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler.MCPIconUploadRequest'
+                description: Icon metadata
+                summary: body
+        description: Icon metadata
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_service_parse_IconUploadResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Initialize MCP icon upload
       tags:
       - mcp
   /mcps:

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
+	"github.com/gin-gonic/gin"
 )
 
 // stubIconSvc lets us drive InitMcpIconUpload's error branches without
@@ -40,23 +41,33 @@ func (s *stubIconSvc) InitMcpIconUpload(_ context.Context, name string, size int
 	}, nil
 }
 
+func serveMcpIcon(h *McpIcon, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	h.Init(c)
+	return rec
+}
+
 func TestMcpIcon_Init_HappyPath(t *testing.T) {
 	svc := &stubIconSvc{}
 	h := NewMcpIcon(svc)
 
 	body := strings.NewReader(`{"file_name":"logo.png","file_size":4096}`)
-	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/mcps/upload/icon", body)
 	req.Header.Set("Content-Type", "application/json")
-	h.Init(rec, req)
+	rec := serveMcpIcon(h, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var out parse.IconUploadResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+	var envelope struct {
+		Data parse.IconUploadResult `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
 	}
+	out := envelope.Data
 	if out.PresignedURL == "" || out.DownloadURL == "" || out.Method != "PUT" {
 		t.Fatalf("unexpected payload: %+v", out)
 	}
@@ -66,11 +77,10 @@ func TestMcpIcon_Init_RejectsEmptyFilename(t *testing.T) {
 	svc := &stubIconSvc{}
 	h := NewMcpIcon(svc)
 
-	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcp/upload/icon",
 		strings.NewReader(`{"file_size":1024}`))
 	req.Header.Set("Content-Type", "application/json")
-	h.Init(rec, req)
+	rec := serveMcpIcon(h, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
@@ -83,10 +93,9 @@ func TestMcpIcon_Init_RejectsEmptyFilename(t *testing.T) {
 func TestMcpIcon_Init_RejectsZeroSize(t *testing.T) {
 	svc := &stubIconSvc{}
 	h := NewMcpIcon(svc)
-	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"file_name":"x.png","file_size":0}`))
 	req.Header.Set("Content-Type", "application/json")
-	h.Init(rec, req)
+	rec := serveMcpIcon(h, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
@@ -95,14 +104,11 @@ func TestMcpIcon_Init_RejectsZeroSize(t *testing.T) {
 func TestMcpIcon_Init_FileTooLargeMapsTo400(t *testing.T) {
 	svc := &stubIconSvc{err: parse.ErrFileTooLarge}
 	h := NewMcpIcon(svc)
-	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"file_name":"big.png","file_size":9999999}`))
 	req.Header.Set("Content-Type", "application/json")
-	h.Init(rec, req)
-	// ErrFileTooLarge maps to InvalidRequest (also 400) rather than 413 —
-	// the marketplace error envelope only distinguishes at the code layer.
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	rec := serveMcpIcon(h, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "exceeds 2 MiB") {
 		t.Fatalf("expected human message about size limit, got %s", rec.Body.String())
@@ -112,14 +118,13 @@ func TestMcpIcon_Init_FileTooLargeMapsTo400(t *testing.T) {
 func TestMcpIcon_Init_ServiceErrorPropagates(t *testing.T) {
 	svc := &stubIconSvc{err: fmt.Errorf("must be an image")}
 	h := NewMcpIcon(svc)
-	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"file_name":"x.txt","file_size":100}`))
 	req.Header.Set("Content-Type", "application/json")
-	h.Init(rec, req)
+	rec := serveMcpIcon(h, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "must be an image") {
-		t.Fatalf("wire message should surface the service error, got %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "must be an image") {
+		t.Fatalf("wire response must not expose service errors, got %s", rec.Body.String())
 	}
 }

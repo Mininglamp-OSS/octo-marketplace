@@ -138,7 +138,8 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		// registerMCP (different prefix: `mcp` vs `mcps`). The admin twin is
 		// wired inside registerAdminMCP below, sharing the same handler.
 		mcpIconH := handler.NewMcpIcon(pSvc)
-		v1.POST("/mcp/upload/icon", gin.WrapF(mcpIconH.Init))
+		v1.POST("/mcp_icon_uploads", mcpIconH.Init)
+		v1.POST("/mcp/upload/icon", deprecatedRoute("/api/v1/mcp_icon_uploads"), mcpIconH.Init)
 		adminMcpIcon = mcpIconH
 	}
 
@@ -182,7 +183,9 @@ func registerAdminMCP(r *gin.Engine, adminAuth *marketmiddleware.AdminAuthentica
 	rg.PATCH("/:mcp_id", admin.Patch)
 	rg.DELETE("/:mcp_id", admin.Delete)
 	if mcpIcon != nil {
-		rg.POST("/upload/icon", gin.WrapF(mcpIcon.Init))
+		adminRoot := r.Group("/api/v1/admin", adminAuth.Handler())
+		adminRoot.POST("/mcp_icon_uploads", mcpIcon.Init)
+		rg.POST("/upload/icon", deprecatedRoute("/api/v1/admin/mcp_icon_uploads"), mcpIcon.Init)
 	}
 }
 

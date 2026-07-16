@@ -1,76 +1,61 @@
-// MCP icon presigned upload endpoints. Two mounts share the same handler:
-//   - POST /api/v1/mcp/upload/icon           (user auth, mounted in v1 group)
-//   - POST /api/v1/admin/mcps/upload/icon    (admin token, mounted at engine root)
-//
-// Body: {"file_name": "...", "file_size": N, "content_type"?: "image/png"}
-// Response: parse.IconUploadResult — presigned PUT URL + persistent download URL
-//
-// Distinct from the older POST /api/v1/mcps/{id}/icon (multipart, per-record
-// stored via WithIconStore). This new flow is presigned URL, unattached, and
-// works for BOTH pre-create (frontend uploads then stores URL in the create
-// payload) AND edit (same, without needing to hit an /{id}/icon endpoint).
-
 package handler
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
+	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/apierr"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
-	"net/http"
+	"github.com/gin-gonic/gin"
 )
 
-// McpIconUploadService is the subset of parse.Service this handler needs.
-// Kept as an interface so tests can inject fakes without spinning up the
-// storage layer.
 type McpIconUploadService interface {
-	InitMcpIconUpload(ctx context.Context, fileName string, fileSize int64) (*parse.IconUploadResult, error)
+	InitMcpIconUpload(context.Context, string, int64) (*parse.IconUploadResult, error)
 }
 
-// McpIcon wires the parse service to a bare-http handler that both the user
-// and admin routers can mount.
-type McpIcon struct {
-	svc McpIconUploadService
-}
+type McpIcon struct{ svc McpIconUploadService }
 
-// NewMcpIcon returns a handler bound to the given service. Nil-safe callers
-// should check the return value; a real service is required.
-func NewMcpIcon(svc McpIconUploadService) *McpIcon {
-	return &McpIcon{svc: svc}
-}
+func NewMcpIcon(svc McpIconUploadService) *McpIcon { return &McpIcon{svc: svc} }
 
-type mcpIconInitRequest struct {
-	FileName    string `json:"file_name"`
-	FileSize    int64  `json:"file_size"`
+type MCPIconUploadRequest struct {
+	FileName    string `json:"file_name" binding:"required"`
+	FileSize    int64  `json:"file_size" binding:"required,gt=0"`
 	ContentType string `json:"content_type,omitempty"`
 }
 
-// Init handles POST for both mount points. Body validation and error mapping
-// mirror the rest of the MCP handler surface (plain JSON, apierr envelope on
-// failure) so the octo-admin / octo-web axios clients don't need a special
-// case for this endpoint.
-func (h *McpIcon) Init(w http.ResponseWriter, r *http.Request) {
-	var req mcpIconInitRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, err)
+// Init godoc
+// @Summary Initialize MCP icon upload
+// @Description Create a presigned upload target and persistent URL for an MCP icon.
+// @Tags mcp
+// @ID mcp_icon_upload.create
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param body body MCPIconUploadRequest true "Icon metadata"
+// @Success 200 {object} apiresponse.Data[parse.IconUploadResult]
+// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
+// @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
+// @Router /mcp_icon_uploads [post]
+func (h *McpIcon) Init(c *gin.Context) {
+	var req MCPIconUploadRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apiresponse.Fail(c, http.StatusBadRequest, apierr.CodeInvalidRequest, "file_name and positive file_size are required", nil, "")
 		return
 	}
-	if req.FileName == "" || req.FileSize <= 0 {
-		writeError(w, apierr.InvalidRequest("file_name and positive file_size are required"))
+	result, err := h.svc.InitMcpIconUpload(c.Request.Context(), req.FileName, req.FileSize)
+	if errors.Is(err, parse.ErrFileTooLarge) {
+		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "icon exceeds 2 MiB limit", map[string]any{"max_bytes": 2 << 20}, "")
 		return
 	}
-	// content_type is informational only right now — the service derives it
-	// from the extension. Kept in the request shape so future callers (native
-	// clients that already know the type) can be more specific without
-	// another API bump.
-	result, err := h.svc.InitMcpIconUpload(r.Context(), req.FileName, req.FileSize)
 	if err != nil {
-		if err == parse.ErrFileTooLarge {
-			writeError(w, apierr.InvalidRequest("icon exceeds 2 MiB limit"))
-			return
-		}
-		writeError(w, apierr.InvalidRequest(err.Error()))
+		apiresponse.Fail(c, http.StatusBadRequest, apierr.CodeInvalidRequest, "invalid icon upload request", nil, "")
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	apiresponse.OK(c, result)
 }
