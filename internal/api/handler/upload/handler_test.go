@@ -56,6 +56,37 @@ func TestLocalUploadProxy(t *testing.T) {
 	}
 }
 
+func TestLocalProxyNotMountedWhenAuthEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	ls := storage.NewLocal(tmpDir, "http://localhost:8092")
+	r := gin.New()
+	h := New(nil, nil, ls)
+	h.RegisterLocalProxy(r, true)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/_storage/upload/skills/abc/test.zip", strings.NewReader("data"))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestLocalUploadProxyRejectsOversizedBody(t *testing.T) {
+	tmpDir := t.TempDir()
+	ls := storage.NewLocal(tmpDir, "http://localhost:8092")
+	r := gin.New()
+	h := New(nil, nil, ls, 1)
+	h.RegisterLocalProxy(r, false)
+
+	body := strings.NewReader(strings.Repeat("x", 1024*1024+1))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/_storage/upload/skills/abc/large.zip", body)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d body=%s", w.Code, http.StatusRequestEntityTooLarge, w.Body.String())
+	}
+}
+
 func TestLocalDownloadProxy(t *testing.T) {
 	tmpDir := t.TempDir()
 	ls := storage.NewLocal(tmpDir, "http://localhost:8092")

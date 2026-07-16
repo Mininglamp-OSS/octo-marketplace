@@ -129,9 +129,9 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		worker := parsesvc.NewWorker(store, parseRepo, db)
 		pSvc := parsesvc.NewService(store, parseRepo, worker, generateID, storageCfg.MaxMB)
 
-		uploadH := uploadhandler.New(pSvc, skSvc, localStorage)
+		uploadH := uploadhandler.New(pSvc, skSvc, localStorage, storageCfg.MaxMB)
 		uploadH.Register(v1)
-		uploadH.RegisterLocalProxy(r)
+		uploadH.RegisterLocalProxy(r, authEnabled)
 
 		// MCP icon presigned upload — user surface only. `/api/v1/mcp/upload/icon`
 		// does not collide with the `/api/v1/mcps/*` wildcard mounted by

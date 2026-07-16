@@ -19,14 +19,20 @@ type Handler struct {
 	parseSvc     *parse.Service
 	skillSvc     *skillsvc.Service
 	localStorage *storage.LocalStorage // nil when not using local storage
+	maxUploadMB  int
 }
 
 // New creates an upload handler.
-func New(parseSvc *parse.Service, skillSvc *skillsvc.Service, localStorage *storage.LocalStorage) *Handler {
+func New(parseSvc *parse.Service, skillSvc *skillsvc.Service, localStorage *storage.LocalStorage, maxUploadMB ...int) *Handler {
+	maxMB := 20
+	if len(maxUploadMB) > 0 && maxUploadMB[0] > 0 {
+		maxMB = maxUploadMB[0]
+	}
 	return &Handler{
 		parseSvc:     parseSvc,
 		skillSvc:     skillSvc,
 		localStorage: localStorage,
+		maxUploadMB:  maxMB,
 	}
 }
 
@@ -58,8 +64,8 @@ func legacyUploadEndpoint(successor string) gin.HandlerFunc {
 }
 
 // RegisterLocalProxy registers local storage proxy routes (only for STORAGE_DRIVER=local).
-func (h *Handler) RegisterLocalProxy(r *gin.Engine) {
-	if h.localStorage == nil {
+func (h *Handler) RegisterLocalProxy(r *gin.Engine, authEnabled ...bool) {
+	if h.localStorage == nil || (len(authEnabled) > 0 && authEnabled[0]) {
 		return
 	}
 	r.PUT("/api/v1/_storage/upload/*key", h.localUploadProxy)

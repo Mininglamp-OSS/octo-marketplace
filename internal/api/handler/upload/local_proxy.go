@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -13,7 +14,14 @@ import (
 // intentionally excluded from the public Marketplace OpenAPI contract.
 func (h *Handler) localUploadProxy(c *gin.Context) {
 	key := localObjectKey(c.Param("key"))
+	maxBytes := int64(h.maxUploadMB) * 1024 * 1024
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 	if err := h.localStorage.WriteObject(key, c.Request.Body); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", map[string]any{"max_bytes": maxBytes}, "")
+			return
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
