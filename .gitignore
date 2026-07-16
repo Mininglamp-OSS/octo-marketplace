@@ -1,32 +1,87 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ---------- Go ----------
+# Built binaries (cmd/* outputs, ad-hoc builds)
+/marketplace-api
+/bin/
+/dist/
 *.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
-coverage.*
-*.coverprofile
-profile.cov
+coverage.out
+coverage.html
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# ---------- OS / editor / IDE ----------
+.DS_Store
+*.pem
+.idea/
+.zed/
+.vscode/settings.json
+**/settings.local.json
 
-# Go workspace file
-go.work
-go.work.sum
-
-# env file
+# ---------- Local env ----------
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# ---------- Node / JS (web assets, tooling) ----------
+node_modules
+.pnp
+.pnp.js
+.next/
+out/
+build
+*.tsbuildinfo
+coverage
+test-results
+playwright-report
+.local-browsers
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.turbo
+package-lock.json
+
+# ---------- AI / agent / IDE tooling artifacts ----------
+.mcp.json
+.gstack/
+.ftre/snapshot
+.ftre/memory/
+.omc/
+.omx
+.claude/
+.codegraph/
+.cctmp/
+.kiro/settings/mcp.json
+.kiro/handoff-*.md
+AGENTS.config.local.json
+dm__test
+
+# ---------- Generated reports / scans ----------
+.i18n/reports/
+**/figma-spec.md
+**/rawdata.txt
+
+# ---------- Review / debug output ----------
+/cc-*.json
+grp_out.txt
+.debug-screenshots/
+debug-storybook.log
+scripts/debug.js
+
+# ---------- Docs standalone builds ----------
+packages/docs/dev-dist/
+packages/docs/dev/smoke-out/
+packages/docs/dev/presence-out/
+docs/superpowers/plans/
+# Loop V1 内部设计文档仅保留在本地 workspace
+docs/loop-v1/
+
+# ---------- Legacy artifacts (kept defensively; likely unused in this repo) ----------
+lib/
+out-election/
+dist-ele/
+icon.icns
+icons.iconset

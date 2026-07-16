@@ -1,0 +1,14 @@
+FROM docker.m.daocloud.io/golang:1.25-alpine AS builder
+WORKDIR /app
+ENV GOPROXY=https://goproxy.cn,direct
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /bin/marketplace-api ./cmd/marketplace-api
+
+FROM docker.m.daocloud.io/alpine:3.21
+ENV TZ=Asia/Shanghai
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /bin/marketplace-api /bin/marketplace-api
+EXPOSE 8092
+ENTRYPOINT ["/bin/marketplace-api"]

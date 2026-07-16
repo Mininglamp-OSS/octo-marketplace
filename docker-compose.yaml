@@ -1,0 +1,44 @@
+# DEV ONLY — for local octo-marketplace development.
+#
+# The credentials below are intentionally simple and must not be used in
+# production. Production deployment must provide rotated secrets and managed
+# persistence through the OCTO deployment repository.
+services:
+  marketplace-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8092:8092"
+    environment:
+      APP_ENV: "dev"
+      MYSQL_DSN: "marketplace:marketplace@tcp(mysql:3306)/octo_marketplace?charset=utf8mb4&parseTime=true"
+      API_PORT: "8092"
+      PUBLIC_BASE_URL: "http://127.0.0.1:8092"
+      AUTH_ENABLED: "false"
+      DEV_AUTH_UID: "dev-user"
+      DEV_AUTH_NAME: "Developer"
+      DEV_SPACE_ID: "dev-space"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: docker.m.daocloud.io/mysql:8.0
+    environment:
+      MYSQL_DATABASE: octo_marketplace
+      MYSQL_USER: marketplace
+      MYSQL_PASSWORD: marketplace
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - mysqldata:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  mysqldata:

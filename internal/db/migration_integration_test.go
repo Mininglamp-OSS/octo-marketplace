@@ -1,0 +1,143 @@
+package db
+
+import (
+	"database/sql"
+	"os"
+	"testing"
+
+	_ "github.com/go-sql-driver/mysql"
+	migrate "github.com/rubenv/sql-migrate"
+
+	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
+)
+
+// testDSN returns the MySQL DSN for integration tests.
+// Skips the test if TEST_MYSQL_DSN is not set.
+func testDSN(t *testing.T) string {
+	t.Helper()
+	dsn := os.Getenv("TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("TEST_MYSQL_DSN not set; skipping integration test")
+	}
+	return dsn
+}
+
+// TestRunMigrationsUpDown executes all migrations Up, asserts the three
+// marketplace tables exist, then runs Down and asserts they are dropped.
+func TestRunMigrationsUpDown(t *testing.T) {
+	dsn := testDSN(t)
+
+	database, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.Ping(); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+
+	source := &migrate.EmbedFileSystemMigrationSource{
+		FileSystem: migrationsql.FS,
+		Root:       ".",
+	}
+
+	// --- Up ---
+	n, err := migrate.Exec(database, "mysql", source, migrate.Up)
+	if err != nil {
+		t.Fatalf("migrate Up: %v", err)
+	}
+	if n < 2 {
+		t.Fatalf("migrate Up applied %d migrations, want >= 2", n)
+	}
+
+	// Assert tables exist by querying INFORMATION_SCHEMA.
+	expectedTables := []string{"categories", "skills", "parse_tasks"}
+	for _, table := range expectedTables {
+		var count int
+		err := database.QueryRow(
+			"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&count)
+		if err != nil {
+			t.Fatalf("query INFORMATION_SCHEMA for %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Errorf("table %s not found after migrate Up", table)
+		}
+	}
+
+	// --- Down ---
+	n, err = migrate.Exec(database, "mysql", source, migrate.Down)
+	if err != nil {
+		t.Fatalf("migrate Down: %v", err)
+	}
+	if n < 2 {
+		t.Fatalf("migrate Down applied %d migrations, want >= 2", n)
+	}
+
+	// Assert tables are gone.
+	for _, table := range expectedTables {
+		var count int
+		err := database.QueryRow(
+			"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&count)
+		if err != nil {
+			t.Fatalf("query INFORMATION_SCHEMA for %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Errorf("table %s still exists after migrate Down", table)
+		}
+	}
+}
+
+// TestRunMigrationsFunc verifies that RunMigrations successfully applies
+// all migrations via the production code path.
+func TestRunMigrationsFunc(t *testing.T) {
+	dsn := testDSN(t)
+
+	database, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.Ping(); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+
+	// Clean state: run all Down first.
+	source := &migrate.EmbedFileSystemMigrationSource{
+		FileSystem: migrationsql.FS,
+		Root:       ".",
+	}
+	_, _ = migrate.Exec(database, "mysql", source, migrate.Down)
+
+	// Run via production function.
+	n, err := RunMigrations(database)
+	if err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+	if n < 2 {
+		t.Fatalf("RunMigrations applied %d, want >= 2", n)
+	}
+
+	// Verify tables exist.
+	for _, table := range []string{"categories", "skills", "parse_tasks"} {
+		var count int
+		err := database.QueryRow(
+			"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&count)
+		if err != nil {
+			t.Fatalf("query INFORMATION_SCHEMA for %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Errorf("table %s not found after RunMigrations", table)
+		}
+	}
+
+	// Cleanup: run Down so test is idempotent.
+	_, _ = migrate.Exec(database, "mysql", source, migrate.Down)
+}
