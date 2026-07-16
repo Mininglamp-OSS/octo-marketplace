@@ -421,7 +421,7 @@ func (s *probeSession) openSSE(ctx context.Context) error {
 		return fmt.Errorf("probe target returned http %d", resp.StatusCode)
 	}
 	s.sseStream = resp.Body
-	s.sseReader = bufio.NewReader(resp.Body)
+	s.sseReader = bufio.NewReader(io.LimitReader(resp.Body, probeMaxRespBytes))
 
 	// Wait for the first `endpoint` event. Any comment lines / retry lines /
 	// unrelated events (server may push a hello ping first) are skipped.
@@ -437,7 +437,7 @@ func (s *probeSession) openSSE(ctx context.Context) error {
 	}()
 	defer close(done)
 
-	ev, err := readSSEEvent(s.sseReader)
+	ev, err := readSSEEvent(s.sseReader, probeMaxRespBytes)
 	for err == nil {
 		if ev.event == "endpoint" && ev.data != "" {
 			resolved, resolveErr := resolveEndpoint(s.url, ev.data)
@@ -447,7 +447,7 @@ func (s *probeSession) openSSE(ctx context.Context) error {
 			s.sseEndpoint = resolved
 			return nil
 		}
-		ev, err = readSSEEvent(s.sseReader)
+		ev, err = readSSEEvent(s.sseReader, probeMaxRespBytes)
 	}
 	if err == io.EOF {
 		return errors.New("sse stream closed before endpoint event")
@@ -480,7 +480,11 @@ func resolveEndpoint(sseURL, endpointData string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse endpoint: %w", err)
 	}
-	return base.ResolveReference(ref).String(), nil
+	resolved := base.ResolveReference(ref)
+	if !sameEndpointOrigin(base, resolved) {
+		return "", errors.New("endpoint must remain on the original probe origin")
+	}
+	return resolved.String(), nil
 }
 
 // sseEvent is one parsed Server-Sent Event: the event name (default "message"
@@ -493,7 +497,7 @@ type sseEvent struct {
 // readSSEEvent consumes lines from the SSE stream until a blank line signals
 // the end of an event, then returns the accumulated event/data pair. Comment
 // lines (starting with ':') and unknown fields are ignored per spec.
-func readSSEEvent(r *bufio.Reader) (sseEvent, error) {
+func readSSEEvent(r *bufio.Reader, maxDataBytes int) (sseEvent, error) {
 	var ev sseEvent
 	ev.event = "message"
 	var dataBuf strings.Builder
@@ -521,6 +525,9 @@ func readSSEEvent(r *bufio.Reader) (sseEvent, error) {
 			if dataBuf.Len() > 0 {
 				dataBuf.WriteByte('\n')
 			}
+			if dataBuf.Len()+len(value) > maxDataBytes {
+				return sseEvent{}, fmt.Errorf("sse event exceeded %d bytes", maxDataBytes)
+			}
 			dataBuf.WriteString(value)
 		}
 		if err == io.EOF {
@@ -531,6 +538,24 @@ func readSSEEvent(r *bufio.Reader) (sseEvent, error) {
 			return sseEvent{}, io.EOF
 		}
 	}
+}
+
+func sameEndpointOrigin(base, resolved *url.URL) bool {
+	return strings.EqualFold(base.Scheme, resolved.Scheme) &&
+		strings.EqualFold(canonicalHostPort(base), canonicalHostPort(resolved))
+}
+
+func canonicalHostPort(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return strings.ToLower(u.Hostname()) + ":" + port
 }
 
 // splitSSEField splits a field line into (name, value) per the SSE spec: the
@@ -705,7 +730,7 @@ func (s *probeSession) rpcSSE(ctx context.Context, id any, method string, params
 	// closes the stream via the goroutine set up in openSSE — this Read will
 	// then error out, which we surface as a timeout above.
 	for {
-		ev, err := readSSEEvent(s.sseReader)
+		ev, err := readSSEEvent(s.sseReader, probeMaxRespBytes)
 		if err != nil {
 			if err == io.EOF {
 				return nil, errors.New("sse stream closed without a matching response")

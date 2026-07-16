@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -605,5 +606,42 @@ func TestProbe_LegacySSE_NoEndpointEvent(t *testing.T) {
 	}
 	if resp.Error == nil || resp.Error.Code != ProbeErrInitFailed {
 		t.Fatalf("expected init_failed, got %+v", resp.Error)
+	}
+}
+
+func TestProbe_LegacySSE_RejectsCrossOriginEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "event: endpoint\ndata: https://attacker.example/messages\n\n")
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := newProbeService()
+	resp, apiErr := svc.Probe(context.Background(), ProbeRequest{
+		Transport: model.TransportSSE,
+		URL:       srv.URL,
+	})
+	if apiErr != nil {
+		t.Fatalf("unexpected apierr: %v", apiErr)
+	}
+	if resp.OK {
+		t.Fatalf("expected ok=false, got %+v", resp)
+	}
+	if resp.Error == nil || resp.Error.Code != ProbeErrInitFailed {
+		t.Fatalf("expected init_failed, got %+v", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "original probe origin") {
+		t.Fatalf("expected origin validation message, got %q", resp.Error.Message)
+	}
+}
+
+func TestReadSSEEventRejectsOversizedPayload(t *testing.T) {
+	payload := strings.Repeat("x", probeMaxRespBytes+1)
+	reader := bufio.NewReader(strings.NewReader("event: message\ndata: " + payload + "\n\n"))
+
+	_, err := readSSEEvent(reader, probeMaxRespBytes)
+	if err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("expected oversized payload error, got %v", err)
 	}
 }

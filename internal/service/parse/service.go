@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,8 +32,8 @@ func NewService(store storage.Storage, repo *Repo, worker *Worker, idGen func() 
 	}
 }
 
-// ErrInvalidFileName indicates the file_name is not a .zip file.
-var ErrInvalidFileName = errors.New("file_name must end with .zip")
+// ErrInvalidFileName indicates the file_name is not a safe .zip basename.
+var ErrInvalidFileName = errors.New("file_name must be a safe .zip basename")
 
 // ErrFileTooLarge indicates the file exceeds the upload limit.
 var ErrFileTooLarge = errors.New("file too large")
@@ -57,7 +58,8 @@ type InitResult struct {
 
 // InitUpload generates a presigned URL and creates a pending parse task.
 func (s *Service) InitUpload(ctx context.Context, fileName string, fileSize int64, ownerID, spaceID string) (*InitResult, error) {
-	if !strings.HasSuffix(strings.ToLower(fileName), ".zip") {
+	fileName, err := normalizeUploadFileName(fileName)
+	if err != nil {
 		return nil, ErrInvalidFileName
 	}
 	maxBytes := int64(s.maxMB) * 1024 * 1024
@@ -107,7 +109,8 @@ func (s *Service) InitUpload(ctx context.Context, fileName string, fileSize int6
 
 // InitReupload generates a presigned URL for re-uploading to an existing skill.
 func (s *Service) InitReupload(ctx context.Context, skillID, fileName string, fileSize int64, ownerID, spaceID string) (*InitResult, error) {
-	if !strings.HasSuffix(strings.ToLower(fileName), ".zip") {
+	fileName, err := normalizeUploadFileName(fileName)
+	if err != nil {
 		return nil, ErrInvalidFileName
 	}
 	maxBytes := int64(s.maxMB) * 1024 * 1024
@@ -172,9 +175,12 @@ func (s *Service) TriggerParse(ctx context.Context, uploadID, ownerID string) (s
 		return "", ErrTaskNotPending
 	}
 
-	// Update status to parsing
-	if err := s.repo.UpdateStatus(ctx, task.ID, "parsing"); err != nil {
+	ok, err := s.repo.TransitionPendingToParsing(ctx, task.ID)
+	if err != nil {
 		return "", err
+	}
+	if !ok {
+		return "", ErrTaskNotPending
 	}
 
 	// Submit to worker pool
@@ -182,6 +188,20 @@ func (s *Service) TriggerParse(ctx context.Context, uploadID, ownerID string) (s
 	s.worker.Submit(task.ID, task.FileURL, maxBytes)
 
 	return task.ID, nil
+}
+
+func normalizeUploadFileName(fileName string) (string, error) {
+	fileName = strings.TrimSpace(fileName)
+	if !strings.HasSuffix(strings.ToLower(fileName), ".zip") {
+		return "", ErrInvalidFileName
+	}
+	if fileName == "" || fileName != filepath.Base(fileName) {
+		return "", ErrInvalidFileName
+	}
+	if strings.ContainsAny(fileName, `/\`) || strings.Contains(fileName, "..") || strings.ContainsRune(fileName, 0) {
+		return "", ErrInvalidFileName
+	}
+	return fileName, nil
 }
 
 // PollResult is returned from GetParseStatus.
@@ -334,12 +354,12 @@ func (s *Service) GetDownloadURL(ctx context.Context, objectKey string) (string,
 
 // InitMcpIconUpload is the MCP-icon-specific twin of InitIconUpload. Two
 // changes over the skill variant:
-//   1. Key prefix is `mcp-icons/{uuid}/{filename}` so MCP and Skill assets stay
-//      in separate bucket sub-trees.
-//   2. Result includes DownloadURL — the persistent URL where the icon will be
-//      reachable once the client has PUT the bytes to PresignedURL. Callers
-//      store DownloadURL on the MCP record; they never need to re-fetch a
-//      presigned GET for the same key.
+//  1. Key prefix is `mcp-icons/{uuid}/{filename}` so MCP and Skill assets stay
+//     in separate bucket sub-trees.
+//  2. Result includes DownloadURL — the persistent URL where the icon will be
+//     reachable once the client has PUT the bytes to PresignedURL. Callers
+//     store DownloadURL on the MCP record; they never need to re-fetch a
+//     presigned GET for the same key.
 //
 // Accepts the same image formats as octo-admin's client-side validator
 // (png / jpg / jpeg / webp / gif). ownerID may be empty when the caller is

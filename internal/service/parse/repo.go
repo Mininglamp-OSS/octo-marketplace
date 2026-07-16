@@ -114,6 +114,21 @@ func (r *Repo) UpdateStatus(ctx context.Context, id, status string) error {
 	return err
 }
 
+// TransitionPendingToParsing atomically flips a task from pending to parsing.
+// It returns false when another caller already consumed the pending state.
+func (r *Repo) TransitionPendingToParsing(ctx context.Context, id string) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		"UPDATE parse_tasks SET status = 'parsing' WHERE id = ? AND status = 'pending'", id)
+	if err != nil {
+		return false, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows == 1, nil
+}
+
 // UpdateFailed sets the parse task to failed with error info.
 func (r *Repo) UpdateFailed(ctx context.Context, id, errorCode, errorMessage string) error {
 	_, err := r.db.ExecContext(ctx,
