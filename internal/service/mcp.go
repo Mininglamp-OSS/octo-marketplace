@@ -125,7 +125,7 @@ func (s *Service) Create(ctx context.Context, caller Caller, req model.CreateReq
 	if err := s.store.Create(ctx, m); err != nil {
 		return model.Detail{}, mapStoreError(err)
 	}
-	return m.ToDetail(), nil
+	return detailForCaller(m, caller), nil
 }
 
 // Get returns a single record's detail if visible to the caller, else 404
@@ -135,7 +135,7 @@ func (s *Service) Get(ctx context.Context, caller Caller, mcpID string) (model.D
 	if apiErr != nil {
 		return model.Detail{}, apiErr
 	}
-	return m.ToDetail(), nil
+	return detailForCaller(m, caller), nil
 }
 
 // Patch applies a partial update. Only the owner may mutate; a non-owner (or a
@@ -158,7 +158,7 @@ func (s *Service) Patch(ctx context.Context, caller Caller, mcpID string, req mo
 	if err := s.store.Update(ctx, m); err != nil {
 		return model.Detail{}, mapStoreError(err)
 	}
-	return m.ToDetail(), nil
+	return detailForCaller(m, caller), nil
 }
 
 // Delete soft-deletes a record. Owner only; the same visibility gate applies.
@@ -508,6 +508,27 @@ func isVisible(m *model.MCP, caller Caller) bool {
 		return false
 	}
 	return m.Visibility == model.VisibilityPublic || m.OwnerUID == caller.UID
+}
+
+func detailForCaller(m *model.MCP, caller Caller) model.Detail {
+	detail := m.ToDetail()
+	if m.OwnerUID == caller.UID {
+		return detail
+	}
+	detail.QuickStart.Env = blankMapValues(detail.QuickStart.Env)
+	detail.QuickStart.Headers = blankMapValues(detail.QuickStart.Headers)
+	return detail
+}
+
+func blankMapValues(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key := range in {
+		out[key] = ""
+	}
+	return out
 }
 
 // resolveSlug validates the incoming slug or auto-derives one from the

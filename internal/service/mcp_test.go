@@ -297,6 +297,41 @@ func TestGetPrivateOfAnotherUserIsNotFound(t *testing.T) {
 	}
 }
 
+func TestGetPublicPeerBlanksConnectionValues(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "x",
+		Name:       "Peer MCP",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u2",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{
+			URL:     "https://mcp.example.com",
+			Env:     map[string]string{"REGION": "us-east-1", "GOOGLE_APPLICATION_CREDENTIALS_JSON": ""},
+			Headers: map[string]string{"X-Trace": "web"},
+		},
+	})
+
+	detail, apiErr := svc.Get(context.Background(), caller, "x")
+	if apiErr != nil {
+		t.Fatalf("public peer should be visible, got %v", apiErr)
+	}
+	if detail.QuickStart.URL != "https://mcp.example.com" {
+		t.Fatalf("url should still be visible, got %+v", detail.QuickStart)
+	}
+	if got := detail.QuickStart.Env["REGION"]; got != "" {
+		t.Fatalf("env value should be blanked for non-owner, got %q", got)
+	}
+	if got := detail.QuickStart.Env["GOOGLE_APPLICATION_CREDENTIALS_JSON"]; got != "" {
+		t.Fatalf("secret-shaped env key should be blanked for non-owner, got %q", got)
+	}
+	if got := detail.QuickStart.Headers["X-Trace"]; got != "" {
+		t.Fatalf("header value should be blanked for non-owner, got %q", got)
+	}
+}
+
 func TestGetSystemVisibleAcrossSpaces(t *testing.T) {
 	store := newFakeStore()
 	svc := New(store)
