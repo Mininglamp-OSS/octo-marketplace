@@ -2,6 +2,5 @@
 useDefault = true
 
 [[allowlists]]
-description = "Allow the documented non-secret OSS object key prefix"
-regexTarget = "line"
-regexes = ['''^OSS_KEY_PREFIX=environment/marketplace$''']
+description = "Ignore placeholder values in the committed environment example"
+paths = ['''^\.env\.example$''']
