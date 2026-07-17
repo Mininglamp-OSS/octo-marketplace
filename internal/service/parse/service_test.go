@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,6 +123,75 @@ func TestTriggerParseReturnsConflictWhenPendingStateWasConsumed(t *testing.T) {
 	if err != ErrTaskNotPending {
 		t.Fatalf("expected ErrTaskNotPending, got %v", err)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetParseStatusMasksStoredFailureDetailsAndSanitizesReadme(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepo(db)
+	svc := NewService(stubStorage{}, repo, nil, func() string { return "upload-1" }, 20)
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+
+	successRows := sqlmock.NewRows([]string{
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
+		"error_code", "error_message",
+		"result_name", "result_description", "result_version", "result_tags", "result_readme",
+		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+	}).AddRow(
+		"task-success", "upload-1", "skill.zip", int64(1), "skills/upload-1/skill.zip", "success",
+		"", "", "safe-skill", "desc", "1.0.0", []byte(`["tag"]`), "# Demo\n\n<script>alert(1)</script>\n<div>ok</div>",
+		"sha", "user-1", "space-1", "", now, now,
+	)
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
+		WithArgs("task-success").
+		WillReturnRows(successRows)
+
+	successResult, err := svc.GetParseStatus(context.Background(), "task-success", "user-1")
+	if err != nil {
+		t.Fatalf("GetParseStatus success: %v", err)
+	}
+	if successResult.Result == nil {
+		t.Fatal("expected success result")
+	}
+	if strings.Contains(successResult.Result.ReadmeContent, "<script>") {
+		t.Fatalf("readme should be sanitized, got %q", successResult.Result.ReadmeContent)
+	}
+	if !strings.Contains(successResult.Result.ReadmeContent, "&lt;div&gt;ok&lt;/div&gt;") {
+		t.Fatalf("expected escaped html, got %q", successResult.Result.ReadmeContent)
+	}
+
+	failedRows := sqlmock.NewRows([]string{
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
+		"error_code", "error_message",
+		"result_name", "result_description", "result_version", "result_tags", "result_readme",
+		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+	}).AddRow(
+		"task-failed", "upload-2", "skill.zip", int64(1), "skills/upload-2/skill.zip", "failed",
+		"INTERNAL_ERROR", "panic: db password leaked", "", nil, "", []byte("[]"), nil,
+		"", "user-1", "space-1", "", now, now,
+	)
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
+		WithArgs("task-failed").
+		WillReturnRows(failedRows)
+
+	failedResult, err := svc.GetParseStatus(context.Background(), "task-failed", "user-1")
+	if err != nil {
+		t.Fatalf("GetParseStatus failed: %v", err)
+	}
+	if failedResult.Error == nil {
+		t.Fatal("expected failed error payload")
+	}
+	if failedResult.Error.Message != publicParseErrorMessage("INTERNAL_ERROR") {
+		t.Fatalf("unexpected public message %q", failedResult.Error.Message)
+	}
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

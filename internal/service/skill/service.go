@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	mdsanitize "github.com/Mininglamp-OSS/octo-marketplace/internal/markdown"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
@@ -205,7 +206,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 	}
 	readmeContent := ""
 	if pt.ResultReadme != nil {
-		readmeContent = *pt.ResultReadme
+		readmeContent = mdsanitize.Sanitize(*pt.ResultReadme)
 	}
 
 	visibility := p.Visibility
@@ -355,7 +356,8 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 
 		// Apply parsed content if not overridden in the request
 		if pt.ResultReadme != nil {
-			repoParams.ReadmeContent = pt.ResultReadme
+			readme := mdsanitize.Sanitize(*pt.ResultReadme)
+			repoParams.ReadmeContent = &readme
 		}
 		// If name/description/version/tags not set in request, use parse results
 		if p.Name == nil && pt.ResultName != "" {
@@ -484,7 +486,7 @@ func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillI
 		SpaceID:       row.SpaceID,
 		Visibility:    row.Visibility,
 		Version:       row.Version,
-		ReadmeContent: row.ReadmeContent,
+		ReadmeContent: mdsanitize.Sanitize(row.ReadmeContent),
 		FileName:      row.FileName,
 		FileURL:       row.FileURL,
 		FileSize:      row.FileSize,

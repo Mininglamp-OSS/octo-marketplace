@@ -1,9 +1,16 @@
 package parse
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +47,60 @@ func (blockingStorage) CopyObject(context.Context, string, string) error {
 
 var _ storage.Storage = (*blockingStorage)(nil)
 
+type panicStorage struct{}
+
+func (panicStorage) PresignPut(context.Context, string, string, time.Duration) (string, http.Header, error) {
+	return "", http.Header{}, nil
+}
+
+func (panicStorage) PresignGet(context.Context, string, time.Duration) (string, error) {
+	return "", nil
+}
+
+func (panicStorage) PublicURL(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (panicStorage) GetObject(context.Context, string) (io.ReadCloser, error) {
+	panic("storage secret leaked")
+}
+
+func (panicStorage) DeleteObject(context.Context, string) error {
+	return nil
+}
+
+func (panicStorage) CopyObject(context.Context, string, string) error {
+	return nil
+}
+
+type zipStorage struct {
+	data []byte
+}
+
+func (s zipStorage) PresignPut(context.Context, string, string, time.Duration) (string, http.Header, error) {
+	return "", http.Header{}, nil
+}
+
+func (s zipStorage) PresignGet(context.Context, string, time.Duration) (string, error) {
+	return "", nil
+}
+
+func (s zipStorage) PublicURL(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (s zipStorage) GetObject(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(s.data)), nil
+}
+
+func (s zipStorage) DeleteObject(context.Context, string) error {
+	return nil
+}
+
+func (s zipStorage) CopyObject(context.Context, string, string) error {
+	return nil
+}
+
 func TestWorkerMarksTaskFailedAfterParseTimeout(t *testing.T) {
 	oldParseTimeout := parseTimeout
 	oldStatusUpdateTimeout := statusUpdateTimeout
@@ -57,7 +118,7 @@ func TestWorkerMarksTaskFailedAfterParseTimeout(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec("UPDATE parse_tasks SET status = 'failed', error_code = \\?, error_message = \\? WHERE id = \\?").
-		WithArgs("INTERNAL_ERROR", "download failed: context deadline exceeded", "task-1").
+		WithArgs("INTERNAL_ERROR", publicParseErrorMessage("INTERNAL_ERROR"), "task-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	worker := NewWorker(blockingStorage{}, NewRepo(db), db)
@@ -66,4 +127,131 @@ func TestWorkerMarksTaskFailedAfterParseTimeout(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestWorkerSubmitMasksPanicDetails(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("UPDATE parse_tasks SET status = 'failed', error_code = \\?, error_message = \\? WHERE id = \\?").
+		WithArgs("INTERNAL_ERROR", publicParseErrorMessage("INTERNAL_ERROR"), "task-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	worker := NewWorker(panicStorage{}, NewRepo(db), db)
+	worker.Submit("task-1", "skills/upload-1/skill.zip", 1024)
+	worker.Wait()
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkerSanitizesReadmeBeforePersisting(t *testing.T) {
+	zipData := createWorkerZip(t, map[string][]byte{
+		"SKILL.md": []byte(strings.Join([]string{
+			"---",
+			"name: safe-skill",
+			"description: demo description",
+			"version: 1.2.3",
+			"tags:",
+			"  - demo",
+			"---",
+			"",
+			"# Safe Skill",
+			"",
+			`<script>alert("xss")</script>`,
+			`<div onclick="evil()">hello</div>`,
+			"",
+			"```html",
+			`<script>keep()</script>`,
+			"```",
+		}, "\n")),
+	})
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	taskRows := sqlmock.NewRows([]string{
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
+		"error_code", "error_message",
+		"result_name", "result_description", "result_version", "result_tags", "result_readme",
+		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+	}).AddRow(
+		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing",
+		"", "", "", nil, "", []byte("[]"), nil,
+		"", "user-1", "space-1", "", now, now,
+	)
+
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
+		WithArgs("task-1").
+		WillReturnRows(taskRows)
+	mock.ExpectQuery("SELECT id FROM skills").
+		WithArgs("safe-skill", "space-1", "user-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("UPDATE parse_tasks SET status = 'success',").
+		WithArgs(
+			"safe-skill",
+			stringArg("demo description"),
+			"1.2.3",
+			sqlmock.AnyArg(),
+			stringArg("# Safe Skill\n\n&lt;div onclick=&#34;evil()&#34;&gt;hello&lt;/div&gt;\n\n```html\n<script>keep()</script>\n```"),
+			sqlmock.AnyArg(),
+			"task-1",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), db)
+	worker.process("task-1", "skills/upload-1/skill.zip", int64(len(zipData)+1024))
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createWorkerZip(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "worker.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := zip.NewWriter(f)
+	for name, content := range files {
+		fw, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+type stringArg string
+
+func (s stringArg) Match(v driver.Value) bool {
+	got, ok := v.(string)
+	return ok && got == string(s)
 }

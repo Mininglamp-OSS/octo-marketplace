@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,6 +131,26 @@ func TestRowToItemFields(t *testing.T) {
 	}
 	if item.CreatedAt != "2026-07-14T12:00:00Z" {
 		t.Errorf("CreatedAt = %q", item.CreatedAt)
+	}
+}
+
+func TestRowToItemSanitizesReadmeContent(t *testing.T) {
+	svc := &Service{}
+	item := svc.rowToItem(context.Background(), &skillrepo.SkillRow{
+		ID:            "id-1",
+		Name:          "skill",
+		ReadmeContent: "# Demo\n\n<script>alert(1)</script>\n<div>ok</div>",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	})
+	if item.ReadmeContent == "" {
+		t.Fatal("expected sanitized readme")
+	}
+	if strings.Contains(item.ReadmeContent, "<script>") {
+		t.Fatalf("script tag should be removed, got %q", item.ReadmeContent)
+	}
+	if !strings.Contains(item.ReadmeContent, "&lt;div&gt;ok&lt;/div&gt;") {
+		t.Fatalf("html should be escaped, got %q", item.ReadmeContent)
 	}
 }
 

@@ -18,6 +18,11 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
+var (
+	cgnatPrefix = mustParseCIDR("100.64.0.0/10")
+	nat64Prefix = mustParseCIDR("64:ff9b::/96")
+)
+
 // Probe subsystem — runs an MCP initialize + tools/list handshake against a
 // remote server so the create wizard can auto-populate the tool list. See
 // docs/api/mcp-v1.md §4.7 for the wire contract.
@@ -230,8 +235,38 @@ func newProbeHTTPClient(allowPrivate bool) *http.Client {
 }
 
 func isUnsafeProbeIP(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil {
+		return isUnsafeProbeIPv4(ip4)
+	}
+	if nat64Prefix.Contains(ip) {
+		if embedded, ok := embeddedNAT64IPv4(ip); ok {
+			return isUnsafeProbeIPv4(embedded)
+		}
+	}
 	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
+}
+
+func isUnsafeProbeIPv4(ip net.IP) bool {
+	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
+		cgnatPrefix.Contains(ip)
+}
+
+func embeddedNAT64IPv4(ip net.IP) (net.IP, bool) {
+	ip = ip.To16()
+	if ip == nil || !nat64Prefix.Contains(ip) {
+		return nil, false
+	}
+	return net.IPv4(ip[12], ip[13], ip[14], ip[15]).To4(), true
+}
+
+func mustParseCIDR(raw string) *net.IPNet {
+	_, network, err := net.ParseCIDR(raw)
+	if err != nil {
+		panic("invalid cidr: " + raw)
+	}
+	return network
 }
 
 // sanitizedHeaders drops the reserved secret placeholder (frontend sends it

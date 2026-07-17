@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	mdsanitize "github.com/Mininglamp-OSS/octo-marketplace/internal/markdown"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
 
@@ -149,6 +150,7 @@ func (w *Worker) process(taskID, objectKey string, maxZipBytes int64) {
 	if len(readme) > 1024*1024 {
 		readme = readme[:1024*1024]
 	}
+	readme = mdsanitize.Sanitize(readme)
 	var readmePtr *string
 	if readme != "" {
 		readmePtr = &readme
@@ -198,13 +200,18 @@ func fileSHA256(path string) (string, error) {
 func (w *Worker) updateFailed(taskID, errorCode, errorMessage string) {
 	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
 	defer cancel()
-	_ = w.repo.UpdateFailed(ctx, taskID, errorCode, errorMessage)
+	if errorMessage != "" {
+		log.Printf("[parse-worker] task %s failed code=%s detail=%s", taskID, errorCode, errorMessage)
+	}
+	_ = w.repo.UpdateFailed(ctx, taskID, errorCode, publicParseErrorMessage(errorCode))
 }
 
 func (w *Worker) updateSuccess(taskID string, name string, description *string, version string, tags json.RawMessage, readme *string, sha256 string) {
 	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
 	defer cancel()
-	_ = w.repo.UpdateSuccess(ctx, taskID, name, description, version, tags, readme, sha256)
+	if err := w.repo.UpdateSuccess(ctx, taskID, name, description, version, tags, readme, sha256); err != nil {
+		log.Printf("[parse-worker] update success failed for task %s: %v", taskID, err)
+	}
 }
 
 func sanitizeString(s string, maxLen int) string {

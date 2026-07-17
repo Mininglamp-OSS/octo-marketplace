@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -339,6 +340,8 @@ func TestProbe_BlocksPrivateTargetsByDefault(t *testing.T) {
 		"http://[::1]:8080/mcp",
 		"http://169.254.169.254/latest/meta-data",
 		"http://10.0.0.1/mcp",
+		"http://100.64.0.1/mcp",
+		"http://[64:ff9b::7f00:1]/mcp",
 	} {
 		t.Run(rawURL, func(t *testing.T) {
 			_, apiErr := svc.Probe(context.Background(), ProbeRequest{
@@ -347,6 +350,29 @@ func TestProbe_BlocksPrivateTargetsByDefault(t *testing.T) {
 			})
 			if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
 				t.Fatalf("expected private target rejection, got %v", apiErr)
+			}
+		})
+	}
+}
+
+func TestIsUnsafeProbeIP_NAT64EmbeddedIPv4(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want bool
+	}{
+		{raw: "64:ff9b::7f00:1", want: true},
+		{raw: "64:ff9b::0a00:1", want: true},
+		{raw: "64:ff9b::808:808", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			ip := net.ParseIP(tt.raw)
+			if ip == nil {
+				t.Fatalf("failed to parse %q", tt.raw)
+			}
+			if got := isUnsafeProbeIP(ip); got != tt.want {
+				t.Fatalf("isUnsafeProbeIP(%q) = %v, want %v", tt.raw, got, tt.want)
 			}
 		})
 	}

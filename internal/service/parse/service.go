@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	mdsanitize "github.com/Mininglamp-OSS/octo-marketplace/internal/markdown"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
 
@@ -267,7 +268,7 @@ func (s *Service) GetParseStatus(ctx context.Context, taskID, ownerID string) (*
 		}
 		readme := ""
 		if task.ResultReadme != nil {
-			readme = *task.ResultReadme
+			readme = mdsanitize.Sanitize(*task.ResultReadme)
 		}
 		result.Result = &ParseData{
 			Name:          task.ResultName,
@@ -282,7 +283,7 @@ func (s *Service) GetParseStatus(ctx context.Context, taskID, ownerID string) (*
 	case "failed":
 		result.Error = &ParseError{
 			Code:    task.ErrorCode,
-			Message: task.ErrorMessage,
+			Message: publicParseErrorMessage(task.ErrorCode),
 		}
 	}
 
