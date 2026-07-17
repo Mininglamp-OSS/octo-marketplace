@@ -96,6 +96,38 @@ func TestCOSDownloadCanUseSignedCDNURL(t *testing.T) {
 	}
 }
 
+func TestPresignPutUsesPublicEndpointWhenNoSigningHost(t *testing.T) {
+	s, err := NewOSS(OSSConfig{
+		Endpoint:       "http://minio:9000",
+		Region:         "us-east-1",
+		Bucket:         "octo-marketplace",
+		AccessKey:      "test-access-key",
+		SecretKey:      "test-secret-key",
+		PathStyle:      true,
+		PublicEndpoint: "http://127.0.0.1:29000",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, headers, err := s.PresignPut(context.Background(), "skills/demo.zip", "application/zip", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(raw)
+	if u.Host != "127.0.0.1:29000" {
+		t.Fatalf("host=%q", u.Host)
+	}
+	if u.Path != "/octo-marketplace/skills/demo.zip" {
+		t.Fatalf("path=%q", u.Path)
+	}
+	if u.Query().Get("X-Amz-Signature") == "" {
+		t.Fatalf("missing signature: %s", raw)
+	}
+	if headers.Get("Content-Type") != "application/zip" {
+		t.Fatalf("content-type header=%q", headers.Get("Content-Type"))
+	}
+}
+
 func TestPublicPresignedURLRewritesOnlyOrigin(t *testing.T) {
 	s := &OSSStorage{
 		publicEndpoint: "https://cdn.example.com",

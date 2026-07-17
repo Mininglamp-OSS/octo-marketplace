@@ -59,10 +59,15 @@ func NewOSS(cfg OSSConfig) (*OSSStorage, error) {
 		UsePathStyle: cfg.PathStyle,
 	})
 
-	// Sign against the canonical storage endpoint. A browser-facing CDN host
-	// is substituted only after signing.
+	// Server-side operations always use the internal endpoint. Browser-side
+	// uploads must be signed for the host the browser will actually call,
+	// unless a CDN is explicitly configured to restore the origin Host header.
+	presignEndpoint := cfg.Endpoint
+	if cfg.PublicEndpoint != "" && strings.TrimSpace(cfg.SigningHost) == "" {
+		presignEndpoint = cfg.PublicEndpoint
+	}
 	presignCli := s3.New(s3.Options{
-		BaseEndpoint: aws.String(cfg.Endpoint),
+		BaseEndpoint: aws.String(presignEndpoint),
 		Region:       region,
 		Credentials:  creds,
 		UsePathStyle: cfg.PathStyle,
