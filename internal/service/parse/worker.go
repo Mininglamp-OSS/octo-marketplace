@@ -146,10 +146,7 @@ func (w *Worker) process(taskID, objectKey string, maxZipBytes int64) {
 	}
 
 	// Limit readme content
-	readme := body
-	if len(readme) > 1024*1024 {
-		readme = readme[:1024*1024]
-	}
+	readme := truncateUTF8Bytes(body, 1024*1024)
 	readme = mdsanitize.Sanitize(readme)
 	var readmePtr *string
 	if readme != "" {
@@ -215,12 +212,27 @@ func (w *Worker) updateSuccess(taskID string, name string, description *string, 
 }
 
 func sanitizeString(s string, maxLen int) string {
-	// Remove null bytes
-	s = replaceNullBytes(s)
-	if len(s) > maxLen {
-		s = s[:maxLen]
+	s = strings.ToValidUTF8(replaceNullBytes(s), "")
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		s = string(runes[:maxLen])
 	}
 	return s
+}
+
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes < 0 {
+		return ""
+	}
+	s = strings.ToValidUTF8(s, "")
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(s[:end]) {
+		end--
+	}
+	return s[:end]
 }
 
 func replaceNullBytes(s string) string {

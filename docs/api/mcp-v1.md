@@ -287,32 +287,26 @@ Returns every record visible to the caller inside their current Space:
 | --- | --- | --- | --- |
 | `keyword` | string | — | Case-insensitive substring match on `name` and `slogan`. |
 | `category` | string | `all` | Category key; `all` disables the filter. |
-| `limit` | int | `20` | Page size, max `100`. |
-| `offset` | int | `0` | Skip count. |
+| `page` | int | `1` | One-based page number. |
+| `page_size` | int | `20` | Page size, max `100`. |
 
 **Response (200):**
 
 ```json
 {
-  "items": [ /* McpListItem[] */ ],
-  "total": 42,
-  "categories": [
-    { "key": "all", "count": 42 },
-    { "key": "dev", "count": 12 }
-  ]
+  "data": [ /* McpListItem[] */ ],
+  "pagination": {
+    "total": 42,
+    "page": 1,
+    "page_size": 20
+  }
 }
 ```
 
 - `total` is the count after `keyword` + `category` filters, before
   pagination.
-- `categories[]` returns `{ key, count }` only. **Labels are the
-  frontend's responsibility** — resolved from `mcp.category.<key>` in the
-  frontend i18n bundle. This keeps the backend free of Chinese/English
-  copy and lets locales evolve without a service redeploy.
-- `categories[].count` **respects the current `keyword` filter** so pill
-  counts update as the user searches; when `keyword` is empty the counts
-  cover the whole visible set. Implementation must group over the same
-  filtered set used for `items`.
+- Category filter options are supplied by the dedicated category API; MCP list
+  responses do not embed category facets.
 - Order: newest first (`created_at DESC`). Not configurable in v1.
 
 **Errors:** 401 / 403.
@@ -323,14 +317,11 @@ Returns every record owned by the caller in their current Space,
 regardless of visibility (including their own `private`). Never leaks
 anything owned by another user.
 
-**Query parameters:** same `keyword`, `category`, `limit`, `offset` as
+**Query parameters:** same `keyword`, `category`, `page`, `page_size` as
 `GET /mcps`.
 
-**Response (200):** same envelope as `GET /mcps`, with `items` and
-`total` restricted to `owner_uid == caller`. `categories[]` still
-returns `{ key, count }` (§7 note: this path is index-covered by
-`idx_owner_created` for the base filter, but `category` narrows via
-filesort — acceptable at v1 scale).
+**Response (200):** same envelope as `GET /mcps`, with `data` and
+`pagination.total` restricted to `owner_uid == caller`.
 
 **Errors:** 401 / 403.
 
@@ -548,7 +539,7 @@ Content-Type: application/json
 ### 6.2 List with keyword
 
 ```http
-GET /market/api/v1/mcps?keyword=git&limit=20 HTTP/1.1
+GET /market/api/v1/mcps?keyword=git&page=1&page_size=20 HTTP/1.1
 token: <opaque>
 X-Space-Id: 3fa85f64-…
 ```
@@ -557,12 +548,11 @@ X-Space-Id: 3fa85f64-…
 HTTP/1.1 200 OK
 Content-Type: application/json
 
-{"items":[{"mcp_id":"01HK7Z3B9YV0K5H0KR6QF8N4M2","name":"GitHub MCP",
+{"data":[{"mcp_id":"01HK7Z3B9YV0K5H0KR6QF8N4M2","name":"GitHub MCP",
            "slogan":"…","category":"dev","icon":"🐙",
            "tags":["官方","热门"],"tool_count":8,
            "visibility":"public","creator_name":"GitHub Bot"}],
- "total":1,
- "categories":[{"key":"all","count":1},{"key":"dev","count":1}]}
+ "pagination":{"total":1,"page":1,"page_size":20}}
 ```
 
 ### 6.3 Sentinel accepted / plain token rejected

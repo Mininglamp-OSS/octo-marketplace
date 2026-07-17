@@ -13,10 +13,33 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
+
+func TestSanitizeStringPreservesUTF8RuneBoundaries(t *testing.T) {
+	withinLimit := strings.Repeat("中", 400)
+	if got := sanitizeString(withinLimit, 1024); got != withinLimit || !utf8.ValidString(got) {
+		t.Fatalf("valid CJK content was corrupted: runes=%d valid=%v", utf8.RuneCountInString(got), utf8.ValidString(got))
+	}
+
+	overLimit := strings.Repeat("中", 1100)
+	got := sanitizeString(overLimit, 1024)
+	if !utf8.ValidString(got) || utf8.RuneCountInString(got) != 1024 {
+		t.Fatalf("rune-aware truncation failed: runes=%d valid=%v", utf8.RuneCountInString(got), utf8.ValidString(got))
+	}
+}
+
+func TestTruncateUTF8BytesPreservesRuneBoundary(t *testing.T) {
+	const maxBytes = 1024 * 1024
+	input := strings.Repeat("中", maxBytes/3+2)
+	got := truncateUTF8Bytes(input, maxBytes)
+	if len(got) > maxBytes || !utf8.ValidString(got) {
+		t.Fatalf("byte-bounded truncation produced invalid output: bytes=%d valid=%v", len(got), utf8.ValidString(got))
+	}
+}
 
 type blockingStorage struct{}
 
