@@ -208,16 +208,16 @@ func TestWorkerSanitizesReadmeBeforePersisting(t *testing.T) {
 
 	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
 	taskRows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
 		"result_id", "result_forked_from", "result_metadata",
-		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing",
+		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing", 0,
 		"", "", "", nil, "", []byte("[]"), nil,
 		"", "", nil,
-		"", 0, "user-1", "space-1", "", now, now,
+		"", "user-1", "space-1", "", now, now,
 	)
 
 	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").

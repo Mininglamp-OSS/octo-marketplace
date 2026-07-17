@@ -482,7 +482,7 @@ func TestAdminAcceptsSuperAdminInProd(t *testing.T) {
 		model.Identity{})
 	svc := &reachedAdminService{}
 	engine := Public(stubPinger{}, testAuthenticator(), prodAdminAuth, testStorageConfig(),
-		testHandler(), handler.NewAdminMCP(svc))
+		testHandler(), handler.NewAdminMCP(svc), testParseConfig())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/mcps", nil)
 	req.Header.Set("Token", "super-admin-session")

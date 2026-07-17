@@ -32,6 +32,12 @@ type Config struct {
 	SkillParseMaxAttempts    int           // max recovery retries before marking failed
 	SkillParseWorkerPoolSize int           // concurrent parse goroutines per pod
 
+	// Parse worker configuration for skill zip async parsing.
+	SkillParseTimeout        time.Duration // single parse execution timeout
+	SkillParseStaleTimeout   time.Duration // how long before parsing is considered stuck
+	SkillParseMaxAttempts    int           // max recovery retries before marking failed
+	SkillParseWorkerPoolSize int           // concurrent parse goroutines per pod
+
 	// Object storage for MCP icons (S3-compatible). Independent of the skill
 	// archive storage below.
 	Storage StorageConfig
@@ -128,6 +134,11 @@ func (c Config) ValidateAPI() error {
 	}
 	if c.AuthEnabled && c.OctoAPIURL == "" {
 		return fmt.Errorf("OCTO_API_URL is required when AUTH_ENABLED=true")
+	}
+	// Parse worker config: staleTimeout must be strictly greater than parseTimeout
+	// so a legitimately-running parse task is not prematurely reclaimed.
+	if c.SkillParseStaleTimeout <= c.SkillParseTimeout {
+		return fmt.Errorf("SKILL_PARSE_STALE_TIMEOUT (%s) must be greater than SKILL_PARSE_TIMEOUT (%s)", c.SkillParseStaleTimeout, c.SkillParseTimeout)
 	}
 	// Parse worker config: staleTimeout must be strictly greater than parseTimeout
 	// so a legitimately-running parse task is not prematurely reclaimed.
