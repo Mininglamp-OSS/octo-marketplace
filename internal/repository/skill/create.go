@@ -45,7 +45,7 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 		now, now,
 	)
 	if err != nil {
-		return nil, err
+		return nil, mapDuplicateName(err)
 	}
 	return &SkillRow{
 		ID:            p.ID,
@@ -109,7 +109,7 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 		now, now,
 	)
 	if err != nil {
-		return nil, err
+		return nil, mapDuplicateName(err)
 	}
 
 	if err := tx.Commit(); err != nil {

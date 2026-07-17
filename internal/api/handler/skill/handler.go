@@ -244,6 +244,10 @@ func (h *Handler) Create(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "category not found", nil, "")
 			return
 		}
+		if errors.Is(err, skillsvc.ErrNameTaken) {
+			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "skill name already exists", nil, "")
+			return
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -325,6 +329,10 @@ func (h *Handler) Update(c *gin.Context) {
 		}
 		if errors.Is(err, skillsvc.ErrParseTaskConsumed) {
 			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "parse task already consumed", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrNameTaken) {
+			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "skill name already exists", nil, "")
 			return
 		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")

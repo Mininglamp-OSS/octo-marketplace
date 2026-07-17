@@ -44,6 +44,10 @@ var ErrParseTaskConsumed = errors.New("parse task already consumed")
 // ErrCategoryNotFound indicates the specified category does not exist.
 var ErrCategoryNotFound = errors.New("category not found")
 
+// ErrNameTaken indicates that the requested name is already used by another
+// skill owned by the caller in the current Space.
+var ErrNameTaken = errors.New("skill name taken")
+
 // SkillItem is the API-facing representation of a skill.
 type SkillItem struct {
 	ID            string          `json:"skill_id"`
@@ -250,6 +254,9 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 		if errors.Is(err, skillrepo.ErrParseTaskAlreadyConsumed) {
 			return nil, ErrParseTaskConsumed
 		}
+		if errors.Is(err, skillrepo.ErrNameTaken) {
+			return nil, ErrNameTaken
+		}
 		return nil, err
 	}
 
@@ -391,6 +398,9 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 			if errors.Is(err, skillrepo.ErrParseTaskAlreadyConsumed) {
 				return nil, ErrParseTaskConsumed
 			}
+			if errors.Is(err, skillrepo.ErrNameTaken) {
+				return nil, ErrNameTaken
+			}
 			return nil, err
 		}
 
@@ -417,6 +427,9 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 
 	_, err = s.repo.Update(ctx, id, repoParams)
 	if err != nil {
+		if errors.Is(err, skillrepo.ErrNameTaken) {
+			return nil, ErrNameTaken
+		}
 		return nil, err
 	}
 

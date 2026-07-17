@@ -104,7 +104,7 @@ func (r *Repo) Update(ctx context.Context, id string, p UpdateParams) (int64, er
 
 	result, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, err
+		return 0, mapDuplicateName(err)
 	}
 	return result.RowsAffected()
 }

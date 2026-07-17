@@ -105,7 +105,7 @@ func (r *Repo) UpdateSkillAndConsumeTask(ctx context.Context, skillID string, p 
 	query := "UPDATE skills SET " + joinStrings(sets, ", ") + " WHERE id = ?"
 	args = append(args, skillID)
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		return err
+		return mapDuplicateName(err)
 	}
 
 	return tx.Commit()
