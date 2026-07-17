@@ -38,6 +38,10 @@ type Config struct {
 	SkillParseMaxAttempts    int           // max recovery retries before marking failed
 	SkillParseWorkerPoolSize int           // concurrent parse goroutines per pod
 
+	// Redis URL for metrics tracking (e.g. "redis://localhost:6379/0").
+	// Empty disables Redis-backed metrics (counters silently no-op).
+	RedisURL string
+
 	// Object storage for MCP icons (S3-compatible). Independent of the skill
 	// archive storage below.
 	Storage StorageConfig
@@ -100,6 +104,7 @@ func Load() Config {
 		SkillParseStaleTimeout:   envDuration("SKILL_PARSE_STALE_TIMEOUT", 5*time.Minute),
 		SkillParseMaxAttempts:    envInt("SKILL_PARSE_MAX_ATTEMPTS", 2),
 		SkillParseWorkerPoolSize: envInt("SKILL_PARSE_WORKER_POOL_SIZE", 10),
+		RedisURL:                 env("REDIS_URL", ""),
 
 		Storage: StorageConfig{
 			Endpoint:      strings.TrimRight(env("STORAGE_ENDPOINT", ""), "/"),

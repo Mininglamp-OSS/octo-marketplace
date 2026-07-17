@@ -10,18 +10,22 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler"
 	categoryhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/category"
+	metricshandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/metrics"
 	skillhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/skill"
 	uploadhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/upload"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	metricsredis "github.com/Mininglamp-OSS/octo-marketplace/internal/redis"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
 	categorysvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/category"
+	metricssvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/metrics"
 	parsesvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
 	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 	"github.com/gin-gonic/gin"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 type Pinger interface {
@@ -55,11 +59,20 @@ type ParseConfig struct {
 	WorkerPoolSize int
 }
 
-func Public(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, parseCfg ParseConfig) *gin.Engine {
-	return publicWithOptions(database, authenticator, adminAuth, storageCfg, mcp, adminMCP, authenticator.AuthEnabled(), parseCfg)
+// RedisConfig holds configuration for the Redis connection used by metrics.
+type RedisConfig struct {
+	URL string // e.g. "redis://localhost:6379/0"
 }
 
-func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, authEnabled bool, parseCfg ParseConfig) *gin.Engine {
+func Public(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, parseCfg ParseConfig, redisCfg ...RedisConfig) *gin.Engine {
+	var rc RedisConfig
+	if len(redisCfg) > 0 {
+		rc = redisCfg[0]
+	}
+	return publicWithOptions(database, authenticator, adminAuth, storageCfg, mcp, adminMCP, authenticator.AuthEnabled(), parseCfg, rc)
+}
+
+func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, authEnabled bool, parseCfg ParseConfig, redisCfg RedisConfig) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery(), corsMiddleware(storageCfg.CORSAllowedOrigins))
 
@@ -135,6 +148,19 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		catH.Register(v1)
 		catH.RegisterAdmin(r, adminAuth, generateID)
 		skillhandler.New(skSvc).Register(v1)
+
+		// Wire up metrics service and handler.
+		var metricsRedisClient *metricsredis.Client
+		if redisCfg.URL != "" {
+			opts, err := goredis.ParseURL(redisCfg.URL)
+			if err == nil {
+				rdb := goredis.NewClient(opts)
+				metricsRedisClient = metricsredis.NewClient(rdb)
+			}
+		}
+		mSvc := metricssvc.New(metricsRedisClient)
+		metricssvc.RegisterResolver("skill", metricssvc.NewSkillResolver(skSvc))
+		metricshandler.New(mSvc).Register(v1)
 
 		parseRepo := parsesvc.NewRepo(db)
 		worker := parsesvc.NewWorker(store, parseRepo, db, parsesvc.WorkerConfig{
@@ -258,7 +284,7 @@ func PublicWithDB(db *sql.DB, authenticator *marketmiddleware.Authenticator, sto
 		StaleTimeout:   5 * time.Minute,
 		MaxAttempts:    2,
 		WorkerPoolSize: 10,
-	})
+	}, RedisConfig{})
 }
 
 // PublicWithDBAndAdminAuth is a test helper that mounts the admin surface with
@@ -272,5 +298,5 @@ func PublicWithDBAndAdminAuth(db *sql.DB, authenticator *marketmiddleware.Authen
 		StaleTimeout:   5 * time.Minute,
 		MaxAttempts:    2,
 		WorkerPoolSize: 10,
-	})
+	}, RedisConfig{})
 }
