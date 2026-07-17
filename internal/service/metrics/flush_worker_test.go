@@ -293,6 +293,51 @@ func TestFlushWorker_LockRelease_DoesNotDeleteOthersLock(t *testing.T) {
 	}
 }
 
+func TestFlushWorker_LockRelease_AfterContextCancel(t *testing.T) {
+	// slowRepo cancels the context on the first UpsertCounts call,
+	// simulating a graceful shutdown while flush is in progress.
+	cancelOnCall := &contextCancelRepo{t: t}
+	mr := miniredis.RunT(t)
+	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	cfg := DefaultFlushWorkerConfig()
+	cfg.Batch = 500
+	w := NewFlushWorker(rdb, &cancelOnCall.mockRepo, cfg)
+
+	// Set up dirty items
+	mr.Set("metrics:skill:sk-1:view", "5")
+	mr.SAdd("metrics:dirty", "skill:sk-1")
+	mr.Set("metrics:skill:sk-2:view", "3")
+	mr.SAdd("metrics:dirty", "skill:sk-2")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelOnCall.cancel = cancel
+
+	// flush acquires lock, processes sk-1 (which triggers cancel), then exits
+	w.flush(ctx)
+
+	// Lock must be released even though context was cancelled mid-flush
+	ok := mr.Exists(flushLockKey)
+	if ok {
+		t.Error("expected lock to be released after context cancellation during flush")
+	}
+}
+
+// contextCancelRepo cancels the provided context on the first UpsertCounts call.
+type contextCancelRepo struct {
+	mockRepo
+	cancel context.CancelFunc
+	t      *testing.T
+}
+
+func (r *contextCancelRepo) UpsertCounts(ctx context.Context, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
+	// Cancel the context to simulate shutdown during flush
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	return r.mockRepo.UpsertCounts(ctx, resourceType, resourceID, viewDelta, downloadDelta, installDelta)
+}
+
 func TestFlushWorker_NonSkillType_Skipped(t *testing.T) {
 	repo := &mockRepo{}
 	w, mr := setupTestWorker(t, repo)

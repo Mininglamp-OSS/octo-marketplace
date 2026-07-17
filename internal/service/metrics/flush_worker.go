@@ -89,7 +89,14 @@ func (w *FlushWorker) flush(ctx context.Context) {
 		log.Printf("[flush-worker] lock held by another instance, skipping")
 		return
 	}
-	defer w.releaseLock(ctx)
+	defer func() {
+		// Use an independent context for lock release so that even if the flush
+		// context is cancelled (e.g. graceful shutdown), we still release our lock
+		// instead of blocking other instances for the full TTL.
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer releaseCancel()
+		w.releaseLock(releaseCtx)
+	}()
 
 	// Log dirty set size
 	dirtySize, _ := w.rdb.SCard(ctx, dirtySetKey).Result()
