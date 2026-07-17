@@ -68,6 +68,7 @@ dm__test
 /cc-*.json
 grp_out.txt
 .debug-screenshots/
+.tmp/
 debug-storybook.log
 scripts/debug.js
 
