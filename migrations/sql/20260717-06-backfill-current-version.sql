@@ -15,11 +15,15 @@ WHERE s.current_version_id = '';
 
 -- For skills that have NO skill_versions record yet, create one from existing
 -- legacy columns and backfill the pointer.
--- We use a stored procedure to iterate because INSERT...SELECT + UPDATE in a
--- single statement is awkward with generated IDs.
-DROP PROCEDURE IF EXISTS backfill_missing_versions;
+-- Uses a stored procedure with cursor iteration; wrapped in StatementBegin/End
+-- so sql-migrate sends the entire block as one statement (semicolons inside
+-- the procedure body won't cause premature splitting).
 
-DELIMITER $$
+-- +migrate StatementBegin
+DROP PROCEDURE IF EXISTS backfill_missing_versions;
+-- +migrate StatementEnd
+
+-- +migrate StatementBegin
 CREATE PROCEDURE backfill_missing_versions()
 BEGIN
   DECLARE done INT DEFAULT FALSE;
@@ -48,8 +52,8 @@ BEGIN
     UPDATE skills SET current_version_id = v_version_id WHERE id = v_skill_id;
   END LOOP;
   CLOSE cur;
-END$$
-DELIMITER ;
+END;
+-- +migrate StatementEnd
 
 CALL backfill_missing_versions();
 DROP PROCEDURE IF EXISTS backfill_missing_versions;

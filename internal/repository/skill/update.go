@@ -11,20 +11,21 @@ import (
 
 // UpdateParams holds optional fields to update.
 type UpdateParams struct {
-	Name          *string
-	DisplayName   *string
-	IconURL       *string
-	Description   *string
-	CategoryID    *string
-	Tags          json.RawMessage // nil means no change
-	Visibility    *model.Visibility
-	Version       *string
-	ReadmeContent *string
-	FileName      *string
-	FileURL       *string
-	FileSize      *int64
-	FileSHA256    *string
-	TagNames      []string
+	Name             *string
+	DisplayName      *string
+	IconURL          *string
+	Description      *string
+	CategoryID       *string
+	Tags             json.RawMessage // nil means no change
+	Visibility       *model.Visibility
+	Version          *string
+	ReadmeContent    *string
+	FileName         *string
+	FileURL          *string
+	FileSize         *int64
+	FileSHA256       *string
+	CurrentVersionID *string
+	TagNames         []string
 }
 
 // buildUpdateSets constructs the SET clause parts and args for an UPDATE query.
@@ -83,6 +84,10 @@ func buildUpdateSets(p UpdateParams) ([]string, []interface{}) {
 	if p.FileSHA256 != nil {
 		sets = append(sets, "file_sha256 = ?")
 		args = append(args, *p.FileSHA256)
+	}
+	if p.CurrentVersionID != nil {
+		sets = append(sets, "current_version_id = ?")
+		args = append(args, *p.CurrentVersionID)
 	}
 
 	return sets, args

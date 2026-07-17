@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -237,6 +236,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 	}
 
 	id := s.idGen()
+	versionID := s.idGen()
 
 	// Compute final object key: skills/{skill_id}/v{version}/{file_name}
 	finalKey := fmt.Sprintf("skills/%s/v%s/%s", id, version, pt.FileName)
@@ -250,24 +250,32 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 	}
 
 	row, err := s.repo.CreateSkillAndConsumeTask(ctx, p.ParseTaskID, skillrepo.CreateParams{
-		ID:            id,
-		Name:          name,
-		DisplayName:   p.DisplayName,
-		IconURL:       p.IconURL,
-		Description:   description,
-		CategoryID:    p.CategoryID,
-		Tags:          tags,
-		OwnerID:       p.UserID,
-		OwnerName:     p.UserName,
-		SpaceID:       p.SpaceID,
-		Visibility:    toVisibility(visibility),
-		Version:       version,
-		ReadmeContent: readmeContent,
-		FileName:      pt.FileName,
-		FileURL:       finalKey,
-		FileSize:      pt.FileSize,
-		FileSHA256:    pt.FileSHA256,
-		TagNames:      tagNames,
+		ID:               id,
+		Name:             name,
+		DisplayName:      p.DisplayName,
+		IconURL:          p.IconURL,
+		CurrentVersionID: versionID,
+		Description:      description,
+		CategoryID:       p.CategoryID,
+		Tags:             tags,
+		OwnerID:          p.UserID,
+		OwnerName:        p.UserName,
+		SpaceID:          p.SpaceID,
+		Visibility:       toVisibility(visibility),
+		Version:          version,
+		ReadmeContent:    readmeContent,
+		FileName:         pt.FileName,
+		FileURL:          finalKey,
+		FileSize:         pt.FileSize,
+		FileSHA256:       pt.FileSHA256,
+		TagNames:         tagNames,
+	}, &model.SkillVersion{
+		ID:        versionID,
+		SkillID:   id,
+		Version:   version,
+		Changelog: "初始发布",
+		Storage:   fmt.Sprintf(`{"type":"s3","object_key":%q}`, finalKey),
+		ChangedBy: p.UserID,
 	})
 	if err != nil {
 		if errors.Is(err, skillrepo.ErrParseTaskAlreadyConsumed) {
@@ -277,18 +285,6 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 			return nil, ErrNameTaken
 		}
 		return nil, err
-	}
-
-	// Record initial version in history
-	if verErr := s.repo.InsertVersion(ctx, model.SkillVersion{
-		ID:        s.idGen(),
-		SkillID:   id,
-		Version:   version,
-		Changelog: "初始发布",
-		Storage:   fmt.Sprintf(`{"type":"s3","object_key":%q}`, finalKey),
-		ChangedBy: p.UserID,
-	}); verErr != nil {
-		log.Printf("[skill] InsertVersion failed for skill %s: %v", id, verErr)
 	}
 
 	item := s.rowToItem(ctx, row)
@@ -420,12 +416,23 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 			}
 		}
 
-		// Transactionally update skill and consume parse task
+		// Pre-generate version ID and set current_version_id on the skill update
+		versionID := s.idGen()
+		repoParams.CurrentVersionID = &versionID
+
+		// Transactionally update skill, insert version, and consume parse task
 		taskSkillID := pt.SkillID
 		if taskSkillID == "" {
 			taskSkillID = id // for tasks not explicitly linked
 		}
-		err = s.repo.UpdateSkillAndConsumeTask(ctx, id, repoParams, p.ParseTaskID, userID, spaceID, taskSkillID)
+		err = s.repo.UpdateSkillAndConsumeTask(ctx, id, repoParams, p.ParseTaskID, userID, spaceID, taskSkillID, &model.SkillVersion{
+			ID:        versionID,
+			SkillID:   id,
+			Version:   version,
+			Changelog: p.Changelog,
+			Storage:   fmt.Sprintf(`{"type":"s3","object_key":%q}`, finalKey),
+			ChangedBy: userID,
+		})
 		if err != nil {
 			if errors.Is(err, skillrepo.ErrParseTaskAlreadyConsumed) {
 				return nil, ErrParseTaskConsumed
@@ -434,18 +441,6 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 				return nil, ErrNameTaken
 			}
 			return nil, err
-		}
-
-		// Record new version in history
-		if verErr := s.repo.InsertVersion(ctx, model.SkillVersion{
-			ID:        s.idGen(),
-			SkillID:   id,
-			Version:   version,
-			Changelog: p.Changelog,
-			Storage:   fmt.Sprintf(`{"type":"s3","object_key":%q}`, finalKey),
-			ChangedBy: userID,
-		}); verErr != nil {
-			log.Printf("[skill] InsertVersion failed for skill %s v%s: %v", id, version, verErr)
 		}
 
 		// Re-fetch to return updated data

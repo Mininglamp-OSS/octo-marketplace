@@ -140,21 +140,19 @@ func TestCreate_CopyObjectSuccess_DBMutationOccurs(t *testing.T) {
 		WithArgs("task-1").
 		WillReturnRows(parseRows)
 
-	// Expect the transaction: BEGIN, consume task, insert skill, COMMIT
+	// Expect the transaction: BEGIN, consume task, insert skill, insert version, upsert tags, COMMIT
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE parse_tasks SET status").
 		WithArgs("task-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skills").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO skill_versions").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_tags").
 		WithArgs("space-1", "tag1", "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-
-	// Expect InsertVersion (called after transaction commits; logged on failure)
-	mock.ExpectExec("INSERT INTO skill_versions").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	ctx := context.Background()
 	item, createErr := svc.Create(ctx, CreateParams{
