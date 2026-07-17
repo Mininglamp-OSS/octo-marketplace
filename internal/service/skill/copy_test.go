@@ -140,6 +140,9 @@ func TestCreate_CopyObjectSuccess_DBMutationOccurs(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skills").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO skill_tags").
+		WithArgs("space-1", "tag1", "user-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	// Expect InsertVersion (called after transaction commits; logged on failure)

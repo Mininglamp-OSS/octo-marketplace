@@ -78,6 +78,11 @@ components:
         data:
           $ref: '#/components/schemas/internal_api_handler_skill.SkillResponse'
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_skill_SkillTagList:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_skill.SkillTagList'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_skill_SkillVersionList:
       properties:
         data:
@@ -636,6 +641,17 @@ components:
         status:
           type: string
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_skill.TagItem:
+      properties:
+        created_at:
+          type: string
+        created_by:
+          type: string
+        name:
+          type: string
+        updated_at:
+          type: string
+      type: object
     internal_api_handler.MCPIconUploadRequest:
       properties:
         content_type:
@@ -720,6 +736,14 @@ components:
           type: string
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
+      type: object
+    internal_api_handler_skill.SkillTagList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_skill.TagItem'
+          type: array
+          uniqueItems: false
       type: object
     internal_api_handler_skill.SkillVersionList:
       properties:
@@ -2374,6 +2398,18 @@ paths:
         name: category_id
         schema:
           type: string
+      - description: Comma-separated tag names; all tags must match
+        in: query
+        name: tags
+        schema:
+          type: string
+      - description: Repeated tag names; all tags must match
+        in: query
+        name: tag
+        schema:
+          items:
+            type: string
+          type: array
       - description: Cursor for next page
         in: query
         name: cursor
@@ -2853,6 +2889,18 @@ paths:
         name: q
         schema:
           type: string
+      - description: Comma-separated tag names; all tags must match
+        in: query
+        name: tags
+        schema:
+          type: string
+      - description: Repeated tag names; all tags must match
+        in: query
+        name: tag
+        schema:
+          items:
+            type: string
+          type: array
       - description: Cursor for next page
         in: query
         name: cursor
@@ -2902,6 +2950,57 @@ paths:
       security:
       - Bearer: []
       summary: List owned skills
+      tags:
+      - skill
+  /skills/tags:
+    get:
+      description: List custom Skill tags created in the current Space. Supports fuzzy
+        search by q.
+      operationId: skill.tag.list
+      parameters:
+      - description: Fuzzy tag search
+        in: query
+        name: q
+        schema:
+          type: string
+      - description: Limit, default 50, max 100
+        in: query
+        name: limit
+        schema:
+          type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_skill_SkillTagList'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: List skill tags
       tags:
       - skill
 servers:

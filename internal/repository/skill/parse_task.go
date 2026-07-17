@@ -107,6 +107,9 @@ func (r *Repo) UpdateSkillAndConsumeTask(ctx context.Context, skillID string, p 
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return mapDuplicateName(err)
 	}
+	if err := upsertTags(ctx, tx, spaceID, ownerID, p.TagNames); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }

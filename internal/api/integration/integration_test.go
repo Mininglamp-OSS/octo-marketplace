@@ -373,8 +373,10 @@ func TestUpdateSkillOwner(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(skillRow("skill-8", "My Skill", "user-1", "Alice", "space-1", "space"))
 	// Update
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE skills SET").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	// Re-fetch after update
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(sqlmock.NewRows(skillCols).AddRow(
@@ -461,6 +463,29 @@ func TestListMine(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestListSkillTags(t *testing.T) {
+	engine, mock, db := testSetup(t)
+	defer db.Close()
+
+	now := time.Now().UTC()
+	mock.ExpectQuery("SELECT space_id, name, created_by, created_at, updated_at").
+		WithArgs("space-1", "%auto%", 10).
+		WillReturnRows(sqlmock.NewRows([]string{"space_id", "name", "created_by", "created_at", "updated_at"}).
+			AddRow("space-1", "automation", "user-2", now, now))
+
+	w := doRequest(engine, "GET", "/api/v1/skill/tags?q=auto&limit=10", nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := parseBody(t, w)
+	data := body["data"].(map[string]interface{})
+	items := data["items"].([]interface{})
+	if len(items) != 1 || items[0].(map[string]interface{})["name"] != "automation" {
+		t.Fatalf("unexpected items: %#v", items)
 	}
 }
 

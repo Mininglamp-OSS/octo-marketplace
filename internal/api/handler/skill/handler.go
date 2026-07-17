@@ -25,6 +25,10 @@ type SkillVersionList struct {
 	Items []model.SkillVersion `json:"items"`
 }
 
+type SkillTagList struct {
+	Items []skillsvc.TagItem `json:"items"`
+}
+
 // New creates a new skill handler.
 func New(svc *skillsvc.Service) *Handler {
 	return &Handler{svc: svc}
@@ -33,6 +37,7 @@ func New(svc *skillsvc.Service) *Handler {
 // Register registers skill routes on the given router group.
 func (h *Handler) Register(rg *gin.RouterGroup) {
 	rg.GET("/skills/mine", h.ListMine)
+	rg.GET("/skills/tags", h.ListTags)
 	rg.GET("/skills", h.List)
 	rg.GET("/skills/:skill_id", h.Get)
 	rg.GET("/skills/:skill_id/versions", h.ListVersions)
@@ -42,6 +47,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 
 	legacy := rg.Group("/skill", legacyEndpoint("/api/v1/skills"))
 	legacy.GET("/mine", h.ListMine)
+	legacy.GET("/tags", h.ListTags)
 	legacy.GET("", h.List)
 	legacy.GET("/:skill_id", h.Get)
 	legacy.GET("/:skill_id/versions", h.ListVersions)
@@ -60,6 +66,8 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 // @Security Bearer
 // @Param q query string false "Search query"
 // @Param category_id query string false "Category ID"
+// @Param tags query string false "Comma-separated tag names; all tags must match"
+// @Param tag query []string false "Repeated tag names; all tags must match"
 // @Param cursor query string false "Cursor for next page"
 // @Param page_size query int false "Page size, default 20, max 50"
 // @Success 200 {object} apiresponse.CursorList[SkillResponse]
@@ -82,6 +90,7 @@ func (h *Handler) List(c *gin.Context) {
 		UserID:     identity.UID,
 		Query:      c.Query("q"),
 		CategoryID: c.Query("category_id"),
+		Tags:       tagFilters(c),
 		Cursor:     c.Query("cursor"),
 		Limit:      limit,
 	})
@@ -103,6 +112,8 @@ func (h *Handler) List(c *gin.Context) {
 // @Produce json
 // @Security Bearer
 // @Param q query string false "Search query"
+// @Param tags query string false "Comma-separated tag names; all tags must match"
+// @Param tag query []string false "Repeated tag names; all tags must match"
 // @Param cursor query string false "Cursor for next page"
 // @Param page_size query int false "Page size, default 20, max 50"
 // @Success 200 {object} apiresponse.CursorList[SkillResponse]
@@ -124,6 +135,7 @@ func (h *Handler) ListMine(c *gin.Context) {
 		SpaceID: spaceID,
 		UserID:  identity.UID,
 		Query:   c.Query("q"),
+		Tags:    tagFilters(c),
 		Cursor:  c.Query("cursor"),
 		Limit:   limit,
 	})
@@ -248,6 +260,10 @@ func (h *Handler) Create(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "skill name already exists", nil, "")
 			return
 		}
+		if errors.Is(err, skillsvc.ErrInvalidTags) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must be a JSON string array", nil, "")
+			return
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -335,11 +351,44 @@ func (h *Handler) Update(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "skill name already exists", nil, "")
 			return
 		}
+		if errors.Is(err, skillsvc.ErrInvalidTags) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must be a JSON string array", nil, "")
+			return
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
 
 	apiresponse.OK(c, item)
+}
+
+// ListTags godoc
+// @Summary List skill tags
+// @Description List custom Skill tags created in the current Space. Supports fuzzy search by q.
+// @Tags skill
+// @ID skill.tag.list
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param q query string false "Fuzzy tag search"
+// @Param limit query int false "Limit, default 50, max 100"
+// @Success 200 {object} apiresponse.Data[SkillTagList]
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
+// @Router /skills/tags [get]
+func (h *Handler) ListTags(c *gin.Context) {
+	if _, ok := middleware.Identity(c); !ok {
+		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "unauthorized", nil, "")
+		return
+	}
+	spaceID := middleware.SpaceID(c)
+	items, err := h.svc.ListTags(c.Request.Context(), spaceID, c.Query("q"), parseTagLimit(c.Query("limit")))
+	if err != nil {
+		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		return
+	}
+	apiresponse.OK(c, gin.H{"items": items})
 }
 
 // Delete godoc
@@ -451,4 +500,24 @@ func parseLimit(s string) int {
 		return 50
 	}
 	return n
+}
+
+func parseTagLimit(s string) int {
+	if s == "" {
+		return 50
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 50
+	}
+	if n > 100 {
+		return 100
+	}
+	return n
+}
+
+func tagFilters(c *gin.Context) []string {
+	values := append([]string{}, c.QueryArray("tags")...)
+	values = append(values, c.QueryArray("tag")...)
+	return skillsvc.ParseTagFilters(values...)
 }

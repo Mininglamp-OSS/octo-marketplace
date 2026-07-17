@@ -48,6 +48,9 @@ var ErrCategoryNotFound = errors.New("category not found")
 // skill owned by the caller in the current Space.
 var ErrNameTaken = errors.New("skill name taken")
 
+// ErrInvalidTags indicates the tags field is not a JSON string array.
+var ErrInvalidTags = errors.New("invalid tags")
+
 // SkillItem is the API-facing representation of a skill.
 type SkillItem struct {
 	ID            string          `json:"skill_id"`
@@ -80,12 +83,21 @@ type ListResult struct {
 	NextCursor *string     `json:"next_cursor"`
 }
 
+// TagItem is the API-facing representation of a Space-scoped skill tag.
+type TagItem struct {
+	Name      string `json:"name"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 // ListParams are the parameters for listing skills.
 type ListParams struct {
 	SpaceID    string
 	UserID     string
 	Query      string
 	CategoryID string
+	Tags       []string
 	Cursor     string
 	Limit      int
 }
@@ -97,6 +109,7 @@ func (s *Service) List(ctx context.Context, p ListParams) (*ListResult, error) {
 		UserID:     p.UserID,
 		Query:      p.Query,
 		CategoryID: p.CategoryID,
+		Tags:       normalizeTags(p.Tags),
 		Cursor:     p.Cursor,
 		Limit:      p.Limit,
 		MineOnly:   false,
@@ -113,6 +126,7 @@ func (s *Service) ListMine(ctx context.Context, p ListParams) (*ListResult, erro
 		SpaceID:  p.SpaceID,
 		UserID:   p.UserID,
 		Query:    p.Query,
+		Tags:     normalizeTags(p.Tags),
 		Cursor:   p.Cursor,
 		Limit:    p.Limit,
 		MineOnly: true,
@@ -208,6 +222,10 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 	if tags == nil {
 		tags = json.RawMessage(`[]`)
 	}
+	tags, tagNames, err := normalizeRawTags(tags)
+	if err != nil {
+		return nil, ErrInvalidTags
+	}
 	readmeContent := ""
 	if pt.ResultReadme != nil {
 		readmeContent = mdsanitize.Sanitize(*pt.ResultReadme)
@@ -249,6 +267,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 		FileURL:       finalKey,
 		FileSize:      pt.FileSize,
 		FileSHA256:    pt.FileSHA256,
+		TagNames:      tagNames,
 	})
 	if err != nil {
 		if errors.Is(err, skillrepo.ErrParseTaskAlreadyConsumed) {
@@ -326,6 +345,14 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 		Visibility:  vis,
 		Version:     p.Version,
 	}
+	if p.Tags != nil {
+		normalized, tagNames, err := normalizeRawTags(p.Tags)
+		if err != nil {
+			return nil, ErrInvalidTags
+		}
+		repoParams.Tags = normalized
+		repoParams.TagNames = tagNames
+	}
 
 	// If a parse_task_id is provided, apply reupload results
 	if p.ParseTaskID != "" {
@@ -377,7 +404,12 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 			repoParams.Version = &pt.ResultVersion
 		}
 		if p.Tags == nil && pt.ResultTags != nil {
-			repoParams.Tags = pt.ResultTags
+			normalized, tagNames, err := normalizeRawTags(pt.ResultTags)
+			if err != nil {
+				return nil, ErrInvalidTags
+			}
+			repoParams.Tags = normalized
+			repoParams.TagNames = tagNames
 		}
 
 		// Relocate file BEFORE committing the DB transaction.
@@ -425,7 +457,7 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 		return &item, nil
 	}
 
-	_, err = s.repo.Update(ctx, id, repoParams)
+	_, err = s.repo.UpdateWithTags(ctx, id, spaceID, userID, repoParams)
 	if err != nil {
 		if errors.Is(err, skillrepo.ErrNameTaken) {
 			return nil, ErrNameTaken
@@ -440,6 +472,24 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 	}
 	item := s.rowToItem(ctx, updated)
 	return &item, nil
+}
+
+// ListTags returns Space-scoped tags created by skill create/update flows.
+func (s *Service) ListTags(ctx context.Context, spaceID, query string, limit int) ([]TagItem, error) {
+	rows, err := s.repo.ListTags(ctx, spaceID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]TagItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, TagItem{
+			Name:      row.Name,
+			CreatedBy: row.CreatedBy,
+			CreatedAt: row.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			UpdatedAt: row.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	return items, nil
 }
 
 // Delete hard-deletes a skill. Only the owner within the same space can delete.

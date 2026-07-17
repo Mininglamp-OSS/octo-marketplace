@@ -27,10 +27,17 @@ type CreateParams struct {
 	FileURL       string
 	FileSize      int64
 	FileSHA256    string
+	TagNames      []string
 }
 
 // Create inserts a new skill record.
 func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
 	now := time.Now().UTC()
 	query := `
 		INSERT INTO skills (id, name, display_name, icon_url, description, category_id, tags, owner_id, owner_name,
@@ -38,7 +45,7 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 			file_sha256, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := r.db.ExecContext(ctx, query,
+	_, err = tx.ExecContext(ctx, query,
 		p.ID, p.Name, p.DisplayName, p.IconURL, p.Description, p.CategoryID, string(p.Tags),
 		p.OwnerID, p.OwnerName, p.SpaceID, string(p.Visibility), p.Version,
 		p.ReadmeContent, p.FileName, p.FileURL, p.FileSize, p.FileSHA256,
@@ -46,6 +53,12 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 	)
 	if err != nil {
 		return nil, mapDuplicateName(err)
+	}
+	if err := upsertTags(ctx, tx, p.SpaceID, p.OwnerID, p.TagNames); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return &SkillRow{
 		ID:            p.ID,
@@ -110,6 +123,9 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 	)
 	if err != nil {
 		return nil, mapDuplicateName(err)
+	}
+	if err := upsertTags(ctx, tx, p.SpaceID, p.OwnerID, p.TagNames); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {

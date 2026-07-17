@@ -19,9 +19,20 @@ services:
       DEV_AUTH_UID: "dev-user"
       DEV_AUTH_NAME: "Developer"
       DEV_SPACE_ID: "dev-space"
+      STORAGE_DRIVER: "oss"
+      OSS_ENDPOINT: "http://172.28.0.2:9000"
+      OSS_BUCKET: "octo-marketplace"
+      OSS_ACCESS_KEY: "octoadmin"
+      OSS_SECRET_KEY: "66aac2f912bc5ec8503f54132ac18a32"
+      OSS_REGION: "us-east-1"
+      OSS_PATH_STYLE: "true"
+      OSS_PUBLIC_ENDPOINT: "http://127.0.0.1:29000"
     depends_on:
       mysql:
         condition: service_healthy
+    networks:
+      - default
+      - octo-net
 
   mysql:
     image: docker.m.daocloud.io/mysql:8.0
@@ -42,3 +53,8 @@ services:
 
 volumes:
   mysqldata:
+
+networks:
+  octo-net:
+    external: true
+    name: octo_octo-net

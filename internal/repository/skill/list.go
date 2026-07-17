@@ -14,6 +14,7 @@ type ListFilter struct {
 	UserID     string
 	Query      string
 	CategoryID string
+	Tags       []string
 	Cursor     string // format: "timestamp,id"
 	Limit      int
 	MineOnly   bool // if true, only return skills owned by UserID
@@ -85,11 +86,18 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		searchTerm := "%" + escapeLike(f.Query) + "%"
 		conditions = append(conditions, `(
 			s.name LIKE ? OR s.description LIKE ? OR s.owner_name LIKE ?
-			OR JSON_CONTAINS(s.tags, ?)
+			OR JSON_SEARCH(s.tags, 'one', ?) IS NOT NULL
 		)`)
-		// JSON_CONTAINS expects a JSON value
-		tagJSON, _ := json.Marshal(f.Query)
-		args = append(args, searchTerm, searchTerm, searchTerm, string(tagJSON))
+		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm)
+	}
+
+	for _, tag := range f.Tags {
+		if strings.TrimSpace(tag) == "" {
+			continue
+		}
+		conditions = append(conditions, "JSON_CONTAINS(s.tags, ?)")
+		tagJSON, _ := json.Marshal(strings.TrimSpace(tag))
+		args = append(args, string(tagJSON))
 	}
 
 	if f.Cursor != "" {
