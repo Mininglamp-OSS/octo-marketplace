@@ -44,6 +44,13 @@ var knownBusinessFields = map[string]bool{
 	"id":          true,
 	"forked_from": true,
 	"source_slug": true,
+	"space_id":    true,
+}
+
+// forbiddenMetadataVendors are metadata sub-keys that must NOT appear in the
+// rewritten frontmatter. Only user vendor fields (e.g. "openclaw") are kept.
+var forbiddenMetadataVendors = map[string]bool{
+	"octo": true,
 }
 
 // RewriteZipPackage rewrites the SKILL.md frontmatter inside a zip archive.
@@ -137,7 +144,16 @@ func buildRewrittenSkillMD(original []byte, p RewriteParams) []byte {
 	if p.RawMetadata != nil {
 		for k, v := range p.RawMetadata {
 			// Only copy vendor fields; skip business fields that we overwrite below
-			if !knownBusinessFields[k] {
+			if knownBusinessFields[k] {
+				continue
+			}
+			// For the "metadata" key, filter out forbidden vendor sub-keys (e.g. "octo")
+			if k == "metadata" {
+				filtered := filterMetadataVendors(v)
+				if filtered != nil {
+					fm[k] = filtered
+				}
+			} else {
 				fm[k] = v
 			}
 		}
@@ -163,6 +179,7 @@ func buildRewrittenSkillMD(original []byte, p RewriteParams) []byte {
 
 	// Remove fields we explicitly don't want in the frontmatter
 	delete(fm, "source_slug")
+	delete(fm, "space_id")
 
 	yamlBytes, err := yaml.Marshal(fm)
 	if err != nil {
@@ -179,6 +196,27 @@ func buildRewrittenSkillMD(original []byte, p RewriteParams) []byte {
 	}
 
 	return buf.Bytes()
+}
+
+// filterMetadataVendors takes the raw "metadata" value (expected to be a map)
+// and returns a new map with forbidden vendor sub-keys removed. Returns nil if
+// the result is empty or the input is not a map.
+func filterMetadataVendors(v interface{}) interface{} {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	filtered := make(map[string]interface{}, len(m))
+	for k, val := range m {
+		if forbiddenMetadataVendors[k] {
+			continue
+		}
+		filtered[k] = val
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 func buildMinimalYAML(p RewriteParams) []byte {

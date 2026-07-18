@@ -648,15 +648,77 @@ Tool body content.
 		t.Errorf("metadata.openclaw.capabilities lost, got:\n%s", md)
 	}
 
-	// Vendor fields preserved — octo (even though spec says not to write it,
-	// the RawMetadata key "metadata" is a single vendor map — we preserve whatever is there)
-	if !strings.Contains(md, "octo") {
-		t.Errorf("metadata.octo lost, got:\n%s", md)
+	// Forbidden vendor fields removed — metadata.octo must NOT survive rewrite
+	if strings.Contains(md, "octo:") || strings.Contains(md, "internal_id") {
+		t.Errorf("metadata.octo should be stripped, got:\n%s", md)
 	}
 
 	// Body preserved
 	if !strings.Contains(md, "Tool body content.") {
 		t.Errorf("body lost, got:\n%s", md)
+	}
+}
+
+func TestRewriteZipPackage_SpaceIDAndMetadataOctoFiltered(t *testing.T) {
+	// Verify that space_id and metadata.octo are stripped per spec
+	originalSkillMD := `---
+name: my-tool
+description: A tool
+version: 1.0.0
+space_id: space-abc
+metadata:
+  openclaw:
+    author: user1
+  octo:
+    internal_id: xxx
+---
+body
+`
+	zipData := makeZip(t, map[string]string{
+		"SKILL.md": originalSkillMD,
+	})
+
+	params := RewriteParams{
+		Name:    "my-tool",
+		Desc:    "A tool",
+		Version: "1.0.0",
+		ID:      "tool-uuid",
+		RawMetadata: map[string]interface{}{
+			"name":        "my-tool",
+			"description": "A tool",
+			"version":     "1.0.0",
+			"space_id":    "space-abc",
+			"metadata": map[string]interface{}{
+				"openclaw": map[string]interface{}{
+					"author": "user1",
+				},
+				"octo": map[string]interface{}{
+					"internal_id": "xxx",
+				},
+			},
+		},
+	}
+
+	result, err := RewriteZipPackage(bytes.NewReader(zipData), int64(len(zipData)), params)
+	if err != nil {
+		t.Fatalf("RewriteZipPackage failed: %v", err)
+	}
+
+	md := string(result.SkillMD)
+
+	// space_id must NOT appear
+	if strings.Contains(md, "space_id") {
+		t.Errorf("space_id should be stripped, got:\n%s", md)
+	}
+
+	// metadata.octo must NOT appear
+	if strings.Contains(md, "octo:") || strings.Contains(md, "internal_id") {
+		t.Errorf("metadata.octo should be stripped, got:\n%s", md)
+	}
+
+	// metadata.openclaw must be preserved
+	if !strings.Contains(md, "openclaw") || !strings.Contains(md, "user1") {
+		t.Errorf("metadata.openclaw should be preserved, got:\n%s", md)
 	}
 }
 
