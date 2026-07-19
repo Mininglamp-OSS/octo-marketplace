@@ -209,6 +209,40 @@ func (s *Service) TriggerParse(ctx context.Context, uploadID, ownerID string) (s
 	return task.ID, nil
 }
 
+// ParseUploadSync starts parsing a previously initialized upload and waits for
+// the parse worker to finish. It is used by bot publish flows after the bot has
+// uploaded the archive to the presigned URL.
+func (s *Service) ParseUploadSync(ctx context.Context, uploadID, ownerID string) (*PollResult, error) {
+	task, err := s.repo.GetByUploadID(ctx, uploadID)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, ErrTaskNotFound
+	}
+	if task.OwnerID != ownerID {
+		return nil, ErrForbidden
+	}
+	if task.Status == "success" {
+		return s.GetParseStatus(ctx, task.ID, ownerID)
+	}
+	if task.Status != "pending" {
+		return nil, ErrTaskNotPending
+	}
+
+	ok, err := s.repo.TransitionPendingToParsing(ctx, task.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrTaskNotPending
+	}
+
+	maxBytes := int64(s.maxMB) * 1024 * 1024
+	s.worker.process(task.ID, task.FileURL, maxBytes)
+	return s.GetParseStatus(ctx, task.ID, ownerID)
+}
+
 func normalizeUploadFileName(fileName string) (string, error) {
 	fileName = strings.TrimSpace(fileName)
 	if !strings.HasSuffix(strings.ToLower(fileName), ".zip") {

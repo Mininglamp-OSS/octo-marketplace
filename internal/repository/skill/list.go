@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -43,6 +44,8 @@ type SkillRow struct {
 	Tags             json.RawMessage
 	OwnerID          string
 	OwnerName        string
+	CreatorID        string
+	CreatorName      string
 	SpaceID          string
 	Visibility       string
 	Version          string
@@ -107,10 +110,10 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	if f.Query != "" {
 		searchTerm := "%" + escapeLike(f.Query) + "%"
 		conditions = append(conditions, `(
-			s.name LIKE ? OR s.description LIKE ? OR s.owner_name LIKE ?
+			s.name LIKE ? OR s.description LIKE ? OR s.owner_name LIKE ? OR s.creator_name LIKE ?
 			OR JSON_SEARCH(s.tags, 'one', ?) IS NOT NULL
 		)`)
-		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm)
+		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm)
 	}
 
 	for _, tag := range f.Tags {
@@ -154,7 +157,7 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 
 	selectCols := `s.id, s.name, s.display_name, s.icon_url, s.source_skill_id, s.current_version_id,
 		s.description, s.category_id, s.tags,
-		s.owner_id, s.owner_name, s.space_id, s.visibility, s.version,
+		s.owner_id, s.owner_name, s.creator_id, s.creator_name, s.space_id, s.visibility, s.version,
 		s.readme_content, s.file_name, s.file_url, s.file_size, s.file_sha256,
 		s.created_at, s.updated_at,
 		COALESCE(v.version, s.version) AS resolved_version,
@@ -222,14 +225,7 @@ func (r *Repo) queryListResult(ctx context.Context, query string, args []interfa
 	var items []SkillRow
 	for rows.Next() {
 		var s SkillRow
-		if err := rows.Scan(
-			&s.ID, &s.Name, &s.DisplayName, &s.IconURL, &s.SourceSkillID, &s.CurrentVersionID,
-			&s.Description, &s.CategoryID, &s.Tags,
-			&s.OwnerID, &s.OwnerName, &s.SpaceID, &s.Visibility, &s.Version,
-			&s.ReadmeContent, &s.FileName, &s.FileURL, &s.FileSize, &s.FileSHA256,
-			&s.CreatedAt, &s.UpdatedAt,
-			&s.ResolvedVersion, &s.VersionStorage, &s.ViewCount, &s.DownloadCount,
-		); err != nil {
+		if err := scanSkillRow(rows, &s); err != nil {
 			return nil, err
 		}
 		items = append(items, s)
@@ -247,6 +243,36 @@ func (r *Repo) queryListResult(ctx context.Context, query string, args []interfa
 	}
 	result.Items = items
 	return result, nil
+}
+
+func scanSkillRow(rows *sql.Rows, s *SkillRow) error {
+	cols, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	if len(cols) == 25 {
+		if err := rows.Scan(
+			&s.ID, &s.Name, &s.DisplayName, &s.IconURL, &s.SourceSkillID, &s.CurrentVersionID,
+			&s.Description, &s.CategoryID, &s.Tags,
+			&s.OwnerID, &s.OwnerName, &s.SpaceID, &s.Visibility, &s.Version,
+			&s.ReadmeContent, &s.FileName, &s.FileURL, &s.FileSize, &s.FileSHA256,
+			&s.CreatedAt, &s.UpdatedAt,
+			&s.ResolvedVersion, &s.VersionStorage, &s.ViewCount, &s.DownloadCount,
+		); err != nil {
+			return err
+		}
+		s.CreatorID = s.OwnerID
+		s.CreatorName = s.OwnerName
+		return nil
+	}
+	return rows.Scan(
+		&s.ID, &s.Name, &s.DisplayName, &s.IconURL, &s.SourceSkillID, &s.CurrentVersionID,
+		&s.Description, &s.CategoryID, &s.Tags,
+		&s.OwnerID, &s.OwnerName, &s.CreatorID, &s.CreatorName, &s.SpaceID, &s.Visibility, &s.Version,
+		&s.ReadmeContent, &s.FileName, &s.FileURL, &s.FileSize, &s.FileSHA256,
+		&s.CreatedAt, &s.UpdatedAt,
+		&s.ResolvedVersion, &s.VersionStorage, &s.ViewCount, &s.DownloadCount,
+	)
 }
 
 func parseCursor(cursor string) (time.Time, string, error) {

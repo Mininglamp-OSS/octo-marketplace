@@ -68,6 +68,8 @@ type SkillItem struct {
 	CategoryID    string          `json:"category_id"`
 	Tags          json.RawMessage `json:"tags"`
 	OwnerName     string          `json:"owner_name"`
+	CreatorID     string          `json:"creator_id"`
+	CreatorName   string          `json:"creator_name"`
 	Visibility    string          `json:"visibility"`
 	Version       string          `json:"version"`
 	ReadmeContent string          `json:"readme_content,omitempty"`
@@ -180,10 +182,13 @@ type CreateParams struct {
 	Tags          json.RawMessage
 	Visibility    string
 	Version       string
+	Changelog     string
 	SourceSkillID string // optional: fork source
 	UserID        string
 	UserName      string
 	SpaceID       string
+	CreatorID     string
+	CreatorName   string
 }
 
 // Create creates a new skill from a completed parse task.
@@ -341,6 +346,8 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 		Tags:             tags,
 		OwnerID:          p.UserID,
 		OwnerName:        p.UserName,
+		CreatorID:        firstNonEmpty(p.CreatorID, p.UserID),
+		CreatorName:      firstNonEmpty(p.CreatorName, p.UserName),
 		SpaceID:          p.SpaceID,
 		Visibility:       toVisibility(visibility),
 		Version:          version,
@@ -354,7 +361,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 		ID:        versionID,
 		SkillID:   id,
 		Version:   version,
-		Changelog: "初始发布",
+		Changelog: firstNonEmpty(p.Changelog, "初始发布"),
 		Storage:   string(storageJSON),
 		ChangedBy: p.UserID,
 	})
@@ -681,6 +688,15 @@ func toVisibilityPtr(v string) *model.Visibility {
 	return &vis
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func canView(row *skillrepo.SkillRow, spaceID, userID string) bool {
 	switch row.Visibility {
 	case "public":
@@ -753,6 +769,8 @@ func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillI
 		Tags:          row.Tags,
 		OwnerID:       row.OwnerID,
 		OwnerName:     row.OwnerName,
+		CreatorID:     firstNonEmpty(row.CreatorID, row.OwnerID),
+		CreatorName:   firstNonEmpty(row.CreatorName, row.OwnerName),
 		SpaceID:       row.SpaceID,
 		Visibility:    row.Visibility,
 		Version:       version,

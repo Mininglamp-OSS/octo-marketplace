@@ -22,6 +22,8 @@ type CreateParams struct {
 	Tags             json.RawMessage
 	OwnerID          string
 	OwnerName        string
+	CreatorID        string
+	CreatorName      string
 	SpaceID          string
 	Visibility       model.Visibility
 	Version          string
@@ -42,17 +44,25 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
+	creatorID := p.CreatorID
+	if creatorID == "" {
+		creatorID = p.OwnerID
+	}
+	creatorName := p.CreatorName
+	if creatorName == "" {
+		creatorName = p.OwnerName
+	}
 	query := `
 		INSERT INTO skills (id, name, display_name, icon_url, source_skill_id, current_version_id,
-			description, category_id, tags, owner_id, owner_name,
+			description, category_id, tags, owner_id, owner_name, creator_id, creator_name,
 			space_id, visibility, version, readme_content, file_name, file_url, file_size,
 			file_sha256, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = tx.ExecContext(ctx, query,
 		p.ID, p.Name, p.DisplayName, p.IconURL, p.SourceSkillID, p.CurrentVersionID,
 		p.Description, p.CategoryID, string(p.Tags),
-		p.OwnerID, p.OwnerName, p.SpaceID, string(p.Visibility), p.Version,
+		p.OwnerID, p.OwnerName, creatorID, creatorName, p.SpaceID, string(p.Visibility), p.Version,
 		p.ReadmeContent, p.FileName, p.FileURL, p.FileSize, p.FileSHA256,
 		now, now,
 	)
@@ -77,6 +87,8 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 		Tags:             p.Tags,
 		OwnerID:          p.OwnerID,
 		OwnerName:        p.OwnerName,
+		CreatorID:        creatorID,
+		CreatorName:      creatorName,
 		SpaceID:          p.SpaceID,
 		Visibility:       string(p.Visibility),
 		Version:          p.Version,
@@ -117,17 +129,25 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 
 	// Insert the skill
 	now := time.Now().UTC()
+	creatorID := p.CreatorID
+	if creatorID == "" {
+		creatorID = p.OwnerID
+	}
+	creatorName := p.CreatorName
+	if creatorName == "" {
+		creatorName = p.OwnerName
+	}
 	query := `
 		INSERT INTO skills (id, name, display_name, icon_url, source_skill_id, current_version_id,
-			description, category_id, tags, owner_id, owner_name,
+			description, category_id, tags, owner_id, owner_name, creator_id, creator_name,
 			space_id, visibility, version, readme_content, file_name, file_url, file_size,
 			file_sha256, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = tx.ExecContext(ctx, query,
 		p.ID, p.Name, p.DisplayName, p.IconURL, p.SourceSkillID, p.CurrentVersionID,
 		p.Description, p.CategoryID, string(p.Tags),
-		p.OwnerID, p.OwnerName, p.SpaceID, string(p.Visibility), p.Version,
+		p.OwnerID, p.OwnerName, creatorID, creatorName, p.SpaceID, string(p.Visibility), p.Version,
 		p.ReadmeContent, p.FileName, p.FileURL, p.FileSize, p.FileSHA256,
 		now, now,
 	)
@@ -167,6 +187,8 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 		Tags:             p.Tags,
 		OwnerID:          p.OwnerID,
 		OwnerName:        p.OwnerName,
+		CreatorID:        creatorID,
+		CreatorName:      creatorName,
 		SpaceID:          p.SpaceID,
 		Visibility:       string(p.Visibility),
 		Version:          p.Version,

@@ -31,6 +31,8 @@ type Skill struct {
 	CategoryID       string          `json:"category_id"`
 	Tags             json.RawMessage `json:"tags"`
 	OwnerName        string          `json:"owner_name"`
+	CreatorID        string          `json:"creator_id"`
+	CreatorName      string          `json:"creator_name"`
 	Visibility       Visibility      `json:"visibility"`
 	Version          string          `json:"version"`
 	ReadmeContent    string          `json:"readme_content"`

@@ -233,6 +233,7 @@ type CreateRequest struct {
 	Tags          json.RawMessage `json:"tags"`
 	Visibility    string          `json:"visibility"`
 	Version       string          `json:"version"`
+	Changelog     string          `json:"changelog"`
 	SourceSkillID string          `json:"source_skill_id"`
 }
 
@@ -277,6 +278,7 @@ func (h *Handler) Create(c *gin.Context) {
 		Tags:          req.Tags,
 		Visibility:    req.Visibility,
 		Version:       req.Version,
+		Changelog:     req.Changelog,
 		SourceSkillID: req.SourceSkillID,
 		UserID:        identity.UID,
 		UserName:      identity.Name,

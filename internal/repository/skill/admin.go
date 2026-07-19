@@ -46,10 +46,10 @@ func (r *Repo) AdminList(ctx context.Context, f AdminListFilter) (*ListResult, e
 	if f.Query != "" {
 		searchTerm := "%" + escapeLike(f.Query) + "%"
 		conditions = append(conditions, `(
-			s.name LIKE ? OR s.description LIKE ? OR s.owner_name LIKE ?
+			s.name LIKE ? OR s.description LIKE ? OR s.owner_name LIKE ? OR s.creator_name LIKE ?
 			OR JSON_SEARCH(s.tags, 'one', ?) IS NOT NULL
 		)`)
-		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm)
+		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm)
 	}
 
 	for _, tag := range f.Tags {
@@ -83,7 +83,7 @@ func (r *Repo) AdminList(ctx context.Context, f AdminListFilter) (*ListResult, e
 
 	selectCols := `s.id, s.name, s.display_name, s.icon_url, s.source_skill_id, s.current_version_id,
 		s.description, s.category_id, s.tags,
-		s.owner_id, s.owner_name, s.space_id, s.visibility, s.version,
+		s.owner_id, s.owner_name, s.creator_id, s.creator_name, s.space_id, s.visibility, s.version,
 		s.readme_content, s.file_name, s.file_url, s.file_size, s.file_sha256,
 		s.created_at, s.updated_at,
 		COALESCE(v.version, s.version) AS resolved_version,

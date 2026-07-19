@@ -180,6 +180,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		})
 
 		uploadH := uploadhandler.New(pSvc, skSvc, localStorage, storageCfg.MaxMB)
+		uploadH.SetDevBotMode(!authEnabled)
 		uploadH.SetMetricsService(mSvc)
 		uploadH.Register(v1)
 		uploadH.RegisterAdmin(r, adminAuth)

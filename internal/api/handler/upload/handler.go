@@ -1,13 +1,16 @@
 package upload
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	metricssvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/metrics"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
 	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
@@ -22,6 +25,7 @@ type Handler struct {
 	metricsSvc   *metricssvc.Service
 	localStorage *storage.LocalStorage // nil when not using local storage
 	maxUploadMB  int
+	devBotMode   bool
 }
 
 // New creates an upload handler.
@@ -49,6 +53,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	rg.POST("/skill_icon_uploads", h.InitIconUpload)
 	rg.POST("/skill_uploads/:skill_upload_id/parse", h.TriggerParse)
 	rg.GET("/skill_parse_tasks/:skill_parse_task_id", h.PollParse)
+	rg.POST("/bot/skills/publish", h.BotPublishSkill)
 	rg.POST("/skills/:skill_id/reuploads", h.InitReupload)
 	rg.GET("/skills/:skill_id/download", h.Download)
 
@@ -59,6 +64,11 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	legacy.GET("/parse/:skill_parse_task_id", h.PollParse)
 	legacy.POST("/:skill_id/reupload/init", h.InitReupload)
 	legacy.GET("/:skill_id/download", h.Download)
+}
+
+// SetDevBotMode enables local-only BotIdentity fallback when AUTH_ENABLED=false.
+func (h *Handler) SetDevBotMode(enabled bool) {
+	h.devBotMode = enabled
 }
 
 // RegisterAdmin registers admin upload/parse/download routes on the admin group.
@@ -88,6 +98,210 @@ func (h *Handler) RegisterLocalProxy(r *gin.Engine, authEnabled ...bool) {
 	}
 	r.PUT("/api/v1/_storage/upload/*key", localProxyLoopbackOnly, h.localUploadProxy)
 	r.GET("/api/v1/_storage/download/*key", localProxyLoopbackOnly, h.localDownloadProxy)
+}
+
+// BotPublishSkill handles Bot one-step Skill publishing:
+// presigned upload -> synchronous parse -> create Skill.
+func (h *Handler) BotPublishSkill(c *gin.Context) {
+	if h.parseSvc == nil || h.skillSvc == nil {
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.InternalError, "skill publishing is unavailable", nil, "")
+		return
+	}
+	identity, ok := middleware.Identity(c)
+	if !ok {
+		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "unauthorized", nil, "")
+		return
+	}
+	bot, ok := h.botIdentity(c, identity)
+	if !ok {
+		apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "bot token is required", nil, "")
+		return
+	}
+
+	var req BotPublishSkillRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "invalid request body", nil, "")
+		return
+	}
+
+	mode := strings.TrimSpace(req.PublishMode)
+	if mode == "" {
+		mode = "create"
+	}
+	if mode != "create" {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "only publish_mode=create is supported", nil, "")
+		return
+	}
+
+	uploadID := strings.TrimSpace(req.SkillUploadID)
+	if uploadID == "" {
+		uploadID = uploadIDFromLink(req.UploadURL)
+	}
+	if uploadID == "" {
+		uploadID = uploadIDFromLink(req.PresignedURL)
+	}
+	if uploadID == "" {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "skill_upload_id or upload_url is required", nil, "")
+		return
+	}
+
+	tags, err := normalizePublishTags(req.Tags)
+	if err != nil {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must be a JSON string array", nil, "")
+		return
+	}
+	result, err := h.parseSvc.ParseUploadSync(c.Request.Context(), uploadID, identity.UID)
+	if err != nil {
+		if errors.Is(err, parse.ErrTaskNotFound) || errors.Is(err, parse.ErrForbidden) {
+			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "upload not found", nil, "")
+			return
+		}
+		if errors.Is(err, parse.ErrTaskNotPending) {
+			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "upload cannot be published from its current parse status", nil, "")
+			return
+		}
+		log.Printf("[BotPublishSkill] parse upload failed: %v", err)
+		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		return
+	}
+	if result.Status != "success" {
+		code := ""
+		message := "parse failed"
+		if result.Error != nil {
+			code = result.Error.Code
+			message = result.Error.Message
+		}
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, message, map[string]any{"parse_error_code": code}, "")
+		return
+	}
+
+	item, err := h.skillSvc.Create(c.Request.Context(), skillsvc.CreateParams{
+		ParseTaskID: result.TaskID,
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		IconURL:     req.IconURL,
+		Description: req.Description,
+		CategoryID:  req.CategoryID,
+		Tags:        tags,
+		Visibility:  req.Visibility,
+		Version:     req.Version,
+		Changelog:   req.Changelog,
+		UserID:      identity.UID,
+		UserName:    identity.Name,
+		SpaceID:     bot.SpaceID,
+		CreatorID:   bot.BotUID,
+		CreatorName: bot.BotName,
+	})
+	if err != nil {
+		if errors.Is(err, skillsvc.ErrInvalidParseTask) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "invalid or unavailable parse task", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrParseTaskConsumed) {
+			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "parse task already consumed", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrCategoryNotFound) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "category not found", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrNameTaken) {
+			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "skill name already exists", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrInvalidTags) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must be a JSON string array", nil, "")
+			return
+		}
+		log.Printf("[BotPublishSkill] create skill failed: %v", err)
+		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		return
+	}
+
+	apiresponse.Created(c, item)
+}
+
+type BotPublishSkillRequest struct {
+	SkillUploadID string          `json:"skill_upload_id"`
+	UploadURL     string          `json:"upload_url"`
+	PresignedURL  string          `json:"presigned_url"`
+	PublishMode   string          `json:"publish_mode"`
+	Name          string          `json:"name"`
+	DisplayName   string          `json:"display_name"`
+	IconURL       string          `json:"icon_url"`
+	Description   string          `json:"description"`
+	CategoryID    string          `json:"category_id"`
+	Tags          json.RawMessage `json:"tags"`
+	Visibility    string          `json:"visibility"`
+	Version       string          `json:"version"`
+	Changelog     string          `json:"changelog"`
+}
+
+func (h *Handler) botIdentity(c *gin.Context, identity model.Identity) (model.BotIdentity, bool) {
+	if bot, ok := middleware.BotIdentity(c); ok {
+		return bot, true
+	}
+	if !h.devBotMode || !strings.HasPrefix(requestToken(c), "bf_") {
+		return model.BotIdentity{}, false
+	}
+	botUID := strings.TrimSpace(c.GetHeader("X-Dev-Bot-Uid"))
+	if botUID == "" {
+		botUID = "dev-bot"
+	}
+	botName := strings.TrimSpace(c.GetHeader("X-Dev-Bot-Name"))
+	if botName == "" {
+		botName = "Dev Bot"
+	}
+	return model.BotIdentity{
+		BotUID:    botUID,
+		BotName:   botName,
+		OwnerUID:  identity.UID,
+		OwnerName: identity.Name,
+		SpaceID:   middleware.SpaceID(c),
+	}, true
+}
+
+func requestToken(c *gin.Context) string {
+	if token := strings.TrimSpace(c.GetHeader("Token")); token != "" {
+		return token
+	}
+	authorization := strings.TrimSpace(c.GetHeader("Authorization"))
+	if len(authorization) > 7 && strings.EqualFold(authorization[:7], "Bearer ") {
+		return strings.TrimSpace(authorization[7:])
+	}
+	return ""
+}
+
+func normalizePublishTags(input json.RawMessage) (json.RawMessage, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	var tags []string
+	if err := json.Unmarshal(input, &tags); err != nil {
+		return nil, err
+	}
+	out, _ := json.Marshal(tags)
+	return out, nil
+}
+
+func uploadIDFromLink(link string) string {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return ""
+	}
+	const marker = "skill-uploads/"
+	idx := strings.Index(link, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := link[idx+len(marker):]
+	if slash := strings.Index(rest, "/"); slash >= 0 {
+		rest = rest[:slash]
+	}
+	if q := strings.IndexAny(rest, "?#"); q >= 0 {
+		rest = rest[:q]
+	}
+	return strings.TrimSpace(rest)
 }
 
 // initRequest is the JSON body for POST /api/v1/skill/upload/init.
