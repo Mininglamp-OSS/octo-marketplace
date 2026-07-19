@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skills Market Layout Prototype</title>
+  <style>
+    :root {
+      --purple: #7444f5;
+      --purple-weak: #efe6ff;
+      --ink: #22242b;
+      --text: #535862;
+      --muted: #858b95;
+      --line: #ecedf2;
+      --panel: #f6f7f9;
+      --active-nav: #e5e6ea;
+      --card: #fff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #fff;
+      color: var(--ink);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 48px 324px minmax(0, 1fr);
+      background: #fff;
+    }
+
+    .rail {
+      border-right: 1px solid #e5e7eb;
+      background: #f8f9fb;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 18px 0;
+      gap: 18px;
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6da2ff, #ffd6a5);
+      position: relative;
+    }
+
+    .avatar::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #5fc95f;
+      border: 2px solid #f8f9fb;
+    }
+
+    .rail-icon {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #9aa0a8;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+
+    .rail-icon.active {
+      color: #2b2d35;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(20, 22, 30, 0.08);
+    }
+
+    .rail-icon svg,
+    .icon svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .rail-spacer {
+      flex: 1;
+    }
+
+    .side {
+      border-right: 1px solid #e7e8ed;
+      background: #f6f7f9;
+    }
+
+    .side-title {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      padding: 0 22px;
+      border-bottom: 1px solid #e7e8ed;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .side-menu {
+      padding: 18px 10px;
+    }
+
+    .side-item {
+      width: 100%;
+      height: 46px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: #30333a;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 15px;
+      font-weight: 650;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .side-item.active {
+      background: var(--active-nav);
+    }
+
+    .main {
+      min-width: 0;
+      background: #fff;
+    }
+
+    .top {
+      min-height: 112px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      padding: 0 32px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .scope-tabs {
+      display: flex;
+      gap: 34px;
+      height: 100%;
+      align-items: center;
+    }
+
+    .scope-tab {
+      position: relative;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: #535862;
+      font-size: 16px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .scope-tab.active {
+      color: var(--purple);
+    }
+
+    .scope-tab.active::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -10px;
+      height: 3px;
+      border-radius: 99px;
+      background: var(--purple);
+    }
+
+    .top-controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .upload {
+      height: 40px;
+      border: 0;
+      border-radius: 9px;
+      background: #7157df;
+      color: #fff;
+      padding: 0 17px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+      box-shadow: 0 1px 2px rgba(45, 36, 110, 0.14);
+    }
+
+    .upload:hover {
+      background: #654bd7;
+    }
+
+    .upload svg,
+    .search svg,
+    .filter-button svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .search {
+      width: 354px;
+      height: 40px;
+      border: 1px solid #e2e4ea;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 8px 0 13px;
+      color: #8b929c;
+      background: #f8f9fb;
+    }
+
+    .search:focus-within {
+      border-color: #cfc2ff;
+      background: #fff;
+      box-shadow: 0 0 0 3px #f3edff;
+    }
+
+    .search input {
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      outline: 0;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 650;
+      background: transparent;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      padding: 14px 32px 13px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .category-list {
+      display: flex;
+      flex-wrap: wrap;
+      row-gap: 12px;
+      column-gap: clamp(22px, 1.9vw, 42px);
+      width: 100%;
+    }
+
+    .category {
+      height: 24px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #686f79;
+      padding: 0 2px;
+      font-size: 13px;
+      font-weight: 400;
+      cursor: pointer;
+      white-space: nowrap;
+      outline: none;
+    }
+
+    .category.active {
+      color: var(--purple);
+      font-weight: 500;
+    }
+
+    .category:focus-visible {
+      outline: 2px solid #d8c5ff;
+      outline-offset: 3px;
+    }
+
+    .sort-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-height: 26px;
+      color: #8b929c;
+      font-size: 13px;
+      font-weight: 400;
+    }
+
+    .sort-label {
+      color: #8b929c;
+    }
+
+    .sort-options {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .sort-option {
+      border: 0;
+      background: transparent;
+      color: #686f79;
+      padding: 0;
+      font-size: 13px;
+      font-weight: 400;
+      cursor: pointer;
+    }
+
+    .sort-option.active {
+      color: var(--purple);
+      font-weight: 600;
+    }
+
+    .sort-separator {
+      color: #c4c8d0;
+      user-select: none;
+    }
+
+    .filter-side {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .filter-button {
+      height: 30px;
+      border: 0;
+      border-left: 1px solid #e2e4ea;
+      border-radius: 0 6px 6px 0;
+      background: transparent;
+      color: #747b86;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 8px 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .filter-button:hover {
+      color: var(--purple);
+    }
+
+    .filter-button.active {
+      color: var(--purple);
+      background: #f1ebff;
+    }
+
+    .tag-popover {
+      position: absolute;
+      right: 0;
+      top: 38px;
+      width: 360px;
+      border: 1px solid #e1e3ea;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 18px 48px rgba(31, 32, 40, 0.16);
+      padding: 12px;
+      z-index: 5;
+    }
+
+    .tag-popover[hidden] {
+      display: none;
+    }
+
+    .tag-search {
+      height: 38px;
+      border: 1px solid #e1e3ea;
+      border-radius: 9px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #858b95;
+    }
+
+    .tag-search input {
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      outline: 0;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .tag-list {
+      max-height: 230px;
+      overflow: auto;
+      margin-top: 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .tag-actions {
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #eef0f4;
+    }
+
+    .tag-selected-text {
+      color: #858b95;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tag-clear {
+      height: 28px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--purple);
+      padding: 0 8px;
+      font-size: 12px;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    .tag-clear:hover:not(:disabled) {
+      background: #f3edff;
+    }
+
+    .tag-clear:disabled {
+      color: #b6bbc4;
+      cursor: not-allowed;
+    }
+
+    .tag-option {
+      min-height: 48px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      text-align: left;
+      color: #4f555f;
+      cursor: pointer;
+    }
+
+    .tag-option:hover {
+      background: #f7f7fa;
+    }
+
+    .tag-option.active {
+      color: var(--purple);
+      background: #f2ecff;
+    }
+
+    .check {
+      width: 15px;
+      height: 15px;
+      display: grid;
+      place-items: center;
+      color: transparent;
+    }
+
+    .tag-option.active .check::before {
+      content: "✓";
+      color: var(--purple);
+      font-size: 14px;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .tag-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .content {
+      padding: 18px 18px 48px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 432px));
+      gap: 16px;
+    }
+
+    .skill-card {
+      min-height: 180px;
+      border: 1px solid #dfe1e8;
+      border-radius: 9px;
+      background: var(--card);
+      box-shadow: 0 6px 14px rgba(31, 32, 40, 0.07);
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .skill-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #6f9cf6;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 850;
+    }
+
+    .skill-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .skill-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #34373f;
+      font-size: 16px;
+      font-weight: 850;
+    }
+
+    .owner {
+      flex: 0 0 auto;
+      color: #858b95;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .card-tags {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      margin-top: 7px;
+    }
+
+    .card-tag {
+      max-width: 150px;
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: #f0eaff;
+      color: var(--purple);
+      padding: 0 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .desc {
+      grid-column: 1 / -1;
+      color: #6c727c;
+      font-size: 14px;
+      line-height: 1.55;
+      margin-top: 4px;
+    }
+
+    .card-actions {
+      grid-column: 1 / -1;
+      align-self: end;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .install {
+      height: 36px;
+      border: 0;
+      border-radius: 999px;
+      background: #f0eaff;
+      color: var(--purple);
+      padding: 0 14px;
+      font-size: 13px;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        grid-template-columns: 48px minmax(0, 1fr);
+      }
+
+      .side {
+        display: none;
+      }
+
+      .top {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
+
+      .top-controls {
+        width: 100%;
+        justify-content: stretch;
+        flex-wrap: wrap;
+      }
+
+      .search {
+        width: 100%;
+        flex: 1 1 100%;
+      }
+
+      .upload {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .filters {
+        grid-template-columns: 1fr;
+        padding: 14px 16px;
+      }
+
+      .category-list {
+        gap: 10px;
+      }
+
+      .category {
+        height: 30px;
+        border: 1px solid #e3e4ea;
+        border-radius: 8px;
+        padding: 0 10px;
+        background: #fff;
+        font-size: 13px;
+      }
+
+      .category.active {
+        background: #f7f2ff;
+        border-color: #d8c5ff;
+      }
+
+      .tag-popover {
+        left: 0;
+        right: auto;
+        width: min(360px, calc(100vw - 80px));
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="rail" aria-label="主导航">
+      <div class="avatar"></div>
+      <button class="rail-icon"><svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path></svg></button>
+      <button class="rail-icon"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></button>
+      <button class="rail-icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></button>
+      <button class="rail-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></button>
+      <button class="rail-icon active"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73L13 2.27a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg></button>
+      <button class="rail-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
+      <div class="rail-spacer"></div>
+      <button class="rail-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1v.17a2 2 0 1 1-4 0V21a1.7 1.7 0 0 0-.4-1 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4H2.8a2 2 0 1 1 0-4H3a1.7 1.7 0 0 0 1-.4 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1V2.8a2 2 0 1 1 4 0V3a1.7 1.7 0 0 0 .4 1 1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.2.36.4.73.6 1h1.2a2 2 0 1 1 0 4H20a1.7 1.7 0 0 0-.6 1z"></path></svg></button>
+    </aside>
+
+    <aside class="side">
+      <div class="side-title">市场</div>
+      <nav class="side-menu" aria-label="市场导航">
+        <button class="side-item">MCP 市场</button>
+        <button class="side-item active">Skills 市场</button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="top">
+        <nav class="scope-tabs" aria-label="Skill 范围">
+          <button class="scope-tab active">Skills</button>
+          <button class="scope-tab">我的</button>
+        </nav>
+        <div class="top-controls">
+          <div class="search">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+            <input id="keyword" type="search" placeholder="搜索名称、描述...">
+            <span class="filter-side">
+              <button class="filter-button" id="tagButton" type="button" aria-expanded="false">
+                <svg viewBox="0 0 24 24"><path d="M20 12H4M14 6H4M10 18H4"></path></svg>
+                标签
+              </button>
+              <span class="tag-popover" id="tagPopover" hidden>
+                <span class="tag-search">
+                  <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                  <input id="tagSearch" type="search" placeholder="搜索标签">
+                </span>
+                <span class="tag-list" id="tagList"></span>
+                <span class="tag-actions">
+                  <span class="tag-selected-text" id="tagSelectedText">未选择标签</span>
+                  <button class="tag-clear" id="tagClear" type="button" disabled>清空</button>
+                </span>
+              </span>
+            </span>
+          </div>
+
+          <button class="upload">
+            <svg viewBox="0 0 24 24"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+            上架 Skill
+          </button>
+        </div>
+      </header>
+
+      <section class="filters" aria-label="筛选">
+        <div class="category-list" id="categories">
+          <button class="category active">全部</button>
+          <button class="category">开发工具</button>
+          <button class="category">装机必备</button>
+          <button class="category">基础设施</button>
+          <button class="category">办公协作</button>
+          <button class="category">市场推广</button>
+          <button class="category">前端开发</button>
+          <button class="category">媒体处理</button>
+          <button class="category">代码质检</button>
+          <button class="category">洞察研究</button>
+          <button class="category">数据分析</button>
+          <button class="category">内容营销</button>
+          <button class="category">移动开发</button>
+          <button class="category">云效工具</button>
+          <button class="category">社交娱乐</button>
+          <button class="category">其他</button>
+        </div>
+        <div class="sort-row" aria-label="排序">
+          <span class="sort-label">排序：</span>
+          <span class="sort-options" id="sortOptions">
+            <button class="sort-option active" type="button">综合</button>
+            <span class="sort-separator">·</span>
+            <button class="sort-option" type="button">最新发布</button>
+            <span class="sort-separator">·</span>
+            <button class="sort-option" type="button">下载最多</button>
+          </span>
+        </div>
+      </section>
+
+      <section class="content">
+        <div class="grid">
+          <article class="skill-card">
+            <div class="skill-icon">US</div>
+            <div>
+              <div class="skill-head">
+                <div class="skill-title">UI Skill Case 178427</div>
+                <div class="owner">@Developer</div>
+              </div>
+              <div class="card-tags">
+                <span class="card-tag">automation</span>
+                <span class="card-tag">ui-case</span>
+              </div>
+            </div>
+            <p class="desc">Test skill uploaded through real browser UI.</p>
+            <div class="card-actions"><button class="install">›_ Agent 安装</button></div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const tags = [
+      "automation",
+      "ui-case",
+      "official",
+      "MCP",
+      "CLI",
+      "workflow",
+      "企业内部流程自动化与跨系统数据同步",
+      "超长标签名称用于验证布局不会被撑开"
+    ];
+
+    const selectedTags = new Set();
+    const categoryButtons = [...document.querySelectorAll(".category")];
+    const sortButtons = [...document.querySelectorAll(".sort-option")];
+    const keyword = document.querySelector("#keyword");
+    const tagButton = document.querySelector("#tagButton");
+    const tagPopover = document.querySelector("#tagPopover");
+    const tagSearch = document.querySelector("#tagSearch");
+    const tagList = document.querySelector("#tagList");
+    const tagSelectedText = document.querySelector("#tagSelectedText");
+    const tagClear = document.querySelector("#tagClear");
+
+    function escapeHTML(value) {
+      return value.replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]);
+    }
+
+    function selectedTagList() {
+      return tags.filter(name => selectedTags.has(name));
+    }
+
+    function renderTags() {
+      const query = tagSearch.value.trim().toLowerCase();
+      const visible = tags.filter(name => name.toLowerCase().includes(query));
+      tagList.innerHTML = visible.map(name => {
+        const active = selectedTags.has(name);
+        return `
+          <button class="tag-option ${active ? "active" : ""}" data-tag="${escapeHTML(name)}" title="${escapeHTML(name)}">
+            <span class="check"></span>
+            <span class="tag-name">${escapeHTML(name)}</span>
+          </button>
+        `;
+      }).join("") || `<div class="tag-option"><span></span><span class="tag-name">没有匹配标签</span></div>`;
+    }
+
+    function updateFilterState() {
+      const selected = selectedTagList();
+      tagButton.classList.toggle("active", selected.length > 0);
+      tagSelectedText.textContent = selected.length === 0 ? "未选择标签" : "已选择标签";
+      tagClear.disabled = selected.length === 0;
+    }
+
+    categoryButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        categoryButtons.forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+        updateFilterState();
+      });
+    });
+
+    sortButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        sortButtons.forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+
+    function openTagPopover() {
+      tagPopover.hidden = false;
+      tagButton.setAttribute("aria-expanded", "true");
+      tagSearch.focus();
+    }
+
+    function closeTagPopover() {
+      tagPopover.hidden = true;
+      tagButton.setAttribute("aria-expanded", "false");
+    }
+
+    tagButton.addEventListener("click", event => {
+      event.stopPropagation();
+      if (tagPopover.hidden) openTagPopover();
+      else closeTagPopover();
+    });
+
+    tagPopover.addEventListener("click", event => {
+      event.stopPropagation();
+    });
+
+    tagSearch.addEventListener("input", renderTags);
+    keyword.addEventListener("input", updateFilterState);
+    tagClear.addEventListener("click", () => {
+      selectedTags.clear();
+      renderTags();
+      updateFilterState();
+      tagSearch.focus();
+    });
+
+    tagList.addEventListener("click", event => {
+      const option = event.target.closest(".tag-option[data-tag]");
+      if (!option) return;
+      const tag = option.dataset.tag;
+      if (selectedTags.has(tag)) selectedTags.delete(tag);
+      else selectedTags.add(tag);
+      renderTags();
+      updateFilterState();
+      tagSearch.focus();
+    });
+
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".filter-side")) {
+        closeTagPopover();
+      }
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") {
+        closeTagPopover();
+      }
+    });
+
+    renderTags();
+    updateFilterState();
+  </script>
+</body>
+</html>

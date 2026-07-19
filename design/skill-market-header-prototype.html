@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skill Market Header Prototype</title>
+  <style>
+    :root {
+      --purple: #7444f5;
+      --purple-soft: #eee4ff;
+      --ink: #1f2028;
+      --muted: #5f646d;
+      --line: #ececf1;
+      --chip: #f6f6f9;
+      --bg: #ffffff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #f5f6f8;
+      color: var(--ink);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .shell {
+      width: min(100%, 1698px);
+      margin: 0 auto;
+      background: var(--bg);
+      border-left: 1px solid #e6e7eb;
+      border-right: 1px solid #e6e7eb;
+    }
+
+    .topbar {
+      height: 132px;
+      display: grid;
+      grid-template-columns: auto 1fr auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 0 80px 0 64px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 64px;
+      min-width: 310px;
+      height: 100%;
+    }
+
+    .tab {
+      position: relative;
+      border: 0;
+      background: transparent;
+      color: #535760;
+      font-size: 30px;
+      font-weight: 800;
+      line-height: 1;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .tab[aria-selected="true"] {
+      color: var(--purple);
+    }
+
+    .tab[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -34px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--purple);
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .upload {
+      height: 72px;
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      border: 0;
+      border-radius: 14px;
+      background: #1f2028;
+      color: #fff;
+      padding: 0 28px;
+      font-size: 28px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .upload svg,
+    .searchbox svg,
+    .filter-toggle svg {
+      width: 30px;
+      height: 30px;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
+    }
+
+    .searchbox {
+      width: 410px;
+      height: 78px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      border: 4px solid var(--purple-soft);
+      border-radius: 18px;
+      padding: 0 28px;
+      color: #6d727b;
+      background: #fff;
+    }
+
+    .searchbox:focus-within {
+      border-color: #dac7ff;
+      box-shadow: 0 0 0 4px #f4edff;
+    }
+
+    .searchbox input {
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      outline: 0;
+      color: var(--ink);
+      font: inherit;
+      font-size: 28px;
+      font-weight: 700;
+      background: transparent;
+    }
+
+    .searchbox input::placeholder {
+      color: #787d86;
+    }
+
+    .filter-toggle {
+      display: none;
+      width: 72px;
+      height: 72px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #dfdfe7;
+      border-radius: 14px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .filter-panel {
+      padding: 28px 80px 30px 80px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .filter-row {
+      display: grid;
+      grid-template-columns: 96px 1fr;
+      align-items: start;
+      gap: 24px;
+    }
+
+    .filter-row + .filter-row {
+      margin-top: 22px;
+    }
+
+    .filter-label {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      color: #9297a1;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .choice-grid {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 18px 34px;
+    }
+
+    .choice {
+      height: 48px;
+      display: inline-flex;
+      align-items: center;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: #555a63;
+      padding: 0 0;
+      font-size: 28px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .choice.category[aria-pressed="true"] {
+      color: var(--purple);
+    }
+
+    .tag-picker {
+      position: relative;
+      max-width: 760px;
+    }
+
+    .tag-trigger {
+      width: 100%;
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border: 1px solid #e1e2ea;
+      border-radius: 14px;
+      background: #fff;
+      padding: 8px 14px 8px 18px;
+      color: #535861;
+      cursor: pointer;
+    }
+
+    .tag-trigger:focus-visible {
+      outline: 4px solid #f0e7ff;
+      border-color: #d7c4ff;
+    }
+
+    .tag-trigger-main {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .tag-placeholder {
+      color: #8a9099;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .selected-tag,
+    .tag-overflow {
+      max-width: 240px;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: #f4efff;
+      color: var(--purple);
+      padding: 0 12px;
+      font-size: 16px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tag-overflow {
+      background: #f0f1f5;
+      color: #626873;
+    }
+
+    .tag-trigger-icon {
+      width: 22px;
+      height: 22px;
+      color: #777d87;
+      flex: 0 0 auto;
+    }
+
+    .tag-popover {
+      position: absolute;
+      z-index: 10;
+      top: calc(100% + 10px);
+      left: 0;
+      width: min(760px, calc(100vw - 160px));
+      border: 1px solid #e2e3ea;
+      border-radius: 16px;
+      background: #fff;
+      box-shadow: 0 22px 60px rgba(28, 30, 40, 0.16);
+      padding: 14px;
+    }
+
+    .tag-popover[hidden] {
+      display: none;
+    }
+
+    .tag-search {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid #dedfe8;
+      border-radius: 12px;
+      padding: 0 14px;
+      color: #747a84;
+    }
+
+    .tag-search svg {
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
+    }
+
+    .tag-search input {
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      outline: 0;
+      color: var(--ink);
+      font: inherit;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .tag-results {
+      max-height: 260px;
+      overflow: auto;
+      display: grid;
+      gap: 4px;
+      margin-top: 10px;
+    }
+
+    .tag-option {
+      min-height: 44px;
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: #4f545d;
+      padding: 8px 10px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .tag-option:hover {
+      background: #f7f7fa;
+    }
+
+    .tag-option[aria-selected="true"] {
+      background: #f4efff;
+      color: var(--purple);
+    }
+
+    .tag-check {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #c5c8d0;
+      border-radius: 5px;
+    }
+
+    .tag-option[aria-selected="true"] .tag-check {
+      border-color: var(--purple);
+      background: var(--purple);
+      box-shadow: inset 0 0 0 3px #fff;
+    }
+
+    .tag-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .tag-count {
+      color: #9298a2;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .tag-empty {
+      padding: 24px 10px 12px;
+      color: #8a9099;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .summary {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+      padding-left: 120px;
+      color: #7a808a;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .summary strong {
+      color: #555a63;
+    }
+
+    .summary-chip {
+      max-width: 320px;
+      display: inline-flex;
+      align-items: center;
+      height: 32px;
+      border-radius: 999px;
+      background: #f1f2f6;
+      padding: 0 12px;
+      color: #555a63;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .clear {
+      border: 0;
+      background: transparent;
+      color: var(--purple);
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      padding: 0 6px;
+    }
+
+    @media (max-width: 980px) {
+      .topbar {
+        height: auto;
+        grid-template-columns: 1fr auto;
+        gap: 18px;
+        padding: 24px;
+      }
+
+      .tabs {
+        gap: 32px;
+        min-width: 0;
+      }
+
+      .tab {
+        font-size: 24px;
+      }
+
+      .tab[aria-selected="true"]::after {
+        bottom: -16px;
+      }
+
+      .actions {
+        grid-column: 1 / -1;
+        width: 100%;
+      }
+
+      .upload {
+        height: 58px;
+        font-size: 22px;
+      }
+
+      .searchbox {
+        flex: 1;
+        height: 58px;
+        width: auto;
+      }
+
+      .searchbox input {
+        font-size: 22px;
+      }
+
+      .filter-toggle {
+        display: inline-flex;
+      }
+
+      .filter-panel {
+        display: none;
+        padding: 18px 24px 24px;
+      }
+
+      .filter-panel.open {
+        display: block;
+      }
+
+      .filter-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
+      .filter-label {
+        height: 28px;
+        font-size: 15px;
+      }
+
+      .choice-grid {
+        gap: 10px;
+      }
+
+      .choice.category {
+        height: 38px;
+        padding: 0 12px;
+        border: 1px solid #e7e7ee;
+        background: #fff;
+        font-size: 17px;
+      }
+
+      .choice.category[aria-pressed="true"] {
+        background: #f4efff;
+        border-color: #d8c8ff;
+      }
+
+      .tag-picker {
+        max-width: none;
+      }
+
+      .tag-popover {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        top: 176px;
+        width: auto;
+      }
+
+      .selected-tag {
+        max-width: 170px;
+      }
+
+      .summary-chip {
+        max-width: 100%;
+      }
+
+      .summary {
+        padding-left: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <nav class="tabs" aria-label="Skill scope">
+        <button class="tab" type="button" aria-selected="true">Skills</button>
+        <button class="tab" type="button" aria-selected="false">我的</button>
+      </nav>
+
+      <div></div>
+
+      <div class="actions">
+        <button class="upload" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+          上架
+        </button>
+
+        <label class="searchbox">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+          <input id="keyword" type="search" placeholder="搜索" autocomplete="off">
+        </label>
+
+        <button class="filter-toggle" type="button" aria-label="筛选" aria-expanded="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"></path></svg>
+        </button>
+      </div>
+    </header>
+
+    <section class="filter-panel open" aria-label="筛选条件">
+      <div class="filter-row">
+        <div class="filter-label">分类</div>
+        <div class="choice-grid" id="categories" role="radiogroup" aria-label="分类单选">
+          <button class="choice category" type="button" aria-pressed="true">全部</button>
+          <button class="choice category" type="button" aria-pressed="false">开发工具</button>
+          <button class="choice category" type="button" aria-pressed="false">装机必备</button>
+          <button class="choice category" type="button" aria-pressed="false">基础设施</button>
+          <button class="choice category" type="button" aria-pressed="false">办公协作</button>
+          <button class="choice category" type="button" aria-pressed="false">市场推广</button>
+          <button class="choice category" type="button" aria-pressed="false">前端开发</button>
+          <button class="choice category" type="button" aria-pressed="false">媒体处理</button>
+          <button class="choice category" type="button" aria-pressed="false">代码质检</button>
+          <button class="choice category" type="button" aria-pressed="false">洞察研究</button>
+          <button class="choice category" type="button" aria-pressed="false">数据分析</button>
+          <button class="choice category" type="button" aria-pressed="false">内容营销</button>
+          <button class="choice category" type="button" aria-pressed="false">移动开发</button>
+          <button class="choice category" type="button" aria-pressed="false">云效工具</button>
+          <button class="choice category" type="button" aria-pressed="false">社交娱乐</button>
+          <button class="choice category" type="button" aria-pressed="false">其他</button>
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <div class="filter-label">标签</div>
+        <div class="tag-picker">
+          <button class="tag-trigger" id="tagTrigger" type="button" aria-expanded="false" aria-controls="tagPopover">
+            <span class="tag-trigger-main" id="tagTriggerMain">
+              <span class="tag-placeholder">选择标签，可搜索后多选</span>
+            </span>
+            <svg class="tag-trigger-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          </button>
+
+          <div class="tag-popover" id="tagPopover" hidden>
+            <label class="tag-search">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+              <input id="tagSearch" type="search" placeholder="搜索标签" autocomplete="off">
+            </label>
+            <div class="tag-results" id="tagResults" role="listbox" aria-label="标签多选"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="summary" id="summary"></div>
+    </section>
+  </main>
+
+  <script>
+    const allTags = [
+      { name: "官方", count: 128 },
+      { name: "热门", count: 96 },
+      { name: "已验证", count: 82 },
+      { name: "免费", count: 76 },
+      { name: "团队推荐", count: 45 },
+      { name: "CLI", count: 41 },
+      { name: "MCP", count: 38 },
+      { name: "自动化", count: 36 },
+      { name: "代码审查", count: 29 },
+      { name: "知识库", count: 24 },
+      { name: "企业内部流程自动化与跨系统数据同步", count: 12 },
+      { name: "超长标签名称用于验证布局不会被撑开也不会覆盖其他控件", count: 4 }
+    ];
+
+    const categoryButtons = [...document.querySelectorAll(".choice.category")];
+    const keywordInput = document.querySelector("#keyword");
+    const summary = document.querySelector("#summary");
+    const panel = document.querySelector(".filter-panel");
+    const toggle = document.querySelector(".filter-toggle");
+    const tagTrigger = document.querySelector("#tagTrigger");
+    const tagTriggerMain = document.querySelector("#tagTriggerMain");
+    const tagPopover = document.querySelector("#tagPopover");
+    const tagSearch = document.querySelector("#tagSearch");
+    const tagResults = document.querySelector("#tagResults");
+    const selectedTags = new Set();
+
+    function escapeHTML(value) {
+      return value.replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]);
+    }
+
+    function selectedTagNames() {
+      return allTags.map((tag) => tag.name).filter((name) => selectedTags.has(name));
+    }
+
+    function renderTagTrigger() {
+      const tags = selectedTagNames();
+      if (tags.length === 0) {
+        tagTriggerMain.innerHTML = `<span class="tag-placeholder">选择标签，可搜索后多选</span>`;
+        return;
+      }
+
+      const visible = tags.slice(0, 2).map((tag) => (
+        `<span class="selected-tag" title="${escapeHTML(tag)}">${escapeHTML(tag)}</span>`
+      ));
+      if (tags.length > 2) {
+        visible.push(`<span class="tag-overflow">+${tags.length - 2}</span>`);
+      }
+      tagTriggerMain.innerHTML = visible.join("");
+    }
+
+    function renderTagResults() {
+      const query = tagSearch.value.trim().toLowerCase();
+      const matched = allTags.filter((tag) => tag.name.toLowerCase().includes(query));
+
+      if (matched.length === 0) {
+        tagResults.innerHTML = `<div class="tag-empty">没有匹配标签</div>`;
+        return;
+      }
+
+      tagResults.innerHTML = matched.map((tag) => {
+        const selected = selectedTags.has(tag.name);
+        return `
+          <button class="tag-option" type="button" title="${escapeHTML(tag.name)}" aria-selected="${selected}" data-tag="${escapeHTML(tag.name)}">
+            <span class="tag-check" aria-hidden="true"></span>
+            <span class="tag-name">${escapeHTML(tag.name)}</span>
+            <span class="tag-count">${tag.count}</span>
+          </button>
+        `;
+      }).join("");
+    }
+
+    function openTagPopover() {
+      tagPopover.hidden = false;
+      tagTrigger.setAttribute("aria-expanded", "true");
+      renderTagResults();
+      tagSearch.focus();
+    }
+
+    function closeTagPopover() {
+      tagPopover.hidden = true;
+      tagTrigger.setAttribute("aria-expanded", "false");
+      tagSearch.value = "";
+    }
+
+    function renderSummary() {
+      const category = categoryButtons.find((button) => button.getAttribute("aria-pressed") === "true")?.textContent.trim() || "全部";
+      const tags = selectedTagNames();
+      const keyword = keywordInput.value.trim();
+      const chips = [];
+
+      if (category !== "全部") chips.push(`<span class="summary-chip" title="分类：${escapeHTML(category)}">分类：${escapeHTML(category)}</span>`);
+      tags.forEach((tag) => chips.push(`<span class="summary-chip" title="标签：${escapeHTML(tag)}">标签：${escapeHTML(tag)}</span>`));
+      if (keyword) chips.push(`<span class="summary-chip" title="关键词：${escapeHTML(keyword)}">关键词：${escapeHTML(keyword)}</span>`);
+
+      summary.innerHTML = chips.length
+        ? `<strong>当前筛选</strong>${chips.join("")}<button class="clear" type="button">清空</button>`
+        : `<span>当前显示全部 Skills，可按分类、标签选择器和关键词组合过滤。</span>`;
+
+      const clear = summary.querySelector(".clear");
+      if (clear) {
+        clear.addEventListener("click", () => {
+          categoryButtons.forEach((button, index) => button.setAttribute("aria-pressed", index === 0 ? "true" : "false"));
+          selectedTags.clear();
+          keywordInput.value = "";
+          renderTagTrigger();
+          renderTagResults();
+          renderSummary();
+        });
+      }
+    }
+
+    categoryButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        categoryButtons.forEach((item) => item.setAttribute("aria-pressed", "false"));
+        button.setAttribute("aria-pressed", "true");
+        renderSummary();
+      });
+    });
+
+    tagTrigger.addEventListener("click", () => {
+      if (tagPopover.hidden) {
+        openTagPopover();
+      } else {
+        closeTagPopover();
+      }
+    });
+
+    tagSearch.addEventListener("input", renderTagResults);
+
+    tagResults.addEventListener("click", (event) => {
+      const option = event.target.closest(".tag-option");
+      if (!option) return;
+      const tag = option.dataset.tag;
+      if (selectedTags.has(tag)) {
+        selectedTags.delete(tag);
+      } else {
+        selectedTags.add(tag);
+      }
+      renderTagTrigger();
+      renderTagResults();
+      renderSummary();
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!tagPopover.hidden && !event.target.closest(".tag-picker")) {
+        closeTagPopover();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !tagPopover.hidden) {
+        closeTagPopover();
+        tagTrigger.focus();
+      }
+    });
+
+    tagPopover.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+
+    tagTrigger.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        openTagPopover();
+      }
+    });
+
+    tagResults.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        const option = event.target.closest(".tag-option");
+        if (!option) return;
+        event.preventDefault();
+        const tag = option.dataset.tag;
+        if (selectedTags.has(tag)) {
+          selectedTags.delete(tag);
+        } else {
+          selectedTags.add(tag);
+        }
+        renderTagTrigger();
+        renderTagResults();
+        renderSummary();
+      }
+    });
+
+    keywordInput.addEventListener("input", renderSummary);
+    toggle.addEventListener("click", () => {
+      const open = !panel.classList.contains("open");
+      panel.classList.toggle("open", open);
+      toggle.setAttribute("aria-expanded", String(open));
+    });
+
+    renderTagTrigger();
+    renderTagResults();
+    renderSummary();
+  </script>
+</body>
+</html>

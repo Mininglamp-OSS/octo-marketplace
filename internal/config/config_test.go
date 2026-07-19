@@ -106,6 +106,7 @@ func TestOSSConfigDefaults(t *testing.T) {
 	t.Setenv("OSS_KEY_PREFIX", "")
 	t.Setenv("OSS_PATH_STYLE", "")
 	t.Setenv("OSS_PUBLIC_ENDPOINT", "")
+	t.Setenv("OSS_PUBLIC_PATH_STYLE", "")
 	t.Setenv("OSS_SIGNING_HOST", "")
 	t.Setenv("MAX_UPLOAD_MB", "")
 
@@ -119,6 +120,9 @@ func TestOSSConfigDefaults(t *testing.T) {
 	if cfg.MaxUploadMB != 20 {
 		t.Fatalf("MaxUploadMB=%d want=20", cfg.MaxUploadMB)
 	}
+	if cfg.OSSPublicPathStyle {
+		t.Fatal("OSSPublicPathStyle=true want default false")
+	}
 }
 
 func TestOSSConfigFromEnv(t *testing.T) {
@@ -131,6 +135,7 @@ func TestOSSConfigFromEnv(t *testing.T) {
 	t.Setenv("OSS_KEY_PREFIX", "/im-test/marketplace/")
 	t.Setenv("OSS_PATH_STYLE", "false")
 	t.Setenv("OSS_PUBLIC_ENDPOINT", "https://cdn.example.com/")
+	t.Setenv("OSS_PUBLIC_PATH_STYLE", "true")
 	t.Setenv("OSS_SIGNING_HOST", "my-bucket.cos.ap-beijing.myqcloud.com")
 	t.Setenv("OSS_DOWNLOAD_SIGNED", "true")
 	t.Setenv("MAX_UPLOAD_MB", "50")
@@ -153,6 +158,9 @@ func TestOSSConfigFromEnv(t *testing.T) {
 	}
 	if cfg.OSSPublicEndpoint != "https://cdn.example.com" {
 		t.Fatalf("OSSPublicEndpoint=%q", cfg.OSSPublicEndpoint)
+	}
+	if !cfg.OSSPublicPathStyle {
+		t.Fatal("OSSPublicPathStyle=false want true")
 	}
 	if cfg.OSSSigningHost != "my-bucket.cos.ap-beijing.myqcloud.com" {
 		t.Fatalf("OSSSigningHost=%q", cfg.OSSSigningHost)

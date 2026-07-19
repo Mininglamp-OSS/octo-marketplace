@@ -46,6 +46,7 @@ type StorageConfig struct {
 	OSSKeyPrefix       string
 	OSSPathStyle       bool
 	OSSPublicEndpoint  string
+	OSSPublicPathStyle bool
 	OSSSigningHost     string
 	OSSDownloadSigned  bool
 	CORSAllowedOrigins []string
@@ -122,16 +123,17 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			localStorage = ls
 		case "oss":
 			oss, err := storage.NewOSS(storage.OSSConfig{
-				Endpoint:       storageCfg.OSSEndpoint,
-				Bucket:         storageCfg.OSSBucket,
-				AccessKey:      storageCfg.OSSAccessKey,
-				SecretKey:      storageCfg.OSSSecretKey,
-				Region:         storageCfg.OSSRegion,
-				KeyPrefix:      storageCfg.OSSKeyPrefix,
-				PathStyle:      storageCfg.OSSPathStyle,
-				PublicEndpoint: storageCfg.OSSPublicEndpoint,
-				SigningHost:    storageCfg.OSSSigningHost,
-				DownloadSigned: storageCfg.OSSDownloadSigned,
+				Endpoint:        storageCfg.OSSEndpoint,
+				Bucket:          storageCfg.OSSBucket,
+				AccessKey:       storageCfg.OSSAccessKey,
+				SecretKey:       storageCfg.OSSSecretKey,
+				Region:          storageCfg.OSSRegion,
+				KeyPrefix:       storageCfg.OSSKeyPrefix,
+				PathStyle:       storageCfg.OSSPathStyle,
+				PublicEndpoint:  storageCfg.OSSPublicEndpoint,
+				PublicPathStyle: storageCfg.OSSPublicPathStyle,
+				SigningHost:     storageCfg.OSSSigningHost,
+				DownloadSigned:  storageCfg.OSSDownloadSigned,
 			})
 			if err != nil {
 				panic("storage driver oss: " + err.Error())

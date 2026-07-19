@@ -154,8 +154,7 @@ func TestRewriteZipPackage_NoSkillMD(t *testing.T) {
 	}
 }
 
-func TestRewriteZipPackage_NonRootSkillMDNotMatched(t *testing.T) {
-	// SKILL.md inside a subdirectory should NOT be matched
+func TestRewriteZipPackage_OneLevelSkillMDMatched(t *testing.T) {
 	zipData := makeZip(t, map[string]string{
 		"subdir/SKILL.md": "---\nname: nested\n---\nbody",
 		"README.md":       "# Root",
@@ -167,9 +166,44 @@ func TestRewriteZipPackage_NonRootSkillMDNotMatched(t *testing.T) {
 		Version: "1.0.0",
 	}
 
+	result, err := RewriteZipPackage(bytes.NewReader(zipData), int64(len(zipData)), params)
+	if err != nil {
+		t.Fatalf("RewriteZipPackage failed: %v", err)
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(result.ZipBytes), result.ZipSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range reader.File {
+		if f.Name != "subdir/SKILL.md" {
+			continue
+		}
+		content, _ := readZipEntry(f)
+		if !strings.Contains(string(content), "name: my-skill") {
+			t.Errorf("nested SKILL.md was not rewritten: %s", string(content))
+		}
+		return
+	}
+	t.Fatal("subdir/SKILL.md missing from result zip")
+}
+
+func TestRewriteZipPackage_TwoLevelSkillMDNotMatched(t *testing.T) {
+	zipData := makeZip(t, map[string]string{
+		"a/b/SKILL.md": "---\nname: nested\n---\nbody",
+		"README.md":    "# Root",
+	})
+
+	params := RewriteParams{
+		Name:    "my-skill",
+		Desc:    "desc",
+		Version: "1.0.0",
+	}
+
 	_, err := RewriteZipPackage(bytes.NewReader(zipData), int64(len(zipData)), params)
 	if err == nil {
-		t.Fatal("expected error: non-root SKILL.md should not be matched")
+		t.Fatal("expected error: two-level SKILL.md should not be matched")
 	}
 	if !strings.Contains(err.Error(), "SKILL.md not found") {
 		t.Errorf("unexpected error: %v", err)
@@ -494,26 +528,30 @@ func TestRewriteZipPackage_PreservesFileHeaders(t *testing.T) {
 	t.Error("data.bin not found in result zip")
 }
 
-func TestIsRootSkillMD(t *testing.T) {
+func TestSkillMDPathMatching(t *testing.T) {
 	tests := []struct {
-		path string
-		want bool
+		path         string
+		wantRoot     bool
+		wantOneLevel bool
 	}{
-		{"SKILL.md", true},
-		{"skill.md", true},
-		{"Skill.md", true},
-		{"SKILL.MD", true},
-		{"subdir/SKILL.md", false},
-		{"a/b/skill.md", false},
-		{"README.md", false},
-		{"skill.txt", false},
-		{"SKILL.md.bak", false},
+		{"SKILL.md", true, false},
+		{"skill.md", true, false},
+		{"Skill.md", true, false},
+		{"SKILL.MD", true, false},
+		{"subdir/SKILL.md", false, true},
+		{"a/b/skill.md", false, false},
+		{"README.md", false, false},
+		{"skill.txt", false, false},
+		{"SKILL.md.bak", false, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			if got := isRootSkillMD(tt.path); got != tt.want {
-				t.Errorf("isRootSkillMD(%q) = %v, want %v", tt.path, got, tt.want)
+			if got := isRootSkillMD(tt.path); got != tt.wantRoot {
+				t.Errorf("isRootSkillMD(%q) = %v, want %v", tt.path, got, tt.wantRoot)
+			}
+			if got := isOneLevelSkillMD(tt.path); got != tt.wantOneLevel {
+				t.Errorf("isOneLevelSkillMD(%q) = %v, want %v", tt.path, got, tt.wantOneLevel)
 			}
 		})
 	}

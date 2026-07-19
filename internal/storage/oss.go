@@ -16,27 +16,29 @@ import (
 
 // OSSStorage implements Storage using an S3-compatible object store (Aliyun OSS, MinIO, AWS S3, etc.).
 type OSSStorage struct {
-	client         *s3.Client
-	presignClient  *s3.Client
-	bucket         string
-	keyPrefix      string
-	publicEndpoint string
-	signingHost    string
-	downloadSigned bool
+	client          *s3.Client
+	presignClient   *s3.Client
+	bucket          string
+	keyPrefix       string
+	publicEndpoint  string
+	publicPathStyle bool
+	signingHost     string
+	downloadSigned  bool
 }
 
 // OSSConfig holds the configuration for S3-compatible storage.
 type OSSConfig struct {
-	Endpoint       string
-	Bucket         string
-	AccessKey      string
-	SecretKey      string
-	Region         string
-	KeyPrefix      string
-	PathStyle      bool
-	PublicEndpoint string
-	SigningHost    string
-	DownloadSigned bool
+	Endpoint        string
+	Bucket          string
+	AccessKey       string
+	SecretKey       string
+	Region          string
+	KeyPrefix       string
+	PathStyle       bool
+	PublicEndpoint  string
+	PublicPathStyle bool
+	SigningHost     string
+	DownloadSigned  bool
 }
 
 // NewOSS creates a Storage backed by an S3-compatible service.
@@ -74,13 +76,14 @@ func NewOSS(cfg OSSConfig) (*OSSStorage, error) {
 	})
 
 	return &OSSStorage{
-		client:         client,
-		presignClient:  presignCli,
-		bucket:         cfg.Bucket,
-		keyPrefix:      strings.Trim(cfg.KeyPrefix, "/"),
-		publicEndpoint: strings.TrimRight(cfg.PublicEndpoint, "/"),
-		signingHost:    strings.TrimSpace(cfg.SigningHost),
-		downloadSigned: cfg.DownloadSigned,
+		client:          client,
+		presignClient:   presignCli,
+		bucket:          cfg.Bucket,
+		keyPrefix:       strings.Trim(cfg.KeyPrefix, "/"),
+		publicEndpoint:  strings.TrimRight(cfg.PublicEndpoint, "/"),
+		publicPathStyle: cfg.PublicPathStyle,
+		signingHost:     strings.TrimSpace(cfg.SigningHost),
+		downloadSigned:  cfg.DownloadSigned,
 	}, nil
 }
 
@@ -194,7 +197,7 @@ func (s *OSSStorage) PublicURL(_ context.Context, key string) (string, error) {
 	if s.publicEndpoint == "" {
 		return "", fmt.Errorf("OSS_PUBLIC_ENDPOINT not configured; cannot construct a persistent public URL")
 	}
-	return fmt.Sprintf("%s/%s", s.publicEndpoint, s.key(key)), nil
+	return s.publicObjectURL(key)
 }
 
 func (s *OSSStorage) key(key string) string {
@@ -210,7 +213,11 @@ func (s *OSSStorage) publicObjectURL(key string) (string, error) {
 	if err != nil || public.Scheme == "" || public.Host == "" {
 		return "", fmt.Errorf("invalid OSS_PUBLIC_ENDPOINT %q", s.publicEndpoint)
 	}
-	public.Path = strings.TrimRight(public.Path, "/") + "/" + strings.TrimLeft(s.key(key), "/")
+	objectPath := strings.TrimLeft(s.key(key), "/")
+	if s.publicPathStyle {
+		objectPath = strings.Trim(s.bucket, "/") + "/" + objectPath
+	}
+	public.Path = strings.TrimRight(public.Path, "/") + "/" + objectPath
 	public.RawPath = ""
 	public.RawQuery = ""
 	public.Fragment = ""

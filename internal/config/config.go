@@ -46,19 +46,20 @@ type Config struct {
 	Storage StorageConfig
 
 	// Object storage (OSS/S3) configuration for skill file uploads.
-	StorageDriver     string // "local" or "oss"
-	LocalStorageDir   string
-	OSSEndpoint       string
-	OSSBucket         string
-	OSSAccessKey      string
-	OSSSecretKey      string
-	OSSRegion         string
-	OSSKeyPrefix      string
-	OSSPathStyle      bool
-	OSSPublicEndpoint string
-	OSSSigningHost    string
-	OSSDownloadSigned bool
-	MaxUploadMB       int
+	StorageDriver      string // "local" or "oss"
+	LocalStorageDir    string
+	OSSEndpoint        string
+	OSSBucket          string
+	OSSAccessKey       string
+	OSSSecretKey       string
+	OSSRegion          string
+	OSSKeyPrefix       string
+	OSSPathStyle       bool
+	OSSPublicEndpoint  string
+	OSSPublicPathStyle bool
+	OSSSigningHost     string
+	OSSDownloadSigned  bool
+	MaxUploadMB        int
 }
 
 // StorageConfig configures the S3-compatible object store used for MCP icons.
@@ -119,19 +120,20 @@ func Load() Config {
 			PathStyle:     envBool("STORAGE_PATH_STYLE", true),
 		},
 
-		StorageDriver:     env("STORAGE_DRIVER", "local"),
-		LocalStorageDir:   env("LOCAL_STORAGE_DIR", "/tmp/marketplace-uploads"),
-		OSSEndpoint:       env("OSS_ENDPOINT", ""),
-		OSSBucket:         env("OSS_BUCKET", ""),
-		OSSAccessKey:      env("OSS_ACCESS_KEY", ""),
-		OSSSecretKey:      env("OSS_SECRET_KEY", ""),
-		OSSRegion:         env("OSS_REGION", "us-east-1"),
-		OSSKeyPrefix:      strings.Trim(env("OSS_KEY_PREFIX", ""), "/"),
-		OSSPathStyle:      envBool("OSS_PATH_STYLE", true),
-		OSSPublicEndpoint: strings.TrimRight(env("OSS_PUBLIC_ENDPOINT", ""), "/"),
-		OSSSigningHost:    strings.TrimSpace(env("OSS_SIGNING_HOST", "")),
-		OSSDownloadSigned: envBool("OSS_DOWNLOAD_SIGNED", false),
-		MaxUploadMB:       envInt("MAX_UPLOAD_MB", 20),
+		StorageDriver:      env("STORAGE_DRIVER", "local"),
+		LocalStorageDir:    env("LOCAL_STORAGE_DIR", "/tmp/marketplace-uploads"),
+		OSSEndpoint:        env("OSS_ENDPOINT", ""),
+		OSSBucket:          env("OSS_BUCKET", ""),
+		OSSAccessKey:       env("OSS_ACCESS_KEY", ""),
+		OSSSecretKey:       env("OSS_SECRET_KEY", ""),
+		OSSRegion:          env("OSS_REGION", "us-east-1"),
+		OSSKeyPrefix:       strings.Trim(env("OSS_KEY_PREFIX", ""), "/"),
+		OSSPathStyle:       envBool("OSS_PATH_STYLE", true),
+		OSSPublicEndpoint:  strings.TrimRight(env("OSS_PUBLIC_ENDPOINT", ""), "/"),
+		OSSPublicPathStyle: envBool("OSS_PUBLIC_PATH_STYLE", false),
+		OSSSigningHost:     strings.TrimSpace(env("OSS_SIGNING_HOST", "")),
+		OSSDownloadSigned:  envBool("OSS_DOWNLOAD_SIGNED", false),
+		MaxUploadMB:        envInt("MAX_UPLOAD_MB", 20),
 	}
 }
 

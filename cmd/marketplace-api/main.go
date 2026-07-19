@@ -147,6 +147,7 @@ func main() {
 			OSSKeyPrefix:       cfg.OSSKeyPrefix,
 			OSSPathStyle:       cfg.OSSPathStyle,
 			OSSPublicEndpoint:  cfg.OSSPublicEndpoint,
+			OSSPublicPathStyle: cfg.OSSPublicPathStyle,
 			OSSSigningHost:     cfg.OSSSigningHost,
 			OSSDownloadSigned:  cfg.OSSDownloadSigned,
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,

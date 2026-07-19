@@ -62,15 +62,9 @@ func RewriteZipPackage(zipData io.ReaderAt, zipSize int64, p RewriteParams) (*Re
 		return nil, fmt.Errorf("rewrite: open zip: %w", err)
 	}
 
-	var skillMDEntry *zip.File
-	for _, f := range reader.File {
-		if isRootSkillMD(f.Name) {
-			skillMDEntry = f
-			break
-		}
-	}
+	skillMDEntry := findSkillMDEntry(reader.File)
 	if skillMDEntry == nil {
-		return nil, fmt.Errorf("rewrite: SKILL.md not found in zip root")
+		return nil, fmt.Errorf("rewrite: SKILL.md not found in zip root or one-level directory")
 	}
 
 	// Read the original SKILL.md
@@ -87,11 +81,15 @@ func RewriteZipPackage(zipData io.ReaderAt, zipSize int64, p RewriteParams) (*Re
 	writer := zip.NewWriter(&buf)
 
 	for _, f := range reader.File {
-		if isRootSkillMD(f.Name) {
+		if f == skillMDEntry {
 			// Write the rewritten SKILL.md
-			header := f.FileHeader
-			header.UncompressedSize64 = uint64(len(newMD))
-			w, err := writer.CreateHeader(&header)
+			header := &zip.FileHeader{
+				Name:   f.Name,
+				Method: f.Method,
+			}
+			header.SetModTime(f.Modified)
+			header.SetMode(f.Mode())
+			w, err := writer.CreateHeader(header)
 			if err != nil {
 				return nil, fmt.Errorf("rewrite: create SKILL.md header: %w", err)
 			}
@@ -122,15 +120,37 @@ func RewriteZipPackage(zipData io.ReaderAt, zipSize int64, p RewriteParams) (*Re
 	}, nil
 }
 
-// isRootSkillMD checks if a zip entry path is SKILL.md at the root level.
-// Only matches entries whose base name is "skill.md" (case-insensitive) and
-// that reside at the zip root (path.Dir == "." or "").
+func findSkillMDEntry(files []*zip.File) *zip.File {
+	var oneLevel *zip.File
+	for _, f := range files {
+		if isRootSkillMD(f.Name) {
+			return f
+		}
+		if oneLevel == nil && isOneLevelSkillMD(f.Name) {
+			oneLevel = f
+		}
+	}
+	return oneLevel
+}
+
+func isSkillMDFile(name string) bool {
+	return strings.EqualFold(path.Base(name), "skill.md")
+}
+
 func isRootSkillMD(name string) bool {
 	dir := path.Dir(name)
 	if dir != "." && dir != "" {
 		return false
 	}
-	return strings.EqualFold(path.Base(name), "skill.md")
+	return isSkillMDFile(name)
+}
+
+func isOneLevelSkillMD(name string) bool {
+	dir := path.Dir(name)
+	if dir == "." || dir == "" || strings.Contains(dir, "/") {
+		return false
+	}
+	return isSkillMDFile(name)
 }
 
 // buildRewrittenSkillMD constructs the new SKILL.md content with updated frontmatter.
