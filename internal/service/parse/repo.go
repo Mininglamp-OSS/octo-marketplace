@@ -15,7 +15,6 @@ type TaskRow struct {
 	FileSize          int64
 	FileURL           string
 	Status            string
-	Attempts          int
 	ErrorCode         string
 	ErrorMessage      string
 	ResultName        string
@@ -27,6 +26,7 @@ type TaskRow struct {
 	ResultForkedFrom  string
 	ResultMetadata    json.RawMessage
 	FileSHA256        string
+	Attempts          int
 	OwnerID           string
 	SpaceID           string
 	SkillID           string // empty for new upload, non-empty for reupload
@@ -60,22 +60,22 @@ func (r *Repo) Create(ctx context.Context, t *TaskRow) error {
 // GetByID fetches a parse task by ID.
 func (r *Repo) GetByID(ctx context.Context, id string) (*TaskRow, error) {
 	query := `
-		SELECT id, upload_id, file_name, file_size, file_url, status, attempts,
+		SELECT id, upload_id, file_name, file_size, file_url, status,
 			error_code, error_message,
 			result_name, result_description, result_version, COALESCE(result_tags, '[]'), result_readme,
 			result_id, result_forked_from, result_metadata,
-			file_sha256, owner_id, space_id, skill_id, created_at, updated_at
+			file_sha256, attempts, owner_id, space_id, skill_id, created_at, updated_at
 		FROM parse_tasks
 		WHERE id = ?
 	`
 	var t TaskRow
 	var resultMetadata sql.NullString
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status, &t.Attempts,
+		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status,
 		&t.ErrorCode, &t.ErrorMessage,
 		&t.ResultName, &t.ResultDescription, &t.ResultVersion, &t.ResultTags, &t.ResultReadme,
 		&t.ResultID, &t.ResultForkedFrom, &resultMetadata,
-		&t.FileSHA256, &t.OwnerID, &t.SpaceID, &t.SkillID, &t.CreatedAt, &t.UpdatedAt,
+		&t.FileSHA256, &t.Attempts, &t.OwnerID, &t.SpaceID, &t.SkillID, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -92,11 +92,11 @@ func (r *Repo) GetByID(ctx context.Context, id string) (*TaskRow, error) {
 // GetByUploadID fetches a parse task by upload_id.
 func (r *Repo) GetByUploadID(ctx context.Context, uploadID string) (*TaskRow, error) {
 	query := `
-		SELECT id, upload_id, file_name, file_size, file_url, status, attempts,
+		SELECT id, upload_id, file_name, file_size, file_url, status,
 			error_code, error_message,
 			result_name, result_description, result_version, COALESCE(result_tags, '[]'), result_readme,
 			result_id, result_forked_from, result_metadata,
-			file_sha256, owner_id, space_id, skill_id, created_at, updated_at
+			file_sha256, attempts, owner_id, space_id, skill_id, created_at, updated_at
 		FROM parse_tasks
 		WHERE upload_id = ?
 		ORDER BY created_at DESC
@@ -105,11 +105,11 @@ func (r *Repo) GetByUploadID(ctx context.Context, uploadID string) (*TaskRow, er
 	var t TaskRow
 	var resultMetadata sql.NullString
 	err := r.db.QueryRowContext(ctx, query, uploadID).Scan(
-		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status, &t.Attempts,
+		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status,
 		&t.ErrorCode, &t.ErrorMessage,
 		&t.ResultName, &t.ResultDescription, &t.ResultVersion, &t.ResultTags, &t.ResultReadme,
 		&t.ResultID, &t.ResultForkedFrom, &resultMetadata,
-		&t.FileSHA256, &t.OwnerID, &t.SpaceID, &t.SkillID, &t.CreatedAt, &t.UpdatedAt,
+		&t.FileSHA256, &t.Attempts, &t.OwnerID, &t.SpaceID, &t.SkillID, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
