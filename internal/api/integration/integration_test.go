@@ -512,10 +512,11 @@ func TestListMineCursorPagination(t *testing.T) {
 	rows := sqlmock.NewRows(skillCols)
 	for i := range 21 {
 		rows.AddRow(
-			fmt.Sprintf("s%d", i), "Skill", "Skill", "", "desc", "cat-1", []byte(`[]`),
+			fmt.Sprintf("s%d", i), "Skill", "Skill", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "private", "1.0.0",
 			"", "f.zip", "url", int64(100), "sha",
-			now.Add(-time.Duration(i)*time.Minute), now, int64(0), int64(0),
+			now.Add(-time.Duration(i)*time.Minute), now, "1.0.0", "", int64(0), int64(0),
 		)
 	}
 	mock.ExpectQuery("SELECT .+ FROM skills").

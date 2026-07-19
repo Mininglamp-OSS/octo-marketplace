@@ -119,7 +119,7 @@ func TestBackfill_Download_WorksAfterBackfill(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"bk-dl", "Backfill DL", "Backfill DL", "", "", "bk-ver-dl",
 		"desc", "", []byte(`[]`), "user-bk", "User BK",
@@ -127,7 +127,7 @@ func TestBackfill_Download_WorksAfterBackfill(t *testing.T) {
 		"skills/bk-dl/v1.5.0/skill.zip", int64(4096), "bkdlsha",
 		now, now,
 		"1.5.0",
-		`{"type":"s3","zip_object_key":"skills/bk-dl/v1.5.0/skill.zip","skill_md_object_key":"skills/bk-dl/v1.5.0/SKILL.md","zip_file_name":"skill.zip","zip_size":4096,"zip_sha256":"bkdlsha"}`,
+		`{"type":"s3","zip_object_key":"skills/bk-dl/v1.5.0/skill.zip","skill_md_object_key":"skills/bk-dl/v1.5.0/SKILL.md","zip_file_name":"skill.zip","zip_size":4096,"zip_sha256":"bkdlsha"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("bk-dl").
@@ -206,7 +206,7 @@ func TestBackfill_List_UsesCurrentVersionStorage(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"list-bk-1", "Listed Skill", "Listed Skill", "", "", "ver-list-1",
 		"desc", "", []byte(`[]`), "user-list", "User List",
@@ -214,8 +214,10 @@ func TestBackfill_List_UsesCurrentVersionStorage(t *testing.T) {
 		"skills/list-bk-1/v1.0.0/old.zip", int64(512), "oldsha",
 		now, now,
 		"2.0.0",
-		`{"type":"s3","zip_object_key":"skills/list-bk-1/v2.0.0/skill.zip","skill_md_object_key":"skills/list-bk-1/v2.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":8192,"zip_sha256":"newsha"}`,
+		`{"type":"s3","zip_object_key":"skills/list-bk-1/v2.0.0/skill.zip","skill_md_object_key":"skills/list-bk-1/v2.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":8192,"zip_sha256":"newsha"}`, int64(0), int64(0),
 	)
+	mock.ExpectQuery("SELECT COUNT").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(listRows)
 
@@ -277,7 +279,7 @@ func TestBackfill_ListMine_UsesCurrentVersionStorage(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"mine-bk-1", "My BK Skill", "My BK Skill", "", "", "ver-mine-1",
 		"desc", "", []byte(`[]`), "owner-mine", "Owner Mine",
@@ -285,7 +287,7 @@ func TestBackfill_ListMine_UsesCurrentVersionStorage(t *testing.T) {
 		"skills/mine-bk-1/v1.0.0/legacy.zip", int64(512), "legsha",
 		now, now,
 		"3.0.0",
-		`{"type":"s3","zip_object_key":"skills/mine-bk-1/v3.0.0/skill.zip","zip_file_name":"skill.zip","zip_size":16384,"zip_sha256":"v3sha"}`,
+		`{"type":"s3","zip_object_key":"skills/mine-bk-1/v3.0.0/skill.zip","zip_file_name":"skill.zip","zip_size":16384,"zip_sha256":"v3sha"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(listRows)

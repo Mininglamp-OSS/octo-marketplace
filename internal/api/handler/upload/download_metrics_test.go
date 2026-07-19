@@ -47,10 +47,12 @@ func (r *alwaysVisibleResolver) CanView(_ context.Context, _ string, _ metricssv
 }
 
 var skillCols = []string{
-	"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+	"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+	"description", "category_id", "tags",
 	"owner_id", "owner_name", "space_id", "visibility", "version",
 	"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-	"created_at", "updated_at", "view_count", "download_count",
+	"created_at", "updated_at", "resolved_version", "version_storage",
+	"view_count", "download_count",
 }
 
 // buildDownloadTestRouter wires a gin engine with skill download routes, using the
@@ -68,8 +70,8 @@ func buildDownloadTestRouter(t *testing.T, db *sql.DB, metricsRedis *testableMet
 	skSvc := skillsvc.New(skRepo, nil, ls, func() string { return "id" })
 
 	parseRepo := parse.NewRepo(db)
-	worker := parse.NewWorker(ls, parseRepo, db)
-	pSvc := parse.NewService(ls, parseRepo, worker, func() string { return "id" }, 20)
+	worker := parse.NewWorker(ls, parseRepo, db, parse.WorkerConfig{})
+	pSvc := parse.NewService(ls, parseRepo, worker, func() string { return "id" }, 20, parse.ServiceConfig{})
 
 	mSvc := metricssvc.New(metricsRedis)
 	metricssvc.RegisterResolver("skill", &alwaysVisibleResolver{})
@@ -104,10 +106,11 @@ func TestDownloadTracksMetricsOnSuccess(t *testing.T) {
 	now := time.Now().UTC()
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(sqlmock.NewRows(skillCols).AddRow(
-			"skill-dl", "Test", "Test", "", "desc", "cat-1", []byte(`[]`),
+			"skill-dl", "Test", "Test", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "space", "1.0.0",
 			"", "file.zip", fileKey, int64(1024), "sha",
-			now, now, int64(5), int64(3),
+			now, now, "1.0.0", "", int64(5), int64(3),
 		))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/skills/skill-dl/download?format=json", nil)
@@ -173,10 +176,11 @@ func TestDownloadDoesNotTrackWhenURLGenerationFails(t *testing.T) {
 	now := time.Now().UTC()
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(sqlmock.NewRows(skillCols).AddRow(
-			"skill-fail", "Fail", "Fail", "", "desc", "cat-1", []byte(`[]`),
+			"skill-fail", "Fail", "Fail", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "space", "1.0.0",
 			"", "file.zip", "skills/missing/v1.0.0/file.zip", int64(1024), "sha",
-			now, now, int64(0), int64(0),
+			now, now, "1.0.0", "", int64(0), int64(0),
 		))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/skills/skill-fail/download", nil)
@@ -211,10 +215,11 @@ func TestDownloadMetricsFailureDoesNotBlockResponse(t *testing.T) {
 	now := time.Now().UTC()
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(sqlmock.NewRows(skillCols).AddRow(
-			"skill-ok", "OK", "OK", "", "desc", "cat-1", []byte(`[]`),
+			"skill-ok", "OK", "OK", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "space", "1.0.0",
 			"", "file.zip", fileKey, int64(1024), "sha",
-			now, now, int64(0), int64(0),
+			now, now, "1.0.0", "", int64(0), int64(0),
 		))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/skills/skill-ok/download?format=json", nil)

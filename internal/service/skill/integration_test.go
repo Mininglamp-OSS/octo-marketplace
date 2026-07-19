@@ -139,13 +139,13 @@ func TestUpdate_ReuploadFlow_NewVersionGenerated(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"skill-reup", "Original Skill", "Original Skill", "", "", "old-ver-id",
 		"Original desc", "cat-1", []byte(`["v1"]`), "user-reup", "User Reup",
 		"space-reup", "space", "1.0.0", "old readme", "skill.zip",
 		"skills/skill-reup/v1.0.0/skill.zip", int64(1024), "oldsha", now, now,
-		"1.0.0", `{"type":"s3","zip_object_key":"skills/skill-reup/v1.0.0/skill.zip","skill_md_object_key":"skills/skill-reup/v1.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":1024,"zip_sha256":"oldsha"}`,
+		"1.0.0", `{"type":"s3","zip_object_key":"skills/skill-reup/v1.0.0/skill.zip","skill_md_object_key":"skills/skill-reup/v1.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":1024,"zip_sha256":"oldsha"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("skill-reup").
@@ -189,13 +189,13 @@ func TestUpdate_ReuploadFlow_NewVersionGenerated(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"skill-reup", "Updated Skill", "Updated Skill", "", "", "ver-id-1",
 		"Updated desc", "cat-1", []byte(`["v3","updated"]`), "user-reup", "User Reup",
 		"space-reup", "space", "3.0.0", "# Updated\nNew body", "skill.zip",
 		"skills/skill-reup/v3.0.0/skill.zip", int64(len(zipData)), "newsha256", now, now,
-		"3.0.0", `{"type":"s3","zip_object_key":"skills/skill-reup/v3.0.0/skill.zip","skill_md_object_key":"skills/skill-reup/v3.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":2048,"zip_sha256":"newsha256"}`,
+		"3.0.0", `{"type":"s3","zip_object_key":"skills/skill-reup/v3.0.0/skill.zip","skill_md_object_key":"skills/skill-reup/v3.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":2048,"zip_sha256":"newsha256"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("skill-reup").
@@ -255,7 +255,7 @@ func TestGet_JoinResult_VersionStorageResolved(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"skill-join", "Join Skill", "Join Skill", "", "", "ver-join-1",
 		"desc", "", []byte(`[]`), "user-join", "User Join",
@@ -265,7 +265,7 @@ func TestGet_JoinResult_VersionStorageResolved(t *testing.T) {
 		// resolved_version from JOIN with skill_versions
 		"2.0.0",
 		// version_storage from skill_versions
-		`{"type":"s3","zip_object_key":"skills/skill-join/v2.0.0/skill.zip","skill_md_object_key":"skills/skill-join/v2.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":2048,"zip_sha256":"sha2"}`,
+		`{"type":"s3","zip_object_key":"skills/skill-join/v2.0.0/skill.zip","skill_md_object_key":"skills/skill-join/v2.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":2048,"zip_sha256":"sha2"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("skill-join").
@@ -321,7 +321,7 @@ func TestGetDownloadInfo_UsesVersionStorageKey(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"dl-skill", "Download Skill", "Download Skill", "", "", "ver-dl-1",
 		"desc", "", []byte(`[]`), "user-dl", "User DL",
@@ -329,7 +329,7 @@ func TestGetDownloadInfo_UsesVersionStorageKey(t *testing.T) {
 		"skills/dl-skill/v1.0.0/skill.zip", int64(4096), "dlsha",
 		now, now,
 		"1.0.0",
-		`{"type":"s3","zip_object_key":"skills/dl-skill/v1.0.0/skill.zip","skill_md_object_key":"skills/dl-skill/v1.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":4096,"zip_sha256":"dlsha"}`,
+		`{"type":"s3","zip_object_key":"skills/dl-skill/v1.0.0/skill.zip","skill_md_object_key":"skills/dl-skill/v1.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":4096,"zip_sha256":"dlsha"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("dl-skill").
@@ -376,7 +376,7 @@ func TestGetSkillMD_ReturnsMarkdownContent(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"md-skill", "MD Skill", "MD Skill", "", "", "ver-md-1",
 		"desc", "", []byte(`[]`), "user-md", "User MD",
@@ -384,7 +384,7 @@ func TestGetSkillMD_ReturnsMarkdownContent(t *testing.T) {
 		"skills/md-skill/v1.0.0/skill.zip", int64(1024), "mdsha",
 		now, now,
 		"1.0.0",
-		`{"type":"s3","zip_object_key":"skills/md-skill/v1.0.0/skill.zip","skill_md_object_key":"skills/md-skill/v1.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":1024,"zip_sha256":"mdsha"}`,
+		`{"type":"s3","zip_object_key":"skills/md-skill/v1.0.0/skill.zip","skill_md_object_key":"skills/md-skill/v1.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":1024,"zip_sha256":"mdsha"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("md-skill").
@@ -427,7 +427,7 @@ func TestGetSkillMD_LegacyVersion_ReturnsErrNoFile(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"legacy-md", "Legacy Skill", "Legacy Skill", "", "", "ver-legacy-1",
 		"desc", "", []byte(`[]`), "user-legacy", "User Legacy",
@@ -436,7 +436,7 @@ func TestGetSkillMD_LegacyVersion_ReturnsErrNoFile(t *testing.T) {
 		now, now,
 		"1.0.0",
 		// Legacy storage format: only object_key, no skill_md_object_key
-		`{"type":"s3","object_key":"skills/legacy-md/v1.0.0/skill.zip"}`,
+		`{"type":"s3","object_key":"skills/legacy-md/v1.0.0/skill.zip"}`, int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("legacy-md").
@@ -717,14 +717,14 @@ func TestGetSkillMD_EmptyVersionStorage_ReturnsErrNoFile(t *testing.T) {
 		"description", "category_id", "tags", "owner_id", "owner_name",
 		"space_id", "visibility", "version", "readme_content", "file_name", "file_url",
 		"file_size", "file_sha256", "created_at", "updated_at",
-		"resolved_version", "version_storage",
+		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"empty-vs", "Empty VS", "Empty VS", "", "", "",
 		"desc", "", []byte(`[]`), "user-ev", "User EV",
 		"space-ev", "space", "1.0.0", "", "skill.zip",
 		"skills/empty-vs/v1.0.0/skill.zip", int64(1024), "sha",
 		now, now,
-		"1.0.0", "", // empty version_storage
+		"1.0.0", "", int64(0), int64(0), // empty version_storage
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("empty-vs").

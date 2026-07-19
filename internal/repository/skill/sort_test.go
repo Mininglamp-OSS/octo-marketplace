@@ -25,14 +25,16 @@ func TestListSortComprehensive(t *testing.T) {
 	mock.ExpectQuery("ORDER BY .+COALESCE.+download_count.+ \\* 5").
 		WithArgs("space-1", "space-1", "user-1", "space-1", 20, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).AddRow(
-			"s1", "Skill 1", "Skill 1", "", "desc", "cat-1", []byte(`[]`),
+			"s1", "Skill 1", "Skill 1", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "space", "1.0.0",
-			"", "f.zip", "url", int64(100), "sha", now, now, int64(10), int64(5),
+			"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(10), int64(5),
 		))
 
 	result, err := New(db).List(context.Background(), ListFilter{
@@ -74,14 +76,16 @@ func TestListSortLatestUsesCursor(t *testing.T) {
 	mock.ExpectQuery("ORDER BY s\\.created_at DESC, s\\.id DESC").
 		WithArgs("space-1", "space-1", "user-1", "space-1", 21). // limit+1
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).AddRow(
-			"s1", "Skill 1", "Skill 1", "", "desc", "cat-1", []byte(`[]`),
+			"s1", "Skill 1", "Skill 1", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "space", "1.0.0",
-			"", "f.zip", "url", int64(100), "sha", now, now, int64(0), int64(0),
+			"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(0), int64(0),
 		))
 
 	result, err := New(db).List(context.Background(), ListFilter{
@@ -118,17 +122,20 @@ func TestListSortDownloads(t *testing.T) {
 
 	mock.ExpectQuery("ORDER BY COALESCE.+download_count.+ DESC").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).
-			AddRow("s1", "Skill 1", "Skill 1", "", "desc", "cat-1", []byte(`[]`),
+			AddRow("s1", "Skill 1", "Skill 1", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 				"user-1", "Alice", "space-1", "space", "1.0.0",
-				"", "f.zip", "url", int64(100), "sha", now, now, int64(0), int64(50)).
-			AddRow("s2", "Skill 2", "Skill 2", "", "desc", "cat-1", []byte(`[]`),
+				"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(0), int64(50)).
+			AddRow("s2", "Skill 2", "Skill 2", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 				"user-2", "Bob", "space-1", "public", "1.0.0",
-				"", "f.zip", "url", int64(100), "sha", now, now, int64(0), int64(10)))
+				"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(0), int64(10)))
 
 	result, err := New(db).List(context.Background(), ListFilter{
 		SpaceID: "space-1",
@@ -167,14 +174,16 @@ func TestListSortViews(t *testing.T) {
 
 	mock.ExpectQuery("ORDER BY COALESCE.+view_count.+ DESC").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).AddRow(
-			"s1", "Skill 1", "Skill 1", "", "desc", "cat-1", []byte(`[]`),
+			"s1", "Skill 1", "Skill 1", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "space", "1.0.0",
-			"", "f.zip", "url", int64(100), "sha", now, now, int64(100), int64(0),
+			"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(100), int64(0),
 		))
 
 	result, err := New(db).List(context.Background(), ListFilter{
@@ -210,14 +219,16 @@ func TestListOffsetPagination(t *testing.T) {
 	mock.ExpectQuery("LIMIT .+ OFFSET").
 		WithArgs("space-1", "space-1", "user-1", "space-1", 10, 10).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).AddRow(
-			"s11", "Skill 11", "Skill 11", "", "desc", "cat-1", []byte(`[]`),
+			"s11", "Skill 11", "Skill 11", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "space", "1.0.0",
-			"", "f.zip", "url", int64(100), "sha", now, now, int64(0), int64(0),
+			"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(0), int64(0),
 		))
 
 	result, err := New(db).List(context.Background(), ListFilter{
@@ -252,10 +263,11 @@ func TestListLimitMax50(t *testing.T) {
 	mock.ExpectQuery("LIMIT .+ OFFSET").
 		WithArgs("space-1", "space-1", "user-1", "space-1", 50, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}))
 
 	_, err = New(db).List(context.Background(), ListFilter{
@@ -283,14 +295,16 @@ func TestGetByIDWithMetrics(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM skills .+ LEFT JOIN resource_metrics").
 		WithArgs("skill-1").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).AddRow(
-			"skill-1", "Test", "Test", "", "desc", "cat-1", []byte(`[]`),
+			"skill-1", "Test", "Test", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "public", "1.0.0",
-			"", "f.zip", "url", int64(100), "sha", now, now, int64(42), int64(7),
+			"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(42), int64(7),
 		))
 
 	row, err := New(db).GetByID(context.Background(), "skill-1")
@@ -323,14 +337,16 @@ func TestGetByIDNoMetricsRow(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM skills .+ LEFT JOIN resource_metrics").
 		WithArgs("skill-new").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
 			"owner_id", "owner_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).AddRow(
-			"skill-new", "New", "New", "", "desc", "cat-1", []byte(`[]`),
+			"skill-new", "New", "New", "", "", "",
+			"desc", "cat-1", []byte(`[]`),
 			"user-1", "Alice", "space-1", "public", "1.0.0",
-			"", "f.zip", "url", int64(100), "sha", now, now, int64(0), int64(0),
+			"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(0), int64(0),
 		))
 
 	row, err := New(db).GetByID(context.Background(), "skill-new")
