@@ -107,13 +107,13 @@ func TestTriggerParseReturnsConflictWhenPendingStateWasConsumed(t *testing.T) {
 	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
 
 	rows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
 		"result_id", "result_forked_from", "result_metadata",
 		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-1", "upload-1", "skill.zip", int64(1), "skills/upload-1/skill.zip", "pending", 0,
+		"task-1", "upload-1", "skill.zip", int64(1), "skills/upload-1/skill.zip", "pending",
 		"", "", "", nil, "", []byte("[]"), nil,
 		"", "", nil,
 		"", 0, "user-1", "space-1", "", now, now,
@@ -146,13 +146,13 @@ func TestGetParseStatusMasksStoredFailureDetailsAndSanitizesReadme(t *testing.T)
 	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
 
 	successRows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
 		"result_id", "result_forked_from", "result_metadata",
 		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-success", "upload-1", "skill.zip", int64(1), "skills/upload-1/skill.zip", "success", 0,
+		"task-success", "upload-1", "skill.zip", int64(1), "skills/upload-1/skill.zip", "success",
 		"", "", "safe-skill", "desc", "1.0.0", []byte(`["tag"]`), "# Demo\n\n<script>alert(1)</script>\n<div>ok</div>",
 		"", "", nil,
 		"sha", 0, "user-1", "space-1", "", now, now,
@@ -176,13 +176,13 @@ func TestGetParseStatusMasksStoredFailureDetailsAndSanitizesReadme(t *testing.T)
 	}
 
 	failedRows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
 		"result_id", "result_forked_from", "result_metadata",
 		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-failed", "upload-2", "skill.zip", int64(1), "skills/upload-2/skill.zip", "failed", 0,
+		"task-failed", "upload-2", "skill.zip", int64(1), "skills/upload-2/skill.zip", "failed",
 		"INTERNAL_ERROR", "panic: db password leaked", "", nil, "", []byte("[]"), nil,
 		"", "", nil,
 		"", 0, "user-1", "space-1", "", now, now,
@@ -227,16 +227,18 @@ func TestGetParseStatusRecoversStaleParsing(t *testing.T) {
 	// Task updated_at is 10 minutes ago — well past 2-minute staleTimeout.
 	staleTime := time.Now().Add(-10 * time.Minute)
 	rows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
-		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+		"result_id", "result_forked_from", "result_metadata",
+		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-stale", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing", 0,
+		"task-stale", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing",
 		"", "", "", nil, "", []byte("[]"), nil,
-		"", "user-1", "space-1", "", staleTime, staleTime,
+		"", "", nil,
+		"", 0, "user-1", "space-1", "", staleTime, staleTime,
 	)
-	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status, attempts").
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
 		WithArgs("task-stale").
 		WillReturnRows(rows)
 
@@ -278,16 +280,18 @@ func TestGetParseStatusConcurrentPollOnlyOneWins(t *testing.T) {
 
 	staleTime := time.Now().Add(-10 * time.Minute)
 	rows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
-		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+		"result_id", "result_forked_from", "result_metadata",
+		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-stale", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing", 0,
+		"task-stale", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing",
 		"", "", "", nil, "", []byte("[]"), nil,
-		"", "user-1", "space-1", "", staleTime, staleTime,
+		"", "", nil,
+		"", 0, "user-1", "space-1", "", staleTime, staleTime,
 	)
-	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status, attempts").
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
 		WithArgs("task-stale").
 		WillReturnRows(rows)
 
@@ -326,16 +330,18 @@ func TestGetParseStatusMaxAttemptsExhausted(t *testing.T) {
 
 	staleTime := time.Now().Add(-10 * time.Minute)
 	rows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
-		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+		"result_id", "result_forked_from", "result_metadata",
+		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-exhausted", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing", 2,
+		"task-exhausted", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing",
 		"", "", "", nil, "", []byte("[]"), nil,
-		"", "user-1", "space-1", "", staleTime, staleTime,
+		"", "", nil,
+		"", 2, "user-1", "space-1", "", staleTime, staleTime,
 	)
-	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status, attempts").
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
 		WithArgs("task-exhausted").
 		WillReturnRows(rows)
 
@@ -378,16 +384,18 @@ func TestGetParseStatusNonStaleParsingReturnsNormally(t *testing.T) {
 	// Updated just 1 minute ago — within staleTimeout.
 	recentTime := time.Now().Add(-1 * time.Minute)
 	rows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
-		"file_sha256", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+		"result_id", "result_forked_from", "result_metadata",
+		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-active", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing", 0,
+		"task-active", "upload-1", "skill.zip", int64(1024), "skills/upload-1/skill.zip", "parsing",
 		"", "", "", nil, "", []byte("[]"), nil,
-		"", "user-1", "space-1", "", recentTime, recentTime,
+		"", "", nil,
+		"", 0, "user-1", "space-1", "", recentTime, recentTime,
 	)
-	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status, attempts").
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
 		WithArgs("task-active").
 		WillReturnRows(rows)
 

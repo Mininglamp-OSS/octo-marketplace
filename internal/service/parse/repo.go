@@ -15,7 +15,6 @@ type TaskRow struct {
 	FileSize          int64
 	FileURL           string
 	Status            string
-	Attempts          int
 	ErrorCode         string
 	ErrorMessage      string
 	ResultName        string
@@ -61,7 +60,7 @@ func (r *Repo) Create(ctx context.Context, t *TaskRow) error {
 // GetByID fetches a parse task by ID.
 func (r *Repo) GetByID(ctx context.Context, id string) (*TaskRow, error) {
 	query := `
-		SELECT id, upload_id, file_name, file_size, file_url, status, attempts,
+		SELECT id, upload_id, file_name, file_size, file_url, status,
 			error_code, error_message,
 			result_name, result_description, result_version, COALESCE(result_tags, '[]'), result_readme,
 			result_id, result_forked_from, result_metadata,
@@ -72,7 +71,7 @@ func (r *Repo) GetByID(ctx context.Context, id string) (*TaskRow, error) {
 	var t TaskRow
 	var resultMetadata sql.NullString
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status, &t.Attempts,
+		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status,
 		&t.ErrorCode, &t.ErrorMessage,
 		&t.ResultName, &t.ResultDescription, &t.ResultVersion, &t.ResultTags, &t.ResultReadme,
 		&t.ResultID, &t.ResultForkedFrom, &resultMetadata,
@@ -93,7 +92,7 @@ func (r *Repo) GetByID(ctx context.Context, id string) (*TaskRow, error) {
 // GetByUploadID fetches a parse task by upload_id.
 func (r *Repo) GetByUploadID(ctx context.Context, uploadID string) (*TaskRow, error) {
 	query := `
-		SELECT id, upload_id, file_name, file_size, file_url, status, attempts,
+		SELECT id, upload_id, file_name, file_size, file_url, status,
 			error_code, error_message,
 			result_name, result_description, result_version, COALESCE(result_tags, '[]'), result_readme,
 			result_id, result_forked_from, result_metadata,
@@ -106,7 +105,7 @@ func (r *Repo) GetByUploadID(ctx context.Context, uploadID string) (*TaskRow, er
 	var t TaskRow
 	var resultMetadata sql.NullString
 	err := r.db.QueryRowContext(ctx, query, uploadID).Scan(
-		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status, &t.Attempts,
+		&t.ID, &t.UploadID, &t.FileName, &t.FileSize, &t.FileURL, &t.Status,
 		&t.ErrorCode, &t.ErrorMessage,
 		&t.ResultName, &t.ResultDescription, &t.ResultVersion, &t.ResultTags, &t.ResultReadme,
 		&t.ResultID, &t.ResultForkedFrom, &resultMetadata,

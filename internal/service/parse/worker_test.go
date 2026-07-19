@@ -208,13 +208,13 @@ func TestWorkerSanitizesReadmeBeforePersisting(t *testing.T) {
 
 	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
 	taskRows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status", "attempts",
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
 		"error_code", "error_message",
 		"result_name", "result_description", "result_version", "result_tags", "result_readme",
 		"result_id", "result_forked_from", "result_metadata",
 		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
 	}).AddRow(
-		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing", 0,
+		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing",
 		"", "", "", nil, "", []byte("[]"), nil,
 		"", "", nil,
 		"", 0, "user-1", "space-1", "", now, now,
@@ -234,8 +234,8 @@ func TestWorkerSanitizesReadmeBeforePersisting(t *testing.T) {
 			sqlmock.AnyArg(),
 			stringArg("# Safe Skill\n\n&lt;div onclick=&#34;evil()&#34;&gt;hello&lt;/div&gt;\n\n```html\n<script>keep()</script>\n```"),
 			sqlmock.AnyArg(),
-			"",              // result_id
-			"",              // result_forked_from
+			"",               // result_id
+			"",               // result_forked_from
 			sqlmock.AnyArg(), // result_metadata (nil json)
 			"task-1",
 		).
