@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
@@ -572,4 +573,23 @@ func (s *Service) AdminReupload(ctx context.Context, id string, p AdminReuploadP
 	}
 	item := s.rowToItem(ctx, updated)
 	return &item, nil
+}
+
+// AdminGetDownloadInfo resolves the artifact download URL for a public skill (no space/user check).
+func (s *Service) AdminGetDownloadInfo(ctx context.Context, id string) (*DownloadInfo, error) {
+	item, err := s.AdminGet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if item.FileURL == "" {
+		return nil, ErrNoFile
+	}
+	url, err := s.store.PresignGet(ctx, item.FileURL, 1*time.Hour)
+	if err != nil {
+		return nil, fmt.Errorf("presign download: %w", err)
+	}
+	return &DownloadInfo{
+		DownloadURL: url,
+		FileSHA256:  item.FileSHA256,
+	}, nil
 }

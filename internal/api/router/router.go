@@ -180,6 +180,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		uploadH := uploadhandler.New(pSvc, skSvc, localStorage, storageCfg.MaxMB)
 		uploadH.SetMetricsService(mSvc)
 		uploadH.Register(v1)
+		uploadH.RegisterAdmin(r, adminAuth)
 		uploadH.RegisterLocalProxy(r, authEnabled)
 
 		// MCP icon presigned upload — user surface only. `/api/v1/mcp/upload/icon`

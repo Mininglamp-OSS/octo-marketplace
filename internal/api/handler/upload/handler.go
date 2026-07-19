@@ -61,6 +61,17 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	legacy.GET("/:skill_id/download", h.Download)
 }
 
+// RegisterAdmin registers admin upload/parse/download routes on the admin group.
+// These reuse the same handlers since the admin auth middleware injects identity
+// in the same way, and the admin is treated as the ownerID of the upload.
+func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthenticator) {
+	admin := r.Group("/api/v1/admin", adminAuth.Handler())
+	admin.POST("/skill_uploads", h.InitUpload)
+	admin.POST("/skill_uploads/:skill_upload_id/parse", h.TriggerParse)
+	admin.GET("/skill_parse_tasks/:skill_parse_task_id", h.PollParse)
+	admin.GET("/skills/:skill_id/download", h.AdminDownload)
+}
+
 func legacyUploadEndpoint(successor string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Deprecation", "true")
@@ -387,6 +398,36 @@ func (h *Handler) Download(c *gin.Context) {
 		if trackErr := h.metricsSvc.TrackDownload(c.Request.Context(), "skill", skillID); trackErr != nil {
 			log.Printf("[download] WARN: TrackDownload failed for skill %s: %v", skillID, trackErr)
 		}
+	}
+
+	if c.Query("format") == "json" {
+		apiresponse.OK(c, DownloadResponse{DownloadURL: info.DownloadURL, FileSHA256: info.FileSHA256})
+		return
+	}
+
+	c.Redirect(http.StatusFound, info.DownloadURL)
+}
+
+// AdminDownload returns a presigned download URL for a public skill (admin-only).
+func (h *Handler) AdminDownload(c *gin.Context) {
+	if _, ok := middleware.Identity(c); !ok {
+		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "authentication is required", nil, "")
+		return
+	}
+	skillID := c.Param("skill_id")
+
+	info, err := h.skillSvc.AdminGetDownloadInfo(c.Request.Context(), skillID)
+	if err != nil {
+		if errors.Is(err, skillsvc.ErrNotFound) {
+			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrNoFile) {
+			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "no file available", nil, "")
+			return
+		}
+		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		return
 	}
 
 	if c.Query("format") == "json" {
