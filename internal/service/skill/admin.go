@@ -223,7 +223,7 @@ func (s *Service) AdminCreate(ctx context.Context, p AdminCreateParams) (*SkillI
 		Tags:             tags,
 		OwnerID:          p.AdminUID,
 		OwnerName:        p.AdminName,
-		SpaceID:          "",
+		SpaceID:          skillrepo.GlobalTagSpaceID,
 		Visibility:       "public",
 		Version:          version,
 		ReadmeContent:    readmeContent,
@@ -299,7 +299,7 @@ func (s *Service) AdminUpdate(ctx context.Context, id string, p AdminUpdateParam
 		repoParams.TagNames = tagNames
 	}
 
-	_, err = s.repo.Update(ctx, id, repoParams)
+	_, err = s.repo.UpdateWithTags(ctx, id, skillrepo.GlobalTagSpaceID, row.OwnerID, repoParams)
 	if err != nil {
 		if errors.Is(err, skillrepo.ErrNameTaken) {
 			return nil, ErrNameTaken
@@ -541,7 +541,7 @@ func (s *Service) AdminReupload(ctx context.Context, id string, p AdminReuploadP
 	repoParams.CurrentVersionID = &versionID
 
 	// Transactionally: consume parse task, update skill, and insert version
-	err = s.repo.AdminUpdateSkillAndConsumeTask(ctx, id, repoParams, p.ParseTaskID, &model.SkillVersion{
+	err = s.repo.AdminUpdateSkillAndConsumeTask(ctx, id, row.OwnerID, repoParams, p.ParseTaskID, &model.SkillVersion{
 		ID:        versionID,
 		SkillID:   id,
 		Version:   version,

@@ -144,7 +144,7 @@ func (r *Repo) AdminConsumeParseTask(ctx context.Context, id string) error {
 // AdminUpdateSkillAndConsumeTask updates a skill, inserts a new version record,
 // and marks the parse task as consumed within a single transaction without
 // owner/space checks on the parse task (admin-only).
-func (r *Repo) AdminUpdateSkillAndConsumeTask(ctx context.Context, skillID string, p UpdateParams, parseTaskID string, ver *model.SkillVersion) error {
+func (r *Repo) AdminUpdateSkillAndConsumeTask(ctx context.Context, skillID, ownerID string, p UpdateParams, parseTaskID string, ver *model.SkillVersion) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -186,6 +186,10 @@ func (r *Repo) AdminUpdateSkillAndConsumeTask(ctx context.Context, skillID strin
 		if err != nil {
 			return fmt.Errorf("insert version: %w", err)
 		}
+	}
+
+	if err := upsertTags(ctx, tx, GlobalTagSpaceID, ownerID, p.TagNames); err != nil {
+		return err
 	}
 
 	return tx.Commit()

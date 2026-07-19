@@ -264,3 +264,75 @@ func TestAdminUpdate_InvalidTags(t *testing.T) {
 		t.Fatalf("expected ErrInvalidTags, got %v", err)
 	}
 }
+
+func TestAdminUpdate_UpsertsGlobalTags(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := skillrepo.New(db)
+	catRepo := categoryrepo.New(db)
+	store := &fakeStorage{}
+	svc := New(repo, catRepo, store, func() string { return "id" })
+
+	initial := sqlmock.NewRows([]string{
+		"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+		"description", "category_id", "tags",
+		"owner_id", "owner_name", "space_id", "visibility", "version",
+		"readme_content", "file_name", "file_url", "file_size", "file_sha256",
+		"created_at", "updated_at",
+		"resolved_version", "version_storage",
+		"view_count", "download_count",
+	}).AddRow(
+		"sk-global", "pub-skill", "", "", "", "",
+		"", "", []byte(`[]`),
+		"admin", "Admin", "", "public", "1.0.0",
+		"", "", "", int64(0), "",
+		time.Now(), time.Now(),
+		"", "",
+		int64(0), int64(0),
+	)
+	mock.ExpectQuery("SELECT .+ FROM skills").WithArgs("sk-global").WillReturnRows(initial)
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE skills SET tags = \\? WHERE id = \\?").
+		WithArgs(`["official"]`, "sk-global").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO skill_tags").
+		WithArgs(skillrepo.GlobalTagSpaceID, "official", "admin").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	updated := sqlmock.NewRows([]string{
+		"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+		"description", "category_id", "tags",
+		"owner_id", "owner_name", "space_id", "visibility", "version",
+		"readme_content", "file_name", "file_url", "file_size", "file_sha256",
+		"created_at", "updated_at",
+		"resolved_version", "version_storage",
+		"view_count", "download_count",
+	}).AddRow(
+		"sk-global", "pub-skill", "", "", "", "",
+		"", "", []byte(`["official"]`),
+		"admin", "Admin", "", "public", "1.0.0",
+		"", "", "", int64(0), "",
+		time.Now(), time.Now(),
+		"", "",
+		int64(0), int64(0),
+	)
+	mock.ExpectQuery("SELECT .+ FROM skills").WithArgs("sk-global").WillReturnRows(updated)
+
+	item, err := svc.AdminUpdate(context.Background(), "sk-global", AdminUpdateParams{
+		Tags: json.RawMessage(`["official"]`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(item.Tags) != `["official"]` {
+		t.Fatalf("tags = %s", item.Tags)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

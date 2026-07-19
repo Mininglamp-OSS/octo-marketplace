@@ -188,7 +188,7 @@ func TestAdminDeleteCategoryEmpty(t *testing.T) {
 
 	mock.ExpectQuery("SELECT COUNT").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectExec("DELETE FROM categories").
+	mock.ExpectExec("UPDATE categories").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	w := doRequest(engine, "DELETE", "/api/v1/skill/admin/categories/cat-1", nil)
@@ -223,7 +223,7 @@ func TestAdminDeleteCategoryNotFound(t *testing.T) {
 
 	mock.ExpectQuery("SELECT COUNT").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectExec("DELETE FROM categories").
+	mock.ExpectExec("UPDATE categories").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	w := doRequest(engine, "DELETE", "/api/v1/skill/admin/categories/nonexist", nil)
@@ -547,9 +547,10 @@ func TestListSkillTags(t *testing.T) {
 
 	now := time.Now().UTC()
 	mock.ExpectQuery("SELECT space_id, name, created_by, created_at, updated_at").
-		WithArgs("space-1", "%auto%", 10).
+		WithArgs("space-1", "space-1", "", "%auto%", 10).
 		WillReturnRows(sqlmock.NewRows([]string{"space_id", "name", "created_by", "created_at", "updated_at"}).
-			AddRow("space-1", "automation", "user-2", now, now))
+			AddRow("space-1", "automation", "user-2", now, now).
+			AddRow("", "auto-global", "admin", now, now))
 
 	w := doRequest(engine, "GET", "/api/v1/skill/tags?q=auto&limit=10", nil)
 
@@ -559,7 +560,7 @@ func TestListSkillTags(t *testing.T) {
 	body := parseBody(t, w)
 	data := body["data"].(map[string]interface{})
 	items := data["items"].([]interface{})
-	if len(items) != 1 || items[0].(map[string]interface{})["name"] != "automation" {
+	if len(items) != 2 || items[0].(map[string]interface{})["name"] != "automation" || items[1].(map[string]interface{})["name"] != "auto-global" {
 		t.Fatalf("unexpected items: %#v", items)
 	}
 }

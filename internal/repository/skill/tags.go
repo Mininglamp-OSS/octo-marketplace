@@ -3,9 +3,15 @@ package skill
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
+
+// GlobalTagSpaceID is the shared tag bucket used by administrator-created
+// public Skills. The column is NOT NULL, so an empty string is used instead of
+// SQL NULL.
+const GlobalTagSpaceID = ""
 
 // TagRow represents a Space-scoped skill tag.
 type TagRow struct {
@@ -16,7 +22,9 @@ type TagRow struct {
 	UpdatedAt time.Time
 }
 
-// ListTags returns tags visible to all members of the current Space.
+// ListTags returns tags visible to all members of the current Space, including
+// administrator-created global tags. When both scopes contain the same tag
+// name, the Space-local row wins so its metadata is returned.
 func (r *Repo) ListTags(ctx context.Context, spaceID, query string, limit int) ([]TagRow, error) {
 	if limit <= 0 {
 		limit = 50
@@ -25,8 +33,8 @@ func (r *Repo) ListTags(ctx context.Context, spaceID, query string, limit int) (
 		limit = 100
 	}
 
-	conditions := []string{"space_id = ?"}
-	args := []interface{}{spaceID}
+	conditions := []string{"space_id IN (?, ?)"}
+	args := []interface{}{spaceID, GlobalTagSpaceID}
 	if strings.TrimSpace(query) != "" {
 		conditions = append(conditions, "name LIKE ?")
 		args = append(args, "%"+escapeLike(strings.TrimSpace(query))+"%")
@@ -34,14 +42,23 @@ func (r *Repo) ListTags(ctx context.Context, spaceID, query string, limit int) (
 	args = append(args, limit)
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT space_id, name, created_by, created_at, updated_at
-		FROM skill_tags
-		WHERE `+strings.Join(conditions, " AND ")+`
-		ORDER BY updated_at DESC, name ASC
+		SELECT ranked.space_id, ranked.name, ranked.created_by, ranked.created_at, ranked.updated_at
+		FROM (
+			SELECT
+				space_id, name, created_by, created_at, updated_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY name
+					ORDER BY CASE WHEN space_id = ? THEN 0 ELSE 1 END, updated_at DESC
+				) AS rn
+			FROM skill_tags
+			WHERE `+strings.Join(conditions, " AND ")+`
+		) AS ranked
+		WHERE ranked.rn = 1
+		ORDER BY ranked.updated_at DESC, ranked.name ASC
 		LIMIT ?
-	`, args...)
+	`, append([]interface{}{spaceID}, args...)...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list tags: %w", err)
 	}
 	defer rows.Close()
 

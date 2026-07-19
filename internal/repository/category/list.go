@@ -28,7 +28,7 @@ func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]Cat
 			)
 		WHERE c.deleted_at IS NULL
 		GROUP BY c.id, c.name, c.icon_key, c.sort_order
-		ORDER BY (COUNT(s.id) > 0) DESC, c.sort_order ASC, c.name ASC
+		ORDER BY c.sort_order ASC, c.name ASC
 	`
 	rows, err := r.db.QueryContext(ctx, query, spaceID, spaceID, userID, spaceID)
 	if err != nil {

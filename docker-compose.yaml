@@ -82,7 +82,7 @@ services:
     environment:
       MINIO_ROOT_USER: octoadmin
       MINIO_ROOT_PASSWORD: 66aac2f912bc5ec8503f54132ac18a32
-      MINIO_API_CORS_ALLOW_ORIGIN: "http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8092,http://localhost:8092"
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:3100,http://localhost:3100,http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8092,http://localhost:8092"
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
       http_proxy: ""
