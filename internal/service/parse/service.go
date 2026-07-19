@@ -245,10 +245,15 @@ func (s *Service) ParseUploadSync(ctx context.Context, uploadID, ownerID string)
 
 func normalizeUploadFileName(fileName string) (string, error) {
 	fileName = strings.TrimSpace(fileName)
-	if !strings.HasSuffix(strings.ToLower(fileName), ".zip") {
+	if !isSupportedSkillPackageName(fileName) {
 		return "", ErrInvalidFileName
 	}
 	return normalizeObjectFileName(fileName)
+}
+
+func isSupportedSkillPackageName(fileName string) bool {
+	lower := strings.ToLower(fileName)
+	return strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".skill")
 }
 
 func normalizeObjectFileName(fileName string) (string, error) {

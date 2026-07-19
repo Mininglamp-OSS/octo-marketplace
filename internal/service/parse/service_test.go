@@ -44,13 +44,42 @@ func (stubStorage) PutObject(context.Context, string, io.Reader, int64, string) 
 
 var _ storage.Storage = (*stubStorage)(nil)
 
-func TestInitUploadRejectsUnsafeZipFileName(t *testing.T) {
+func TestInitUploadAcceptsSkillPackageFileName(t *testing.T) {
+	for _, fileName := range []string{"skill.zip", "skill.skill", "Skill.SKILL"} {
+		t.Run(fileName, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+
+			mock.ExpectExec("INSERT INTO parse_tasks").
+				WillReturnResult(sqlmock.NewResult(1, 1))
+
+			repo := NewRepo(db)
+			svc := NewService(stubStorage{}, repo, nil, func() string { return "upload-1" }, 20, ServiceConfig{})
+			result, err := svc.InitUpload(context.Background(), fileName, 1024, "user-1", "space-1")
+			if err != nil {
+				t.Fatalf("InitUpload() error = %v", err)
+			}
+			if result.UploadID != "upload-1" {
+				t.Fatalf("UploadID = %q, want upload-1", result.UploadID)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestInitUploadRejectsUnsafeSkillPackageFileName(t *testing.T) {
 	svc := NewService(stubStorage{}, nil, nil, func() string { return "upload-1" }, 20, ServiceConfig{})
 	for _, fileName := range []string{
 		"../skill.zip",
 		"nested/skill.zip",
 		`nested\skill.zip`,
 		"skill..zip",
+		"skill.tar.gz",
 	} {
 		t.Run(fileName, func(t *testing.T) {
 			_, err := svc.InitUpload(context.Background(), fileName, 1024, "user-1", "space-1")

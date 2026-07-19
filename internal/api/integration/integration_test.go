@@ -600,24 +600,28 @@ func TestInitUploadInvalidFileName(t *testing.T) {
 }
 
 func TestInitUploadHappyPath(t *testing.T) {
-	engine, mock, db := testSetup(t)
-	defer db.Close()
+	for _, fileName := range []string{"my-skill.zip", "my-skill.skill"} {
+		t.Run(fileName, func(t *testing.T) {
+			engine, mock, db := testSetup(t)
+			defer db.Close()
 
-	mock.ExpectExec("INSERT INTO parse_tasks").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec("INSERT INTO parse_tasks").
+				WillReturnResult(sqlmock.NewResult(1, 1))
 
-	w := doRequest(engine, "POST", "/api/v1/skill/upload/init", map[string]interface{}{
-		"file_name": "my-skill.zip",
-		"file_size": 5120,
-	})
+			w := doRequest(engine, "POST", "/api/v1/skill/upload/init", map[string]interface{}{
+				"file_name": fileName,
+				"file_size": 5120,
+			})
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
-	}
-	body := parseBody(t, w)
-	data := body["data"].(map[string]interface{})
-	if data["skill_upload_id"] == nil || data["skill_upload_id"] == "" {
-		t.Error("expected skill_upload_id in response")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+			}
+			body := parseBody(t, w)
+			data := body["data"].(map[string]interface{})
+			if data["skill_upload_id"] == nil || data["skill_upload_id"] == "" {
+				t.Error("expected skill_upload_id in response")
+			}
+		})
 	}
 }
 
