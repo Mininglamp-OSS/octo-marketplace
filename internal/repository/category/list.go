@@ -14,7 +14,7 @@ type CategoryWithCount struct {
 	SkillCount int
 }
 
-// ListWithCount returns all categories with skill counts visible to the given space and user.
+// ListWithCount returns all non-deleted categories with skill counts visible to the given space and user.
 func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]CategoryWithCount, error) {
 	query := `
 		SELECT c.id, c.name, c.icon_key, c.sort_order,
@@ -26,6 +26,7 @@ func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]Cat
 				OR (s.visibility = 'space' AND s.space_id = ?)
 				OR (s.visibility = 'private' AND s.owner_id = ? AND s.space_id = ?)
 			)
+		WHERE c.deleted_at IS NULL
 		GROUP BY c.id, c.name, c.icon_key, c.sort_order
 		ORDER BY (COUNT(s.id) > 0) DESC, c.sort_order ASC, c.name ASC
 	`
@@ -46,10 +47,10 @@ func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]Cat
 	return result, rows.Err()
 }
 
-// Exists checks whether a category with the given ID exists.
+// Exists checks whether a non-deleted category with the given ID exists.
 func (r *Repo) Exists(ctx context.Context, id string) (bool, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM categories WHERE id = ?", id).Scan(&count)
+	err := r.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM categories WHERE id = ? AND deleted_at IS NULL", id).Scan(&count)
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}

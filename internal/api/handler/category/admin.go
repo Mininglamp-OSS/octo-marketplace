@@ -14,11 +14,13 @@ import (
 func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthenticator, idGen func() string) {
 	h.idGen = idGen
 	admin := r.Group("/api/v1/admin/skill_categories", adminAuth.Handler())
+	admin.GET("", h.AdminList)
 	admin.POST("", h.AdminCreate)
 	admin.PATCH("/:skill_category_id", h.AdminUpdate)
 	admin.DELETE("/:skill_category_id", h.AdminDelete)
 
 	legacy := r.Group("/api/v1/skill/admin/categories", adminAuth.Handler(), legacyCategoryEndpoint)
+	legacy.GET("", h.AdminList)
 	legacy.POST("", h.AdminCreate)
 	legacy.PUT("/:skill_category_id", h.AdminUpdate)
 	legacy.DELETE("/:skill_category_id", h.AdminDelete)
@@ -46,6 +48,19 @@ type AdminCategoryRequest struct {
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /admin/skill_categories [post]
+func (h *Handler) AdminList(c *gin.Context) {
+	if _, ok := middleware.Identity(c); !ok {
+		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "authentication is required", nil, "")
+		return
+	}
+	items, err := h.svc.AdminList(c.Request.Context())
+	if err != nil {
+		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		return
+	}
+	apiresponse.OK(c, items)
+}
+
 func (h *Handler) AdminCreate(c *gin.Context) {
 	if _, ok := middleware.Identity(c); !ok {
 		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "authentication is required", nil, "")

@@ -78,3 +78,21 @@ func (s *Service) Delete(ctx context.Context, id string) (int, error) {
 	}
 	return 0, nil
 }
+
+// AdminList returns all non-deleted categories for admin management.
+func (s *Service) AdminList(ctx context.Context) ([]AdminItem, error) {
+	rows, err := s.repo.AdminList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]AdminItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, AdminItem{
+			ID:        row.ID,
+			Name:      row.Name,
+			IconKey:   row.IconKey,
+			SortOrder: row.SortOrder,
+		})
+	}
+	return items, nil
+}
