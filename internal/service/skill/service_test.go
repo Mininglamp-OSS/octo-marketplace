@@ -134,6 +134,73 @@ func TestRowToItemFields(t *testing.T) {
 	}
 }
 
+func TestRowToItem_UsesVersionStorage(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	row := &skillrepo.SkillRow{
+		ID:              "id-v",
+		Name:            "Versioned Skill",
+		Version:         "1.0.0",
+		ResolvedVersion: "2.0.0",
+		VersionStorage:  `{"type":"s3","zip_object_key":"skills/id-v/v2.0.0/skill.zip","skill_md_object_key":"skills/id-v/v2.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":2048,"zip_sha256":"newsha"}`,
+		FileName:        "old.zip",
+		FileURL:         "skills/id-v/v1.0.0/old.zip",
+		FileSize:        512,
+		FileSHA256:      "oldsha",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	svc := &Service{}
+	item := svc.rowToItem(context.Background(), row)
+
+	if item.Version != "2.0.0" {
+		t.Errorf("Version = %q, want %q", item.Version, "2.0.0")
+	}
+	if item.FileName != "skill.zip" {
+		t.Errorf("FileName = %q, want %q", item.FileName, "skill.zip")
+	}
+	if item.FileURL != "skills/id-v/v2.0.0/skill.zip" {
+		t.Errorf("FileURL = %q, want %q", item.FileURL, "skills/id-v/v2.0.0/skill.zip")
+	}
+	if item.FileSize != 2048 {
+		t.Errorf("FileSize = %d, want %d", item.FileSize, 2048)
+	}
+	if item.FileSHA256 != "newsha" {
+		t.Errorf("FileSHA256 = %q, want %q", item.FileSHA256, "newsha")
+	}
+}
+
+func TestRowToItem_FallbackWhenNoVersionStorage(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	row := &skillrepo.SkillRow{
+		ID:              "id-old",
+		Name:            "Legacy Skill",
+		Version:         "1.0.0",
+		ResolvedVersion: "",
+		VersionStorage:  "",
+		FileName:        "legacy.zip",
+		FileURL:         "skills/id-old/v1.0.0/legacy.zip",
+		FileSize:        1024,
+		FileSHA256:      "legsha",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	svc := &Service{}
+	item := svc.rowToItem(context.Background(), row)
+
+	if item.Version != "1.0.0" {
+		t.Errorf("Version = %q, want %q", item.Version, "1.0.0")
+	}
+	if item.FileURL != "skills/id-old/v1.0.0/legacy.zip" {
+		t.Errorf("FileURL = %q, want %q", item.FileURL, "skills/id-old/v1.0.0/legacy.zip")
+	}
+	if item.FileSize != 1024 {
+		t.Errorf("FileSize = %d, want %d", item.FileSize, 1024)
+	}
+	if item.FileSHA256 != "legsha" {
+		t.Errorf("FileSHA256 = %q, want %q", item.FileSHA256, "legsha")
+	}
+}
+
 func TestRowToItemSanitizesReadmeContent(t *testing.T) {
 	svc := &Service{}
 	item := svc.rowToItem(context.Background(), &skillrepo.SkillRow{
@@ -186,5 +253,42 @@ func TestToVisibilityPtr(t *testing.T) {
 	}
 	if string(*v) != "private" {
 		t.Errorf("toVisibilityPtr(\"private\") = %q", *v)
+	}
+}
+
+func TestExtractReadmeBody(t *testing.T) {
+	tests := []struct {
+		name string
+		md   []byte
+		want string
+	}{
+		{
+			name: "with frontmatter",
+			md:   []byte("---\nname: test\n---\n# Hello\nWorld"),
+			want: "# Hello\nWorld",
+		},
+		{
+			name: "no frontmatter",
+			md:   []byte("# No FM\nContent"),
+			want: "# No FM\nContent",
+		},
+		{
+			name: "empty body after frontmatter",
+			md:   []byte("---\nname: test\n---\n"),
+			want: "",
+		},
+		{
+			name: "nil input",
+			md:   nil,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractReadmeBody(tt.md)
+			if got != tt.want {
+				t.Errorf("extractReadmeBody() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

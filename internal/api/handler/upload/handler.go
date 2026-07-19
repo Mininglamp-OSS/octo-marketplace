@@ -361,30 +361,24 @@ func (h *Handler) Download(c *gin.Context) {
 	spaceID := middleware.SpaceID(c)
 	skillID := c.Param("skill_id")
 
-	skill, err := h.skillSvc.Get(c.Request.Context(), skillID, spaceID, identity.UID)
+	info, err := h.skillSvc.GetDownloadInfo(c.Request.Context(), skillID, spaceID, identity.UID)
 	if err != nil {
 		if errors.Is(err, skillsvc.ErrNotFound) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrNoFile) {
+			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "no file available", nil, "")
 			return
 		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
 
-	if skill.FileURL == "" {
-		apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "no file available", nil, "")
-		return
-	}
-
-	downloadURL, err := h.parseSvc.GetDownloadURL(c.Request.Context(), skill.FileURL)
-	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
-		return
-	}
 	if c.Query("format") == "json" {
-		apiresponse.OK(c, DownloadResponse{DownloadURL: downloadURL, FileSHA256: skill.FileSHA256})
+		apiresponse.OK(c, DownloadResponse{DownloadURL: info.DownloadURL, FileSHA256: info.FileSHA256})
 		return
 	}
 
-	c.Redirect(http.StatusFound, downloadURL)
+	c.Redirect(http.StatusFound, info.DownloadURL)
 }

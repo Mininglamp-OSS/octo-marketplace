@@ -41,6 +41,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	rg.GET("/skills", h.List)
 	rg.GET("/skills/:skill_id", h.Get)
 	rg.GET("/skills/:skill_id/versions", h.ListVersions)
+	rg.GET("/skills/:skill_id/skill-md", h.GetSkillMD)
 	rg.POST("/skills", h.Create)
 	rg.PATCH("/skills/:skill_id", h.Update)
 	rg.DELETE("/skills/:skill_id", h.Delete)
@@ -51,6 +52,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	legacy.GET("", h.List)
 	legacy.GET("/:skill_id", h.Get)
 	legacy.GET("/:skill_id/versions", h.ListVersions)
+	legacy.GET("/:skill_id/skill-md", h.GetSkillMD)
 	legacy.POST("", h.Create)
 	legacy.PUT("/:skill_id", h.Update)
 	legacy.DELETE("/:skill_id", h.Delete)
@@ -463,6 +465,45 @@ func (h *Handler) ListVersions(c *gin.Context) {
 	}
 
 	apiresponse.OK(c, gin.H{"items": items})
+}
+
+// GetSkillMD godoc
+// @Summary Get SKILL.md
+// @Description Return the SKILL.md content for the current version of a visible Skill.
+// @Tags skill
+// @ID skill.skillmd.get
+// @Produce text/markdown
+// @Security Bearer
+// @Param skill_id path string true "Skill ID"
+// @Success 200 {string} string "Markdown content"
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
+// @Router /skills/{skill_id}/skill-md [get]
+func (h *Handler) GetSkillMD(c *gin.Context) {
+	identity, ok := middleware.Identity(c)
+	if !ok {
+		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "unauthorized", nil, "")
+		return
+	}
+	spaceID := middleware.SpaceID(c)
+	id := c.Param("skill_id")
+
+	data, err := h.svc.GetSkillMD(c.Request.Context(), id, spaceID, identity.UID)
+	if err != nil {
+		if errors.Is(err, skillsvc.ErrNotFound) {
+			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrNoFile) {
+			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "skill-md not available for this version", nil, "")
+			return
+		}
+		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		return
+	}
+
+	c.Data(http.StatusOK, "text/markdown; charset=utf-8", data)
 }
 
 func pageSizeQuery(c *gin.Context) string {
