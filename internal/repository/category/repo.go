@@ -16,7 +16,8 @@ const mysqlErrDupEntry = 1062
 func mapCategoryDuplicateName(err error) error {
 	var myErr *mysql.MySQLError
 	if errors.As(err, &myErr) && myErr.Number == mysqlErrDupEntry &&
-		strings.Contains(myErr.Message, "uk_categories_name") {
+		(strings.Contains(myErr.Message, "uk_categories_name") ||
+			strings.Contains(myErr.Message, "uk_categories_name_live")) {
 		return ErrCategoryNameTaken
 	}
 	return err
