@@ -14,7 +14,7 @@ type CategoryWithCount struct {
 	SkillCount int
 }
 
-// ListWithCount returns all non-deleted categories with skill counts visible to the given space and user.
+// ListWithCount returns all non-deleted categories with visible skill counts.
 func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]CategoryWithCount, error) {
 	query := `
 		SELECT c.id, c.name, c.icon_key, c.sort_order,
@@ -22,7 +22,7 @@ func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]Cat
 		FROM categories c
 		LEFT JOIN skills s ON s.category_id = c.id
 			AND (
-				(s.visibility = 'public' AND s.space_id = ?)
+				s.visibility = 'public'
 				OR (s.visibility = 'space' AND s.space_id = ?)
 				OR (s.visibility = 'private' AND s.owner_id = ? AND s.space_id = ?)
 			)
@@ -30,7 +30,7 @@ func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]Cat
 		GROUP BY c.id, c.name, c.icon_key, c.sort_order
 		ORDER BY c.sort_order ASC, c.name ASC
 	`
-	rows, err := r.db.QueryContext(ctx, query, spaceID, spaceID, userID, spaceID)
+	rows, err := r.db.QueryContext(ctx, query, spaceID, userID, spaceID)
 	if err != nil {
 		return nil, err
 	}

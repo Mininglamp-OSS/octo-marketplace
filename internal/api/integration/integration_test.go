@@ -254,14 +254,14 @@ func TestGetSkillVisibilityPublicCrossSpace(t *testing.T) {
 	engine, mock, db := testSetup(t)
 	defer db.Close()
 
-	// Public skill in another space - should return 404 (Space isolation)
+	// Public skill in another space should remain visible.
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(skillRow("skill-1x", "Public Skill", "other-user", "Bob", "other-space", "public"))
 
 	w := doRequest(engine, "GET", "/api/v1/skill/skill-1x", nil)
 
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusNotFound, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 }
 

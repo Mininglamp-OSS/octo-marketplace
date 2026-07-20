@@ -19,11 +19,11 @@ func TestListSortComprehensive(t *testing.T) {
 
 	// comprehensive sort → COUNT query + data query with OFFSET
 	mock.ExpectQuery("SELECT COUNT").
-		WithArgs("space-1", "space-1", "user-1", "space-1").
+		WithArgs("space-1", "user-1", "space-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	mock.ExpectQuery("ORDER BY .+COALESCE.+download_count.+ \\* 5").
-		WithArgs("space-1", "space-1", "user-1", "space-1", 20, 0).
+		WithArgs("space-1", "user-1", "space-1", 20, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
 			"description", "category_id", "tags",
@@ -74,7 +74,7 @@ func TestListSortLatestUsesCursor(t *testing.T) {
 
 	// latest sort → cursor-based pagination (no COUNT query)
 	mock.ExpectQuery("ORDER BY s\\.created_at DESC, s\\.id DESC").
-		WithArgs("space-1", "space-1", "user-1", "space-1", 21). // limit+1
+		WithArgs("space-1", "user-1", "space-1", 21). // limit+1
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
 			"description", "category_id", "tags",
@@ -129,11 +129,11 @@ func TestListSortDownloads(t *testing.T) {
 			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}).
 			AddRow("s1", "Skill 1", "Skill 1", "", "", "",
-			"desc", "cat-1", []byte(`[]`),
+				"desc", "cat-1", []byte(`[]`),
 				"user-1", "Alice", "space-1", "space", "1.0.0",
 				"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(0), int64(50)).
 			AddRow("s2", "Skill 2", "Skill 2", "", "", "",
-			"desc", "cat-1", []byte(`[]`),
+				"desc", "cat-1", []byte(`[]`),
 				"user-2", "Bob", "space-1", "public", "1.0.0",
 				"", "f.zip", "url", int64(100), "sha", now, now, "1.0.0", "", int64(0), int64(10)))
 
@@ -217,7 +217,7 @@ func TestListOffsetPagination(t *testing.T) {
 
 	// Expect LIMIT ? OFFSET ? with 10, 10
 	mock.ExpectQuery("LIMIT .+ OFFSET").
-		WithArgs("space-1", "space-1", "user-1", "space-1", 10, 10).
+		WithArgs("space-1", "user-1", "space-1", 10, 10).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
 			"description", "category_id", "tags",
@@ -261,7 +261,7 @@ func TestListLimitMax50(t *testing.T) {
 
 	// Even with limit=100, should be capped to 50
 	mock.ExpectQuery("LIMIT .+ OFFSET").
-		WithArgs("space-1", "space-1", "user-1", "space-1", 50, 0).
+		WithArgs("space-1", "user-1", "space-1", 50, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
 			"description", "category_id", "tags",

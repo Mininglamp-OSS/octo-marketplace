@@ -712,8 +712,7 @@ func firstNonEmpty(values ...string) string {
 func canView(row *skillrepo.SkillRow, spaceID, userID string) bool {
 	switch row.Visibility {
 	case "public":
-		// Public skills are visible to all members of the same Space.
-		return row.SpaceID == spaceID
+		return true
 	case "space":
 		return row.SpaceID == spaceID
 	case "private":
