@@ -128,14 +128,12 @@ type MCP struct {
 	// two bot fields are empty. For bot creates the fields are stamped from
 	// the resolved BotIdentity — CreatedByBotName is a snapshot so the market
 	// badge stays intact after the bot is renamed or deleted.
-	CreatedByType      CreatedByType
-	CreatedByBotUID    string
-	CreatedByBotName   string
-	Transport          Transport
-	VerificationStatus string
-	VerifiedAt         *time.Time
-	Connection         Connection
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	DeletedAt          *time.Time
+	CreatedByType    CreatedByType
+	CreatedByBotUID  string
+	CreatedByBotName string
+	Transport        Transport
+	Connection       Connection
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	DeletedAt        *time.Time
 }

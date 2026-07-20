@@ -368,3 +368,74 @@ func TestKeywordSearchCaseInsensitive(t *testing.T) {
 		}
 	}
 }
+
+// TestRelevanceSortDoesNotBuryEmptyToolsRows is the DB-backed regression for
+// the JSON_EXTRACT NULL-propagation bug (PR #9 yujiawei P1). Before the fix,
+// an exact name match with an empty tools_json produced a NULL relevance score
+// because JSON_EXTRACT(tools_json, '$[*].name') on '[]' returns SQL NULL,
+// NULL LIKE ? = NULL, and NULL + anything = NULL — collapsing the additive
+// score and sending the row to the bottom of ORDER BY score DESC. Seed one
+// exact-name row without tools and one weaker (slogan-only) match with tools,
+// then assert the exact match sorts above the weaker one under sort=relevance.
+func TestRelevanceSortDoesNotBuryEmptyToolsRows(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	repo := New(database)
+
+	const (
+		owner = "owner-relevance-empty-tools"
+		space = "space-relevance-empty-tools"
+	)
+
+	exactNoTools := "github kw exact no tools"
+	weakWithTools := "unrelated title"
+	cleanTuple(t, database, owner, space, exactNoTools)
+	cleanTuple(t, database, owner, space, weakWithTools)
+	t.Cleanup(func() {
+		cleanTuple(t, database, owner, space, exactNoTools)
+		cleanTuple(t, database, owner, space, weakWithTools)
+	})
+
+	// Exact name match, no tools → pre-fix this row's relevance score was NULL.
+	strong := newTestMCP(exactNoTools, owner, space)
+	strong.Tools = nil
+	if err := repo.Create(ctx, strong); err != nil {
+		t.Fatalf("seed strong row: %v", err)
+	}
+
+	// Weak (slogan-only) match but with a non-empty tools_json → score stays numeric.
+	weak := newTestMCP(weakWithTools, owner, space)
+	weak.Slogan = "mentions github somewhere"
+	weak.Tools = []model.Tool{{Name: "unrelated", Description: "unrelated"}}
+	if err := repo.Create(ctx, weak); err != nil {
+		t.Fatalf("seed weak row: %v", err)
+	}
+
+	list, _, _, err := repo.List(ctx, ListFilter{
+		CallerUID: owner,
+		SpaceID:   space,
+		Keyword:   "github",
+		Sort:      "relevance",
+		MineOnly:  true,
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var strongIdx, weakIdx = -1, -1
+	for i, m := range list {
+		switch m.ID {
+		case strong.ID:
+			strongIdx = i
+		case weak.ID:
+			weakIdx = i
+		}
+	}
+	if strongIdx == -1 || weakIdx == -1 {
+		t.Fatalf("both seeded rows must be in the result: strongIdx=%d weakIdx=%d list=%v", strongIdx, weakIdx, list)
+	}
+	if strongIdx >= weakIdx {
+		t.Fatalf("exact-name-no-tools row (idx=%d) must sort ABOVE the weaker slogan-only-with-tools row (idx=%d) — NULL propagation regression",
+			strongIdx, weakIdx)
+	}
+}

@@ -243,13 +243,15 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 // Every searchable field participates with the same weight and stable tie-breakers.
 // JSON columns are matched case-insensitively via LOWER(CAST(...)) LIKE with a
 // lowercased keyword so the SQL ranking agrees with the Go-side substring check
-// (which lowercases both sides).
+// (which lowercases both sides). The tools OR-group is wrapped in COALESCE so
+// JSON_EXTRACT returning NULL on an empty tools_json (`'[]'` → SQL NULL) does
+// not collapse the whole additive score to NULL and bury exact-name matches.
 func relevanceOrder(keyword string) (string, []any) {
 	like := "%" + escapeLike(strings.ToLower(strings.TrimSpace(keyword))) + "%"
 	order := `((name LIKE ?) * 8 + (slogan LIKE ?) * 2 + (category LIKE ?) * 3 + ` +
 		`(LOWER(CAST(tags_json AS CHAR)) LIKE ?) * 6 + ` +
-		`((LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ? OR ` +
-		`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ?)) * 7 + ` +
+		`COALESCE(LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ? OR ` +
+		`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ?, 0) * 7 + ` +
 		`(LOWER(CAST(usage_examples_json AS CHAR)) LIKE ?) + (creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
 	return order, []any{like, like, like, like, like, like, like, like}
 }
@@ -391,15 +393,15 @@ func insert(ctx context.Context, ex execer, m *model.MCP) error {
 	  (id, name, slug, slogan, category, icon, icon_version, tags_json, tools_json, usage_examples_json,
 	   faqs_json, notes_json, visibility, owner_uid, space_id, creator_name,
 	   created_by_type, created_by_bot_uid, created_by_bot_name,
-	   transport, verification_status, verified_at, config_json, created_at, updated_at, deleted_at)
-	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+	   transport, config_json, created_at, updated_at, deleted_at)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
 	_, err = ex.ExecContext(ctx, q,
 		m.ID, m.Name, m.Slug, m.Slogan, m.Category, m.Icon, m.IconVersion,
 		cols.tags, cols.tools, cols.usage, cols.faqs, cols.notes,
 		string(m.Visibility), m.OwnerUID, nullableString(m.SpaceID), m.CreatorName,
 		string(m.CreatedByType),
 		nullableString(m.CreatedByBotUID), nullableString(m.CreatedByBotName),
-		string(m.Transport), defaultVerification(m.VerificationStatus), m.VerifiedAt, cols.config, m.CreatedAt, m.UpdatedAt,
+		string(m.Transport), cols.config, m.CreatedAt, m.UpdatedAt,
 	)
 	return err
 }
@@ -412,12 +414,12 @@ func update(ctx context.Context, ex execer, m *model.MCP) error {
 	const q = `UPDATE mcp_servers SET
 	  name = ?, slug = ?, slogan = ?, category = ?, icon = ?, icon_version = ?, tags_json = ?, tools_json = ?,
 	  usage_examples_json = ?, faqs_json = ?, notes_json = ?, visibility = ?,
-	  transport = ?, verification_status = ?, verified_at = ?, config_json = ?, updated_at = ?
+	  transport = ?, config_json = ?, updated_at = ?
 	  WHERE id = ? AND deleted_at IS NULL`
 	res, err := ex.ExecContext(ctx, q,
 		m.Name, m.Slug, m.Slogan, m.Category, m.Icon, m.IconVersion,
 		cols.tags, cols.tools, cols.usage, cols.faqs, cols.notes,
-		string(m.Visibility), string(m.Transport), defaultVerification(m.VerificationStatus), m.VerifiedAt, cols.config, m.UpdatedAt,
+		string(m.Visibility), string(m.Transport), cols.config, m.UpdatedAt,
 		m.ID,
 	)
 	if err != nil {
@@ -447,14 +449,7 @@ func nullableString(s string) any {
 const columns = `id, name, slug, slogan, category, icon, icon_version, tags_json, tools_json,
 	usage_examples_json, faqs_json, notes_json, visibility, owner_uid, space_id,
 	creator_name, created_by_type, created_by_bot_uid, created_by_bot_name,
-	transport, verification_status, verified_at, config_json, created_at, updated_at, deleted_at`
-
-func defaultVerification(value string) string {
-	if value == "" {
-		return "unverified"
-	}
-	return value
-}
+	transport, config_json, created_at, updated_at, deleted_at`
 
 type marshaledColumns struct {
 	tags   []byte
@@ -500,45 +495,39 @@ type rowScanner interface {
 
 func scanRow(s rowScanner) (*model.MCP, error) {
 	var (
-		m                  model.MCP
-		tags               []byte
-		tools              []byte
-		usage              []byte
-		faqs               []byte
-		notes              []byte
-		config             []byte
-		spaceID            sql.NullString
-		visibility         string
-		createdByType      string
-		createdByBotUID    sql.NullString
-		createdByBotName   sql.NullString
-		transport          string
-		verificationStatus string
-		verifiedAt         sql.NullTime
-		deletedAt          sql.NullTime
+		m                model.MCP
+		tags             []byte
+		tools            []byte
+		usage            []byte
+		faqs             []byte
+		notes            []byte
+		config           []byte
+		spaceID          sql.NullString
+		visibility       string
+		createdByType    string
+		createdByBotUID  sql.NullString
+		createdByBotName sql.NullString
+		transport        string
+		deletedAt        sql.NullTime
 	)
 	if err := s.Scan(
 		&m.ID, &m.Name, &m.Slug, &m.Slogan, &m.Category, &m.Icon, &m.IconVersion,
 		&tags, &tools, &usage, &faqs, &notes,
 		&visibility, &m.OwnerUID, &spaceID, &m.CreatorName,
 		&createdByType, &createdByBotUID, &createdByBotName,
-		&transport, &verificationStatus, &verifiedAt, &config, &m.CreatedAt, &m.UpdatedAt, &deletedAt,
+		&transport, &config, &m.CreatedAt, &m.UpdatedAt, &deletedAt,
 	); err != nil {
 		return nil, err
 	}
 
 	m.Visibility = model.Visibility(visibility)
 	m.Transport = model.Transport(transport)
-	m.VerificationStatus = verificationStatus
 	m.CreatedByType = model.CreatedByType(createdByType)
 	if createdByBotUID.Valid {
 		m.CreatedByBotUID = createdByBotUID.String
 	}
 	if createdByBotName.Valid {
 		m.CreatedByBotName = createdByBotName.String
-	}
-	if verifiedAt.Valid {
-		m.VerifiedAt = &verifiedAt.Time
 	}
 	if spaceID.Valid {
 		m.SpaceID = spaceID.String
