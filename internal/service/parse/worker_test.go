@@ -270,6 +270,57 @@ func TestWorkerSanitizesReadmeBeforePersisting(t *testing.T) {
 	}
 }
 
+func TestWorkerReuploadNameMismatchFailsBeforeDuplicateCheck(t *testing.T) {
+	zipData := createWorkerZip(t, map[string][]byte{
+		"SKILL.md": []byte(strings.Join([]string{
+			"---",
+			"name: gstack-guard",
+			"description: demo description",
+			"version: 1.2.3",
+			"---",
+			"",
+			"# Wrong Skill",
+		}, "\n")),
+	})
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	taskRows := sqlmock.NewRows([]string{
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
+		"error_code", "error_message",
+		"result_name", "result_description", "result_version", "result_tags", "result_readme",
+		"result_id", "result_forked_from", "result_metadata",
+		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+	}).AddRow(
+		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing",
+		"", "", "", nil, "", []byte("[]"), nil,
+		"", "", nil,
+		"", 0, "user-1", "space-1", "skill-1", now, now,
+	)
+
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
+		WithArgs("task-1").
+		WillReturnRows(taskRows)
+	mock.ExpectQuery("SELECT name FROM skills WHERE id = \\? AND space_id = \\? AND owner_id = \\?").
+		WithArgs("skill-1", "space-1", "user-1").
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("ui-skill-case-1784277863"))
+	mock.ExpectExec("UPDATE parse_tasks SET status = 'failed', error_code = \\?, error_message = \\? WHERE id = \\?").
+		WithArgs("SKILL_NAME_MISMATCH", `重新上传的 Skill 与当前 Skill 不一致：上传 Skill name 为 "gstack-guard"，当前 Skill name 为 "ui-skill-case-1784277863"`, "task-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), db, WorkerConfig{PoolSize: 5, ParseTimeout: 30 * time.Second})
+	worker.process(context.Background(), "task-1", "skills/upload-1/skill.zip", int64(len(zipData)+1024))
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func createWorkerZip(t *testing.T, files map[string][]byte) []byte {
 	t.Helper()
 

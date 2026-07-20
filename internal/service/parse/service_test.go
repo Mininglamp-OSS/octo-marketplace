@@ -231,6 +231,34 @@ func TestGetParseStatusMasksStoredFailureDetailsAndSanitizesReadme(t *testing.T)
 		t.Fatalf("unexpected public message %q", failedResult.Error.Message)
 	}
 
+	mismatchMessage := `重新上传的 Skill 与当前 Skill 不一致：上传 Skill name 为 "gstack-guard"，当前 Skill name 为 "octo-style"`
+	mismatchRows := sqlmock.NewRows([]string{
+		"id", "upload_id", "file_name", "file_size", "file_url", "status",
+		"error_code", "error_message",
+		"result_name", "result_description", "result_version", "result_tags", "result_readme",
+		"result_id", "result_forked_from", "result_metadata",
+		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+	}).AddRow(
+		"task-mismatch", "upload-3", "skill.zip", int64(1), "skills/upload-3/skill.zip", "failed",
+		"SKILL_NAME_MISMATCH", mismatchMessage, "", nil, "", []byte("[]"), nil,
+		"", "", nil,
+		"", 0, "user-1", "space-1", "skill-1", now, now,
+	)
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
+		WithArgs("task-mismatch").
+		WillReturnRows(mismatchRows)
+
+	mismatchResult, err := svc.GetParseStatus(context.Background(), "task-mismatch", "user-1")
+	if err != nil {
+		t.Fatalf("GetParseStatus mismatch: %v", err)
+	}
+	if mismatchResult.Error == nil {
+		t.Fatal("expected mismatch error payload")
+	}
+	if mismatchResult.Error.Message != mismatchMessage {
+		t.Fatalf("mismatch message = %q, want %q", mismatchResult.Error.Message, mismatchMessage)
+	}
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

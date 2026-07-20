@@ -345,7 +345,7 @@ func (s *Service) GetParseStatus(ctx context.Context, taskID, ownerID string) (*
 	case "failed":
 		result.Error = &ParseError{
 			Code:    task.ErrorCode,
-			Message: publicParseErrorMessage(task.ErrorCode),
+			Message: publicParseErrorMessageWithDetail(task.ErrorCode, task.ErrorMessage),
 		}
 	case "parsing":
 		// Check if the task is stale and attempt recovery.
