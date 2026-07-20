@@ -141,6 +141,14 @@ func TestCreateStampsIdentityAndMapsToDetail(t *testing.T) {
 	if detail.CreatorName != "李世超" {
 		t.Fatalf("creatorName = %q, want 李世超", detail.CreatorName)
 	}
+	// A plain user-token create resolves to CreatedByHuman with the two Bot
+	// fields empty (issue #894).
+	if detail.CreatedByType != model.CreatedByHuman {
+		t.Fatalf("createdByType = %q, want human", detail.CreatedByType)
+	}
+	if detail.CreatedByBotUID != "" || detail.CreatedByBotName != "" {
+		t.Fatalf("bot fields should be empty on human create: %+v", detail)
+	}
 	// Tags normalized.
 	if len(detail.Tags) != 2 || detail.Tags[0] != "官方" || detail.Tags[1] != "热门" {
 		t.Fatalf("tags not normalized: %#v", detail.Tags)
@@ -157,6 +165,35 @@ func TestCreateStampsIdentityAndMapsToDetail(t *testing.T) {
 	// Timestamps in RFC3339 ms.
 	if detail.CreatedAt != "2026-07-14T18:30:12.123Z" {
 		t.Fatalf("createdAt = %q", detail.CreatedAt)
+	}
+}
+
+// TestCreateStampsBotProvenance verifies that when the request rode in on a
+// Bot token — expressed at the service boundary by a Caller with non-empty
+// BotUID / BotName — the persisted row carries CreatedByType=bot and the two
+// snapshot fields. Owner identity is still stamped from the Caller (BotIdentity
+// collapses into the owner Identity in middleware), so the badge does not
+// change who owns the row.
+func TestCreateStampsBotProvenance(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	fixedClock(svc)
+	botCaller := caller
+	botCaller.BotUID = "bot_01HXYZ"
+	botCaller.BotName = "GitHub Autoposter"
+
+	detail, apiErr := svc.Create(context.Background(), botCaller, baseCreate())
+	if apiErr != nil {
+		t.Fatalf("unexpected error: %v", apiErr)
+	}
+	if detail.CreatedByType != model.CreatedByBot {
+		t.Fatalf("createdByType = %q, want bot", detail.CreatedByType)
+	}
+	if detail.CreatedByBotUID != "bot_01HXYZ" || detail.CreatedByBotName != "GitHub Autoposter" {
+		t.Fatalf("bot fields not stamped: %+v", detail)
+	}
+	if store.created.OwnerUID != "u1" || store.created.CreatorName != "李世超" {
+		t.Fatalf("owner still stamped from Caller, not Bot: %+v", store.created)
 	}
 }
 

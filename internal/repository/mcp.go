@@ -55,9 +55,12 @@ type ListFilter struct {
 	Visibilities         []string
 	Sources              []string
 	VerificationStatuses []string
-	Sort                 string
-	Limit                int
-	Offset               int
+	// CreatedByTypes narrows the result to rows whose created_by_type matches
+	// one of the given values (mcp-v1.md §4.2). Nil/empty means no filter.
+	CreatedByTypes []string
+	Sort           string
+	Limit          int
+	Offset         int
 	// MineOnly restricts the result to rows owned by CallerUID inside SpaceID
 	// (GET /mcps/mine, doc §4.3). When false, the visible-set rule applies
 	// (GET /mcps, doc §4.2).
@@ -333,6 +336,7 @@ func (f ListFilter) buildWhere() (string, []any) {
 	appendIn("transport", f.Transports)
 	appendIn("visibility", f.Visibilities)
 	appendIn("verification_status", f.VerificationStatuses)
+	appendIn("created_by_type", f.CreatedByTypes)
 	if len(f.Sources) > 0 {
 		parts := make([]string, 0, len(f.Sources))
 		for _, source := range f.Sources {
@@ -386,12 +390,15 @@ func insert(ctx context.Context, ex execer, m *model.MCP) error {
 	const q = `INSERT INTO mcp_servers
 	  (id, name, slug, slogan, category, icon, icon_version, tags_json, tools_json, usage_examples_json,
 	   faqs_json, notes_json, visibility, owner_uid, space_id, creator_name,
+	   created_by_type, created_by_bot_uid, created_by_bot_name,
 	   transport, verification_status, verified_at, config_json, created_at, updated_at, deleted_at)
-	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
 	_, err = ex.ExecContext(ctx, q,
 		m.ID, m.Name, m.Slug, m.Slogan, m.Category, m.Icon, m.IconVersion,
 		cols.tags, cols.tools, cols.usage, cols.faqs, cols.notes,
-		string(m.Visibility), m.OwnerUID, nullableSpace(m.SpaceID), m.CreatorName,
+		string(m.Visibility), m.OwnerUID, nullableString(m.SpaceID), m.CreatorName,
+		string(m.CreatedByType),
+		nullableString(m.CreatedByBotUID), nullableString(m.CreatedByBotName),
 		string(m.Transport), defaultVerification(m.VerificationStatus), m.VerifiedAt, cols.config, m.CreatedAt, m.UpdatedAt,
 	)
 	return err
@@ -426,17 +433,21 @@ func update(ctx context.Context, ex execer, m *model.MCP) error {
 	return nil
 }
 
-// nullableSpace maps the empty-string convention (system rows) onto SQL NULL.
-func nullableSpace(spaceID string) any {
-	if spaceID == "" {
+// nullableString maps the empty-string convention onto SQL NULL. Used for
+// every optional VARCHAR column where "" is the caller's way of saying "not
+// applicable": space_id on system rows (which are cross-Space), and the
+// bot provenance triple's uid/name on human-created rows.
+func nullableString(s string) any {
+	if s == "" {
 		return nil
 	}
-	return spaceID
+	return s
 }
 
 const columns = `id, name, slug, slogan, category, icon, icon_version, tags_json, tools_json,
 	usage_examples_json, faqs_json, notes_json, visibility, owner_uid, space_id,
-	creator_name, transport, verification_status, verified_at, config_json, created_at, updated_at, deleted_at`
+	creator_name, created_by_type, created_by_bot_uid, created_by_bot_name,
+	transport, verification_status, verified_at, config_json, created_at, updated_at, deleted_at`
 
 func defaultVerification(value string) string {
 	if value == "" {
@@ -498,6 +509,9 @@ func scanRow(s rowScanner) (*model.MCP, error) {
 		config             []byte
 		spaceID            sql.NullString
 		visibility         string
+		createdByType      string
+		createdByBotUID    sql.NullString
+		createdByBotName   sql.NullString
 		transport          string
 		verificationStatus string
 		verifiedAt         sql.NullTime
@@ -507,6 +521,7 @@ func scanRow(s rowScanner) (*model.MCP, error) {
 		&m.ID, &m.Name, &m.Slug, &m.Slogan, &m.Category, &m.Icon, &m.IconVersion,
 		&tags, &tools, &usage, &faqs, &notes,
 		&visibility, &m.OwnerUID, &spaceID, &m.CreatorName,
+		&createdByType, &createdByBotUID, &createdByBotName,
 		&transport, &verificationStatus, &verifiedAt, &config, &m.CreatedAt, &m.UpdatedAt, &deletedAt,
 	); err != nil {
 		return nil, err
@@ -515,6 +530,13 @@ func scanRow(s rowScanner) (*model.MCP, error) {
 	m.Visibility = model.Visibility(visibility)
 	m.Transport = model.Transport(transport)
 	m.VerificationStatus = verificationStatus
+	m.CreatedByType = model.CreatedByType(createdByType)
+	if createdByBotUID.Valid {
+		m.CreatedByBotUID = createdByBotUID.String
+	}
+	if createdByBotName.Valid {
+		m.CreatedByBotName = createdByBotName.String
+	}
 	if verifiedAt.Valid {
 		m.VerifiedAt = &verifiedAt.Time
 	}

@@ -98,13 +98,20 @@ type Detail struct {
 	ToolCount     int        `json:"tool_count"`
 	Visibility    Visibility `json:"visibility"`
 	CreatorName   string     `json:"creator_name"`
-	QuickStart    QuickStart `json:"quick_start"`
-	Tools         []Tool     `json:"tools"`
-	UsageExamples []string   `json:"usage_examples"`
-	FAQs          []FAQ      `json:"faqs"`
-	Notes         []string   `json:"notes"`
-	CreatedAt     string     `json:"created_at"`
-	UpdatedAt     string     `json:"updated_at"`
+	// CreatedByType is always present (falls back to "human" for legacy rows
+	// pre-#894). CreatedByBotUID / CreatedByBotName are omitted when this row
+	// was authored by a human — the frontend uses the presence of the bot
+	// fields to render the 🤖 badge.
+	CreatedByType    CreatedByType `json:"created_by_type"`
+	CreatedByBotUID  string        `json:"created_by_bot_uid,omitempty"`
+	CreatedByBotName string        `json:"created_by_bot_name,omitempty"`
+	QuickStart       QuickStart    `json:"quick_start"`
+	Tools            []Tool        `json:"tools"`
+	UsageExamples    []string      `json:"usage_examples"`
+	FAQs             []FAQ         `json:"faqs"`
+	Notes            []string      `json:"notes"`
+	CreatedAt        string        `json:"created_at"`
+	UpdatedAt        string        `json:"updated_at"`
 }
 
 // ListItem is the projection used by GET /mcps and GET /mcps/mine (doc §3.2).
@@ -118,13 +125,17 @@ type ListItem struct {
 	ToolCount          int        `json:"tool_count"`
 	Visibility         Visibility `json:"visibility"`
 	CreatorName        string     `json:"creator_name"`
-	Source             string     `json:"source"`
-	Transport          Transport  `json:"transport"`
-	VerificationStatus string     `json:"verification_status"`
-	VerifiedAt         *string    `json:"verified_at,omitempty"`
-	UpdatedAt          string     `json:"updated_at"`
-	MatchReasons       []string   `json:"match_reasons,omitempty"`
-	Relevance          int        `json:"relevance,omitempty"`
+	// Same shape + semantics as Detail (see there for rationale).
+	CreatedByType      CreatedByType `json:"created_by_type"`
+	CreatedByBotUID    string        `json:"created_by_bot_uid,omitempty"`
+	CreatedByBotName   string        `json:"created_by_bot_name,omitempty"`
+	Source             string        `json:"source"`
+	Transport          Transport     `json:"transport"`
+	VerificationStatus string        `json:"verification_status"`
+	VerifiedAt         *string       `json:"verified_at,omitempty"`
+	UpdatedAt          string        `json:"updated_at"`
+	MatchReasons       []string      `json:"match_reasons,omitempty"`
+	Relevance          int           `json:"relevance,omitempty"`
 }
 
 // CategoryFilter is one filter pill with its live count (doc §4.2). Labels are
@@ -150,15 +161,18 @@ func (m *MCP) ToDetail() Detail {
 		serverName = m.Name
 	}
 	return Detail{
-		ID:          m.ID,
-		Name:        m.Name,
-		Slogan:      m.Slogan,
-		Category:    m.Category,
-		Icon:        m.Icon,
-		Tags:        nonNilStrings(m.Tags),
-		ToolCount:   len(m.Tools),
-		Visibility:  m.Visibility,
-		CreatorName: m.CreatorName,
+		ID:               m.ID,
+		Name:             m.Name,
+		Slogan:           m.Slogan,
+		Category:         m.Category,
+		Icon:             m.Icon,
+		Tags:             nonNilStrings(m.Tags),
+		ToolCount:        len(m.Tools),
+		Visibility:       m.Visibility,
+		CreatorName:      m.CreatorName,
+		CreatedByType:    normalizeCreatedByType(m.CreatedByType),
+		CreatedByBotUID:  m.CreatedByBotUID,
+		CreatedByBotName: m.CreatedByBotName,
 		QuickStart: QuickStart{
 			Transport:  m.Transport,
 			ServerName: serverName,
@@ -187,18 +201,35 @@ func (m *MCP) ToListItem() ListItem {
 		verifiedAt = &value
 	}
 	return ListItem{
-		ID:          m.ID,
-		Name:        m.Name,
-		Slogan:      m.Slogan,
-		Category:    m.Category,
-		Icon:        m.Icon,
-		Tags:        nonNilStrings(m.Tags),
-		ToolCount:   len(m.Tools),
-		Visibility:  m.Visibility,
-		CreatorName: m.CreatorName,
-		Transport:   m.Transport, VerificationStatus: m.VerificationStatus,
+		ID:               m.ID,
+		Name:             m.Name,
+		Slogan:           m.Slogan,
+		Category:         m.Category,
+		Icon:             m.Icon,
+		Tags:             nonNilStrings(m.Tags),
+		ToolCount:        len(m.Tools),
+		Visibility:       m.Visibility,
+		CreatorName:      m.CreatorName,
+		CreatedByType:    normalizeCreatedByType(m.CreatedByType),
+		CreatedByBotUID:  m.CreatedByBotUID,
+		CreatedByBotName: m.CreatedByBotName,
+		Transport:        m.Transport, VerificationStatus: m.VerificationStatus,
 		VerifiedAt: verifiedAt, UpdatedAt: m.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+}
+
+// normalizeCreatedByType guarantees a non-empty value on the wire (doc §3.1:
+// "always present"). Post-migration rows read back as human/bot/import
+// verbatim from the ENUM column, so this only fires for zero-value struct
+// literals — chiefly router/handler test stubs that return model.Detail{}
+// without hydrating provenance. The service create path is authoritative
+// for real writes; this normalise sits on the read/serialize side purely as
+// a wire-contract guard.
+func normalizeCreatedByType(t CreatedByType) CreatedByType {
+	if t == "" {
+		return CreatedByHuman
+	}
+	return t
 }
 
 // nonNilStrings guarantees a JSON array (not null) for always-present fields.

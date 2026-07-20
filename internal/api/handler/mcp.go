@@ -135,6 +135,8 @@ func (h *MCP) ListMine(c *gin.Context) { h.list(c, true) }
 // @Accept json
 // @Produce json
 // @Security Bearer
+// @Param mode query string false "Scope: \"mine\" restricts counts to caller-owned records"
+// @Param created_by_type query []string false "Provenance filter (human, bot, import); repeatable or comma-separated"
 // @Success 200 {object} apiresponse.Data[[]model.CategoryFilter]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
@@ -147,12 +149,21 @@ func (h *MCP) ListCategories(c *gin.Context) {
 		writeError(c, apierr.Unauthorized())
 		return
 	}
+	// Categories share the SAME predicates as the list endpoints so counts
+	// stay coherent when the two filters combine (issue #894 follow-up: a
+	// user narrowing to "Bot 创建" expects every category pill to shrink
+	// accordingly). Only `created_by_type` is honoured today — the other
+	// filters (keyword/tags/…) are still ignored by design because clicking
+	// a pill would zero itself out otherwise.
+	params := service.ListParams{
+		CreatedByTypes: splitQuery(c.QueryArray("created_by_type")),
+	}
 	var result model.ListResponse
 	var apiErr *apierr.Error
 	if c.Query("mode") == "mine" {
-		result, apiErr = h.svc.ListMine(c.Request.Context(), caller, service.ListParams{})
+		result, apiErr = h.svc.ListMine(c.Request.Context(), caller, params)
 	} else {
-		result, apiErr = h.svc.List(c.Request.Context(), caller, service.ListParams{})
+		result, apiErr = h.svc.List(c.Request.Context(), caller, params)
 	}
 	if apiErr != nil {
 		writeError(c, apiErr)
@@ -363,7 +374,18 @@ func callerFromContext(c *gin.Context) (service.Caller, bool) {
 	if !ok || identity.UID == "" {
 		return service.Caller{}, false
 	}
-	return service.Caller{UID: identity.UID, Name: identity.Name, SpaceID: marketmiddleware.SpaceID(c)}, true
+	caller := service.Caller{UID: identity.UID, Name: identity.Name, SpaceID: marketmiddleware.SpaceID(c)}
+	// If the token was a Bot token, middleware.authenticateBot collapsed the
+	// Bot into the owner Identity for authorization but stashed the resolved
+	// BotIdentity in the context. Lift it here so the service layer can stamp
+	// CreatedByType=bot on new rows (issue #894). A user-token request has no
+	// BotIdentity — the two Bot fields stay empty and CreatedByType defaults
+	// to human downstream.
+	if bot, hasBot := marketmiddleware.BotIdentity(c); hasBot && bot.BotUID != "" {
+		caller.BotUID = bot.BotUID
+		caller.BotName = bot.BotName
+	}
+	return caller, true
 }
 
 func listParams(c *gin.Context) (service.ListParams, int, int) {
@@ -381,6 +403,7 @@ func listParams(c *gin.Context) (service.ListParams, int, int) {
 		Visibilities:         splitQuery(c.QueryArray("visibility")),
 		Sources:              splitQuery(c.QueryArray("source")),
 		VerificationStatuses: splitQuery(c.QueryArray("verification_status")),
+		CreatedByTypes:       splitQuery(c.QueryArray("created_by_type")),
 		Sort:                 strings.TrimSpace(c.Query("sort")),
 		Limit:                pageSize,
 		Offset:               (page - 1) * pageSize,

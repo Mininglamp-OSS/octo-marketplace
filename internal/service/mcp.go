@@ -44,10 +44,20 @@ type Store interface {
 // Caller is the resolved identity + Space for a request, stamped server-side
 // from the Octo token and X-Space-Id (doc §1). The service never trusts body
 // identity fields.
+//
+// BotUID / BotName are non-empty only when the request arrived on a Bot token
+// (middleware/auth.go:70 recognises the "bf_" prefix and collapses the Bot
+// into the owner Identity for authorization). UID / Name always describe the
+// owner user; the Bot fields carry the extra "which Bot spoke for that user"
+// context needed to stamp CreatedByType=bot on new MCP rows (issue #894). All
+// existing permission logic keeps operating on UID — a Bot-created MCP is
+// owner-editable exactly like a manually-created one.
 type Caller struct {
 	UID     string
 	Name    string
 	SpaceID string
+	BotUID  string
+	BotName string
 }
 
 // Service implements the MCP catalog operations.
@@ -116,9 +126,13 @@ type ListParams struct {
 	Visibilities         []string
 	Sources              []string
 	VerificationStatuses []string
-	Sort                 string
-	Limit                int
-	Offset               int
+	// CreatedByTypes filters by row provenance (mcp-v1.md §4.2; issue #894).
+	// Empty means "no filter" — legacy list callers keep their existing
+	// behaviour.
+	CreatedByTypes []string
+	Sort           string
+	Limit          int
+	Offset         int
 }
 
 // Create validates + normalizes a flat create body, redacts secrets, stamps
@@ -297,7 +311,8 @@ func (s *Service) ListSystem(ctx context.Context, p ListParams) (model.ListRespo
 	filter := repository.ListFilter{
 		Keyword:    p.Keyword,
 		Categories: p.Categories, Tags: p.Tags, Transports: p.Transports,
-		Visibilities: p.Visibilities, Sources: p.Sources, VerificationStatuses: p.VerificationStatuses, Sort: p.Sort,
+		Visibilities: p.Visibilities, Sources: p.Sources, VerificationStatuses: p.VerificationStatuses,
+		CreatedByTypes: p.CreatedByTypes, Sort: p.Sort,
 		Limit:      clampLimit(p.Limit),
 		Offset:     clampOffset(p.Offset),
 		SystemOnly: true,
@@ -450,6 +465,9 @@ func (s *Service) buildSystemFromCreate(caller Caller, req model.CreateRequest) 
 		OwnerUID:      caller.UID,
 		SpaceID:       "", // NULL in DB — system rows are cross-Space.
 		CreatorName:   caller.Name,
+		// Admin surface is human-only; the bot resolver never sees this path.
+		// Explicit for clarity so the repository insert has a well-defined value.
+		CreatedByType: model.CreatedByHuman,
 		Transport:     req.Transport,
 		Connection: model.Connection{
 			URL:        req.URL,
@@ -474,7 +492,8 @@ func (s *Service) list(ctx context.Context, caller Caller, p ListParams, mineOnl
 		SpaceID:    caller.SpaceID,
 		Keyword:    p.Keyword,
 		Categories: p.Categories, Tags: p.Tags, Transports: p.Transports,
-		Visibilities: p.Visibilities, Sources: p.Sources, VerificationStatuses: p.VerificationStatuses, Sort: p.Sort,
+		Visibilities: p.Visibilities, Sources: p.Sources, VerificationStatuses: p.VerificationStatuses,
+		CreatedByTypes: p.CreatedByTypes, Sort: p.Sort,
 		Limit:    clampLimit(p.Limit),
 		Offset:   clampOffset(p.Offset),
 		MineOnly: mineOnly,
@@ -647,22 +666,25 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 
 	now := s.now()
 	m := &model.MCP{
-		ID:            id.New(),
-		Name:          name,
-		Slug:          slug,
-		Slogan:        req.Slogan,
-		Category:      req.Category,
-		Icon:          req.Icon,
-		Tags:          normalizeTags(req.Tags),
-		Tools:         req.Tools,
-		UsageExamples: normalizeStringList(req.UsageExamples),
-		FAQs:          normalizeFAQs(req.FAQs),
-		Notes:         normalizeStringList(req.Notes),
-		Visibility:    visibility,
-		OwnerUID:      caller.UID,
-		SpaceID:       caller.SpaceID,
-		CreatorName:   caller.Name,
-		Transport:     req.Transport,
+		ID:               id.New(),
+		Name:             name,
+		Slug:             slug,
+		Slogan:           req.Slogan,
+		Category:         req.Category,
+		Icon:             req.Icon,
+		Tags:             normalizeTags(req.Tags),
+		Tools:            req.Tools,
+		UsageExamples:    normalizeStringList(req.UsageExamples),
+		FAQs:             normalizeFAQs(req.FAQs),
+		Notes:            normalizeStringList(req.Notes),
+		Visibility:       visibility,
+		OwnerUID:         caller.UID,
+		SpaceID:          caller.SpaceID,
+		CreatorName:      caller.Name,
+		CreatedByType:    resolveCreatedByType(caller),
+		CreatedByBotUID:  caller.BotUID,
+		CreatedByBotName: caller.BotName,
+		Transport:        req.Transport,
 		Connection: model.Connection{
 			URL:        req.URL,
 			Command:    req.Command,
@@ -676,6 +698,18 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 		UpdatedAt: now,
 	}
 	return m, nil
+}
+
+// resolveCreatedByType decides the provenance stamp for a new row. The rule is
+// simple by design (issue #894): if the request rode in on a Bot token, the
+// middleware exposes a non-empty BotUID via Caller — mark the row as bot.
+// Every other Caller (a plain user token in the public API, or the admin
+// surface) writes 'human'. The service NEVER trusts a client-supplied value.
+func resolveCreatedByType(caller Caller) model.CreatedByType {
+	if caller.BotUID != "" {
+		return model.CreatedByBot
+	}
+	return model.CreatedByHuman
 }
 
 // applyPatch mutates m in place from the partial request, re-running

@@ -25,6 +25,17 @@ const (
 	VisibilitySpace   Visibility = "space"
 )
 
+// CreatedByType records who authored an MCP row (mcp-v1.md §3.1; issue #894).
+// A Bot-created MCP is owned by the Bot's owner (owner_uid == owner user) with
+// no privilege delta — this value is a metadata badge for the market UI only.
+type CreatedByType string
+
+const (
+	CreatedByHuman  CreatedByType = "human"
+	CreatedByBot    CreatedByType = "bot"
+	CreatedByImport CreatedByType = "import" // reserved for Git import (#867); not written today.
+)
+
 // Transport kinds, per the MCP spec (doc §4.1).
 type Transport string
 
@@ -112,7 +123,15 @@ type MCP struct {
 	OwnerUID           string
 	SpaceID            string // empty string means NULL (system rows)
 	CreatorName        string
-	Transport          Transport
+	// CreatedByType / CreatedByBotUID / CreatedByBotName record provenance
+	// (issue #894). For human creates CreatedByType == CreatedByHuman and the
+	// two bot fields are empty. For bot creates the fields are stamped from
+	// the resolved BotIdentity — CreatedByBotName is a snapshot so the market
+	// badge stays intact after the bot is renamed or deleted.
+	CreatedByType    CreatedByType
+	CreatedByBotUID  string
+	CreatedByBotName string
+	Transport        Transport
 	VerificationStatus string
 	VerifiedAt         *time.Time
 	Connection         Connection
