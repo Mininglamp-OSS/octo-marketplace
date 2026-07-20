@@ -532,6 +532,15 @@ func enrichListItem(item *model.ListItem, m *model.MCP, keyword, callerUID strin
 			break
 		}
 	}
+	for _, example := range m.UsageExamples {
+		if strings.Contains(strings.ToLower(example), kw) {
+			add("usage_example", 1)
+			break
+		}
+	}
+	if strings.Contains(strings.ToLower(m.CreatorName), kw) {
+		add("creator:"+m.CreatorName, 1)
+	}
 }
 
 // loadVisible loads a record and applies the read visibility rule (doc §4.4):

@@ -19,3 +19,15 @@ func TestListFilterCategoryORTransportAND(t *testing.T) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }
+
+func TestRelevanceOrderCoversEverySearchableField(t *testing.T) {
+	order, args := relevanceOrder("issue")
+	for _, field := range []string{"name LIKE", "slogan LIKE", "category LIKE", "tags_json", "tools_json", "usage_examples_json", "creator_name LIKE"} {
+		if !strings.Contains(order, field) {
+			t.Fatalf("ranking omits %s: %s", field, order)
+		}
+	}
+	if len(args) != 7 {
+		t.Fatalf("ranking args = %d, want 7", len(args))
+	}
+}

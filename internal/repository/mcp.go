@@ -213,13 +213,8 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 		orderBy = "verified_at DESC, updated_at DESC, id DESC"
 	}
 	if f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "" {
-		// Exact tool/tag/name hits outrank descriptive matches. The id tie-breaker
-		// makes offset pagination deterministic when scores and timestamps match.
-		orderBy = `((name LIKE ?) * 8 + (JSON_SEARCH(tags_json, 'one', ?) IS NOT NULL) * 6 + ` +
-			`(JSON_SEARCH(tools_json, 'one', ?, NULL, '$[*].name') IS NOT NULL) * 7 + ` +
-			`(slogan LIKE ?) * 2) DESC, updated_at DESC, id DESC`
-		like := "%" + escapeLike(strings.TrimSpace(f.Keyword)) + "%"
-		pageArgs = append(pageArgs, like, like, like, like)
+		orderBy, args = relevanceOrder(f.Keyword)
+		pageArgs = append(pageArgs, args...)
 	}
 	q := `SELECT ` + columns + ` FROM mcp_servers WHERE ` + pageWhere +
 		` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
@@ -243,6 +238,17 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 		return nil, 0, nil, err
 	}
 	return items, total, cats, nil
+}
+
+// relevanceOrder is the single ranking contract mirrored by service.enrichListItem.
+// Every searchable field participates with the same weight and stable tie-breakers.
+func relevanceOrder(keyword string) (string, []any) {
+	like := "%" + escapeLike(strings.TrimSpace(keyword)) + "%"
+	order := `((name LIKE ?) * 8 + (slogan LIKE ?) * 2 + (category LIKE ?) * 3 + ` +
+		`(JSON_SEARCH(tags_json, 'one', ?) IS NOT NULL) * 6 + ` +
+		`(JSON_SEARCH(tools_json, 'one', ?, NULL, '$[*].name', '$[*].description') IS NOT NULL) * 7 + ` +
+		`(JSON_SEARCH(usage_examples_json, 'one', ?) IS NOT NULL) + (creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
+	return order, []any{like, like, like, like, like, like, like}
 }
 
 func (r *Repository) count(ctx context.Context, where string, args []any) (int, error) {
