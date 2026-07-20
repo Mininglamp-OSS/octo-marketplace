@@ -45,3 +45,18 @@ func TestSourceMineExcludesSystemRows(t *testing.T) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }
+
+// TestSourceSpaceExcludesCallerOwnedRows guards the filter/label consistency:
+// enrichListItem classifies OwnerUID==callerUID as source=mine (checked before
+// space), so source=space must exclude caller-owned rows to partition the set
+// the way the projection does.
+func TestSourceSpaceExcludesCallerOwnedRows(t *testing.T) {
+	where, args := (ListFilter{CallerUID: "u1", SpaceID: "s1", Sources: []string{"space"}}).buildWhere()
+	if !strings.Contains(where, "space_id = ? AND owner_uid <> ?") {
+		t.Fatalf("source=space must exclude caller-owned rows: %s", where)
+	}
+	want := []any{"s1", "u1", "s1", "u1"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}

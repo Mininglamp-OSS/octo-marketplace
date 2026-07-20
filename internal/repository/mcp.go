@@ -46,15 +46,14 @@ func New(db *sql.DB) *Repository {
 // ListFilter carries the resolved visibility scope plus the query params. The
 // service builds it; the repository only translates it to SQL.
 type ListFilter struct {
-	CallerUID            string
-	SpaceID              string
-	Keyword              string
-	Categories           []string
-	Tags                 []string
-	Transports           []string
-	Visibilities         []string
-	Sources              []string
-	VerificationStatuses []string
+	CallerUID    string
+	SpaceID      string
+	Keyword      string
+	Categories   []string
+	Tags         []string
+	Transports   []string
+	Visibilities []string
+	Sources      []string
 	// CreatedByTypes narrows the result to rows whose created_by_type matches
 	// one of the given values (mcp-v1.md §4.2). Nil/empty means no filter.
 	CreatedByTypes []string
@@ -212,9 +211,6 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 	pageWhere := where
 	pageArgs := append([]any{}, args...)
 	orderBy := "created_at DESC, id DESC"
-	if f.Sort == "verified" {
-		orderBy = "verified_at DESC, updated_at DESC, id DESC"
-	}
 	if f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "" {
 		orderBy, args = relevanceOrder(f.Keyword)
 		pageArgs = append(pageArgs, args...)
@@ -335,7 +331,6 @@ func (f ListFilter) buildWhere() (string, []any) {
 	appendIn("category", f.Categories)
 	appendIn("transport", f.Transports)
 	appendIn("visibility", f.Visibilities)
-	appendIn("verification_status", f.VerificationStatuses)
 	appendIn("created_by_type", f.CreatedByTypes)
 	if len(f.Sources) > 0 {
 		parts := make([]string, 0, len(f.Sources))
@@ -347,8 +342,8 @@ func (f ListFilter) buildWhere() (string, []any) {
 				parts = append(parts, "owner_uid = ? AND visibility <> 'system'")
 				args = append(args, f.CallerUID)
 			case "space":
-				parts = append(parts, "visibility <> 'system' AND space_id = ?")
-				args = append(args, f.SpaceID)
+				parts = append(parts, "visibility <> 'system' AND space_id = ? AND owner_uid <> ?")
+				args = append(args, f.SpaceID, f.CallerUID)
 			}
 		}
 		if len(parts) > 0 {

@@ -320,10 +320,6 @@ components:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Transport'
         updated_at:
           type: string
-        verification_status:
-          type: string
-        verified_at:
-          type: string
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
       type: object
@@ -836,13 +832,6 @@ paths:
           items:
             type: string
           type: array
-      - description: Verification filters
-        in: query
-        name: verification_status
-        schema:
-          items:
-            type: string
-          type: array
       - description: Tag filters
         in: query
         name: tag
@@ -850,7 +839,7 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: relevance, updated, verified'
+      - description: 'Sort: relevance, updated'
         in: query
         name: sort
         schema:
@@ -1538,13 +1527,6 @@ paths:
           items:
             type: string
           type: array
-      - description: Verification filters
-        in: query
-        name: verification_status
-        schema:
-          items:
-            type: string
-          type: array
       - description: Provenance filter (human, bot, import); repeatable or comma-separated
         in: query
         name: created_by_type
@@ -1559,7 +1541,7 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: relevance, updated, verified'
+      - description: 'Sort: relevance, updated'
         in: query
         name: sort
         schema:
@@ -2018,13 +2000,6 @@ paths:
           items:
             type: string
           type: array
-      - description: Verification filters
-        in: query
-        name: verification_status
-        schema:
-          items:
-            type: string
-          type: array
       - description: Provenance filter (human, bot, import); repeatable or comma-separated
         in: query
         name: created_by_type
@@ -2039,7 +2014,7 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: relevance, updated, verified'
+      - description: 'Sort: relevance, updated'
         in: query
         name: sort
         schema:

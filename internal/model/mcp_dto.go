@@ -126,16 +126,14 @@ type ListItem struct {
 	Visibility  Visibility `json:"visibility"`
 	CreatorName string     `json:"creator_name"`
 	// Same shape + semantics as Detail (see there for rationale).
-	CreatedByType      CreatedByType `json:"created_by_type"`
-	CreatedByBotUID    string        `json:"created_by_bot_uid,omitempty"`
-	CreatedByBotName   string        `json:"created_by_bot_name,omitempty"`
-	Source             string        `json:"source"`
-	Transport          Transport     `json:"transport"`
-	VerificationStatus string        `json:"verification_status"`
-	VerifiedAt         *string       `json:"verified_at,omitempty"`
-	UpdatedAt          string        `json:"updated_at"`
-	MatchReasons       []string      `json:"match_reasons,omitempty"`
-	Relevance          int           `json:"relevance,omitempty"`
+	CreatedByType    CreatedByType `json:"created_by_type"`
+	CreatedByBotUID  string        `json:"created_by_bot_uid,omitempty"`
+	CreatedByBotName string        `json:"created_by_bot_name,omitempty"`
+	Source           string        `json:"source"`
+	Transport        Transport     `json:"transport"`
+	UpdatedAt        string        `json:"updated_at"`
+	MatchReasons     []string      `json:"match_reasons,omitempty"`
+	Relevance        int           `json:"relevance,omitempty"`
 }
 
 // CategoryFilter is one filter pill with its live count (doc §4.2). Labels are
@@ -195,11 +193,6 @@ func (m *MCP) ToDetail() Detail {
 
 // ToListItem projects a domain MCP onto the list-card wire shape.
 func (m *MCP) ToListItem() ListItem {
-	var verifiedAt *string
-	if m.VerifiedAt != nil {
-		value := m.VerifiedAt.UTC().Format(time.RFC3339)
-		verifiedAt = &value
-	}
 	return ListItem{
 		ID:               m.ID,
 		Name:             m.Name,
@@ -213,8 +206,8 @@ func (m *MCP) ToListItem() ListItem {
 		CreatedByType:    normalizeCreatedByType(m.CreatedByType),
 		CreatedByBotUID:  m.CreatedByBotUID,
 		CreatedByBotName: m.CreatedByBotName,
-		Transport:        m.Transport, VerificationStatus: m.VerificationStatus,
-		VerifiedAt: verifiedAt, UpdatedAt: m.UpdatedAt.UTC().Format(time.RFC3339),
+		Transport:        m.Transport,
+		UpdatedAt:        m.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

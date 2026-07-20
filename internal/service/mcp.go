@@ -119,13 +119,12 @@ const defaultIconMaxBytes = 2 << 20 // 2 MiB
 
 // ListParams carries the query parameters for the two list endpoints.
 type ListParams struct {
-	Keyword              string
-	Categories           []string
-	Tags                 []string
-	Transports           []string
-	Visibilities         []string
-	Sources              []string
-	VerificationStatuses []string
+	Keyword      string
+	Categories   []string
+	Tags         []string
+	Transports   []string
+	Visibilities []string
+	Sources      []string
 	// CreatedByTypes filters by row provenance (mcp-v1.md §4.2; issue #894).
 	// Empty means "no filter" — legacy list callers keep their existing
 	// behaviour.
@@ -311,7 +310,7 @@ func (s *Service) ListSystem(ctx context.Context, p ListParams) (model.ListRespo
 	filter := repository.ListFilter{
 		Keyword:    p.Keyword,
 		Categories: p.Categories, Tags: p.Tags, Transports: p.Transports,
-		Visibilities: p.Visibilities, Sources: p.Sources, VerificationStatuses: p.VerificationStatuses,
+		Visibilities: p.Visibilities, Sources: p.Sources,
 		CreatedByTypes: p.CreatedByTypes, Sort: p.Sort,
 		Limit:      clampLimit(p.Limit),
 		Offset:     clampOffset(p.Offset),
@@ -492,7 +491,7 @@ func (s *Service) list(ctx context.Context, caller Caller, p ListParams, mineOnl
 		SpaceID:    caller.SpaceID,
 		Keyword:    p.Keyword,
 		Categories: p.Categories, Tags: p.Tags, Transports: p.Transports,
-		Visibilities: p.Visibilities, Sources: p.Sources, VerificationStatuses: p.VerificationStatuses,
+		Visibilities: p.Visibilities, Sources: p.Sources,
 		CreatedByTypes: p.CreatedByTypes, Sort: p.Sort,
 		Limit:    clampLimit(p.Limit),
 		Offset:   clampOffset(p.Offset),

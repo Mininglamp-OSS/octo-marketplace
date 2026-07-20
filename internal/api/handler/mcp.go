@@ -88,10 +88,9 @@ func (h *MCP) Create(c *gin.Context) {
 // @Param transport query []string false "Transport filters"
 // @Param visibility query []string false "Visibility filters"
 // @Param source query []string false "Source filters: system, space, mine"
-// @Param verification_status query []string false "Verification filters"
 // @Param created_by_type query []string false "Provenance filter (human, bot, import); repeatable or comma-separated"
 // @Param tag query []string false "Tag filters"
-// @Param sort query string false "Sort: relevance, updated, verified"
+// @Param sort query string false "Sort: relevance, updated"
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"
 // @Success 200 {object} apiresponse.OffsetList[model.ListItem]
@@ -115,10 +114,9 @@ func (h *MCP) List(c *gin.Context) { h.list(c, false) }
 // @Param transport query []string false "Transport filters"
 // @Param visibility query []string false "Visibility filters"
 // @Param source query []string false "Source filters: system, space, mine"
-// @Param verification_status query []string false "Verification filters"
 // @Param created_by_type query []string false "Provenance filter (human, bot, import); repeatable or comma-separated"
 // @Param tag query []string false "Tag filters"
-// @Param sort query string false "Sort: relevance, updated, verified"
+// @Param sort query string false "Sort: relevance, updated"
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"
 // @Success 200 {object} apiresponse.OffsetList[model.ListItem]
@@ -398,17 +396,16 @@ func listParams(c *gin.Context) (service.ListParams, int, int) {
 	}
 	categories := splitQuery(c.QueryArray("category"))
 	return service.ListParams{
-		Keyword:              strings.TrimSpace(c.Query("keyword")),
-		Categories:           categories,
-		Tags:                 splitQuery(c.QueryArray("tag")),
-		Transports:           splitQuery(c.QueryArray("transport")),
-		Visibilities:         splitQuery(c.QueryArray("visibility")),
-		Sources:              splitQuery(c.QueryArray("source")),
-		VerificationStatuses: splitQuery(c.QueryArray("verification_status")),
-		CreatedByTypes:       splitQuery(c.QueryArray("created_by_type")),
-		Sort:                 strings.TrimSpace(c.Query("sort")),
-		Limit:                pageSize,
-		Offset:               (page - 1) * pageSize,
+		Keyword:        strings.TrimSpace(c.Query("keyword")),
+		Categories:     categories,
+		Tags:           splitQuery(c.QueryArray("tag")),
+		Transports:     splitQuery(c.QueryArray("transport")),
+		Visibilities:   splitQuery(c.QueryArray("visibility")),
+		Sources:        splitQuery(c.QueryArray("source")),
+		CreatedByTypes: splitQuery(c.QueryArray("created_by_type")),
+		Sort:           strings.TrimSpace(c.Query("sort")),
+		Limit:          pageSize,
+		Offset:         (page - 1) * pageSize,
 	}, page, pageSize
 }
 
