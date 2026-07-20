@@ -147,7 +147,13 @@ func (h *MCP) ListCategories(c *gin.Context) {
 		writeError(c, apierr.Unauthorized())
 		return
 	}
-	result, apiErr := h.svc.List(c.Request.Context(), caller, service.ListParams{})
+	var result model.ListResponse
+	var apiErr *apierr.Error
+	if c.Query("mode") == "mine" {
+		result, apiErr = h.svc.ListMine(c.Request.Context(), caller, service.ListParams{})
+	} else {
+		result, apiErr = h.svc.List(c.Request.Context(), caller, service.ListParams{})
+	}
 	if apiErr != nil {
 		writeError(c, apiErr)
 		return
