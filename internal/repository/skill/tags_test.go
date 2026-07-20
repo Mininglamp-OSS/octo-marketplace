@@ -136,7 +136,7 @@ func TestListFiltersByAllTags(t *testing.T) {
 	}
 }
 
-func TestListSearchMatchesTagFuzzy(t *testing.T) {
+func TestListSearchMatchesNameAndDisplayNameFuzzy(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatal(err)
@@ -145,16 +145,17 @@ func TestListSearchMatchesTagFuzzy(t *testing.T) {
 
 	// With comprehensive sort (default), expect a count query first, then the data query.
 	mock.ExpectQuery("SELECT COUNT").
-		WithArgs("space-1", "user-1", "space-1", "%auto%", "%auto%", "%auto%", "%auto%", "%auto%").
+		WithArgs("space-1", "user-1", "space-1", "%auto%", "%auto%").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	mock.ExpectQuery("JSON_SEARCH\\(s\\.tags, 'one', \\?\\) IS NOT NULL").
-		WithArgs("space-1", "user-1", "space-1", "%auto%", "%auto%", "%auto%", "%auto%", "%auto%", 20, 0).
+	mock.ExpectQuery("s\\.name LIKE \\?.*s\\.display_name LIKE \\?").
+		WithArgs("space-1", "user-1", "space-1", "%auto%", "%auto%", 20, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "display_name", "icon_url", "description", "category_id", "tags",
-			"owner_id", "owner_name", "space_id", "visibility", "version",
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
+			"owner_id", "owner_name", "creator_id", "creator_name", "space_id", "visibility", "version",
 			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
-			"created_at", "updated_at", "view_count", "download_count",
+			"created_at", "updated_at", "resolved_version", "version_storage", "view_count", "download_count",
 		}))
 
 	_, err = New(db).List(context.Background(), ListFilter{

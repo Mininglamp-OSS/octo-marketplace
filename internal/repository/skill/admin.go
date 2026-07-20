@@ -47,10 +47,9 @@ func (r *Repo) AdminList(ctx context.Context, f AdminListFilter) (*ListResult, e
 	if f.Query != "" {
 		searchTerm := "%" + escapeLike(f.Query) + "%"
 		conditions = append(conditions, `(
-			s.name LIKE ? OR s.description LIKE ? OR s.owner_name LIKE ? OR s.creator_name LIKE ?
-			OR JSON_SEARCH(s.tags, 'one', ?) IS NOT NULL
+			s.name LIKE ? OR s.display_name LIKE ?
 		)`)
-		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm)
+		args = append(args, searchTerm, searchTerm)
 	}
 
 	for _, tag := range f.Tags {
