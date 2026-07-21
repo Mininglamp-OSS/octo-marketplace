@@ -134,11 +134,11 @@ func (h *Handler) RegisterLocalProxy(r *gin.Engine, authEnabled ...bool) {
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
-// @Failure 504 {object} apiresponse.Error "INTERNAL_ERROR"
+// @Failure 503 {object} apiresponse.Error "UPSTREAM_UNAVAILABLE"
 // @Router /bot/skills/publish [post]
 func (h *Handler) BotPublishSkill(c *gin.Context) {
 	if h.parseSvc == nil || h.skillSvc == nil {
-		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.InternalError, "skill publishing is unavailable", nil, "")
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "skill publishing is unavailable", map[string]any{"upstream": "skill_publish"}, "")
 		return
 	}
 	identity, ok := middleware.Identity(c)
@@ -198,7 +198,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			apiresponse.Fail(c, http.StatusGatewayTimeout, errcode.InternalError, "skill parse timed out", nil, "")
+			apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "skill parse timed out", map[string]any{"upstream": "skill_parse"}, "")
 			return
 		}
 		if errors.Is(err, parse.ErrParseIncomplete) {
@@ -239,7 +239,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			apiresponse.Fail(c, http.StatusGatewayTimeout, errcode.InternalError, "skill publish timed out", nil, "")
+			apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "skill publish timed out", map[string]any{"upstream": "skill_publish"}, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidParseTask) {

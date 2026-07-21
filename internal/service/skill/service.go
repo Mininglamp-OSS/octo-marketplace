@@ -833,6 +833,10 @@ func (s *Service) resolveSourceSkillID(ctx context.Context, sourceID, spaceID, u
 }
 
 func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillItem {
+	return s.rowToItemWithTagNames(ctx, row, nil)
+}
+
+func (s *Service) rowToItemWithTagNames(ctx context.Context, row *skillrepo.SkillRow, tagNames map[int64]string) SkillItem {
 	iconURL := row.IconURL
 	if iconURL != "" && !isURL(iconURL) {
 		// icon_url is an object key — resolve to a presigned download URL
@@ -887,7 +891,7 @@ func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillI
 		IconURL:       iconURL,
 		Description:   row.Description,
 		CategoryID:    row.CategoryID,
-		Tags:          s.rawTagsToNames(ctx, row.Tags),
+		Tags:          s.rawTagsToNames(ctx, row.Tags, tagNames),
 		OwnerID:       row.OwnerID,
 		OwnerName:     row.OwnerName,
 		CreatorID:     firstNonEmpty(row.CreatorID, row.OwnerID),
@@ -907,7 +911,7 @@ func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillI
 	}
 }
 
-func (s *Service) rawTagsToNames(ctx context.Context, raw json.RawMessage) []string {
+func (s *Service) rawTagsToNames(ctx context.Context, raw json.RawMessage, tagNames map[int64]string) []string {
 	if stringTags := rawTagsToStrings(raw); len(stringTags) > 0 {
 		return stringTags
 	}
@@ -915,10 +919,14 @@ func (s *Service) rawTagsToNames(ctx context.Context, raw json.RawMessage) []str
 	if len(ids) == 0 {
 		return []string{}
 	}
-	nameByID, err := s.repo.ResolveTagNames(ctx, ids)
-	if err != nil {
-		log.Printf("[skill] resolve tag names failed: %v", err)
-		return []string{}
+	nameByID := tagNames
+	if nameByID == nil {
+		var err error
+		nameByID, err = s.repo.ResolveTagNames(ctx, ids)
+		if err != nil {
+			log.Printf("[skill] resolve tag names failed: %v", err)
+			return []string{}
+		}
 	}
 	seen := make(map[string]struct{}, len(ids))
 	names := make([]string, 0, len(ids))
@@ -937,11 +945,41 @@ func (s *Service) rawTagsToNames(ctx context.Context, raw json.RawMessage) []str
 }
 
 func (s *Service) toListResult(ctx context.Context, r *skillrepo.ListResult) *ListResult {
+	tagNames := s.resolveListTagNames(ctx, r.Items)
 	items := make([]SkillItem, 0, len(r.Items))
 	for i := range r.Items {
-		items = append(items, s.rowToItem(ctx, &r.Items[i]))
+		items = append(items, s.rowToItemWithTagNames(ctx, &r.Items[i], tagNames))
 	}
 	return &ListResult{Items: items, NextCursor: r.NextCursor, Total: r.Total}
+}
+
+func (s *Service) resolveListTagNames(ctx context.Context, rows []skillrepo.SkillRow) map[int64]string {
+	seen := make(map[int64]struct{})
+	var ids []int64
+	for i := range rows {
+		if len(rawTagsToStrings(rows[i].Tags)) > 0 {
+			continue
+		}
+		for _, id := range rawTagsToIDs(rows[i].Tags) {
+			if id <= 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	names, err := s.repo.ResolveTagNames(ctx, ids)
+	if err != nil {
+		log.Printf("[skill] resolve list tag names failed: %v", err)
+		return map[int64]string{}
+	}
+	return names
 }
 
 // isURL returns true if the string looks like a full URL (not an object key).

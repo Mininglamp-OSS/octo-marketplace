@@ -136,6 +136,38 @@ func TestRowToItemFields(t *testing.T) {
 	}
 }
 
+func TestToListResultResolvesTagNamesInOneBatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := &Service{repo: skillrepo.New(db)}
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	result := &skillrepo.ListResult{
+		Items: []skillrepo.SkillRow{
+			{ID: "skill-1", Name: "Skill 1", Tags: tagIDJSON(1, 2), CreatedAt: now, UpdatedAt: now},
+			{ID: "skill-2", Name: "Skill 2", Tags: tagIDJSON(2, 3), CreatedAt: now, UpdatedAt: now},
+		},
+	}
+	expectResolveTagNames(mock, []int64{1, 2, 3}, []string{"alpha", "beta", "gamma"})
+
+	items := svc.toListResult(context.Background(), result).Items
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(items))
+	}
+	if got := strings.Join(items[0].Tags, ","); got != "alpha,beta" {
+		t.Fatalf("first tags = %q", got)
+	}
+	if got := strings.Join(items[1].Tags, ","); got != "beta,gamma" {
+		t.Fatalf("second tags = %q", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeleteDeletesAllVersionArtifacts(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

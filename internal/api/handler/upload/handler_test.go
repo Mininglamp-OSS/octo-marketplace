@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
@@ -215,6 +216,36 @@ func TestBotIdentityDevFallback(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusNoContent, w.Body.String())
+	}
+}
+
+func TestBotPublishUnavailableUsesUpstreamErrorCode(t *testing.T) {
+	r := gin.New()
+	auth := middleware.NewAuthenticator(false, nil, model.Identity{UID: "owner-1", Name: "Owner"}, "space-1")
+	v1 := r.Group("/api/v1")
+	v1.Use(auth.Handler())
+
+	h := New(nil, nil, nil)
+	h.Register(v1)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bot/skills/publish", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != errcode.UpstreamUnavailable {
+		t.Fatalf("code = %q, want %q", body.Error.Code, errcode.UpstreamUnavailable)
 	}
 }
 
