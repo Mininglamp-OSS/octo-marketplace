@@ -315,20 +315,16 @@ func TestErrParseTaskConsumed(t *testing.T) {
 	}
 }
 
-func TestToVisibility(t *testing.T) {
-	v := toVisibility("public")
-	if string(v) != "public" {
-		t.Errorf("toVisibility(\"public\") = %q", v)
+func TestNormalizeVisibility(t *testing.T) {
+	v, err := normalizeVisibility("", "space")
+	if err != nil {
+		t.Fatalf("normalizeVisibility default error = %v", err)
 	}
-}
-
-func TestToVisibilityPtr(t *testing.T) {
-	v := toVisibilityPtr("private")
-	if v == nil {
-		t.Fatal("expected non-nil pointer")
+	if string(v) != "space" {
+		t.Fatalf("normalizeVisibility default = %q, want space", v)
 	}
-	if string(*v) != "private" {
-		t.Errorf("toVisibilityPtr(\"private\") = %q", *v)
+	if _, err := normalizeVisibility("system", ""); !errors.Is(err, ErrInvalidVisibility) {
+		t.Fatalf("normalizeVisibility invalid error = %v, want ErrInvalidVisibility", err)
 	}
 }
 

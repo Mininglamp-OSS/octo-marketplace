@@ -9,9 +9,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
+	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
+	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 	"github.com/gin-gonic/gin"
 )
@@ -209,6 +215,86 @@ func TestBotIdentityDevFallback(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusNoContent, w.Body.String())
+	}
+}
+
+func TestBotPublishInvalidVisibilityReturnsBadRequest(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	desc := "desc"
+	readme := "# Bot Skill"
+	parseRows := func() *sqlmock.Rows {
+		return sqlmock.NewRows([]string{
+			"id", "upload_id", "file_name", "file_size", "file_url", "status",
+			"error_code", "error_message",
+			"result_name", "result_description", "result_version", "result_tags", "result_readme",
+			"result_id", "result_forked_from", "result_metadata",
+			"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
+		}).AddRow(
+			"task-1", "upload-1", "skill.zip", int64(100), "skill-uploads/upload-1/skill.zip", "success",
+			"", "",
+			"Bot Skill", &desc, "1.0.0", []byte(`[]`), &readme,
+			"", "", nil,
+			"sha", 0, "owner-1", "space-1", "", now, now,
+		)
+	}
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
+		WithArgs("upload-1").
+		WillReturnRows(parseRows())
+	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
+		WithArgs("task-1").
+		WillReturnRows(parseRows())
+	mock.ExpectQuery("SELECT .+ FROM parse_tasks WHERE id").
+		WithArgs("task-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "upload_id", "file_name", "file_size", "file_url", "file_sha256",
+			"status", "result_name", "result_description", "result_version",
+			"result_tags", "result_readme", "result_id", "result_forked_from", "result_metadata", "attempts",
+			"owner_id", "space_id", "skill_id",
+		}).AddRow(
+			"task-1", "upload-1", "skill.zip", int64(100), "skill-uploads/upload-1/skill.zip", "sha",
+			"success", "Bot Skill", &desc, "1.0.0",
+			[]byte(`[]`), &readme, "", "", nil, 0,
+			"owner-1", "space-1", "",
+		))
+
+	parseRepo := parse.NewRepo(db)
+	parseSvc := parse.NewService(nil, parseRepo, nil, func() string { return "id" }, 20, parse.ServiceConfig{})
+	skillSvc := skillsvc.New(skillrepo.New(db), categoryrepo.New(db), nil, func() string { return "skill-id" })
+	h := New(parseSvc, skillSvc, nil)
+	h.SetDevBotMode(true)
+
+	r := gin.New()
+	auth := middleware.NewAuthenticator(false, nil, model.Identity{UID: "owner-1", Name: "Owner"}, "space-1")
+	v1 := r.Group("/api/v1")
+	v1.Use(auth.Handler())
+	h.Register(v1)
+
+	body, _ := json.Marshal(map[string]any{
+		"skill_upload_id": "upload-1",
+		"visibility":      "system",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bot/skills/publish", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer bf_local")
+	req.Header.Set("X-Dev-Bot-Uid", "bot-1")
+	req.Header.Set("X-Dev-Bot-Name", "Bot")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "visibility must be one of") {
+		t.Fatalf("body = %s, want visibility validation message", w.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

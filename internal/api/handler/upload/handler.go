@@ -257,6 +257,14 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must be a JSON string array", nil, "")
 			return
 		}
+		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private", nil, "")
+			return
+		}
+		if errors.Is(err, skillsvc.ErrInvalidSourceSkill) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "source skill not found or inaccessible", nil, "")
+			return
+		}
 		log.Printf("[BotPublishSkill] create skill failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return

@@ -473,6 +473,25 @@ func TestCreate_SourceSkillID_FromParam(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM parse_tasks WHERE id").
 		WithArgs("task-f").
 		WillReturnRows(parseRows)
+	mock.ExpectQuery("SELECT .+ FROM skills").
+		WithArgs("explicit-source").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags",
+			"owner_id", "owner_name", "space_id", "visibility", "version",
+			"readme_content", "file_name", "file_url", "file_size", "file_sha256",
+			"created_at", "updated_at",
+			"resolved_version", "version_storage",
+			"view_count", "download_count",
+		}).AddRow(
+			"explicit-source", "Source Skill", "", "", "", "",
+			"source", "", []byte(`[]`),
+			"user-1", "User", "space-1", "private", "1.0.0",
+			"", "", "", int64(0), "",
+			time.Now(), time.Now(),
+			"1.0.0", "",
+			int64(0), int64(0),
+		))
 
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE parse_tasks SET status").

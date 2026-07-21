@@ -156,6 +156,123 @@ func TestCreateDBFailureSynchronouslyDeletesNewArtifacts(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsInvalidVisibilityBeforeStorageWrites(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	zipData := makeTestZip("Invalid Visibility", "desc", "1.0.0")
+	store := &fakeStorage{getData: zipData}
+	svc := New(skillrepo.New(db), categoryrepo.New(db), store, func() string { return "id" })
+
+	mock.ExpectQuery("SELECT .+ FROM parse_tasks WHERE id").
+		WithArgs("task-invalid-visibility").
+		WillReturnRows(parseTaskRowsForSecurityTest().
+			AddRow("task-invalid-visibility", "upload-invalid", "skill.zip", int64(len(zipData)),
+				"skill-uploads/upload-invalid/skill.zip", testSHA256Hex(zipData),
+				"success", "Invalid Visibility", "desc", "1.0.0",
+				[]byte(`[]`), "", "", "", nil, 0,
+				"user-1", "space-1", ""))
+
+	_, err = svc.Create(context.Background(), CreateParams{
+		ParseTaskID: "task-invalid-visibility",
+		Visibility:  "system",
+		UserID:      "user-1",
+		UserName:    "User One",
+		SpaceID:     "space-1",
+	})
+	if !errors.Is(err, ErrInvalidVisibility) {
+		t.Fatalf("Create error = %v, want ErrInvalidVisibility", err)
+	}
+	if store.putCount != 0 {
+		t.Fatalf("PutObject count = %d, want 0", store.putCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateRejectsInaccessibleSourceBeforeStorageWrites(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	zipData := makeTestZip("Forged Source", "desc", "1.0.0")
+	store := &fakeStorage{getData: zipData}
+	svc := New(skillrepo.New(db), categoryrepo.New(db), store, func() string { return "id" })
+
+	mock.ExpectQuery("SELECT .+ FROM parse_tasks WHERE id").
+		WithArgs("task-forged-source").
+		WillReturnRows(parseTaskRowsForSecurityTest().
+			AddRow("task-forged-source", "upload-forged", "skill.zip", int64(len(zipData)),
+				"skill-uploads/upload-forged/skill.zip", testSHA256Hex(zipData),
+				"success", "Forged Source", "desc", "1.0.0",
+				[]byte(`[]`), "", "", "private-source", nil, 0,
+				"user-1", "space-1", ""))
+	mock.ExpectQuery("SELECT .+ FROM skills").
+		WithArgs("private-source").
+		WillReturnRows(skillRowsForSecurityTest().
+			AddRow("private-source", "Private Source", "", "", "", "",
+				"desc", "", []byte(`[]`), "other-user", "Other",
+				"space-2", "private", "1.0.0", "", "", "",
+				int64(0), "", time.Now(), time.Now(),
+				"1.0.0", "", int64(0), int64(0)))
+
+	_, err = svc.Create(context.Background(), CreateParams{
+		ParseTaskID: "task-forged-source",
+		UserID:      "user-1",
+		UserName:    "User One",
+		SpaceID:     "space-1",
+	})
+	if !errors.Is(err, ErrInvalidSourceSkill) {
+		t.Fatalf("Create error = %v, want ErrInvalidSourceSkill", err)
+	}
+	if store.putCount != 0 {
+		t.Fatalf("PutObject count = %d, want 0", store.putCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateRejectsInvalidVisibilityBeforeStorageWrites(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	store := &fakeStorage{}
+	svc := New(skillrepo.New(db), categoryrepo.New(db), store, func() string { return "id" })
+
+	mock.ExpectQuery("SELECT .+ FROM skills").
+		WithArgs("skill-1").
+		WillReturnRows(skillRowsForSecurityTest().
+			AddRow("skill-1", "Skill", "", "", "", "",
+				"desc", "", []byte(`[]`), "user-1", "User One",
+				"space-1", "space", "1.0.0", "", "", "",
+				int64(0), "", time.Now(), time.Now(),
+				"1.0.0", "", int64(0), int64(0)))
+
+	visibility := "system"
+	_, err = svc.Update(context.Background(), "skill-1", "user-1", "space-1", UpdateParams{
+		Visibility: &visibility,
+	})
+	if !errors.Is(err, ErrInvalidVisibility) {
+		t.Fatalf("Update error = %v, want ErrInvalidVisibility", err)
+	}
+	if store.putCount != 0 {
+		t.Fatalf("PutObject count = %d, want 0", store.putCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdminReuploadDuplicateVersionDoesNotDeletePublishedObjects(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

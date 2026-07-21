@@ -68,6 +68,12 @@ var ErrNameTaken = errors.New("skill name taken")
 // ErrInvalidTags indicates the tags field is not a JSON string array.
 var ErrInvalidTags = errors.New("invalid tags")
 
+// ErrInvalidVisibility indicates the requested visibility is not supported.
+var ErrInvalidVisibility = errors.New("invalid visibility")
+
+// ErrInvalidSourceSkill indicates the requested source Skill does not exist or is not visible.
+var ErrInvalidSourceSkill = errors.New("invalid source skill")
+
 // ErrNoFile indicates that the skill version has no downloadable file.
 var ErrNoFile = errors.New("no file available")
 
@@ -271,15 +277,17 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 		return nil, ErrInvalidTags
 	}
 
-	// Determine source_skill_id: API param first, else result_id from parse, else empty
-	sourceSkillID := p.SourceSkillID
-	if sourceSkillID == "" && pt.ResultID != "" {
-		sourceSkillID = pt.ResultID
+	visibility, err := normalizeVisibility(p.Visibility, "space")
+	if err != nil {
+		return nil, err
 	}
 
-	visibility := p.Visibility
-	if visibility == "" {
-		visibility = "space"
+	// Determine source_skill_id: explicit request first, else SKILL.md forked_from.
+	// result_id is the archive's embedded package id and must not be accepted as
+	// provenance because a client can forge it in uploaded content.
+	sourceSkillID, err := s.resolveSourceSkillID(ctx, firstNonEmpty(p.SourceSkillID, pt.ResultForkedFrom), p.SpaceID, p.UserID)
+	if err != nil {
+		return nil, err
 	}
 
 	id := s.idGen()
@@ -363,7 +371,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 		CreatorID:        firstNonEmpty(p.CreatorID, p.UserID),
 		CreatorName:      firstNonEmpty(p.CreatorName, p.UserName),
 		SpaceID:          p.SpaceID,
-		Visibility:       toVisibility(visibility),
+		Visibility:       visibility,
 		Version:          version,
 		ReadmeContent:    readmeContent,
 		FileName:         "skill.zip",
@@ -441,7 +449,11 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 
 	var vis *model.Visibility
 	if p.Visibility != nil {
-		vis = toVisibilityPtr(*p.Visibility)
+		normalized, err := normalizeVisibility(*p.Visibility, "")
+		if err != nil {
+			return nil, err
+		}
+		vis = &normalized
 	}
 
 	repoParams := skillrepo.UpdateParams{
@@ -707,13 +719,16 @@ func (s *Service) Delete(ctx context.Context, id, userID, spaceID string) error 
 	return nil
 }
 
-func toVisibility(v string) model.Visibility {
-	return model.Visibility(v)
-}
-
-func toVisibilityPtr(v string) *model.Visibility {
-	vis := model.Visibility(v)
-	return &vis
+func normalizeVisibility(v string, defaultValue string) (model.Visibility, error) {
+	if v == "" {
+		v = defaultValue
+	}
+	switch v {
+	case string(model.VisibilityPublic), string(model.VisibilitySpace), string(model.VisibilityPrivate):
+		return model.Visibility(v), nil
+	default:
+		return "", ErrInvalidVisibility
+	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -736,6 +751,21 @@ func canView(row *skillrepo.SkillRow, spaceID, userID string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Service) resolveSourceSkillID(ctx context.Context, sourceID, spaceID, userID string) (string, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return "", nil
+	}
+	row, err := s.repo.GetByID(ctx, sourceID)
+	if err != nil {
+		return "", err
+	}
+	if row == nil || !canView(row, spaceID, userID) {
+		return "", ErrInvalidSourceSkill
+	}
+	return row.ID, nil
 }
 
 func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillItem {
