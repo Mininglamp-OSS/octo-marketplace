@@ -597,11 +597,9 @@ func TestAdminUpdate_UpsertsGlobalTags(t *testing.T) {
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").WithArgs("sk-global").WillReturnRows(initial)
 	mock.ExpectBegin()
+	expectResolveOrCreateTagIDs(mock, skillrepo.GlobalTagSpaceID, "owner-1", []string{"official"}, []int64{1})
 	mock.ExpectExec("UPDATE skills SET tags = \\? WHERE id = \\? AND owner_id = \\? AND space_id = \\? AND is_deleted = 0").
-		WithArgs(`["official"]`, "sk-global", "owner-1", "space-1").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO skill_tags").
-		WithArgs(skillrepo.GlobalTagSpaceID, "official", "owner-1").
+		WithArgs(`[1]`, "sk-global", "owner-1", "space-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -615,7 +613,7 @@ func TestAdminUpdate_UpsertsGlobalTags(t *testing.T) {
 		"view_count", "download_count",
 	}).AddRow(
 		"sk-global", "pub-skill", "", "", "", "",
-		"", "", []byte(`["official"]`),
+		"", "", tagIDJSON(1),
 		"owner-1", "Owner", "space-1", "public", "1.0.0",
 		"", "", "", int64(0), "",
 		time.Now(), time.Now(),
@@ -623,6 +621,7 @@ func TestAdminUpdate_UpsertsGlobalTags(t *testing.T) {
 		int64(0), int64(0),
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").WithArgs("sk-global").WillReturnRows(updated)
+	expectResolveTagNames(mock, []int64{1}, []string{"official"})
 
 	item, err := svc.AdminUpdate(context.Background(), "sk-global", AdminUpdateParams{
 		Tags: json.RawMessage(`["official"]`),

@@ -2,7 +2,6 @@ package skill
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,12 +10,13 @@ import (
 
 // AdminListFilter holds parameters for admin-level skill listing.
 type AdminListFilter struct {
-	Query      string
-	CategoryID string
-	Tags       []string
-	Limit      int
-	Offset     int
-	Sort       string
+	Query       string
+	CategoryID  string
+	Tags        []string
+	TagIDGroups [][]int64
+	Limit       int
+	Offset      int
+	Sort        string
 }
 
 // AdminList returns paginated public skills without Space restriction.
@@ -52,13 +52,8 @@ func (r *Repo) AdminList(ctx context.Context, f AdminListFilter) (*ListResult, e
 		args = append(args, searchTerm, searchTerm)
 	}
 
-	for _, tag := range f.Tags {
-		if strings.TrimSpace(tag) == "" {
-			continue
-		}
-		conditions = append(conditions, "JSON_CONTAINS(s.tags, ?)")
-		tagJSON, _ := json.Marshal(strings.TrimSpace(tag))
-		args = append(args, string(tagJSON))
+	for _, ids := range f.TagIDGroups {
+		addTagIDGroupCondition(&conditions, &args, ids)
 	}
 
 	where := ""
@@ -167,6 +162,18 @@ func (r *Repo) AdminUpdateSkillAndConsumeTask(ctx context.Context, skillID, owne
 		return ErrParseTaskAlreadyConsumed
 	}
 
+	if p.Tags != nil {
+		tagIDs, err := resolveOrCreateTagIDs(ctx, tx, GlobalTagSpaceID, ownerID, p.TagNames)
+		if err != nil {
+			return err
+		}
+		tags, err := tagIDsToRaw(tagIDs)
+		if err != nil {
+			return err
+		}
+		p.Tags = tags
+	}
+
 	// Build and execute the skill update
 	sets, args := buildUpdateSets(p)
 	if len(sets) > 0 {
@@ -195,10 +202,6 @@ func (r *Repo) AdminUpdateSkillAndConsumeTask(ctx context.Context, skillID, owne
 		if err != nil {
 			return fmt.Errorf("insert version: %w", err)
 		}
-	}
-
-	if err := upsertTags(ctx, tx, GlobalTagSpaceID, ownerID, p.TagNames); err != nil {
-		return err
 	}
 
 	return tx.Commit()

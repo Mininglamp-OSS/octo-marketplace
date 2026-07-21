@@ -58,15 +58,13 @@ func TestCreate_FullFlow_VerifiesStoragePath(t *testing.T) {
 	mock.ExpectExec("UPDATE parse_tasks SET status").
 		WithArgs("task-int-1", "user-int", "space-int").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectResolveOrCreateTagIDs(mock, "space-int", "user-int", []string{"integration", "test"}, []int64{1, 2})
 	mock.ExpectExec("INSERT INTO skills").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_versions").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO skill_tags").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO skill_tags").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectResolveTagNames(mock, []int64{1, 2}, []string{"integration", "test"})
 
 	ctx := context.Background()
 	item, err := svc.Create(ctx, CreateParams{
@@ -174,13 +172,10 @@ func TestUpdate_ReuploadFlow_NewVersionGenerated(t *testing.T) {
 	mock.ExpectExec("UPDATE parse_tasks SET status").
 		WithArgs("task-reup", "user-reup", "space-reup", "skill-reup").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectResolveOrCreateTagIDs(mock, "space-reup", "user-reup", []string{"v3", "updated"}, []int64{3, 4})
 	mock.ExpectExec("UPDATE skills SET").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_versions").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO skill_tags").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO skill_tags").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -193,7 +188,7 @@ func TestUpdate_ReuploadFlow_NewVersionGenerated(t *testing.T) {
 		"resolved_version", "version_storage", "view_count", "download_count",
 	}).AddRow(
 		"skill-reup", "Original Skill", "Original Skill", "", "", "ver-id-1",
-		"Updated desc", "cat-1", []byte(`["v3","updated"]`), "user-reup", "User Reup",
+		"Updated desc", "cat-1", tagIDJSON(3, 4), "user-reup", "User Reup",
 		"space-reup", "space", "3.0.0", "# Updated\nNew body", "skill.zip",
 		"skills/skill-reup/v3.0.0/skill.zip", int64(len(zipData)), testSHA256Hex(zipData), now, now,
 		"3.0.0", `{"type":"s3","zip_object_key":"skills/skill-reup/v3.0.0/skill.zip","skill_md_object_key":"skills/skill-reup/v3.0.0/SKILL.md","zip_file_name":"skill.zip","zip_size":2048,"zip_sha256":"newsha256"}`, int64(0), int64(0),
@@ -201,6 +196,7 @@ func TestUpdate_ReuploadFlow_NewVersionGenerated(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WithArgs("skill-reup").
 		WillReturnRows(updatedRows)
+	expectResolveTagNames(mock, []int64{3, 4}, []string{"v3", "updated"})
 
 	ctx := context.Background()
 	item, err := svc.Update(ctx, "skill-reup", "user-reup", "space-reup", UpdateParams{
@@ -807,13 +803,13 @@ func TestCreate_ZipRewrite_ExtractsSkillMD(t *testing.T) {
 	mock.ExpectExec("UPDATE parse_tasks SET status").
 		WithArgs("task-ext", "user-ext", "space-ext").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectResolveOrCreateTagIDs(mock, "space-ext", "user-ext", []string{"extract"}, []int64{5})
 	mock.ExpectExec("INSERT INTO skills").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_versions").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO skill_tags").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectResolveTagNames(mock, []int64{5}, []string{"extract"})
 
 	ctx := context.Background()
 	item, err := svc.Create(ctx, CreateParams{

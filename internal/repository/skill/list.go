@@ -20,17 +20,18 @@ const (
 
 // ListFilter holds parameters for listing skills.
 type ListFilter struct {
-	SpaceID    string
-	UserID     string
-	Query      string
-	CategoryID string
-	Tags       []string
-	Cursor     string // "timestamp,id" for latest sort, opaque offset for ranked sorts
-	Limit      int
-	Offset     int    // used with offset pagination
-	Sort       string // comprehensive, latest, downloads, views
-	MineOnly   bool   // if true, only return skills owned by UserID
-	UseCursor  bool   // if true, return cursor pagination
+	SpaceID     string
+	UserID      string
+	Query       string
+	CategoryID  string
+	Tags        []string
+	TagIDGroups [][]int64
+	Cursor      string // "timestamp,id" for latest sort, opaque offset for ranked sorts
+	Limit       int
+	Offset      int    // used with offset pagination
+	Sort        string // comprehensive, latest, downloads, views
+	MineOnly    bool   // if true, only return skills owned by UserID
+	UseCursor   bool   // if true, return cursor pagination
 }
 
 // SkillRow represents a row from the skills table.
@@ -119,13 +120,8 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		args = append(args, searchTerm, searchTerm)
 	}
 
-	for _, tag := range f.Tags {
-		if strings.TrimSpace(tag) == "" {
-			continue
-		}
-		conditions = append(conditions, "JSON_CONTAINS(s.tags, ?)")
-		tagJSON, _ := json.Marshal(strings.TrimSpace(tag))
-		args = append(args, string(tagJSON))
+	for _, ids := range f.TagIDGroups {
+		addTagIDGroupCondition(&conditions, &args, ids)
 	}
 
 	useCursor := f.UseCursor
@@ -228,6 +224,28 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	}
 	result.Total = total
 	return result, nil
+}
+
+func addTagIDGroupCondition(conditions *[]string, args *[]interface{}, ids []int64) {
+	if len(ids) == 0 {
+		return
+	}
+	parts := make([]string, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		parts = append(parts, "JSON_CONTAINS(s.tags, ?)")
+		*args = append(*args, strconv.FormatInt(id, 10))
+	}
+	if len(parts) > 0 {
+		*conditions = append(*conditions, "("+strings.Join(parts, " OR ")+")")
+	}
 }
 
 // queryListResult executes the query and returns a ListResult.

@@ -52,6 +52,14 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 	if creatorName == "" {
 		creatorName = p.OwnerName
 	}
+	tagIDs, err := resolveOrCreateTagIDs(ctx, tx, p.SpaceID, p.OwnerID, p.TagNames)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := tagIDsToRaw(tagIDs)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		INSERT INTO skills (id, name, display_name, icon_url, source_skill_id, current_version_id,
 			description, category_id, tags, owner_id, owner_name, creator_id, creator_name,
@@ -61,16 +69,13 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 	`
 	_, err = tx.ExecContext(ctx, query,
 		p.ID, p.Name, p.DisplayName, p.IconURL, p.SourceSkillID, p.CurrentVersionID,
-		p.Description, p.CategoryID, string(p.Tags),
+		p.Description, p.CategoryID, string(tags),
 		p.OwnerID, p.OwnerName, creatorID, creatorName, p.SpaceID, string(p.Visibility), p.Version,
 		p.ReadmeContent, p.FileName, p.FileURL, p.FileSize, p.FileSHA256,
 		now, now,
 	)
 	if err != nil {
 		return nil, mapDuplicateName(err)
-	}
-	if err := upsertTags(ctx, tx, p.SpaceID, p.OwnerID, p.TagNames); err != nil {
-		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -84,7 +89,7 @@ func (r *Repo) Create(ctx context.Context, p CreateParams) (*SkillRow, error) {
 		CurrentVersionID: p.CurrentVersionID,
 		Description:      p.Description,
 		CategoryID:       p.CategoryID,
-		Tags:             p.Tags,
+		Tags:             tags,
 		OwnerID:          p.OwnerID,
 		OwnerName:        p.OwnerName,
 		CreatorID:        creatorID,
@@ -138,6 +143,14 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 	if creatorName == "" {
 		creatorName = p.OwnerName
 	}
+	tagIDs, err := resolveOrCreateTagIDs(ctx, tx, p.SpaceID, p.OwnerID, p.TagNames)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := tagIDsToRaw(tagIDs)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		INSERT INTO skills (id, name, display_name, icon_url, source_skill_id, current_version_id,
 			description, category_id, tags, owner_id, owner_name, creator_id, creator_name,
@@ -147,7 +160,7 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 	`
 	_, err = tx.ExecContext(ctx, query,
 		p.ID, p.Name, p.DisplayName, p.IconURL, p.SourceSkillID, p.CurrentVersionID,
-		p.Description, p.CategoryID, string(p.Tags),
+		p.Description, p.CategoryID, string(tags),
 		p.OwnerID, p.OwnerName, creatorID, creatorName, p.SpaceID, string(p.Visibility), p.Version,
 		p.ReadmeContent, p.FileName, p.FileURL, p.FileSize, p.FileSHA256,
 		now, now,
@@ -168,10 +181,6 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 		}
 	}
 
-	if err := upsertTags(ctx, tx, p.SpaceID, p.OwnerID, p.TagNames); err != nil {
-		return nil, err
-	}
-
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -185,7 +194,7 @@ func (r *Repo) CreateSkillAndConsumeTask(ctx context.Context, parseTaskID string
 		CurrentVersionID: p.CurrentVersionID,
 		Description:      p.Description,
 		CategoryID:       p.CategoryID,
-		Tags:             p.Tags,
+		Tags:             tags,
 		OwnerID:          p.OwnerID,
 		OwnerName:        p.OwnerName,
 		CreatorID:        creatorID,

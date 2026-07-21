@@ -186,14 +186,13 @@ func TestCreate_PutObjectSuccess_DBMutationOccurs(t *testing.T) {
 	mock.ExpectExec("UPDATE parse_tasks SET status").
 		WithArgs("task-1", "user-1", "space-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectResolveOrCreateTagIDs(mock, "space-1", "user-1", []string{"tag1"}, []int64{1})
 	mock.ExpectExec("INSERT INTO skills").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_versions").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO skill_tags").
-		WithArgs("space-1", "tag1", "user-1").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectResolveTagNames(mock, []int64{1}, []string{"tag1"})
 
 	ctx := context.Background()
 	item, createErr := svc.Create(ctx, CreateParams{

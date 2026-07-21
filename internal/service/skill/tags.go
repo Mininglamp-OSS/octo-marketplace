@@ -2,6 +2,7 @@ package skill
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +30,41 @@ func tagsToRaw(tags []string) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.RawMessage(out), nil
+}
+
+func rawTagsToIDs(raw json.RawMessage) []int64 {
+	if len(raw) == 0 {
+		return []int64{}
+	}
+	var ids []int64
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return []int64{}
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func rawTagsToIDStrings(raw json.RawMessage) []string {
+	ids := rawTagsToIDs(raw)
+	if len(ids) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, strconv.FormatInt(id, 10))
+	}
+	return out
 }
 
 func normalizeRawTags(raw json.RawMessage) (json.RawMessage, []string, error) {

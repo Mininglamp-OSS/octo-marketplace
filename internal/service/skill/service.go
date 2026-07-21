@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -122,6 +123,7 @@ type ListResult struct {
 
 // TagItem is the API-facing representation of a Space-scoped skill tag.
 type TagItem struct {
+	ID        int64  `json:"tag_id"`
 	Name      string `json:"name"`
 	CreatedBy string `json:"created_by"`
 	CreatedAt string `json:"created_at"`
@@ -144,18 +146,27 @@ type ListParams struct {
 
 // List returns skills visible to the user.
 func (s *Service) List(ctx context.Context, p ListParams) (*ListResult, error) {
+	tags := normalizeTags(p.Tags)
+	tagIDGroups, err := s.resolveListTagIDGroups(ctx, p.SpaceID, tags)
+	if err != nil {
+		return nil, err
+	}
+	if len(tags) > 0 && len(tagIDGroups) == 0 {
+		return &ListResult{Items: []SkillItem{}, Total: 0}, nil
+	}
 	repoResult, err := s.repo.List(ctx, skillrepo.ListFilter{
-		SpaceID:    p.SpaceID,
-		UserID:     p.UserID,
-		Query:      p.Query,
-		CategoryID: p.CategoryID,
-		Tags:       normalizeTags(p.Tags),
-		Cursor:     p.Cursor,
-		Limit:      p.Limit,
-		Offset:     p.Offset,
-		Sort:       p.Sort,
-		UseCursor:  p.UseCursor,
-		MineOnly:   false,
+		SpaceID:     p.SpaceID,
+		UserID:      p.UserID,
+		Query:       p.Query,
+		CategoryID:  p.CategoryID,
+		Tags:        tags,
+		TagIDGroups: tagIDGroups,
+		Cursor:      p.Cursor,
+		Limit:       p.Limit,
+		Offset:      p.Offset,
+		Sort:        p.Sort,
+		UseCursor:   p.UseCursor,
+		MineOnly:    false,
 	})
 	if err != nil {
 		return nil, err
@@ -166,16 +177,25 @@ func (s *Service) List(ctx context.Context, p ListParams) (*ListResult, error) {
 // ListMine returns skills owned by the user. Always uses latest (cursor) sort
 // to preserve backward-compatible cursor pagination on the /skills/mine endpoint.
 func (s *Service) ListMine(ctx context.Context, p ListParams) (*ListResult, error) {
+	tags := normalizeTags(p.Tags)
+	tagIDGroups, err := s.resolveListTagIDGroups(ctx, p.SpaceID, tags)
+	if err != nil {
+		return nil, err
+	}
+	if len(tags) > 0 && len(tagIDGroups) == 0 {
+		return &ListResult{Items: []SkillItem{}}, nil
+	}
 	repoResult, err := s.repo.List(ctx, skillrepo.ListFilter{
-		SpaceID:   p.SpaceID,
-		UserID:    p.UserID,
-		Query:     p.Query,
-		Tags:      normalizeTags(p.Tags),
-		Cursor:    p.Cursor,
-		Limit:     p.Limit,
-		Sort:      skillrepo.SortLatest,
-		MineOnly:  true,
-		UseCursor: true,
+		SpaceID:     p.SpaceID,
+		UserID:      p.UserID,
+		Query:       p.Query,
+		Tags:        tags,
+		TagIDGroups: tagIDGroups,
+		Cursor:      p.Cursor,
+		Limit:       p.Limit,
+		Sort:        skillrepo.SortLatest,
+		MineOnly:    true,
+		UseCursor:   true,
 	})
 	if err != nil {
 		return nil, err
@@ -691,6 +711,7 @@ func (s *Service) ListTags(ctx context.Context, spaceID, query string, limit int
 	items := make([]TagItem, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, TagItem{
+			ID:        row.ID,
 			Name:      row.Name,
 			CreatedBy: row.CreatedBy,
 			CreatedAt: row.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
@@ -698,6 +719,36 @@ func (s *Service) ListTags(ctx context.Context, spaceID, query string, limit int
 		})
 	}
 	return items, nil
+}
+
+func (s *Service) resolveListTagIDGroups(ctx context.Context, spaceID string, tags []string) ([][]int64, error) {
+	groups, err := s.repo.ResolveFilterTagIDs(ctx, spaceID, tags)
+	if err != nil {
+		return nil, err
+	}
+	merged := mergeTagIDGroups(groups)
+	if len(merged) == 0 {
+		return nil, nil
+	}
+	return [][]int64{merged}, nil
+}
+
+func mergeTagIDGroups(groups [][]int64) []int64 {
+	seen := make(map[int64]struct{})
+	var merged []int64
+	for _, group := range groups {
+		for _, id := range group {
+			if id <= 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			merged = append(merged, id)
+		}
+	}
+	return merged
 }
 
 // Delete soft-deletes a skill. Only the owner within the same space can delete.
@@ -836,7 +887,7 @@ func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillI
 		IconURL:       iconURL,
 		Description:   row.Description,
 		CategoryID:    row.CategoryID,
-		Tags:          rawTagsToStrings(row.Tags),
+		Tags:          s.rawTagsToNames(ctx, row.Tags),
 		OwnerID:       row.OwnerID,
 		OwnerName:     row.OwnerName,
 		CreatorID:     firstNonEmpty(row.CreatorID, row.OwnerID),
@@ -854,6 +905,35 @@ func (s *Service) rowToItem(ctx context.Context, row *skillrepo.SkillRow) SkillI
 		CreatedAt:     row.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:     row.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+func (s *Service) rawTagsToNames(ctx context.Context, raw json.RawMessage) []string {
+	if stringTags := rawTagsToStrings(raw); len(stringTags) > 0 {
+		return stringTags
+	}
+	ids := rawTagsToIDs(raw)
+	if len(ids) == 0 {
+		return []string{}
+	}
+	nameByID, err := s.repo.ResolveTagNames(ctx, ids)
+	if err != nil {
+		log.Printf("[skill] resolve tag names failed: %v", err)
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(ids))
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		name := strings.TrimSpace(nameByID[id])
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }
 
 func (s *Service) toListResult(ctx context.Context, r *skillrepo.ListResult) *ListResult {

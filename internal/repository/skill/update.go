@@ -131,6 +131,18 @@ func (r *Repo) UpdateWithTagsScoped(ctx context.Context, id, skillSpaceID, skill
 	}
 	defer tx.Rollback()
 
+	if p.Tags != nil {
+		tagIDs, err := resolveOrCreateTagIDs(ctx, tx, tagSpaceID, tagCreatedBy, p.TagNames)
+		if err != nil {
+			return 0, err
+		}
+		tags, err := tagIDsToRaw(tagIDs)
+		if err != nil {
+			return 0, err
+		}
+		p.Tags = tags
+	}
+
 	sets, args := buildUpdateSets(p)
 	var affected int64
 	if len(sets) > 0 {
@@ -148,9 +160,6 @@ func (r *Repo) UpdateWithTagsScoped(ctx context.Context, id, skillSpaceID, skill
 		if affected == 0 {
 			return 0, ErrSkillNotFound
 		}
-	}
-	if err := upsertTags(ctx, tx, tagSpaceID, tagCreatedBy, p.TagNames); err != nil {
-		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err

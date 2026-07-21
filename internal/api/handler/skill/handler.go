@@ -77,8 +77,8 @@ var validSortModes = map[string]bool{
 // @Security Bearer
 // @Param q query string false "Search query"
 // @Param category_id query string false "Category ID"
-// @Param tags query string false "Comma-separated tag names; all tags must match"
-// @Param tag query []string false "Repeated tag names; all tags must match"
+// @Param tags query string false "Comma-separated tag names; any tag may match"
+// @Param tag query []string false "Repeated tag names; any tag may match"
 // @Param sort query string false "Sort mode: latest (default), comprehensive, downloads, views"
 // @Param cursor query string false "Cursor for next page; used with default/latest sort"
 // @Param page_size query int false "Page size, default 20, max 50"
@@ -143,8 +143,8 @@ func listSortAndPagination(sort string) (string, bool) {
 // @Produce json
 // @Security Bearer
 // @Param q query string false "Search query"
-// @Param tags query string false "Comma-separated tag names; all tags must match"
-// @Param tag query []string false "Repeated tag names; all tags must match"
+// @Param tags query string false "Comma-separated tag names; any tag may match"
+// @Param tag query []string false "Repeated tag names; any tag may match"
 // @Param cursor query string false "Cursor for next page"
 // @Param page_size query int false "Page size, default 20, max 50"
 // @Success 200 {object} apiresponse.CursorList[SkillResponse]

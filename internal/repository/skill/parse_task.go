@@ -111,6 +111,18 @@ func (r *Repo) UpdateSkillAndConsumeTask(ctx context.Context, skillID string, p 
 		return ErrParseTaskAlreadyConsumed
 	}
 
+	if p.Tags != nil {
+		tagIDs, err := resolveOrCreateTagIDs(ctx, tx, spaceID, ownerID, p.TagNames)
+		if err != nil {
+			return err
+		}
+		tags, err := tagIDsToRaw(tagIDs)
+		if err != nil {
+			return err
+		}
+		p.Tags = tags
+	}
+
 	// Build and execute the skill update
 	sets, args := buildUpdateSets(p)
 	if len(sets) == 0 {
@@ -141,10 +153,6 @@ func (r *Repo) UpdateSkillAndConsumeTask(ctx context.Context, skillID string, p 
 		if err != nil {
 			return fmt.Errorf("insert version: %w", err)
 		}
-	}
-
-	if err := upsertTags(ctx, tx, spaceID, ownerID, p.TagNames); err != nil {
-		return err
 	}
 
 	return tx.Commit()

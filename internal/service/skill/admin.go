@@ -57,13 +57,22 @@ type AdminReuploadParams struct {
 
 // AdminList returns public skills without Space restriction.
 func (s *Service) AdminList(ctx context.Context, p AdminListParams) (*ListResult, error) {
+	tags := normalizeTags(p.Tags)
+	tagIDGroups, err := s.resolveListTagIDGroups(ctx, skillrepo.GlobalTagSpaceID, tags)
+	if err != nil {
+		return nil, err
+	}
+	if len(tags) > 0 && len(tagIDGroups) == 0 {
+		return &ListResult{Items: []SkillItem{}, Total: 0}, nil
+	}
 	repoResult, err := s.repo.AdminList(ctx, skillrepo.AdminListFilter{
-		Query:      p.Query,
-		CategoryID: p.CategoryID,
-		Tags:       normalizeTags(p.Tags),
-		Limit:      p.Limit,
-		Offset:     p.Offset,
-		Sort:       p.Sort,
+		Query:       p.Query,
+		CategoryID:  p.CategoryID,
+		Tags:        tags,
+		TagIDGroups: tagIDGroups,
+		Limit:       p.Limit,
+		Offset:      p.Offset,
+		Sort:        p.Sort,
 	})
 	if err != nil {
 		return nil, err

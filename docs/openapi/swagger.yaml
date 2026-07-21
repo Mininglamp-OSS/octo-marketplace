@@ -726,6 +726,8 @@ components:
           type: string
         name:
           type: string
+        tag_id:
+          type: integer
         updated_at:
           type: string
       type: object
@@ -3323,12 +3325,12 @@ paths:
         name: category_id
         schema:
           type: string
-      - description: Comma-separated tag names; all tags must match
+      - description: Comma-separated tag names; any tag may match
         in: query
         name: tags
         schema:
           type: string
-      - description: Repeated tag names; all tags must match
+      - description: Repeated tag names; any tag may match
         in: query
         name: tag
         schema:
@@ -3878,12 +3880,12 @@ paths:
         name: q
         schema:
           type: string
-      - description: Comma-separated tag names; all tags must match
+      - description: Comma-separated tag names; any tag may match
         in: query
         name: tags
         schema:
           type: string
-      - description: Repeated tag names; all tags must match
+      - description: Repeated tag names; any tag may match
         in: query
         name: tag
         schema:
