@@ -32,7 +32,7 @@ CREATE TEMPORARY TABLE skill_tag_id_json (
 INSERT INTO skill_tag_id_json (skill_id, tag_ids)
 SELECT
   skill_id,
-  COALESCE(JSON_ARRAYAGG(tag_id ORDER BY ord), JSON_ARRAY()) AS tag_ids
+  COALESCE(JSON_ARRAYAGG(tag_id), JSON_ARRAY()) AS tag_ids
 FROM (
   SELECT skill_id, MIN(ord) AS ord, tag_id
   FROM (
@@ -82,7 +82,7 @@ CREATE TEMPORARY TABLE skill_tag_name_json (
 INSERT INTO skill_tag_name_json (skill_id, tag_names)
 SELECT
   skill_id,
-  COALESCE(JSON_ARRAYAGG(tag_name ORDER BY ord), JSON_ARRAY()) AS tag_names
+  COALESCE(JSON_ARRAYAGG(tag_name), JSON_ARRAY()) AS tag_names
 FROM (
   SELECT skill_id, MIN(ord) AS ord, tag_name
   FROM (
