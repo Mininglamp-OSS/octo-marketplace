@@ -446,10 +446,9 @@ type IconUploadResult struct {
 // InitIconUpload generates a presigned URL for uploading a skill icon image.
 func (s *Service) InitIconUpload(ctx context.Context, fileName string, fileSize int64, ownerID string) (*IconUploadResult, error) {
 	fileName = strings.TrimSpace(fileName)
-	// Validate image extension
-	lower := strings.ToLower(fileName)
-	if !strings.HasSuffix(lower, ".png") && !strings.HasSuffix(lower, ".jpg") && !strings.HasSuffix(lower, ".jpeg") && !strings.HasSuffix(lower, ".svg") {
-		return nil, errors.New("file must be an image (png/jpg/jpeg/svg)")
+	contentType, ok := safeIconContentType(fileName)
+	if !ok {
+		return nil, errors.New("file must be an image (png/jpg/jpeg/webp/gif)")
 	}
 	if _, err := normalizeObjectFileName(fileName); err != nil {
 		return nil, ErrInvalidFileName
@@ -464,13 +463,6 @@ func (s *Service) InitIconUpload(ctx context.Context, fileName string, fileSize 
 
 	id := s.idGen()
 	objectKey := fmt.Sprintf("icons/%s/%s", id, fileName)
-
-	contentType := "image/png"
-	if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") {
-		contentType = "image/jpeg"
-	} else if strings.HasSuffix(lower, ".svg") {
-		contentType = "image/svg+xml"
-	}
 
 	iconTTL := time.Hour
 	url, headers, err := s.store.PresignPut(ctx, objectKey, contentType, iconTTL)
@@ -517,12 +509,8 @@ func (s *Service) GetDownloadURL(ctx context.Context, objectKey string) (string,
 // an admin (no user identity) — we don't tie the object key to a subject.
 func (s *Service) InitMcpIconUpload(ctx context.Context, fileName string, fileSize int64) (*IconUploadResult, error) {
 	fileName = strings.TrimSpace(fileName)
-	lower := strings.ToLower(fileName)
-	if !strings.HasSuffix(lower, ".png") &&
-		!strings.HasSuffix(lower, ".jpg") &&
-		!strings.HasSuffix(lower, ".jpeg") &&
-		!strings.HasSuffix(lower, ".webp") &&
-		!strings.HasSuffix(lower, ".gif") {
+	contentType, ok := safeIconContentType(fileName)
+	if !ok {
 		return nil, errors.New("file must be an image (png/jpg/jpeg/webp/gif)")
 	}
 	if _, err := normalizeObjectFileName(fileName); err != nil {
@@ -537,16 +525,6 @@ func (s *Service) InitMcpIconUpload(ctx context.Context, fileName string, fileSi
 
 	id := s.idGen()
 	objectKey := fmt.Sprintf("mcp-icons/%s/%s", id, fileName)
-
-	contentType := "image/png"
-	switch {
-	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"):
-		contentType = "image/jpeg"
-	case strings.HasSuffix(lower, ".webp"):
-		contentType = "image/webp"
-	case strings.HasSuffix(lower, ".gif"):
-		contentType = "image/gif"
-	}
 
 	iconTTL := time.Hour
 	putURL, headers, err := s.store.PresignPut(ctx, objectKey, contentType, iconTTL)
@@ -575,4 +553,19 @@ func (s *Service) InitMcpIconUpload(ctx context.Context, fileName string, fileSi
 		Headers:      headerMap,
 		DownloadURL:  downloadURL,
 	}, nil
+}
+
+func safeIconContentType(fileName string) (string, bool) {
+	switch strings.ToLower(filepath.Ext(fileName)) {
+	case ".png":
+		return "image/png", true
+	case ".jpg", ".jpeg":
+		return "image/jpeg", true
+	case ".webp":
+		return "image/webp", true
+	case ".gif":
+		return "image/gif", true
+	default:
+		return "", false
+	}
 }

@@ -145,6 +145,18 @@ func TestInitIconUploadRejectsUnsafeFileName(t *testing.T) {
 	}
 }
 
+func TestInitIconUploadRejectsSVG(t *testing.T) {
+	svc := NewService(stubStorage{}, nil, nil, func() string { return "icon-1" }, 20, ServiceConfig{})
+	for _, fileName := range []string{"evil.svg", "EVIL.SVG"} {
+		t.Run(fileName, func(t *testing.T) {
+			_, err := svc.InitIconUpload(context.Background(), fileName, 1024, "user-1")
+			if err == nil {
+				t.Fatal("expected SVG icon upload to be rejected")
+			}
+		})
+	}
+}
+
 func TestInitMcpIconUploadRejectsUnsafeFileName(t *testing.T) {
 	svc := NewService(stubStorage{}, nil, nil, func() string { return "icon-1" }, 20, ServiceConfig{})
 	for _, fileName := range []string{
@@ -157,6 +169,18 @@ func TestInitMcpIconUploadRejectsUnsafeFileName(t *testing.T) {
 			_, err := svc.InitMcpIconUpload(context.Background(), fileName, 1024)
 			if err != ErrInvalidFileName {
 				t.Fatalf("expected ErrInvalidFileName, got %v", err)
+			}
+		})
+	}
+}
+
+func TestInitMcpIconUploadRejectsSVG(t *testing.T) {
+	svc := NewService(stubStorage{}, nil, nil, func() string { return "icon-1" }, 20, ServiceConfig{})
+	for _, fileName := range []string{"evil.svg", "EVIL.SVG"} {
+		t.Run(fileName, func(t *testing.T) {
+			_, err := svc.InitMcpIconUpload(context.Background(), fileName, 1024)
+			if err == nil {
+				t.Fatal("expected SVG icon upload to be rejected")
 			}
 		})
 	}
