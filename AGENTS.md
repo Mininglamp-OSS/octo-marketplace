@@ -141,6 +141,19 @@ or filesystem paths.
 - Authentication failures use a generic response to prevent enumeration.
 - Keep wire contracts backward compatible after clients begin consuming them.
 
+## OpenAPI Workflow
+
+Any task that adds, changes, or reviews an HTTP endpoint must load and follow
+`$octo-api` before implementation or review.
+
+- Run `make openapi-check` for every endpoint change.
+- Run `make openapi-diff` when modifying an existing endpoint.
+- Regenerate and commit the OpenAPI artifacts together with the implementation.
+- Keep handler routes, request/response schemas, operation IDs, and generated
+  OpenAPI in sync.
+- Do not consider endpoint work complete while either validation command fails
+  or generated OpenAPI differs from the handlers.
+
 ## Database and Migrations
 
 Only MySQL connection management exists in the scaffold. When persistence is added:

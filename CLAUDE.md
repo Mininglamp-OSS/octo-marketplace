@@ -104,6 +104,19 @@ Never execute Skill code or launch MCP servers inside Marketplace.
   them.
 - Do not introduce an extra listener without a concrete internal API need.
 
+## OpenAPI Workflow
+
+Any task that adds, changes, or reviews an HTTP endpoint must load and follow
+`$octo-api` before implementation or review.
+
+- Run `make openapi-check` for every endpoint change.
+- Run `make openapi-diff` when modifying an existing endpoint.
+- Regenerate and commit the OpenAPI artifacts together with the implementation.
+- Keep handler routes, request/response schemas, operation IDs, and generated
+  OpenAPI in sync.
+- Do not consider endpoint work complete while either validation command fails
+  or generated OpenAPI differs from the handlers.
+
 ## Persistence
 
 Only MySQL connection management exists. When adding persistence:

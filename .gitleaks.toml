@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Ignore placeholder values in the committed environment example"
+paths = ['''^\.env\.example$''']
