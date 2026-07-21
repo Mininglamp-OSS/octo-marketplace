@@ -15,12 +15,15 @@ import (
 
 // mockRepo is a test double for MetricsRepository.
 type mockRepo struct {
-	calls     []upsertCall
-	failN     int // fail the first N calls
-	callCount int
+	calls         []upsertCall
+	failN         int // fail the first N calls
+	callCount     int
+	cleanupCalls  int
+	cleanupCutoff time.Time
 }
 
 type upsertCall struct {
+	FlushID       string
 	ResourceType  string
 	ResourceID    string
 	ViewDelta     int64
@@ -28,18 +31,25 @@ type upsertCall struct {
 	InstallDelta  int64
 }
 
-func (m *mockRepo) UpsertCounts(_ context.Context, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
+func (m *mockRepo) UpsertCountsOnce(_ context.Context, flushID, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
 	m.callCount++
 	if m.callCount <= m.failN {
 		return errors.New("db error")
 	}
 	m.calls = append(m.calls, upsertCall{
+		FlushID:       flushID,
 		ResourceType:  resourceType,
 		ResourceID:    resourceID,
 		ViewDelta:     viewDelta,
 		DownloadDelta: downloadDelta,
 		InstallDelta:  installDelta,
 	})
+	return nil
+}
+
+func (m *mockRepo) DeleteAppliedFlushesBefore(_ context.Context, cutoff time.Time) error {
+	m.cleanupCalls++
+	m.cleanupCutoff = cutoff
 	return nil
 }
 
@@ -200,20 +210,22 @@ func TestFlushWorker_DBFailRetry_ThenSADDBack(t *testing.T) {
 		t.Fatalf("expected 0 successful upserts, got %d", len(repo.calls))
 	}
 
-	// Key should be re-added to dirty set
+	// Key is removed from dirty and retained as a durable pending delta.
 	members, _ := mr.Members("metrics:dirty")
-	if len(members) != 1 || members[0] != "skill:sk-1" {
-		t.Errorf("expected dirty set to have [skill:sk-1], got %v", members)
+	if len(members) != 0 {
+		t.Errorf("expected dirty set to be empty, got %v", members)
 	}
-
-	// Counters should be restored to Redis (not lost)
+	pendingIDs, _ := mr.Members("metrics:pending")
+	if len(pendingIDs) != 1 {
+		t.Fatalf("expected one pending delta, got %v", pendingIDs)
+	}
 	viewVal, _ := mr.Get("metrics:skill:sk-1:view")
-	if viewVal != "3" {
-		t.Errorf("expected view counter restored to 3, got %q", viewVal)
+	if viewVal != "0" {
+		t.Errorf("expected view counter drained to 0, got %q", viewVal)
 	}
 	dlVal, _ := mr.Get("metrics:skill:sk-1:download")
-	if dlVal != "2" {
-		t.Errorf("expected download counter restored to 2, got %q", dlVal)
+	if dlVal != "0" {
+		t.Errorf("expected download counter drained to 0, got %q", dlVal)
 	}
 }
 
@@ -305,6 +317,33 @@ func TestFlushWorker_LockRelease_DoesNotDeleteOthersLock(t *testing.T) {
 	}
 }
 
+func TestFlushWorker_CleansLedgerWhenNoPending(t *testing.T) {
+	repo := &mockRepo{}
+	w, _ := setupTestWorker(t, repo)
+
+	w.flush(context.Background())
+
+	if repo.cleanupCalls != 1 {
+		t.Fatalf("cleanupCalls = %d, want 1", repo.cleanupCalls)
+	}
+	if repo.cleanupCutoff.IsZero() {
+		t.Fatal("cleanup cutoff was not set")
+	}
+}
+
+func TestFlushWorker_SkipsLedgerCleanupWhenPendingExists(t *testing.T) {
+	repo := &mockRepo{}
+	w, mr := setupTestWorker(t, repo)
+	mr.SAdd("metrics:pending", "flush-old")
+	mr.HSet("metrics:pending:flush-old", "member", "skill:sk-1")
+
+	w.flush(context.Background())
+
+	if repo.cleanupCalls != 0 {
+		t.Fatalf("cleanupCalls = %d, want 0 while pending exists", repo.cleanupCalls)
+	}
+}
+
 func TestFlushWorker_LockRelease_AfterContextCancel(t *testing.T) {
 	// slowRepo cancels the context on the first UpsertCounts call,
 	// simulating a graceful shutdown while flush is in progress.
@@ -354,13 +393,13 @@ type contextCancelRepo struct {
 	t      *testing.T
 }
 
-func (r *contextCancelRepo) UpsertCounts(ctx context.Context, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
+func (r *contextCancelRepo) UpsertCountsOnce(ctx context.Context, flushID, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
 	// Cancel the context to simulate shutdown during flush
 	if r.cancel != nil {
 		r.cancel()
 		r.cancel = nil
 	}
-	return r.mockRepo.UpsertCounts(ctx, resourceType, resourceID, viewDelta, downloadDelta, installDelta)
+	return r.mockRepo.UpsertCountsOnce(ctx, flushID, resourceType, resourceID, viewDelta, downloadDelta, installDelta)
 }
 
 func TestFlushWorker_NonSkillType_Requeued(t *testing.T) {
@@ -470,7 +509,7 @@ func TestParseCounterValue_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestFlushWorker_DrainCountersUsesAtomicScript(t *testing.T) {
+func TestFlushWorker_DrainCountersCreatesPendingDelta(t *testing.T) {
 	repo := &mockRepo{}
 	w, mr := setupTestWorker(t, repo)
 
@@ -478,13 +517,17 @@ func TestFlushWorker_DrainCountersUsesAtomicScript(t *testing.T) {
 	mr.Set("metrics:skill:scripted:view", "4")
 	mr.Set("metrics:skill:scripted:download", "3")
 	mr.Set("metrics:skill:scripted:install", "2")
+	mr.SAdd("metrics:dirty", "skill:scripted")
 
-	view, download, install, err := w.getAndResetCounters(ctx, "skill", "scripted")
+	pending, hasDelta, err := w.drainToPending(ctx, "skill:scripted", "skill", "scripted")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view != 4 || download != 3 || install != 2 {
-		t.Fatalf("deltas = (%d,%d,%d), want (4,3,2)", view, download, install)
+	if !hasDelta {
+		t.Fatal("expected pending delta")
+	}
+	if pending.ViewDelta != 4 || pending.DownloadDelta != 3 || pending.InstallDelta != 2 {
+		t.Fatalf("deltas = (%d,%d,%d), want (4,3,2)", pending.ViewDelta, pending.DownloadDelta, pending.InstallDelta)
 	}
 	for _, key := range []string{"view", "download", "install"} {
 		got, err := mr.Get("metrics:skill:scripted:" + key)
@@ -494,6 +537,14 @@ func TestFlushWorker_DrainCountersUsesAtomicScript(t *testing.T) {
 		if got != "0" {
 			t.Fatalf("%s counter = %q, want 0", key, got)
 		}
+	}
+	members, _ := mr.Members("metrics:dirty")
+	if len(members) != 0 {
+		t.Fatalf("dirty members = %v, want empty", members)
+	}
+	pendingIDs, _ := mr.Members("metrics:pending")
+	if len(pendingIDs) != 1 || pendingIDs[0] != pending.FlushID {
+		t.Fatalf("pending IDs = %v, want [%s]", pendingIDs, pending.FlushID)
 	}
 }
 
@@ -552,9 +603,9 @@ func TestFlushWorker_AllCounters_Flushed(t *testing.T) {
 	}
 }
 
-func TestFlushWorker_DBFail_RestoresThenNextFlushSucceeds(t *testing.T) {
-	// First flush: DB fails all 3 retries → counters restored to Redis + SADD back.
-	// Second flush: DB succeeds → counters finally persisted.
+func TestFlushWorker_DBFail_PendingThenNextFlushSucceeds(t *testing.T) {
+	// First flush: DB fails all 3 retries, leaving the delta in Redis pending.
+	// Second flush: DB succeeds from pending without needing dirty counters.
 	repo := &mockRepo{failN: 3}
 	w, mr := setupTestWorker(t, repo)
 
@@ -572,14 +623,18 @@ func TestFlushWorker_DBFail_RestoresThenNextFlushSucceeds(t *testing.T) {
 		t.Fatalf("expected 0 successful upserts after first flush, got %d", len(repo.calls))
 	}
 
-	// Verify counters preserved in Redis
+	// Verify counters were drained and the delta moved to pending.
 	viewVal, _ := mr.Get("metrics:skill:sk-1:view")
-	if viewVal != "5" {
-		t.Errorf("expected view=5 after failed flush, got %q", viewVal)
+	if viewVal != "0" {
+		t.Errorf("expected view=0 after failed flush, got %q", viewVal)
 	}
 	installVal, _ := mr.Get("metrics:skill:sk-1:install")
-	if installVal != "1" {
-		t.Errorf("expected install=1 after failed flush, got %q", installVal)
+	if installVal != "0" {
+		t.Errorf("expected install=0 after failed flush, got %q", installVal)
+	}
+	pendingIDs, _ := mr.Members("metrics:pending")
+	if len(pendingIDs) != 1 {
+		t.Fatalf("expected one pending delta after failed flush, got %v", pendingIDs)
 	}
 
 	// Simulate DB recovery — no more failures
@@ -596,13 +651,15 @@ func TestFlushWorker_DBFail_RestoresThenNextFlushSucceeds(t *testing.T) {
 	if c.ViewDelta != 5 || c.DownloadDelta != 2 || c.InstallDelta != 1 {
 		t.Errorf("expected (5,2,1), got (%d,%d,%d)", c.ViewDelta, c.DownloadDelta, c.InstallDelta)
 	}
+	pendingIDs, _ = mr.Members("metrics:pending")
+	if len(pendingIDs) != 0 {
+		t.Fatalf("expected pending set empty after successful retry, got %v", pendingIDs)
+	}
 }
 
-func TestFlushWorker_ContextCancel_RestoresCounters(t *testing.T) {
-	// Simulates: getAndResetCounters succeeds (GETSET clears counters), then
-	// the context is cancelled (e.g. graceful shutdown), causing upsertWithRetry
-	// to fail with context.Canceled. Recovery (restoreCounters + requeue) must
-	// still succeed because they use independent contexts.
+func TestFlushWorker_ContextCancel_LeavesPendingDelta(t *testing.T) {
+	// Simulates: counters are drained into pending, then the context is cancelled
+	// before DB persistence. The pending delta remains available for retry.
 	cancelOnUpsert := &contextCancelOnUpsertRepo{t: t}
 	mr := miniredis.RunT(t)
 	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
@@ -619,7 +676,7 @@ func TestFlushWorker_ContextCancel_RestoresCounters(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelOnUpsert.cancel = cancel
 
-	// flush: acquires lock → GETSET clears counters → upsert triggers cancel → restoreCounters
+	// flush: acquires lock → moves counters to pending → upsert triggers cancel.
 	w.flush(ctx)
 
 	// No successful upserts
@@ -627,24 +684,27 @@ func TestFlushWorker_ContextCancel_RestoresCounters(t *testing.T) {
 		t.Fatalf("expected 0 successful upserts, got %d", len(cancelOnUpsert.calls))
 	}
 
-	// Counters must be restored despite context cancellation
+	// Counters are drained, and the pending delta is retained despite cancellation.
 	viewVal, _ := mr.Get("metrics:skill:sk-cancel:view")
-	if viewVal != "7" {
-		t.Errorf("expected view counter restored to 7 after ctx cancel, got %q", viewVal)
+	if viewVal != "0" {
+		t.Errorf("expected view counter drained to 0 after ctx cancel, got %q", viewVal)
 	}
 	dlVal, _ := mr.Get("metrics:skill:sk-cancel:download")
-	if dlVal != "3" {
-		t.Errorf("expected download counter restored to 3 after ctx cancel, got %q", dlVal)
+	if dlVal != "0" {
+		t.Errorf("expected download counter drained to 0 after ctx cancel, got %q", dlVal)
 	}
 	installVal, _ := mr.Get("metrics:skill:sk-cancel:install")
-	if installVal != "2" {
-		t.Errorf("expected install counter restored to 2 after ctx cancel, got %q", installVal)
+	if installVal != "0" {
+		t.Errorf("expected install counter drained to 0 after ctx cancel, got %q", installVal)
 	}
 
-	// Dirty member must be re-added
 	members, _ := mr.Members("metrics:dirty")
-	if len(members) != 1 || members[0] != "skill:sk-cancel" {
-		t.Errorf("expected dirty set to have [skill:sk-cancel], got %v", members)
+	if len(members) != 0 {
+		t.Errorf("expected dirty set to be empty, got %v", members)
+	}
+	pendingIDs, _ := mr.Members("metrics:pending")
+	if len(pendingIDs) != 1 {
+		t.Errorf("expected one pending delta, got %v", pendingIDs)
 	}
 }
 
@@ -656,7 +716,7 @@ type contextCancelOnUpsertRepo struct {
 	t      *testing.T
 }
 
-func (r *contextCancelOnUpsertRepo) UpsertCounts(ctx context.Context, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
+func (r *contextCancelOnUpsertRepo) UpsertCountsOnce(ctx context.Context, flushID, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
 	if r.cancel != nil {
 		r.cancel()
 		r.cancel = nil

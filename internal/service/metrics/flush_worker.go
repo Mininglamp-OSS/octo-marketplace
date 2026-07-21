@@ -14,23 +14,31 @@ import (
 
 // FlushWorkerConfig holds configuration for the flush worker.
 type FlushWorkerConfig struct {
-	Interval time.Duration // How often to run flush (default 30s)
-	Batch    int64         // How many dirty keys to pop per iteration (default 500)
-	LockTTL  time.Duration // Distributed lock TTL (default 120s)
+	Interval              time.Duration // How often to run flush (default 30s)
+	Batch                 int64         // How many dirty keys to process per iteration (default 500)
+	LockTTL               time.Duration // Distributed lock TTL (default 120s)
+	FlushLedgerRetention  time.Duration // How long applied flush IDs remain idempotent (default 7d)
+	FlushLedgerCleanupGap time.Duration // Minimum interval between cleanup attempts (default 1h)
 }
 
 // DefaultFlushWorkerConfig returns the default flush worker configuration.
 func DefaultFlushWorkerConfig() FlushWorkerConfig {
 	return FlushWorkerConfig{
-		Interval: 30 * time.Second,
-		Batch:    500,
-		LockTTL:  120 * time.Second,
+		Interval:              30 * time.Second,
+		Batch:                 500,
+		LockTTL:               120 * time.Second,
+		FlushLedgerRetention:  7 * 24 * time.Hour,
+		FlushLedgerCleanupGap: time.Hour,
 	}
 }
 
-// MetricsRepository is the interface for persisting metric deltas to the database.
+// MetricsRepository is the interface for idempotently persisting metric deltas.
 type MetricsRepository interface {
-	UpsertCounts(ctx context.Context, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error
+	UpsertCountsOnce(ctx context.Context, flushID, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error
+}
+
+type flushLedgerCleaner interface {
+	DeleteAppliedFlushesBefore(ctx context.Context, cutoff time.Time) error
 }
 
 // FlushWorker periodically flushes Redis metric increments to the database.
@@ -71,29 +79,56 @@ func (w *FlushWorker) Start(ctx context.Context) {
 }
 
 const (
-	flushLockKey = "metrics:flush:lock"
-	dirtySetKey  = "metrics:dirty"
-	keyPrefix    = "metrics:"
+	flushLockKey     = "metrics:flush:lock"
+	dirtySetKey      = "metrics:dirty"
+	pendingSetKey    = "metrics:pending"
+	pendingKeyPrefix = "metrics:pending:"
+	keyPrefix        = "metrics:"
 )
 
-var drainCountersScript = goredis.NewScript(`
-local view = redis.call("GETSET", KEYS[1], "0")
-local download = redis.call("GETSET", KEYS[2], "0")
-local install = redis.call("GETSET", KEYS[3], "0")
-return {view or "0", download or "0", install or "0"}
+var drainToPendingScript = goredis.NewScript(`
+local view = redis.call("GETSET", KEYS[1], "0") or "0"
+local download = redis.call("GETSET", KEYS[2], "0") or "0"
+local install = redis.call("GETSET", KEYS[3], "0") or "0"
+redis.call("SREM", KEYS[5], ARGV[1])
+
+local view_num = tonumber(view) or 0
+local download_num = tonumber(download) or 0
+local install_num = tonumber(install) or 0
+if view_num == 0 and download_num == 0 and install_num == 0 then
+	return {view, download, install, "0"}
+end
+
+redis.call("HSET", KEYS[4],
+	"member", ARGV[1],
+	"resource_type", ARGV[2],
+	"resource_id", ARGV[3],
+	"view", view,
+	"download", download,
+	"install", install)
+redis.call("SADD", KEYS[6], ARGV[4])
+return {view, download, install, "1"}
 `)
 
-var restoreCountersScript = goredis.NewScript(`
-if tonumber(ARGV[1]) > 0 then redis.call("INCRBY", KEYS[1], ARGV[1]) end
-if tonumber(ARGV[2]) > 0 then redis.call("INCRBY", KEYS[2], ARGV[2]) end
-if tonumber(ARGV[3]) > 0 then redis.call("INCRBY", KEYS[3], ARGV[3]) end
+var ackPendingScript = goredis.NewScript(`
+redis.call("DEL", KEYS[1])
+redis.call("SREM", KEYS[2], ARGV[1])
 return 1
 `)
+
+type pendingDelta struct {
+	FlushID       string
+	Member        string
+	ResourceType  string
+	ResourceID    string
+	ViewDelta     int64
+	DownloadDelta int64
+	InstallDelta  int64
+}
 
 func (w *FlushWorker) flush(ctx context.Context) {
 	start := time.Now()
 
-	// 1. Acquire distributed lock
 	acquired, err := w.acquireLock(ctx)
 	if err != nil {
 		log.Printf("[flush-worker] lock acquire error: %v", err)
@@ -104,61 +139,57 @@ func (w *FlushWorker) flush(ctx context.Context) {
 		return
 	}
 	defer func() {
-		// Use an independent context for lock release so that even if the flush
-		// context is cancelled (e.g. graceful shutdown), we still release our lock
-		// instead of blocking other instances for the full TTL.
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer releaseCancel()
 		w.releaseLock(releaseCtx)
 	}()
 
-	// Log dirty set size
 	dirtySize, _ := w.rdb.SCard(ctx, dirtySetKey).Result()
-	log.Printf("[flush-worker] starting flush, dirty_set_size=%d", dirtySize)
+	pendingSize, _ := w.rdb.SCard(ctx, pendingSetKey).Result()
+	log.Printf("[flush-worker] starting flush, dirty_set_size=%d, pending_set_size=%d", dirtySize, pendingSize)
+	w.cleanupFlushLedger(ctx)
 
 	var totalProcessed int64
 	var totalDBFails int64
-	var failedMembers []string
 
-	// 2. Loop SPOP batch from dirty set
+	w.processPending(ctx, &totalProcessed, &totalDBFails)
+	if totalDBFails > 0 {
+		w.logFlushResult(start, totalProcessed, totalDBFails)
+		return
+	}
+
 	for {
 		if ctx.Err() != nil {
 			break
 		}
 
-		members, err := w.rdb.SPopN(ctx, dirtySetKey, w.cfg.Batch).Result()
+		members, err := w.rdb.SRandMemberN(ctx, dirtySetKey, w.cfg.Batch).Result()
 		if err != nil {
-			log.Printf("[flush-worker] SPOP error: %v", err)
+			log.Printf("[flush-worker] dirty sample error: %v", err)
 			break
 		}
 		if len(members) == 0 {
 			break
 		}
 
-		for i, member := range members {
+		var madeProgress bool
+		for _, member := range members {
 			if ctx.Err() != nil {
-				failedMembers = append(failedMembers, members[i:]...)
 				break
 			}
-			w.processMember(ctx, member, &totalProcessed, &totalDBFails, &failedMembers)
+			if w.processDirtyMember(ctx, member, &totalProcessed, &totalDBFails) {
+				madeProgress = true
+			}
+		}
+		if totalDBFails > 0 || !madeProgress {
+			break
 		}
 	}
 
-	// 3. Re-add failed members to dirty set (after SPOP loop to avoid re-popping).
-	// Use an independent context so that requeue succeeds even if the flush ctx
-	// was cancelled (e.g. graceful shutdown after GETSET already cleared counters).
-	if len(failedMembers) > 0 {
-		requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		ifaces := make([]interface{}, len(failedMembers))
-		for i, m := range failedMembers {
-			ifaces[i] = m
-		}
-		if err := w.rdb.SAdd(requeueCtx, dirtySetKey, ifaces...).Err(); err != nil {
-			log.Printf("[flush-worker] CRITICAL: failed to requeue %d dirty members: %v (data may be lost)", len(failedMembers), err)
-		}
-		requeueCancel()
-	}
+	w.logFlushResult(start, totalProcessed, totalDBFails)
+}
 
+func (w *FlushWorker) logFlushResult(start time.Time, totalProcessed, totalDBFails int64) {
 	duration := time.Since(start)
 	result := "success"
 	if totalDBFails > 0 {
@@ -168,88 +199,189 @@ func (w *FlushWorker) flush(ctx context.Context) {
 		result, totalProcessed, totalDBFails, duration)
 }
 
-func (w *FlushWorker) processMember(ctx context.Context, member string, totalProcessed, totalDBFails *int64, failedMembers *[]string) {
-	// Parse "resourceType:resourceID" — SplitN with limit 2 to handle resourceID containing ":"
+func (w *FlushWorker) cleanupFlushLedger(ctx context.Context) {
+	if w.cfg.FlushLedgerRetention <= 0 {
+		return
+	}
+	cleaner, ok := w.repo.(flushLedgerCleaner)
+	if !ok {
+		return
+	}
+	pendingSize, err := w.rdb.SCard(ctx, pendingSetKey).Result()
+	if err != nil {
+		log.Printf("[flush-worker] WARN: ledger cleanup pending check failed: %v", err)
+		return
+	}
+	if pendingSize > 0 {
+		return
+	}
+
+	gap := w.cfg.FlushLedgerCleanupGap
+	if gap <= 0 {
+		gap = time.Hour
+	}
+	cleanupKey := flushLockKey + ":ledger_cleanup"
+	acquired, err := w.rdb.SetNX(ctx, cleanupKey, w.instanceID, gap).Result()
+	if err != nil {
+		log.Printf("[flush-worker] WARN: ledger cleanup throttle failed: %v", err)
+		return
+	}
+	if !acquired {
+		return
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cutoff := time.Now().Add(-w.cfg.FlushLedgerRetention)
+	if err := cleaner.DeleteAppliedFlushesBefore(cleanupCtx, cutoff); err != nil {
+		log.Printf("[flush-worker] WARN: ledger cleanup failed: %v", err)
+	}
+}
+
+func (w *FlushWorker) processDirtyMember(ctx context.Context, member string, totalProcessed, totalDBFails *int64) bool {
 	parts := strings.SplitN(member, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		log.Printf("[flush-worker] WARN: invalid dirty key %q, skipping", member)
-		return
+		log.Printf("[flush-worker] WARN: invalid dirty key %q, removing", member)
+		if err := w.rdb.SRem(ctx, dirtySetKey, member).Err(); err != nil {
+			log.Printf("[flush-worker] WARN: failed to remove invalid dirty key %q: %v", member, err)
+		}
+		return true
 	}
 	resourceType := parts[0]
 	resourceID := parts[1]
 
-	// v1: only process "skill" type
 	if resourceType != "skill" {
-		log.Printf("[flush-worker] WARN: unsupported dirty resource type %q for member %q, requeueing", resourceType, member)
-		*failedMembers = append(*failedMembers, member)
-		return
+		log.Printf("[flush-worker] WARN: unsupported dirty resource type %q for member %q, leaving dirty", resourceType, member)
+		return false
 	}
 
-	// Atomically get and reset counters
-	viewDelta, downloadDelta, installDelta, err := w.getAndResetCounters(ctx, resourceType, resourceID)
+	pending, hasDelta, err := w.drainToPending(ctx, member, resourceType, resourceID)
 	if err != nil {
-		log.Printf("[flush-worker] ERROR: get counters for %s/%s: %v", resourceType, resourceID, err)
-		// Collect for re-add to dirty set after the SPOP loop
-		*failedMembers = append(*failedMembers, member)
-		return
-	}
-
-	// Skip if all deltas are zero
-	if viewDelta == 0 && downloadDelta == 0 && installDelta == 0 {
-		return
-	}
-
-	// UPSERT to database with retries
-	if err := w.upsertWithRetry(ctx, resourceType, resourceID, viewDelta, downloadDelta, installDelta); err != nil {
-		log.Printf("[flush-worker] ERROR: db upsert failed for %s/%s after retries: %v", resourceType, resourceID, err)
-		// Restore deltas to Redis so they are not lost. Use an independent context
-		// so that recovery succeeds even if the flush ctx was cancelled (e.g. graceful shutdown).
-		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		w.restoreCounters(restoreCtx, resourceType, resourceID, viewDelta, downloadDelta, installDelta)
-		restoreCancel()
-		// Collect for re-add to dirty set after the SPOP loop
-		*failedMembers = append(*failedMembers, member)
+		log.Printf("[flush-worker] ERROR: drain counters for %s/%s: %v", resourceType, resourceID, err)
 		*totalDBFails++
-		return
+		return false
 	}
-
-	*totalProcessed++
+	if !hasDelta {
+		return true
+	}
+	return w.processPendingDelta(ctx, pending, totalProcessed, totalDBFails)
 }
 
-func (w *FlushWorker) getAndResetCounters(ctx context.Context, resourceType, resourceID string) (viewDelta, downloadDelta, installDelta int64, err error) {
+func (w *FlushWorker) processPending(ctx context.Context, totalProcessed, totalDBFails *int64) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		flushIDs, err := w.rdb.SRandMemberN(ctx, pendingSetKey, w.cfg.Batch).Result()
+		if err != nil {
+			log.Printf("[flush-worker] pending sample error: %v", err)
+			*totalDBFails++
+			return
+		}
+		if len(flushIDs) == 0 {
+			return
+		}
+
+		for _, flushID := range flushIDs {
+			if ctx.Err() != nil {
+				return
+			}
+			pending, err := w.loadPendingDelta(ctx, flushID)
+			if err != nil {
+				log.Printf("[flush-worker] ERROR: load pending delta %s: %v", flushID, err)
+				*totalDBFails++
+				return
+			}
+			if pending == nil {
+				continue
+			}
+			if !w.processPendingDelta(ctx, *pending, totalProcessed, totalDBFails) {
+				return
+			}
+		}
+	}
+}
+
+func (w *FlushWorker) drainToPending(ctx context.Context, member, resourceType, resourceID string) (pendingDelta, bool, error) {
+	flushID := w.newFlushID()
 	viewKey := fmt.Sprintf("%s%s:%s:view", keyPrefix, resourceType, resourceID)
 	downloadKey := fmt.Sprintf("%s%s:%s:download", keyPrefix, resourceType, resourceID)
 	installKey := fmt.Sprintf("%s%s:%s:install", keyPrefix, resourceType, resourceID)
 
-	raw, err := drainCountersScript.Run(ctx, w.rdb, []string{viewKey, downloadKey, installKey}).Result()
+	raw, err := drainToPendingScript.Run(ctx, w.rdb,
+		[]string{viewKey, downloadKey, installKey, pendingKey(flushID), dirtySetKey, pendingSetKey},
+		member, resourceType, resourceID, flushID,
+	).Result()
 	if err != nil && err != goredis.Nil {
-		return 0, 0, 0, fmt.Errorf("drain counters: %w", err)
+		return pendingDelta{}, false, fmt.Errorf("drain counters: %w", err)
 	}
 	values, ok := raw.([]interface{})
-	if !ok || len(values) != 3 {
-		return 0, 0, 0, fmt.Errorf("drain counters: unexpected script result %T", raw)
+	if !ok || len(values) != 4 {
+		return pendingDelta{}, false, fmt.Errorf("drain counters: unexpected script result %T", raw)
 	}
-	viewDelta = parseCounterValue(values[0])
-	downloadDelta = parseCounterValue(values[1])
-	installDelta = parseCounterValue(values[2])
-	return viewDelta, downloadDelta, installDelta, nil
+
+	pending := pendingDelta{
+		FlushID:       flushID,
+		Member:        member,
+		ResourceType:  resourceType,
+		ResourceID:    resourceID,
+		ViewDelta:     parseCounterValue(values[0]),
+		DownloadDelta: parseCounterValue(values[1]),
+		InstallDelta:  parseCounterValue(values[2]),
+	}
+	return pending, parseCounterValue(values[3]) == 1, nil
 }
 
-// restoreCounters adds back deltas to Redis counters after a DB write failure,
-// preventing permanent data loss.
-func (w *FlushWorker) restoreCounters(ctx context.Context, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) {
-	viewKey := fmt.Sprintf("%s%s:%s:view", keyPrefix, resourceType, resourceID)
-	downloadKey := fmt.Sprintf("%s%s:%s:download", keyPrefix, resourceType, resourceID)
-	installKey := fmt.Sprintf("%s%s:%s:install", keyPrefix, resourceType, resourceID)
-
-	_, err := restoreCountersScript.Run(ctx, w.rdb, []string{viewKey, downloadKey, installKey},
-		strconv.FormatInt(viewDelta, 10),
-		strconv.FormatInt(downloadDelta, 10),
-		strconv.FormatInt(installDelta, 10),
-	).Result()
+func (w *FlushWorker) loadPendingDelta(ctx context.Context, flushID string) (*pendingDelta, error) {
+	values, err := w.rdb.HGetAll(ctx, pendingKey(flushID)).Result()
 	if err != nil {
-		log.Printf("[flush-worker] CRITICAL: failed to restore counters for %s/%s: %v (data may be lost)", resourceType, resourceID, err)
+		return nil, err
 	}
+	if len(values) == 0 {
+		if err := w.rdb.SRem(ctx, pendingSetKey, flushID).Err(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	pending := &pendingDelta{
+		FlushID:       flushID,
+		Member:        values["member"],
+		ResourceType:  values["resource_type"],
+		ResourceID:    values["resource_id"],
+		ViewDelta:     parseCounterValue(values["view"]),
+		DownloadDelta: parseCounterValue(values["download"]),
+		InstallDelta:  parseCounterValue(values["install"]),
+	}
+	if pending.Member == "" || pending.ResourceType == "" || pending.ResourceID == "" {
+		return nil, fmt.Errorf("pending delta %s missing required fields", flushID)
+	}
+	return pending, nil
+}
+
+func (w *FlushWorker) processPendingDelta(ctx context.Context, pending pendingDelta, totalProcessed, totalDBFails *int64) bool {
+	if pending.ViewDelta == 0 && pending.DownloadDelta == 0 && pending.InstallDelta == 0 {
+		if err := w.ackPending(ctx, pending.FlushID); err != nil {
+			log.Printf("[flush-worker] ERROR: ack zero pending %s: %v", pending.FlushID, err)
+			*totalDBFails++
+			return false
+		}
+		return true
+	}
+
+	if err := w.upsertWithRetry(ctx, pending); err != nil {
+		log.Printf("[flush-worker] ERROR: db upsert failed for %s/%s flush=%s after retries: %v",
+			pending.ResourceType, pending.ResourceID, pending.FlushID, err)
+		*totalDBFails++
+		return false
+	}
+	if err := w.ackPending(ctx, pending.FlushID); err != nil {
+		log.Printf("[flush-worker] ERROR: ack pending %s: %v", pending.FlushID, err)
+		*totalDBFails++
+		return false
+	}
+	*totalProcessed++
+	return true
 }
 
 func parseCounterValue(raw interface{}) int64 {
@@ -264,7 +396,7 @@ func parseCounterValue(raw interface{}) int64 {
 	return n
 }
 
-func (w *FlushWorker) upsertWithRetry(ctx context.Context, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error {
+func (w *FlushWorker) upsertWithRetry(ctx context.Context, pending pendingDelta) error {
 	const maxRetries = 3
 	const retryInterval = 100 * time.Millisecond
 
@@ -273,7 +405,8 @@ func (w *FlushWorker) upsertWithRetry(ctx context.Context, resourceType, resourc
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := w.repo.UpsertCounts(ctx, resourceType, resourceID, viewDelta, downloadDelta, installDelta)
+		err := w.repo.UpsertCountsOnce(ctx, pending.FlushID, pending.ResourceType, pending.ResourceID,
+			pending.ViewDelta, pending.DownloadDelta, pending.InstallDelta)
 		if err == nil {
 			return nil
 		}
@@ -285,6 +418,11 @@ func (w *FlushWorker) upsertWithRetry(ctx context.Context, resourceType, resourc
 	return lastErr
 }
 
+func (w *FlushWorker) ackPending(ctx context.Context, flushID string) error {
+	_, err := ackPendingScript.Run(ctx, w.rdb, []string{pendingKey(flushID), pendingSetKey}, flushID).Result()
+	return err
+}
+
 func (w *FlushWorker) acquireLock(ctx context.Context) (bool, error) {
 	ok, err := w.rdb.SetNX(ctx, flushLockKey, w.instanceID, w.cfg.LockTTL).Result()
 	if err != nil {
@@ -294,12 +432,19 @@ func (w *FlushWorker) acquireLock(ctx context.Context) (bool, error) {
 }
 
 func (w *FlushWorker) releaseLock(ctx context.Context) {
-	// Only delete if we still own the lock (Lua script for atomicity)
 	const script = `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`
 	err := w.rdb.Eval(ctx, script, []string{flushLockKey}, w.instanceID).Err()
 	if err != nil && err != goredis.Nil {
 		log.Printf("[flush-worker] WARN: lock release failed: %v", err)
 	}
+}
+
+func (w *FlushWorker) newFlushID() string {
+	return fmt.Sprintf("%s:%s", w.instanceID, generateInstanceID())
+}
+
+func pendingKey(flushID string) string {
+	return pendingKeyPrefix + flushID
 }
 
 func generateInstanceID() string {

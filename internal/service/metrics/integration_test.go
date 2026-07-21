@@ -236,8 +236,7 @@ func TestIntegration_RedisDown_TrackDownloadReturnsNil(t *testing.T) {
 }
 
 func TestIntegration_RedisDown_FlushWorkerSkipsGracefully(t *testing.T) {
-	// When Redis is down, flush worker should not panic — it should log and
-	// skip (lock acquire fails or SPOP fails).
+	// When Redis is down, flush worker should not panic; it should log and skip.
 	mr := miniredis.RunT(t)
 	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	mr.Close()
@@ -388,9 +387,9 @@ func TestIntegration_ComprehensiveSortFormula(t *testing.T) {
 	}
 }
 
-// --- 6. DB Failure Retry + Re-add to Dirty Set ---
+// --- 6. DB Failure Retry + Pending Recovery ---
 
-func TestIntegration_DBFailure_ReaddsToDirtySet(t *testing.T) {
+func TestIntegration_DBFailure_MovesToPending(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	ctx := context.Background()
@@ -404,10 +403,14 @@ func TestIntegration_DBFailure_ReaddsToDirtySet(t *testing.T) {
 	w := NewFlushWorker(rdb, repo, DefaultFlushWorkerConfig())
 	w.flush(ctx)
 
-	// Should have been re-added to dirty set
+	// Should have been drained into the durable pending set.
 	isMember, _ := rdb.SIsMember(ctx, "metrics:dirty", "skill:fail-skill").Result()
-	if !isMember {
-		t.Fatal("failed member should be re-added to dirty set after DB failures")
+	if isMember {
+		t.Fatal("failed member should have been removed from dirty set")
+	}
+	pendingSize, _ := rdb.SCard(ctx, "metrics:pending").Result()
+	if pendingSize != 1 {
+		t.Fatalf("pending size = %d, want 1", pendingSize)
 	}
 }
 
@@ -476,8 +479,7 @@ func TestIntegration_NonSkillType_RequeuedByFlush(t *testing.T) {
 	w := NewFlushWorker(rdb, repo, DefaultFlushWorkerConfig())
 	w.flush(ctx)
 
-	// v1 only processes "skill" — unsupported types must be requeued because
-	// SPOP already removed them from the dirty set.
+	// v1 only processes "skill"; unsupported types remain dirty for a future worker.
 	if len(repo.calls) != 0 {
 		t.Fatalf("expected 0 upserts for non-skill type, got %d", len(repo.calls))
 	}
