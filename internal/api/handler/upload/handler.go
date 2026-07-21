@@ -326,7 +326,7 @@ func uploadIDFromLink(link string) string {
 // initRequest is the JSON body for POST /api/v1/skill/upload/init.
 type InitUploadRequest struct {
 	FileName string `json:"file_name" binding:"required"`
-	FileSize int64  `json:"file_size" binding:"required"`
+	FileSize int64  `json:"file_size" binding:"required,gt=0"`
 }
 
 // InitUpload godoc
@@ -366,6 +366,10 @@ func (h *Handler) InitUpload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "file_name must end with .zip", nil, "")
 			return
 		}
+		if errors.Is(err, parse.ErrInvalidFileSize) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "file_size must be positive", nil, "")
+			return
+		}
 		if errors.Is(err, parse.ErrFileTooLarge) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", nil, "")
 			return
@@ -392,6 +396,7 @@ func (h *Handler) InitUpload(c *gin.Context) {
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 429 {object} apiresponse.Error "RATE_LIMITED"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /skill_uploads/{skill_upload_id}/parse [post]
 func (h *Handler) TriggerParse(c *gin.Context) {
@@ -414,6 +419,10 @@ func (h *Handler) TriggerParse(c *gin.Context) {
 		}
 		if errors.Is(err, parse.ErrTaskNotPending) {
 			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "parse already triggered", nil, "")
+			return
+		}
+		if errors.Is(err, parse.ErrParseQueueFull) {
+			apiresponse.Fail(c, http.StatusTooManyRequests, errcode.RateLimited, "parse queue is busy, retry later", nil, "")
 			return
 		}
 		log.Printf("[TriggerParse] internal error for uploadID=%s: %v", uploadID, err)
@@ -463,7 +472,7 @@ func (h *Handler) PollParse(c *gin.Context) {
 // iconUploadRequest is the JSON body for POST /api/v1/skill/upload/icon.
 type IconUploadRequest struct {
 	FileName string `json:"file_name" binding:"required"`
-	FileSize int64  `json:"file_size" binding:"required"`
+	FileSize int64  `json:"file_size" binding:"required,gt=0"`
 }
 
 // InitIconUpload godoc
@@ -498,6 +507,10 @@ func (h *Handler) InitIconUpload(c *gin.Context) {
 
 	result, err := h.parseSvc.InitIconUpload(c.Request.Context(), req.FileName, req.FileSize, identity.UID)
 	if err != nil {
+		if errors.Is(err, parse.ErrInvalidFileSize) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "file_size must be positive", nil, "")
+			return
+		}
 		if errors.Is(err, parse.ErrFileTooLarge) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "icon exceeds 2MB limit", nil, "")
 			return
@@ -512,7 +525,7 @@ func (h *Handler) InitIconUpload(c *gin.Context) {
 // reuploadRequest is the JSON body for POST /api/v1/skill/:id/reupload/init.
 type ReuploadRequest struct {
 	FileName string `json:"file_name" binding:"required"`
-	FileSize int64  `json:"file_size" binding:"required"`
+	FileSize int64  `json:"file_size" binding:"required,gt=0"`
 }
 
 // InitReupload godoc
@@ -567,6 +580,10 @@ func (h *Handler) InitReupload(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, parse.ErrInvalidFileName) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "file_name must end with .zip", nil, "")
+			return
+		}
+		if errors.Is(err, parse.ErrInvalidFileSize) {
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "file_size must be positive", nil, "")
 			return
 		}
 		if errors.Is(err, parse.ErrFileTooLarge) {

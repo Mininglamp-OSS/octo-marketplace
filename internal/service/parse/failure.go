@@ -24,6 +24,8 @@ func publicParseErrorMessage(errorCode string) string {
 		return "当前 Space 下已存在同名 Skill"
 	case "PARSE_RETRY_EXHAUSTED":
 		return "解析任务多次超时，请重新上传"
+	case "PARSE_QUEUE_FULL":
+		return "解析队列繁忙，请稍后重试"
 	default:
 		return "解析失败"
 	}

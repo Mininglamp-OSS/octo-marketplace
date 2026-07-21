@@ -10,6 +10,7 @@ const (
 	InvalidZip       = "VALIDATION_ERROR"
 	SkillMDNotFound  = "VALIDATION_ERROR"
 	CategoryInUse    = "CONFLICT"
+	RateLimited      = "RATE_LIMITED"
 	InternalError    = "INTERNAL_ERROR"
 	Conflict         = "CONFLICT"
 

@@ -60,6 +60,12 @@ func (f *fakeStorage) GetObject(_ context.Context, _ string) (io.ReadCloser, err
 	}
 	return io.NopCloser(bytes.NewReader(nil)), nil
 }
+func (f *fakeStorage) StatObject(_ context.Context, _ string) (storage.ObjectInfo, error) {
+	if f.getData != nil {
+		return storage.ObjectInfo{Size: int64(len(f.getData))}, nil
+	}
+	return storage.ObjectInfo{Size: 0}, nil
+}
 func (f *fakeStorage) DeleteObject(_ context.Context, key string) error {
 	f.deleteCount++
 	f.deleteKeys = append(f.deleteKeys, key)

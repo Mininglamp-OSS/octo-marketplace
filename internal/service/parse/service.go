@@ -57,6 +57,9 @@ var ErrInvalidFileName = errors.New("file_name must be a safe .zip basename")
 // ErrFileTooLarge indicates the file exceeds the upload limit.
 var ErrFileTooLarge = errors.New("file too large")
 
+// ErrInvalidFileSize indicates the declared upload size is missing or invalid.
+var ErrInvalidFileSize = errors.New("file_size must be positive")
+
 // ErrTaskNotFound indicates the parse task was not found.
 var ErrTaskNotFound = errors.New("task not found")
 
@@ -82,6 +85,9 @@ func (s *Service) InitUpload(ctx context.Context, fileName string, fileSize int6
 		return nil, ErrInvalidFileName
 	}
 	maxBytes := int64(s.maxMB) * 1024 * 1024
+	if fileSize <= 0 {
+		return nil, ErrInvalidFileSize
+	}
 	if fileSize > maxBytes {
 		return nil, ErrFileTooLarge
 	}
@@ -133,6 +139,9 @@ func (s *Service) InitReupload(ctx context.Context, skillID, fileName string, fi
 		return nil, ErrInvalidFileName
 	}
 	maxBytes := int64(s.maxMB) * 1024 * 1024
+	if fileSize <= 0 {
+		return nil, ErrInvalidFileSize
+	}
 	if fileSize > maxBytes {
 		return nil, ErrFileTooLarge
 	}
@@ -204,7 +213,10 @@ func (s *Service) TriggerParse(ctx context.Context, uploadID, ownerID string) (s
 
 	// Submit to worker pool
 	maxBytes := int64(s.maxMB) * 1024 * 1024
-	s.worker.Submit(task.ID, task.FileURL, maxBytes)
+	if err := s.worker.Submit(task.ID, task.FileURL, maxBytes); err != nil {
+		_ = s.repo.UpdateFailed(ctx, task.ID, "PARSE_QUEUE_FULL", publicParseErrorMessage("PARSE_QUEUE_FULL"))
+		return "", err
+	}
 
 	return task.ID, nil
 }
@@ -372,7 +384,15 @@ func (s *Service) GetParseStatus(ctx context.Context, taskID, ownerID string) (*
 			if won {
 				// This pod won the race — re-submit to the worker pool.
 				maxBytes := int64(s.maxMB) * 1024 * 1024
-				s.worker.Submit(task.ID, task.FileURL, maxBytes)
+				if err := s.worker.Submit(task.ID, task.FileURL, maxBytes); err != nil {
+					_ = s.repo.UpdateFailed(ctx, task.ID, "PARSE_QUEUE_FULL", publicParseErrorMessage("PARSE_QUEUE_FULL"))
+					result.Status = "failed"
+					result.Error = &ParseError{
+						Code:    "PARSE_QUEUE_FULL",
+						Message: publicParseErrorMessage("PARSE_QUEUE_FULL"),
+					}
+					return result, nil
+				}
 			}
 			// Either way, status is still parsing (recovery just kicked off).
 		}
@@ -407,6 +427,9 @@ func (s *Service) InitIconUpload(ctx context.Context, fileName string, fileSize 
 		return nil, ErrInvalidFileName
 	}
 	// Limit icon to 2MB
+	if fileSize <= 0 {
+		return nil, ErrInvalidFileSize
+	}
 	if fileSize > 2*1024*1024 {
 		return nil, ErrFileTooLarge
 	}
@@ -476,6 +499,9 @@ func (s *Service) InitMcpIconUpload(ctx context.Context, fileName string, fileSi
 	}
 	if _, err := normalizeObjectFileName(fileName); err != nil {
 		return nil, ErrInvalidFileName
+	}
+	if fileSize <= 0 {
+		return nil, ErrInvalidFileSize
 	}
 	if fileSize > 2*1024*1024 {
 		return nil, ErrFileTooLarge

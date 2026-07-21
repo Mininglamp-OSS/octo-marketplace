@@ -30,6 +30,10 @@ func (stubStorage) GetObject(context.Context, string) (io.ReadCloser, error) {
 	return nil, nil
 }
 
+func (stubStorage) StatObject(context.Context, string) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{}, nil
+}
+
 func (stubStorage) DeleteObject(context.Context, string) error {
 	return nil
 }
@@ -85,6 +89,24 @@ func TestInitUploadRejectsUnsafeSkillPackageFileName(t *testing.T) {
 			_, err := svc.InitUpload(context.Background(), fileName, 1024, "user-1", "space-1")
 			if err != ErrInvalidFileName {
 				t.Fatalf("expected ErrInvalidFileName, got %v", err)
+			}
+		})
+	}
+}
+
+func TestInitUploadRejectsNonPositiveFileSize(t *testing.T) {
+	svc := NewService(stubStorage{}, nil, nil, func() string { return "upload-1" }, 20, ServiceConfig{})
+	for _, fileSize := range []int64{0, -1} {
+		t.Run("upload", func(t *testing.T) {
+			_, err := svc.InitUpload(context.Background(), "skill.zip", fileSize, "user-1", "space-1")
+			if err != ErrInvalidFileSize {
+				t.Fatalf("InitUpload error = %v, want ErrInvalidFileSize", err)
+			}
+		})
+		t.Run("reupload", func(t *testing.T) {
+			_, err := svc.InitReupload(context.Background(), "skill-1", "skill.zip", fileSize, "user-1", "space-1")
+			if err != ErrInvalidFileSize {
+				t.Fatalf("InitReupload error = %v, want ErrInvalidFileSize", err)
 			}
 		})
 	}
@@ -275,7 +297,7 @@ func TestGetParseStatusRecoversStaleParsing(t *testing.T) {
 	defer db.Close()
 
 	repo := NewRepo(db)
-	worker := NewWorker(blockingStorage{}, repo, db, WorkerConfig{PoolSize: 5, ParseTimeout: time.Minute})
+	worker := NewWorker(blockingStorage{}, repo, db, WorkerConfig{PoolSize: 5, ParseTimeout: 10 * time.Millisecond})
 	svc := NewService(stubStorage{}, repo, worker, func() string { return "u1" }, 20, ServiceConfig{
 		StaleTimeout: 2 * time.Minute,
 		MaxAttempts:  2,
@@ -302,6 +324,9 @@ func TestGetParseStatusRecoversStaleParsing(t *testing.T) {
 	// Expect the atomic recovery UPDATE — this caller wins the race.
 	mock.ExpectExec("UPDATE parse_tasks").
 		WithArgs("task-stale", 120, 2).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE parse_tasks SET status = 'failed', error_code = \\?, error_message = \\? WHERE id = \\?").
+		WithArgs("INTERNAL_ERROR", publicParseErrorMessage("INTERNAL_ERROR"), "task-stale").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	result, err := svc.GetParseStatus(context.Background(), "task-stale", "user-1")

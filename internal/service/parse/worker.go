@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,15 +22,26 @@ import (
 )
 
 const defaultWorkerPoolSize = 10
+const defaultWorkerQueueMultiplier = 10
 
 var (
 	statusUpdateTimeout = 5 * time.Second
+	ErrParseQueueFull   = errors.New("parse queue is full")
 )
 
 // WorkerConfig holds configuration for the parse worker pool.
 type WorkerConfig struct {
 	PoolSize     int
+	QueueSize    int
 	ParseTimeout time.Duration
+}
+
+type parseJob struct {
+	taskID      string
+	objectKey   string
+	maxZipBytes int64
+	ctx         context.Context
+	done        chan struct{}
 }
 
 // Worker manages the async parsing goroutine pool.
@@ -37,8 +49,8 @@ type Worker struct {
 	store        storage.Storage
 	repo         *Repo
 	db           *sql.DB
-	sem          chan struct{}
-	wg           sync.WaitGroup
+	jobs         chan parseJob
+	jobWG        sync.WaitGroup
 	parseTimeout time.Duration
 }
 
@@ -48,36 +60,64 @@ func NewWorker(store storage.Storage, repo *Repo, db *sql.DB, cfg WorkerConfig) 
 	if poolSize <= 0 {
 		poolSize = defaultWorkerPoolSize
 	}
+	queueSize := cfg.QueueSize
+	if queueSize <= 0 {
+		queueSize = poolSize * defaultWorkerQueueMultiplier
+	}
 	parseTimeout := cfg.ParseTimeout
 	if parseTimeout <= 0 {
 		parseTimeout = time.Minute
 	}
-	return &Worker{
+	w := &Worker{
 		store:        store,
 		repo:         repo,
 		db:           db,
-		sem:          make(chan struct{}, poolSize),
+		jobs:         make(chan parseJob, queueSize),
 		parseTimeout: parseTimeout,
+	}
+	for i := 0; i < poolSize; i++ {
+		go w.run()
+	}
+	return w
+}
+
+func (w *Worker) run() {
+	for job := range w.jobs {
+		w.runJob(job)
 	}
 }
 
-// Submit enqueues a parse job. It does not block.
-func (w *Worker) Submit(taskID, objectKey string, maxZipBytes int64) {
-	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("[parse-worker] panic recovered for task %s: %v", taskID, r)
-				w.updateFailed(taskID, "INTERNAL_ERROR", fmt.Sprintf("panic: %v", r))
-			}
-		}()
-
-		w.sem <- struct{}{}
-		defer func() { <-w.sem }()
-
-		w.process(context.Background(), taskID, objectKey, maxZipBytes)
+func (w *Worker) runJob(job parseJob) {
+	defer w.jobWG.Done()
+	if job.done != nil {
+		defer close(job.done)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[parse-worker] panic recovered for task %s: %v", job.taskID, r)
+			w.updateFailed(job.taskID, "INTERNAL_ERROR", fmt.Sprintf("panic: %v", r))
+		}
 	}()
+	w.process(job.ctx, job.taskID, job.objectKey, job.maxZipBytes)
+}
+
+// Submit enqueues a parse job without blocking. It returns ErrParseQueueFull
+// when both running and queued work are already at the configured bound.
+func (w *Worker) Submit(taskID, objectKey string, maxZipBytes int64) error {
+	w.jobWG.Add(1)
+	job := parseJob{
+		taskID:      taskID,
+		objectKey:   objectKey,
+		maxZipBytes: maxZipBytes,
+		ctx:         context.Background(),
+	}
+	select {
+	case w.jobs <- job:
+		return nil
+	default:
+		w.jobWG.Done()
+		return ErrParseQueueFull
+	}
 }
 
 // ProcessSync runs a parse job in the bounded worker pool and waits for it to finish.
@@ -85,27 +125,33 @@ func (w *Worker) ProcessSync(ctx context.Context, taskID, objectKey string, maxZ
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	done := make(chan struct{})
+	w.jobWG.Add(1)
+	job := parseJob{
+		taskID:      taskID,
+		objectKey:   objectKey,
+		maxZipBytes: maxZipBytes,
+		ctx:         ctx,
+		done:        done,
+	}
 	select {
-	case w.sem <- struct{}{}:
-		defer func() { <-w.sem }()
+	case w.jobs <- job:
 	case <-ctx.Done():
+		w.jobWG.Done()
 		return ctx.Err()
 	}
 
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[parse-worker] panic recovered for task %s: %v", taskID, r)
-			w.updateFailed(taskID, "INTERNAL_ERROR", fmt.Sprintf("panic: %v", r))
-		}
-	}()
-
-	w.process(ctx, taskID, objectKey, maxZipBytes)
-	return nil
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Wait blocks until all running parse jobs complete. Used for graceful shutdown.
 func (w *Worker) Wait() {
-	w.wg.Wait()
+	w.jobWG.Wait()
 }
 
 func (w *Worker) process(parent context.Context, taskID, objectKey string, maxZipBytes int64) {
@@ -125,6 +171,11 @@ func (w *Worker) process(parent context.Context, taskID, objectKey string, maxZi
 
 	zipPath := filepath.Join(tmpDir, "skill.zip")
 	if err := w.downloadToFile(ctx, objectKey, zipPath, maxZipBytes); err != nil {
+		if errors.Is(err, ErrFileTooLarge) {
+			w.deleteOversizedObject(objectKey)
+			w.updateFailed(taskID, "FILE_TOO_LARGE", "uploaded object exceeds size limit")
+			return
+		}
 		w.updateFailed(taskID, "INTERNAL_ERROR", "download failed: "+err.Error())
 		return
 	}
@@ -212,6 +263,14 @@ func (w *Worker) process(parent context.Context, taskID, objectKey string, maxZi
 }
 
 func (w *Worker) downloadToFile(ctx context.Context, key, dst string, maxBytes int64) error {
+	info, err := w.store.StatObject(ctx, key)
+	if err != nil {
+		return err
+	}
+	if info.Size <= 0 || info.Size > maxBytes {
+		return ErrFileTooLarge
+	}
+
 	rc, err := w.store.GetObject(ctx, key)
 	if err != nil {
 		return err
@@ -230,9 +289,17 @@ func (w *Worker) downloadToFile(ctx context.Context, key, dst string, maxBytes i
 		return err
 	}
 	if n > maxBytes {
-		return fmt.Errorf("file exceeds size limit")
+		return ErrFileTooLarge
 	}
 	return nil
+}
+
+func (w *Worker) deleteOversizedObject(key string) {
+	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
+	defer cancel()
+	if err := w.store.DeleteObject(ctx, key); err != nil {
+		log.Printf("[parse-worker] failed to delete oversized object %s: %v", key, err)
+	}
 }
 
 func fileSHA256(path string) (string, error) {

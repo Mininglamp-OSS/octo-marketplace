@@ -153,6 +153,19 @@ func (s *LocalStorage) GetObject(_ context.Context, key string) (io.ReadCloser, 
 	return f, nil
 }
 
+// StatObject returns local object metadata without opening the body for parsing.
+func (s *LocalStorage) StatObject(_ context.Context, key string) (ObjectInfo, error) {
+	full, err := s.safePath(key)
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return ObjectInfo{}, fmt.Errorf("local storage: stat: %w", err)
+	}
+	return ObjectInfo{Size: info.Size()}, nil
+}
+
 // PutObject writes data from a reader to the local filesystem.
 func (s *LocalStorage) PutObject(_ context.Context, key string, reader io.Reader, _ int64, _ string) error {
 	return s.WriteObject(key, reader)

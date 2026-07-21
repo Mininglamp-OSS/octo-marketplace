@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// ObjectInfo describes stored object metadata needed before ingestion.
+type ObjectInfo struct {
+	Size int64
+}
+
 // Storage defines the object storage interface for skill file uploads.
 type Storage interface {
 	// PresignPut generates a presigned PUT URL for uploading an object.
@@ -24,6 +29,9 @@ type Storage interface {
 
 	// GetObject retrieves an object from storage.
 	GetObject(ctx context.Context, key string) (io.ReadCloser, error)
+
+	// StatObject retrieves object metadata without downloading the body.
+	StatObject(ctx context.Context, key string) (ObjectInfo, error)
 
 	// PutObject uploads an object to storage from a reader.
 	PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
