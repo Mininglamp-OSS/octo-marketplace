@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/apierr"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/service"
@@ -29,7 +30,43 @@ func testAuthenticator() *marketmiddleware.Authenticator {
 }
 
 func testAdminAuthenticator() *marketmiddleware.AdminAuthenticator {
-	return marketmiddleware.NewAdminAuthenticator(false, "", model.Identity{UID: "dev-user", Name: "Developer"})
+	return marketmiddleware.NewAdminAuthenticator(false, nil, model.Identity{UID: "dev-user", Name: "Developer"})
+}
+
+// stubResolver returns a fixed identity for any non-empty token and errors on
+// a specific sentinel. Lets router tests exercise the admin middleware's
+// resolve → role-check chain without a real octo-server.
+type stubResolver struct {
+	identity model.Identity
+	err      error
+}
+
+func (r stubResolver) Resolve(_ context.Context, token string) (model.Identity, error) {
+	if r.err != nil {
+		return model.Identity{}, r.err
+	}
+	if token == "" {
+		return model.Identity{}, nil
+	}
+	return r.identity, nil
+}
+
+func superAdminResolver() auth.Resolver {
+	return stubResolver{identity: model.Identity{
+		UID:             "platform-admin",
+		Name:            "Platform",
+		Role:            marketmiddleware.RoleSuperAdmin,
+		ContextIncluded: true,
+	}}
+}
+
+func nonAdminResolver() auth.Resolver {
+	return stubResolver{identity: model.Identity{
+		UID:             "u1",
+		Name:            "Alice",
+		Role:            "",
+		ContextIncluded: true,
+	}}
 }
 
 func testStorageConfig() StorageConfig {
@@ -378,11 +415,11 @@ func TestOldAdminPathNotMounted(t *testing.T) {
 }
 
 // TestAdminRejectsMissingTokenInProd wires a prod-mode admin authenticator
-// (AUTH_ENABLED=true + configured secret) and confirms a request without
-// X-Admin-Token is rejected 401 with the auth-family error code.
+// (AUTH_ENABLED=true + real resolver) and confirms a request without a Token
+// header is rejected 401 with AUTH_REQUIRED.
 func TestAdminRejectsMissingTokenInProd(t *testing.T) {
-	prodAdminAuth := marketmiddleware.NewAdminAuthenticator(true, "sekret",
-		model.Identity{UID: "platform-admin", Name: "Platform"})
+	prodAdminAuth := marketmiddleware.NewAdminAuthenticator(true, superAdminResolver(),
+		model.Identity{})
 	svc := &reachedAdminService{}
 	engine := Public(stubPinger{}, testAuthenticator(), prodAdminAuth, testStorageConfig(),
 		testHandler(), handler.NewAdminMCP(svc))
@@ -401,25 +438,51 @@ func TestAdminRejectsMissingTokenInProd(t *testing.T) {
 	}
 }
 
-// TestAdminAcceptsMatchingTokenInProd walks the happy path: prod-mode
-// authenticator with a matching X-Admin-Token → 200 and the handler is
-// reached.
-func TestAdminAcceptsMatchingTokenInProd(t *testing.T) {
-	prodAdminAuth := marketmiddleware.NewAdminAuthenticator(true, "sekret",
-		model.Identity{UID: "platform-admin", Name: "Platform"})
+// TestAdminRejectsNonSuperAdminInProd confirms a valid session token whose
+// identity is not superAdmin is refused with 403 FORBIDDEN. Mirrors
+// octo-server's CheckLoginRoleIsSuperAdmin gate on /v1/manager/*.
+func TestAdminRejectsNonSuperAdminInProd(t *testing.T) {
+	prodAdminAuth := marketmiddleware.NewAdminAuthenticator(true, nonAdminResolver(),
+		model.Identity{})
 	svc := &reachedAdminService{}
 	engine := Public(stubPinger{}, testAuthenticator(), prodAdminAuth, testStorageConfig(),
 		testHandler(), handler.NewAdminMCP(svc))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/mcps", nil)
-	req.Header.Set("X-Admin-Token", "sekret")
+	req.Header.Set("Token", "some-user-session")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("non-admin status=%d want=403 body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "FORBIDDEN") {
+		t.Fatalf("expected FORBIDDEN in body, got %s", recorder.Body.String())
+	}
+	if svc.listed {
+		t.Fatal("non-admin must NOT reach the handler")
+	}
+}
+
+// TestAdminAcceptsSuperAdminInProd walks the happy path: prod-mode
+// authenticator with a Token header whose resolved identity has
+// role=superAdmin → 200 and the handler is reached.
+func TestAdminAcceptsSuperAdminInProd(t *testing.T) {
+	prodAdminAuth := marketmiddleware.NewAdminAuthenticator(true, superAdminResolver(),
+		model.Identity{})
+	svc := &reachedAdminService{}
+	engine := Public(stubPinger{}, testAuthenticator(), prodAdminAuth, testStorageConfig(),
+		testHandler(), handler.NewAdminMCP(svc))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/mcps", nil)
+	req.Header.Set("Token", "super-admin-session")
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("prod-mode matching token status=%d body=%s", recorder.Code, recorder.Body.String())
+		t.Fatalf("prod-mode superAdmin status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	if !svc.listed {
-		t.Fatal("matching token must reach the handler")
+		t.Fatal("superAdmin token must reach the handler")
 	}
 }

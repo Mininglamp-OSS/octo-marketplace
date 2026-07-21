@@ -11,6 +11,7 @@ import (
 	categoryhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/category"
 	skillhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/skill"
 	uploadhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/upload"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
@@ -209,7 +210,7 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 	}
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization,Token,X-Space-Id,X-Admin-Token,X-Request-Id")
+		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization,Token,X-Space-Id,X-Request-Id")
 		if origin := c.GetHeader("Origin"); origin != "" {
 			if _, ok := allowed[origin]; ok {
 				c.Header("Access-Control-Allow-Origin", origin)
@@ -236,16 +237,15 @@ func generateID() string {
 // PublicWithDB is a convenience wrapper for tests that need a *sql.DB-backed
 // engine without wiring MCP or admin handlers.
 func PublicWithDB(db *sql.DB, authenticator *marketmiddleware.Authenticator, storageCfg StorageConfig) *gin.Engine {
-	adminAuth := marketmiddleware.NewAdminAuthenticator(false, "", model.Identity{})
+	adminAuth := marketmiddleware.NewAdminAuthenticator(false, nil, model.Identity{})
 	return Public(db, authenticator, adminAuth, storageCfg, nil, nil)
 }
 
-// PublicWithDBAndAuth is a test helper that overrides the authEnabled flag for admin routes.
-func PublicWithDBAndAuth(db *sql.DB, authenticator *marketmiddleware.Authenticator, storageCfg StorageConfig, authEnabled bool) *gin.Engine {
-	adminToken := ""
-	if authEnabled {
-		adminToken = "sekret"
-	}
-	adminAuth := marketmiddleware.NewAdminAuthenticator(authEnabled, adminToken, model.Identity{})
+// PublicWithDBAndAdminAuth is a test helper that mounts the admin surface with
+// a caller-supplied resolver so tests can inject fake SuperAdmin identities.
+// Use authEnabled=false to short-circuit both public and admin auth chains
+// (adminResolver is ignored in that case).
+func PublicWithDBAndAdminAuth(db *sql.DB, authenticator *marketmiddleware.Authenticator, storageCfg StorageConfig, authEnabled bool, adminResolver auth.Resolver) *gin.Engine {
+	adminAuth := marketmiddleware.NewAdminAuthenticator(authEnabled, adminResolver, model.Identity{})
 	return publicWithOptions(db, authenticator, adminAuth, storageCfg, nil, nil, authEnabled)
 }

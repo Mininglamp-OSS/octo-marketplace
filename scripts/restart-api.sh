@@ -24,7 +24,6 @@ export AUTH_ENABLED=false
 export DEV_AUTH_UID=dev-user
 export DEV_AUTH_NAME=Developer
 export DEV_SPACE_ID=dev-space
-export MARKETPLACE_ADMIN_TOKEN=dev-admin-token
 
 nohup /tmp/marketplace-api > /tmp/marketplace.log 2>&1 &
 PID=$!

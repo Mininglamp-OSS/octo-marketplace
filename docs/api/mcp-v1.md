@@ -672,17 +672,18 @@ rewrite handles both uniformly).
 
 | Header | Value | Notes |
 | --- | --- | --- |
-| `X-Admin-Token` | Shared secret | Must match `MARKETPLACE_ADMIN_TOKEN` on the marketplace service (`crypto/subtle.ConstantTimeCompare`). Empty on the server side ⇒ admin routes are disabled by design. |
+| `Token` | Octo session token | Same session token the user's browser holds for the public surface (`Authorization: Bearer <token>` is also accepted). Marketplace verifies it against octo-server's `/v1/auth/verify?include=context` and requires the returned identity to carry `role == "superAdmin"`. |
 
-**No `token` / `X-Space-Id` required.** The middleware stamps a
-server-configured admin identity (`ADMIN_OWNER_UID` / `ADMIN_OWNER_NAME`,
-required in prod) into the request context so downstream handlers reuse
-the same `callerFromContext` accessor as the public surface.
+**No `X-Space-Id` required.** Admin routes operate globally — the middleware
+resolves the caller's SuperAdmin identity and stamps it into the request
+context so downstream handlers reuse the same `callerFromContext` accessor as
+the public surface. `creator_name` / `owner_uid` on newly created system MCPs
+reflect the real SuperAdmin user, not a synthetic account.
 
-**Dev mode**: when the service runs with `AUTH_ENABLED=false`, the
-`X-Admin-Token` check is bypassed. Combined with `ADMIN_OWNER_UID`
-falling back to `DEV_AUTH_UID`, admin routes are usable end-to-end
-without extra secret plumbing during local development.
+**Dev mode**: when the service runs with `AUTH_ENABLED=false`, the token
+resolve + role check are bypassed. `DEV_AUTH_UID` / `DEV_AUTH_NAME` (or a
+fallback `admin`/`Admin`) are stamped so admin routes work end-to-end without
+octo-server during local development.
 
 ### 9.2 Endpoints
 
@@ -746,12 +747,13 @@ without extra secret plumbing during local development.
 
 | HTTP | Code | When |
 | --- | --- | --- |
-| 401 | `err.marketplace.auth.admin_unauthorized` | Missing / mismatched `X-Admin-Token`, or the server was deployed without one (admin closed). |
+| 401 | `AUTH_REQUIRED` | Missing `Token` header or the token was rejected by octo-server. |
+| 403 | `FORBIDDEN` | Token resolved but the caller's `role` is not `superAdmin`. |
+| 503 | `UPSTREAM_UNAVAILABLE` | octo-server could not verify the token (network or upstream error). |
 
-All other error codes are shared with the public surface (§2). The admin
-error deliberately lives in the `err.marketplace.auth.*` family, not a
-standalone `err.marketplace.admin.*` namespace, so clients switch on one
-family for every authentication failure.
+Endpoint tables above cite `auth.admin_unauthorized` from the previous
+`X-Admin-Token` design; new deployments will see the standard `AUTH_REQUIRED`
+/ `FORBIDDEN` codes for these cases.
 
 ### 9.4 Out of scope for v1 admin
 
@@ -767,10 +769,6 @@ family for every authentication failure.
 - Marketplace MUST NOT be reachable from the public internet; front it
   with nginx / an internal load balancer that only accepts traffic from
   trusted origins (admin console + `/market/*` gateway rewrite).
-- `MARKETPLACE_ADMIN_TOKEN` should be rotated on any suspicion of leak.
-  Because `octo-admin` today ships this token to the browser via
-  `import.meta.env.VITE_MARKETPLACE_ADMIN_TOKEN` (Vite build-time
-  inline), treat it as a low-value shared secret: the network fence is
-  the primary defense, the token is defense-in-depth.
-- A future iteration will move admin writes behind octo-admin's own
-  backend so the token never touches the browser.
+- Admin access is gated by the caller's `superAdmin` role in octo-server;
+  revoke a compromised SuperAdmin account in octo-server to cut off
+  marketplace admin at the same time.

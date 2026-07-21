@@ -20,21 +20,11 @@ type Config struct {
 	DevAuthUID         string
 	DevAuthName        string
 	DevSpaceID         string
-	// AdminToken is the shared secret octo-admin sends in X-Admin-Token to
-	// prove it may hit /api/v1/admin/*. Empty ⇒ admin routes are disabled in
-	// prod. In dev (AuthEnabled=false) admin routes are open regardless.
-	AdminToken string
-	// AdminOwnerUID / AdminOwnerName stamp `owner_uid` and `creator_name` on
-	// admin-created records (system MCPs). MUST be set explicitly in prod so
-	// admin-owned data doesn't silently inherit the dev identity. In dev
-	// (AuthEnabled=false) these fall back to DevAuthUID / DevAuthName.
-	AdminOwnerUID     string
-	AdminOwnerName    string
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	ProbeAllowPrivate bool
+	ReadHeaderTimeout  time.Duration
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	IdleTimeout        time.Duration
+	ProbeAllowPrivate  bool
 
 	// Object storage for MCP icons (S3-compatible). Independent of the skill
 	// archive storage below.
@@ -88,9 +78,6 @@ func Load() Config {
 		DevAuthUID:         env("DEV_AUTH_UID", "dev-user"),
 		DevAuthName:        env("DEV_AUTH_NAME", "Developer"),
 		DevSpaceID:         env("DEV_SPACE_ID", "dev-space"),
-		AdminToken:         env("MARKETPLACE_ADMIN_TOKEN", ""),
-		AdminOwnerUID:      env("ADMIN_OWNER_UID", ""),
-		AdminOwnerName:     env("ADMIN_OWNER_NAME", ""),
 		ReadHeaderTimeout:  envDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
 		ReadTimeout:        envDuration("HTTP_READ_TIMEOUT", 15*time.Second),
 		WriteTimeout:       envDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
@@ -123,29 +110,12 @@ func Load() Config {
 	}
 }
 
-// AdminIdentity resolves the identity that will own admin-created records.
-// Prod: requires ADMIN_OWNER_UID / ADMIN_OWNER_NAME to be set (ValidateAPI
-// blocks startup otherwise). Dev: falls back to DevAuthUID / DevAuthName so
-// local iteration doesn't need extra env plumbing.
-func (c Config) AdminIdentity() (uid, name string) {
-	if c.AdminOwnerUID != "" {
-		return c.AdminOwnerUID, c.AdminOwnerName
-	}
-	return c.DevAuthUID, c.DevAuthName
-}
-
 func (c Config) ValidateAPI() error {
 	if c.MySQLDSN == "" {
 		return fmt.Errorf("MYSQL_DSN is required")
 	}
 	if c.AuthEnabled && c.OctoAPIURL == "" {
 		return fmt.Errorf("OCTO_API_URL is required when AUTH_ENABLED=true")
-	}
-	// Prod guardrail: when auth is on, admin-owned data must not fall back to
-	// the dev identity. Force an explicit ADMIN_OWNER_UID so system MCPs are
-	// attributable to a real service account, not "dev-user".
-	if c.AuthEnabled && c.AdminToken != "" && c.AdminOwnerUID == "" {
-		return fmt.Errorf("ADMIN_OWNER_UID is required when AUTH_ENABLED=true and MARKETPLACE_ADMIN_TOKEN is set")
 	}
 	return validatePort(c.APIPort, "API_PORT")
 }

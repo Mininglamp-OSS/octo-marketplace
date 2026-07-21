@@ -79,11 +79,10 @@ func main() {
 		botResolver,
 	)
 
-	adminUID, adminName := cfg.AdminIdentity()
 	adminAuth := middleware.NewAdminAuthenticator(
 		cfg.AuthEnabled,
-		cfg.AdminToken,
-		model.Identity{UID: adminUID, Name: adminName},
+		resolver,
+		model.Identity{UID: cfg.DevAuthUID, Name: cfg.DevAuthName},
 	)
 
 	mcpSvc := service.New(repository.New(database)).WithProbeAllowPrivate(cfg.ProbeAllowPrivate)
