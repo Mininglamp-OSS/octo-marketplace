@@ -15,6 +15,9 @@ var ErrParseTaskAlreadyConsumed = errors.New("parse task already consumed")
 // in the same Space.
 var ErrNameTaken = errors.New("skill name taken")
 
+// ErrSkillNotFound indicates the target live Skill row was not found.
+var ErrSkillNotFound = errors.New("skill not found")
+
 const mysqlErrDupEntry = 1062
 
 func mapDuplicateName(err error) error {

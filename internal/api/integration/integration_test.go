@@ -352,14 +352,9 @@ func TestDeleteSkillOwner(t *testing.T) {
 
 	mock.ExpectQuery("SELECT .+ FROM skills").
 		WillReturnRows(skillRow("skill-6", "My Skill", "user-1", "Alice", "space-1", "space"))
-	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM skill_versions").
+	mock.ExpectExec("UPDATE skills").
 		WithArgs("skill-6").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("DELETE FROM skills").
-		WithArgs("skill-6").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
 
 	w := doRequest(engine, "DELETE", "/api/v1/skill/skill-6", nil)
 

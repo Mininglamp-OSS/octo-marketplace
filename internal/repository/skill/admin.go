@@ -36,6 +36,7 @@ func (r *Repo) AdminList(ctx context.Context, f AdminListFilter) (*ListResult, e
 	var conditions []string
 	var args []interface{}
 
+	conditions = append(conditions, "s.is_deleted = 0")
 	conditions = append(conditions, "s.visibility = 'public'")
 
 	if f.CategoryID != "" {
@@ -169,10 +170,18 @@ func (r *Repo) AdminUpdateSkillAndConsumeTask(ctx context.Context, skillID, owne
 	// Build and execute the skill update
 	sets, args := buildUpdateSets(p)
 	if len(sets) > 0 {
-		query := "UPDATE skills SET " + joinStrings(sets, ", ") + " WHERE id = ?"
+		query := "UPDATE skills SET " + joinStrings(sets, ", ") + " WHERE id = ? AND is_deleted = 0"
 		args = append(args, skillID)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		result, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
 			return mapDuplicateName(err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return ErrSkillNotFound
 		}
 	}
 

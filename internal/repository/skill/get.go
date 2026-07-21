@@ -18,7 +18,7 @@ func (r *Repo) GetByID(ctx context.Context, id string) (*SkillRow, error) {
 		FROM skills s
 		LEFT JOIN skill_versions v ON v.id = s.current_version_id
 		LEFT JOIN resource_metrics rm ON rm.resource_type = 'skill' AND rm.resource_id = s.id
-		WHERE s.id = ?
+		WHERE s.id = ? AND s.is_deleted = 0
 	`
 	rows, err := r.db.QueryContext(ctx, query, id)
 	if err != nil {

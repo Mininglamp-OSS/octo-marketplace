@@ -105,7 +105,7 @@ func (r *Repo) Update(ctx context.Context, id string, p UpdateParams) (int64, er
 		return 0, nil
 	}
 
-	query := fmt.Sprintf("UPDATE skills SET %s WHERE id = ?", strings.Join(sets, ", "))
+	query := fmt.Sprintf("UPDATE skills SET %s WHERE id = ? AND is_deleted = 0", strings.Join(sets, ", "))
 	args = append(args, id)
 
 	result, err := r.db.ExecContext(ctx, query, args...)
@@ -127,7 +127,7 @@ func (r *Repo) UpdateWithTags(ctx context.Context, id, spaceID, ownerID string, 
 	sets, args := buildUpdateSets(p)
 	var affected int64
 	if len(sets) > 0 {
-		query := fmt.Sprintf("UPDATE skills SET %s WHERE id = ?", strings.Join(sets, ", "))
+		query := fmt.Sprintf("UPDATE skills SET %s WHERE id = ? AND is_deleted = 0", strings.Join(sets, ", "))
 		args = append(args, id)
 
 		result, err := tx.ExecContext(ctx, query, args...)
@@ -137,6 +137,9 @@ func (r *Repo) UpdateWithTags(ctx context.Context, id, spaceID, ownerID string, 
 		affected, err = result.RowsAffected()
 		if err != nil {
 			return 0, err
+		}
+		if affected == 0 {
+			return 0, ErrSkillNotFound
 		}
 	}
 	if err := upsertTags(ctx, tx, spaceID, ownerID, p.TagNames); err != nil {

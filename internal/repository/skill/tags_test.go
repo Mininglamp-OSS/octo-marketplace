@@ -74,7 +74,7 @@ func TestAdminUpdateSkillAndConsumeTaskUpsertsGlobalTags(t *testing.T) {
 	mock.ExpectExec("UPDATE parse_tasks SET status = 'consumed'").
 		WithArgs("task-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE skills SET tags = \\? WHERE id = \\?").
+	mock.ExpectExec("UPDATE skills SET tags = \\? WHERE id = \\? AND is_deleted = 0").
 		WithArgs(`["official"]`, "skill-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_tags").

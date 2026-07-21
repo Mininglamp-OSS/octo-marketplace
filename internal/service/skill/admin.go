@@ -301,6 +301,9 @@ func (s *Service) AdminUpdate(ctx context.Context, id string, p AdminUpdateParam
 
 	_, err = s.repo.UpdateWithTags(ctx, id, skillrepo.GlobalTagSpaceID, row.OwnerID, repoParams)
 	if err != nil {
+		if errors.Is(err, skillrepo.ErrSkillNotFound) {
+			return nil, ErrNotFound
+		}
 		if errors.Is(err, skillrepo.ErrNameTaken) {
 			return nil, ErrNameTaken
 		}
@@ -316,7 +319,7 @@ func (s *Service) AdminUpdate(ctx context.Context, id string, p AdminUpdateParam
 	return &item, nil
 }
 
-// AdminDelete deletes a public skill and its versions.
+// AdminDelete soft-deletes a public skill.
 func (s *Service) AdminDelete(ctx context.Context, id string) error {
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -326,31 +329,12 @@ func (s *Service) AdminDelete(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 
-	// Collect object keys for best-effort cleanup
-	var objectKeys []string
-	if row.FileURL != "" {
-		objectKeys = append(objectKeys, row.FileURL)
-	}
-	if row.VersionStorage != "" {
-		var vs model.VersionStorage
-		if json.Unmarshal([]byte(row.VersionStorage), &vs) == nil {
-			if vs.ZipObjectKey != "" && vs.ZipObjectKey != row.FileURL {
-				objectKeys = append(objectKeys, vs.ZipObjectKey)
-			}
-			if vs.SkillMdObjectKey != "" {
-				objectKeys = append(objectKeys, vs.SkillMdObjectKey)
-			}
-		}
-	}
-
-	_, err = s.repo.Delete(ctx, id)
+	affected, err := s.repo.Delete(ctx, id)
 	if err != nil {
 		return err
 	}
-
-	// Best-effort cleanup of stored objects
-	for _, key := range objectKeys {
-		_ = s.store.DeleteObject(ctx, key)
+	if affected == 0 {
+		return ErrNotFound
 	}
 
 	return nil
@@ -554,6 +538,9 @@ func (s *Service) AdminReupload(ctx context.Context, id string, p AdminReuploadP
 		_ = s.store.DeleteObject(ctx, skillMdObjectKey)
 		if errors.Is(err, skillrepo.ErrParseTaskAlreadyConsumed) {
 			return nil, ErrParseTaskConsumed
+		}
+		if errors.Is(err, skillrepo.ErrSkillNotFound) {
+			return nil, ErrNotFound
 		}
 		if errors.Is(err, skillrepo.ErrNameTaken) {
 			return nil, ErrNameTaken

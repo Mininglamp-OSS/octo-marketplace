@@ -117,10 +117,18 @@ func (r *Repo) UpdateSkillAndConsumeTask(ctx context.Context, skillID string, p 
 		return tx.Commit()
 	}
 
-	query := "UPDATE skills SET " + joinStrings(sets, ", ") + " WHERE id = ?"
+	query := "UPDATE skills SET " + joinStrings(sets, ", ") + " WHERE id = ? AND is_deleted = 0"
 	args = append(args, skillID)
-	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
 		return mapDuplicateName(err)
+	}
+	affected, err = result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrSkillNotFound
 	}
 
 	// Insert the new version record in the same transaction

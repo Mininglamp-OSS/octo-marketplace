@@ -296,7 +296,7 @@ func TestAdminUpdate_UpsertsGlobalTags(t *testing.T) {
 	)
 	mock.ExpectQuery("SELECT .+ FROM skills").WithArgs("sk-global").WillReturnRows(initial)
 	mock.ExpectBegin()
-	mock.ExpectExec("UPDATE skills SET tags = \\? WHERE id = \\?").
+	mock.ExpectExec("UPDATE skills SET tags = \\? WHERE id = \\? AND is_deleted = 0").
 		WithArgs(`["official"]`, "sk-global").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_tags").

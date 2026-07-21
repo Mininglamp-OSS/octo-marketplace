@@ -609,6 +609,9 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 			if errors.Is(err, skillrepo.ErrParseTaskAlreadyConsumed) {
 				return nil, ErrParseTaskConsumed
 			}
+			if errors.Is(err, skillrepo.ErrSkillNotFound) {
+				return nil, ErrNotFound
+			}
 			if errors.Is(err, skillrepo.ErrNameTaken) {
 				return nil, ErrNameTaken
 			}
@@ -633,6 +636,9 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 
 	_, err = s.repo.UpdateWithTags(ctx, id, spaceID, userID, repoParams)
 	if err != nil {
+		if errors.Is(err, skillrepo.ErrSkillNotFound) {
+			return nil, ErrNotFound
+		}
 		if errors.Is(err, skillrepo.ErrNameTaken) {
 			return nil, ErrNameTaken
 		}
@@ -666,7 +672,7 @@ func (s *Service) ListTags(ctx context.Context, spaceID, query string, limit int
 	return items, nil
 }
 
-// Delete hard-deletes a skill. Only the owner within the same space can delete.
+// Delete soft-deletes a skill. Only the owner within the same space can delete.
 func (s *Service) Delete(ctx context.Context, id, userID, spaceID string) error {
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -675,8 +681,14 @@ func (s *Service) Delete(ctx context.Context, id, userID, spaceID string) error 
 	if row == nil || row.OwnerID != userID || row.SpaceID != spaceID {
 		return ErrNotFound
 	}
-	_, err = s.repo.Delete(ctx, id)
-	return err
+	affected, err := s.repo.Delete(ctx, id)
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func toVisibility(v string) model.Visibility {

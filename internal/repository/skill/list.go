@@ -86,6 +86,8 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	var conditions []string
 	var args []interface{}
 
+	conditions = append(conditions, "s.is_deleted = 0")
+
 	if f.MineOnly {
 		conditions = append(conditions, "s.owner_id = ? AND s.space_id = ?")
 		args = append(args, f.UserID, f.SpaceID)
