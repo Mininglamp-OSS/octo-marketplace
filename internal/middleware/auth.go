@@ -71,21 +71,8 @@ func (a *Authenticator) Handler() gin.HandlerFunc {
 			a.authenticateBot(c, token)
 			return
 		}
-		if a.resolver == nil {
-			abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
-			return
-		}
-		identity, err := a.resolver.Resolve(c.Request.Context(), token)
-		if err != nil {
-			abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
-			return
-		}
-		if identity.UID == "" {
-			abortError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "Invalid or expired token.")
-			return
-		}
-		if !identity.ContextIncluded {
-			abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authorization context is unavailable.")
+		identity, ok := resolveUserIdentity(c, a.resolver, token)
+		if !ok {
 			return
 		}
 
@@ -102,6 +89,36 @@ func (a *Authenticator) Handler() gin.HandlerFunc {
 		setAuthContext(c, identity, spaceID)
 		c.Next()
 	}
+}
+
+// resolveUserIdentity runs the resolver-based identity validation both public
+// and admin middleware share once the caller-supplied token has been
+// extracted and any bot-token dispatch has been done. On any failure it emits
+// the appropriate 4xx/5xx envelope via abortError and returns ok=false;
+// callers must not continue in that case.
+//
+// The nil-resolver branch is a defense-in-depth 503: the constructors reject
+// this configuration at startup, so a non-nil resolver is a wiring invariant
+// by the time a request reaches here.
+func resolveUserIdentity(c *gin.Context, resolver auth.Resolver, token string) (model.Identity, bool) {
+	if resolver == nil {
+		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
+		return model.Identity{}, false
+	}
+	identity, err := resolver.Resolve(c.Request.Context(), token)
+	if err != nil {
+		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
+		return model.Identity{}, false
+	}
+	if identity.UID == "" {
+		abortError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "Invalid or expired token.")
+		return model.Identity{}, false
+	}
+	if !identity.ContextIncluded {
+		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authorization context is unavailable.")
+		return model.Identity{}, false
+	}
+	return identity, true
 }
 
 func (a *Authenticator) authenticateBot(c *gin.Context, token string) {

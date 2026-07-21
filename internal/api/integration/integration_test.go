@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/router"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/gin-gonic/gin"
@@ -687,14 +689,31 @@ func TestReuploadNonOwner(t *testing.T) {
 
 // --- Admin Auth Tests (AUTH_ENABLED=true) ---
 
-func TestAdminCreateCategoryIgnoresIdentityRoleWhenAdminTokenMatches(t *testing.T) {
+// stubSuperAdminResolver returns a fixed SuperAdmin identity for any non-empty
+// token so admin integration tests can exercise the resolver + role-check
+// chain without a real octo-server.
+type stubSuperAdminResolver struct{}
+
+func (stubSuperAdminResolver) Resolve(_ context.Context, token string) (model.Identity, error) {
+	if token == "" {
+		return model.Identity{}, nil
+	}
+	return model.Identity{
+		UID:             "platform-admin",
+		Name:            "Platform",
+		Role:            marketmiddleware.RoleSuperAdmin,
+		ContextIncluded: true,
+	}, nil
+}
+
+func TestAdminCreateCategoryAcceptsSuperAdminToken(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
-	auth := marketmiddleware.NewAuthenticator(false, nil, model.Identity{
+	pubAuth := marketmiddleware.NewAuthenticator(false, nil, model.Identity{
 		UID:  "user-1",
 		Name: "Alice",
 		Role: "member",
@@ -705,7 +724,8 @@ func TestAdminCreateCategoryIgnoresIdentityRoleWhenAdminTokenMatches(t *testing.
 		BaseURL:  "http://localhost:8092",
 		MaxMB:    20,
 	}
-	engine := router.PublicWithDBAndAuth(db, auth, storageCfg, true)
+	var adminResolver auth.Resolver = stubSuperAdminResolver{}
+	engine := router.PublicWithDBAndAdminAuth(db, pubAuth, storageCfg, true, adminResolver)
 
 	mock.ExpectExec("INSERT INTO categories").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -714,7 +734,7 @@ func TestAdminCreateCategoryIgnoresIdentityRoleWhenAdminTokenMatches(t *testing.
 		"name":       "Test",
 		"icon_key":   "star",
 		"sort_order": 1,
-	}, map[string]string{"X-Admin-Token": "sekret"})
+	}, map[string]string{"Token": "super-admin-session"})
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusCreated, w.Body.String())
@@ -724,7 +744,7 @@ func TestAdminCreateCategoryIgnoresIdentityRoleWhenAdminTokenMatches(t *testing.
 	}
 }
 
-func TestAdminCreateCategoryMissingAdminTokenUnauthorized(t *testing.T) {
+func TestAdminCreateCategoryMissingTokenUnauthorized(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatal(err)
@@ -732,7 +752,7 @@ func TestAdminCreateCategoryMissingAdminTokenUnauthorized(t *testing.T) {
 	defer db.Close()
 	_ = mock
 
-	auth := marketmiddleware.NewAuthenticator(false, nil, model.Identity{
+	pubAuth := marketmiddleware.NewAuthenticator(false, nil, model.Identity{
 		UID:  "admin-1",
 		Name: "Admin",
 		Role: "admin",
@@ -743,7 +763,8 @@ func TestAdminCreateCategoryMissingAdminTokenUnauthorized(t *testing.T) {
 		BaseURL:  "http://localhost:8092",
 		MaxMB:    20,
 	}
-	engine := router.PublicWithDBAndAuth(db, auth, storageCfg, true)
+	var adminResolver auth.Resolver = stubSuperAdminResolver{}
+	engine := router.PublicWithDBAndAdminAuth(db, pubAuth, storageCfg, true, adminResolver)
 
 	w := doRequest(engine, "POST", "/api/v1/skill/admin/categories", map[string]interface{}{
 		"name":       "Admin Category",

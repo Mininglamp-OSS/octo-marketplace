@@ -1,120 +1,90 @@
 package middleware
 
 import (
-	"crypto/subtle"
-	"encoding/json"
 	"net/http"
-	"strings"
 
-	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/gin-gonic/gin"
 )
 
-// AdminAuthenticator guards the /admin/api/v1/* namespace used by octo-admin.
+// RoleSuperAdmin is the identity.Role value octo-server encodes for global
+// administrators. It is coupled by convention — not by import — to the string
+// literal used in octo-server (see pkg/auth/tokeninfo.go and callers of
+// wkhttp.Context.CheckLoginRoleIsSuperAdmin). If octo-server ever renames or
+// re-cases the role, marketplace silently 403s every SuperAdmin until this
+// constant is updated to match. Grep both repos before changing.
+const RoleSuperAdmin = "superAdmin"
+
+// AdminAuthenticator guards the /api/v1/admin/* namespace consumed by
+// octo-admin. It resolves the caller's Octo session token the same way as the
+// public Authenticator (via resolveUserIdentity) and additionally requires
+// identity.Role == "superAdmin", mirroring octo-server's /v1/manager/*
+// CheckLoginRoleIsSuperAdmin gate.
 //
-// Auth contract (documented on the octo-admin side; not yet in mcp-v1.md
-// because that doc only covers the public /market/api/v1/* surface):
+// AUTH_ENABLED=false skips the resolve+role check entirely and stamps the
+// configured dev identity, matching the dev bypass on the public
+// Authenticator so local iteration doesn't need a real octo-server.
 //
-//	Header:  X-Admin-Token: <shared-secret>
-//	Env:     MARKETPLACE_ADMIN_TOKEN=<same-value>
-//
-// A request is admitted iff the header equals the configured token AND the
-// token is non-empty. When AUTH_ENABLED=false (dev), the token check is
-// skipped and the request is admitted unconditionally — matching the dev-mode
-// behaviour of the regular Authenticator so local iteration doesn't need
-// secret management. Every admin request is stamped with a synthetic admin
-// identity (`admin` uid, `Admin` name) so downstream service code has a
-// caller for creator_name and audit trails.
-//
-// Wire error envelope mirrors the marketplace public API (doc §2):
-//
-//	{"err": {"code":"err.marketplace.admin.unauthorized",
-//	         "message":"Admin token required"}}
+// Admin routes carry no X-Space-Id — system MCPs live outside the Space model
+// (space_id=NULL) — so setAuthContext is called with an empty spaceID.
 type AdminAuthenticator struct {
-	enabled  bool
-	token    string
-	identity model.Identity
-	spaceID  string
+	enabled     bool
+	resolver    auth.Resolver
+	devIdentity model.Identity
+}
+
+// NewAdminAuthenticator constructs the admin middleware.
+//
+//   - authEnabled mirrors the public authenticator's flag; when false, no
+//     token is resolved and no role is checked.
+//   - resolver is the same identity resolver used by the public Authenticator.
+//     REQUIRED when authEnabled=true; passing nil in that mode panics at
+//     construction so a misconfigured deployment fails at boot rather than
+//     silently returning 503 to every admin request.
+//   - devIdentity is stamped onto the request context in dev bypass. Empty
+//     UID/Name default to "admin"/"Admin" so downstream creator_name fields
+//     stay populated during local runs.
+func NewAdminAuthenticator(authEnabled bool, resolver auth.Resolver, devIdentity model.Identity) *AdminAuthenticator {
+	if authEnabled && resolver == nil {
+		panic("middleware: NewAdminAuthenticator requires a non-nil resolver when authEnabled=true")
+	}
+	if devIdentity.UID == "" {
+		devIdentity.UID = "admin"
+	}
+	if devIdentity.Name == "" {
+		devIdentity.Name = "Admin"
+	}
+	return &AdminAuthenticator{
+		enabled:     authEnabled,
+		resolver:    resolver,
+		devIdentity: devIdentity,
+	}
 }
 
 // Handler guards admin marketplace routes in the Gin router.
 func (a *AdminAuthenticator) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if a.enabled {
-			supplied := strings.TrimSpace(c.GetHeader("X-Admin-Token"))
-			if a.token == "" || supplied == "" ||
-				subtle.ConstantTimeCompare([]byte(supplied), []byte(a.token)) != 1 {
-				apiresponse.Fail(c, http.StatusUnauthorized, "AUTH_REQUIRED", "Admin authentication is required", nil, "")
-				return
-			}
+		if !a.enabled {
+			setAuthContext(c, a.devIdentity, "")
+			c.Next()
+			return
 		}
-		setAuthContext(c, a.identity, a.spaceID)
+
+		token := requestToken(c)
+		if token == "" {
+			abortError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "Admin authentication is required.")
+			return
+		}
+		identity, ok := resolveUserIdentity(c, a.resolver, token)
+		if !ok {
+			return
+		}
+		if identity.Role != RoleSuperAdmin {
+			abortError(c, http.StatusForbidden, "FORBIDDEN", "SuperAdmin role is required.")
+			return
+		}
+		setAuthContext(c, identity, "")
 		c.Next()
 	}
-}
-
-// NewAdminAuthenticator constructs the middleware.
-//
-//   - `authEnabled` mirrors the public authenticator's flag; when false, the
-//     token check is bypassed for local dev.
-//   - `token` is the shared secret from config.MARKETPLACE_ADMIN_TOKEN.
-//     Empty AND authEnabled=true ⇒ every admin request is rejected 401
-//     (deployed without a token means admin is disabled by design).
-//   - `devIdentity` supplies uid/name used for stamping creator_name on
-//     system MCPs.
-func NewAdminAuthenticator(authEnabled bool, token string, devIdentity model.Identity) *AdminAuthenticator {
-	identity := devIdentity
-	if identity.UID == "" {
-		identity.UID = "admin"
-	}
-	if identity.Name == "" {
-		identity.Name = "Admin"
-	}
-	// Admin operates outside the Space model: system MCPs carry space_id=NULL.
-	// We hand an empty spaceID down to service code and let it interpret that
-	// as "no space anchor" for the CreateSystem path.
-	return &AdminAuthenticator{
-		enabled:  authEnabled,
-		token:    strings.TrimSpace(token),
-		identity: identity,
-		spaceID:  "",
-	}
-}
-
-// Wrap returns an http.Handler middleware wrapping `next`. Same
-// http.Handler chain shape as Authenticator.WrapMarket so it composes with
-// the existing marketplace router wiring.
-func (a *AdminAuthenticator) Wrap(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.enabled {
-			// Prod path: require a matching token. Empty configured token
-			// closes the door (admin disabled). Comparison uses
-			// crypto/subtle to blunt timing attacks on the secret.
-			supplied := strings.TrimSpace(r.Header.Get("X-Admin-Token"))
-			if a.token == "" || supplied == "" ||
-				subtle.ConstantTimeCompare([]byte(supplied), []byte(a.token)) != 1 {
-				writeAdminError(w, http.StatusUnauthorized,
-					"err.marketplace.auth.admin_unauthorized",
-					"Admin token required")
-				return
-			}
-		}
-		// Stamp the synthetic admin identity + empty space so downstream
-		// handlers reuse the same context accessors as the market path.
-		next.ServeHTTP(w, r.WithContext(withAuthContext(r.Context(), a.identity, a.spaceID)))
-	})
-}
-
-// writeAdminError renders the marketplace wire envelope (doc §2) with an
-// admin-specific error code that lives in the auth family (doc §9).
-func writeAdminError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"err": map[string]any{
-			"code":    code,
-			"message": message,
-		},
-	})
 }
