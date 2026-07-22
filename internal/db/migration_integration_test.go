@@ -67,7 +67,15 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		}
 	}
 
-	for _, table := range []string{"skill_versions", "resource_metrics", "resource_metric_flushes"} {
+	for _, table := range []string{
+		"categories",
+		"skills",
+		"parse_tasks",
+		"skill_tags",
+		"skill_versions",
+		"resource_metrics",
+		"resource_metric_flushes",
+	} {
 		var collation string
 		err := database.QueryRow(
 			"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
