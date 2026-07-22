@@ -7,9 +7,13 @@ UPDATE skills s
     SELECT skill_id, id AS version_id
     FROM skill_versions sv1
     WHERE created_at = (
-      SELECT MAX(created_at) FROM skill_versions sv2 WHERE sv2.skill_id = sv1.skill_id
+      SELECT MAX(created_at)
+      FROM skill_versions sv2
+      WHERE sv2.skill_id COLLATE utf8mb4_unicode_ci =
+            sv1.skill_id COLLATE utf8mb4_unicode_ci
     )
-  ) latest ON latest.skill_id = s.id
+  ) latest ON latest.skill_id COLLATE utf8mb4_unicode_ci =
+              s.id COLLATE utf8mb4_unicode_ci
 SET s.current_version_id = latest.version_id
 WHERE s.current_version_id = '';
 
@@ -34,7 +38,12 @@ BEGIN
     SELECT s.id, s.version
     FROM skills s
     WHERE s.current_version_id = ''
-      AND NOT EXISTS (SELECT 1 FROM skill_versions sv WHERE sv.skill_id = s.id);
+      AND NOT EXISTS (
+        SELECT 1
+        FROM skill_versions sv
+        WHERE sv.skill_id COLLATE utf8mb4_unicode_ci =
+              s.id COLLATE utf8mb4_unicode_ci
+      );
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 
   OPEN cur;
@@ -49,7 +58,10 @@ BEGIN
     INSERT INTO skill_versions (id, skill_id, version, changelog, storage, changed_by)
     VALUES (v_version_id, v_skill_id, v_version, '', NULL, 'system-backfill');
 
-    UPDATE skills SET current_version_id = v_version_id WHERE id = v_skill_id;
+    UPDATE skills
+    SET current_version_id = v_version_id
+    WHERE id COLLATE utf8mb4_unicode_ci =
+          v_skill_id COLLATE utf8mb4_unicode_ci;
   END LOOP;
   CLOSE cur;
 END;
