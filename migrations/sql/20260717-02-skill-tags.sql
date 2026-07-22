@@ -8,7 +8,7 @@ CREATE TABLE skill_tags (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (space_id, name),
   INDEX idx_skill_tags_space_updated (space_id, updated_at)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Backfill Space tag indexes from existing skill JSON tags.
 INSERT INTO skill_tags (space_id, name, created_by, created_at, updated_at)

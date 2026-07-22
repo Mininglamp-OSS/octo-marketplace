@@ -7,7 +7,7 @@ CREATE TABLE categories (
   sort_order INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE skills (
   id VARCHAR(36) PRIMARY KEY,
@@ -31,7 +31,7 @@ CREATE TABLE skills (
   INDEX idx_owner (owner_id),
   INDEX idx_space_visibility (space_id, visibility),
   INDEX idx_created_at (created_at)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE parse_tasks (
   id VARCHAR(36) PRIMARY KEY,
@@ -51,7 +51,7 @@ CREATE TABLE parse_tasks (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_status (status),
   INDEX idx_owner (owner_id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +migrate Down
 
