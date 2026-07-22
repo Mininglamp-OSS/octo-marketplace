@@ -1,8 +1,37 @@
 -- +migrate Up
 
-ALTER TABLE skill_tags
-  ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT FIRST,
-  ADD UNIQUE KEY uk_skill_tags_id (id);
+-- MySQL DDL commits independently from the migration bookkeeping transaction.
+-- A retry after a later statement fails must therefore tolerate the column and
+-- index already existing.
+SET @add_skill_tag_id = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE skill_tags ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT FIRST, ADD UNIQUE KEY uk_skill_tags_id (id)',
+    'SELECT 1'
+  )
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'skill_tags'
+    AND column_name = 'id'
+);
+PREPARE add_skill_tag_id_stmt FROM @add_skill_tag_id;
+EXECUTE add_skill_tag_id_stmt;
+DEALLOCATE PREPARE add_skill_tag_id_stmt;
+
+SET @add_skill_tag_id_index = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE skill_tags ADD UNIQUE KEY uk_skill_tags_id (id)',
+    'SELECT 1'
+  )
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'skill_tags'
+    AND index_name = 'uk_skill_tags_id'
+);
+PREPARE add_skill_tag_id_index_stmt FROM @add_skill_tag_id_index;
+EXECUTE add_skill_tag_id_index_stmt;
+DEALLOCATE PREPARE add_skill_tag_id_index_stmt;
 
 -- Ensure every historical string tag in skills.tags has a tag row.
 INSERT INTO skill_tags (space_id, name, created_by, created_at, updated_at)
@@ -25,7 +54,7 @@ WHERE JSON_TYPE(s.tags) = 'ARRAY'
 ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at);
 
 CREATE TEMPORARY TABLE skill_tag_id_json (
-  skill_id VARCHAR(36) PRIMARY KEY,
+  skill_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PRIMARY KEY,
   tag_ids JSON NOT NULL
 );
 
@@ -49,9 +78,14 @@ FROM (
       )
     ) AS jt
     LEFT JOIN skill_tags global_tag
-      ON global_tag.space_id = '' AND global_tag.name = jt.name
+      ON global_tag.space_id = ''
+     AND global_tag.name COLLATE utf8mb4_unicode_ci =
+         jt.name COLLATE utf8mb4_unicode_ci
     LEFT JOIN skill_tags space_tag
-      ON space_tag.space_id = s.space_id AND space_tag.name = jt.name
+      ON space_tag.space_id COLLATE utf8mb4_unicode_ci =
+         s.space_id COLLATE utf8mb4_unicode_ci
+     AND space_tag.name COLLATE utf8mb4_unicode_ci =
+         jt.name COLLATE utf8mb4_unicode_ci
     WHERE JSON_TYPE(s.tags) = 'ARRAY'
       AND JSON_LENGTH(s.tags) > 0
       AND JSON_TYPE(JSON_EXTRACT(s.tags, '$[0]')) = 'STRING'
@@ -64,7 +98,9 @@ FROM (
 GROUP BY skill_id;
 
 UPDATE skills s
-LEFT JOIN skill_tag_id_json m ON m.skill_id = s.id
+LEFT JOIN skill_tag_id_json m
+  ON m.skill_id COLLATE utf8mb4_unicode_ci =
+     s.id COLLATE utf8mb4_unicode_ci
 SET s.tags = COALESCE(m.tag_ids, JSON_ARRAY())
 WHERE JSON_TYPE(s.tags) = 'ARRAY'
   AND JSON_LENGTH(s.tags) > 0
@@ -75,7 +111,7 @@ DROP TEMPORARY TABLE skill_tag_id_json;
 -- +migrate Down
 
 CREATE TEMPORARY TABLE skill_tag_name_json (
-  skill_id VARCHAR(36) PRIMARY KEY,
+  skill_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PRIMARY KEY,
   tag_names JSON NOT NULL
 );
 
@@ -108,7 +144,9 @@ FROM (
 GROUP BY skill_id;
 
 UPDATE skills s
-LEFT JOIN skill_tag_name_json m ON m.skill_id = s.id
+LEFT JOIN skill_tag_name_json m
+  ON m.skill_id COLLATE utf8mb4_unicode_ci =
+     s.id COLLATE utf8mb4_unicode_ci
 SET s.tags = COALESCE(m.tag_names, JSON_ARRAY())
 WHERE JSON_TYPE(s.tags) = 'ARRAY'
   AND JSON_LENGTH(s.tags) > 0
