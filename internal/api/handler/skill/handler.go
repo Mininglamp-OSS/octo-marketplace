@@ -255,6 +255,12 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 	spaceID := middleware.SpaceID(c)
+	creatorID := identity.UID
+	creatorName := identity.Name
+	if bot, hasBot := middleware.BotIdentity(c); hasBot && bot.BotUID != "" {
+		creatorID = bot.BotUID
+		creatorName = bot.BotName
+	}
 
 	var req CreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -277,6 +283,8 @@ func (h *Handler) Create(c *gin.Context) {
 		UserID:        identity.UID,
 		UserName:      identity.Name,
 		SpaceID:       spaceID,
+		CreatorID:     creatorID,
+		CreatorName:   creatorName,
 	})
 	if err != nil {
 		if errors.Is(err, skillsvc.ErrInvalidParseTask) {
