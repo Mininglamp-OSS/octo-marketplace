@@ -67,6 +67,20 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		}
 	}
 
+	for _, table := range []string{"skill_versions", "resource_metrics", "resource_metric_flushes"} {
+		var collation string
+		err := database.QueryRow(
+			"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&collation)
+		if err != nil {
+			t.Fatalf("query collation for %s: %v", table, err)
+		}
+		if collation != "utf8mb4_unicode_ci" {
+			t.Errorf("table %s collation=%s want=utf8mb4_unicode_ci", table, collation)
+		}
+	}
+
 	// --- Down ---
 	n, err = migrate.Exec(database, "mysql", source, migrate.Down)
 	if err != nil {
