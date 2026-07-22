@@ -6,75 +6,81 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
-func TestIsSecretKey(t *testing.T) {
-	secret := []string{
-		"Authorization", "authorization", "token", "TOKEN",
-		"GITHUB_TOKEN", "access_token", "api_key", "API-KEY", "apikey",
-		"my_secret", "password", "PWD", "openai_key",
-		"DB_PASSWORD", "MYSQL_PWD", "user_password", "passwd", "pass",
-		"passphrase", "Cookie", "credentials", "credential", "auth",
-		"x-auth", "bearer", "session", "sessionid", "PAT",
-		"jwt", "JWT", "DSN", "connection_string", "x_connection_string",
-		"access", "public_access",
+// Rule 1 (must_be_empty on user-supplied) and rule 2 (public_secret_disallowed
+// on secret-shaped shared keys) are both removed as of this revision (doc §5).
+// Values are persisted verbatim on any visibility; non-owner blanking in
+// detailForCaller (§5.3) is the sole guard.
+
+func TestRedactSecretsPreservesValueOnAllVisibilities(t *testing.T) {
+	// Regardless of visibility or user-supplied flag, a value passes through
+	// verbatim. The only transform is the legacy sentinel → "" normalization.
+	cases := []struct {
+		name       string
+		visibility model.Visibility
+		userSup    []string
+	}{
+		{"private no user-supplied", model.VisibilityPrivate, nil},
+		{"private with user-supplied", model.VisibilityPrivate, []string{"Authorization"}},
+		{"public no user-supplied", model.VisibilityPublic, nil},
+		{"public with user-supplied", model.VisibilityPublic, []string{"Authorization"}},
+		{"system no user-supplied", model.VisibilitySystem, nil},
+		{"space no user-supplied", model.VisibilitySpace, nil},
 	}
-	for _, k := range secret {
-		if !isSecretKey(k) {
-			t.Errorf("isSecretKey(%q) = false, want true", k)
-		}
-	}
-	notSecret := []string{
-		"region", "url", "X-Trace", "serverName", "keyboard_layout",
-		// "keyboard_layout" ends in "layout" not "key"; ensure the anchored
-		// pattern does not over-match a word merely containing "key".
-		"donkey_count",
-	}
-	for _, k := range notSecret {
-		if isSecretKey(k) {
-			t.Errorf("isSecretKey(%q) = true, want false", k)
-		}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := map[string]string{
+				"Authorization": "Bearer real-token",
+				"X-Trace":       "web",
+			}
+			out, leaks := redactSecrets(in, "headers", c.userSup, c.visibility)
+			if len(leaks) != 0 {
+				t.Fatalf("unexpected leaks: %#v", leaks)
+			}
+			if out["Authorization"] != "Bearer real-token" {
+				t.Fatalf("Authorization altered: %q", out["Authorization"])
+			}
+			if out["X-Trace"] != "web" {
+				t.Fatalf("X-Trace altered: %q", out["X-Trace"])
+			}
+		})
 	}
 }
 
-func TestRedactSecrets(t *testing.T) {
+func TestRedactSecretsSentinelNormalizedToEmpty(t *testing.T) {
+	// Legacy clients still submit the sentinel for user-supplied keys. Accept
+	// and normalize to "" so the DB doesn't accumulate the placeholder literal.
 	in := map[string]string{
 		"TOKEN":  model.SecretPlaceholderSentinel,
-		"API":    "", // not a secret key, empty is fine
 		"secret": "",
-		"region": "eu-west-1",
+		"other":  "plain-value",
 	}
-	out, leaks := redactSecrets(in, "env")
+	out, leaks := redactSecrets(
+		in, "env", []string{"TOKEN", "secret"}, model.VisibilityPrivate,
+	)
 	if len(leaks) != 0 {
 		t.Fatalf("unexpected leaks: %#v", leaks)
 	}
 	if out["TOKEN"] != "" {
-		t.Fatalf("TOKEN not blanked: %q", out["TOKEN"])
+		t.Fatalf("sentinel not normalized: %q", out["TOKEN"])
 	}
-	if out["region"] != "eu-west-1" {
-		t.Fatalf("region altered: %q", out["region"])
+	if out["secret"] != "" {
+		t.Fatalf("empty altered: %q", out["secret"])
 	}
-}
-
-func TestRedactSecretsRejectsPlaintext(t *testing.T) {
-	in := map[string]string{"my_secret": "hunter2"}
-	_, leaks := redactSecrets(in, "headers")
-	if len(leaks) != 1 || leaks[0].Field != "headers.my_secret" || leaks[0].Reason != "non_empty" {
-		t.Fatalf("expected one leak headers.my_secret/non_empty, got %#v", leaks)
+	if out["other"] != "plain-value" {
+		t.Fatalf("plain value altered: %q", out["other"])
 	}
 }
 
-func TestRedactSecretsRejectsCommonCredentialAliases(t *testing.T) {
-	in := map[string]string{
-		"DB_PASSWORD": "hunter2",
-		"Cookie":      "session=abc",
-		"credentials": "secret",
-		"PAT":         "ghp_xxx",
-		"dsn":         "mysql://user:pass@host/db",
-		"jwt":         "eyJhbGciOi...",
-		"access":      "opaque-secret",
+func TestRedactSecretsEmptyMapPassesThrough(t *testing.T) {
+	// Nil / empty maps pass through untouched. Guarantees the caller doesn't
+	// need to nil-check before invoking.
+	out, leaks := redactSecrets(nil, "env", nil, model.VisibilityPublic)
+	if len(leaks) != 0 || out != nil {
+		t.Fatalf("nil should stay nil: out=%#v leaks=%#v", out, leaks)
 	}
-	_, leaks := redactSecrets(in, "env")
-	if len(leaks) != len(in) {
-		t.Fatalf("expected %d leaks, got %#v", len(in), leaks)
+	out, leaks = redactSecrets(map[string]string{}, "env", nil, model.VisibilityPublic)
+	if len(leaks) != 0 || len(out) != 0 {
+		t.Fatalf("empty map should stay empty: out=%#v leaks=%#v", out, leaks)
 	}
 }
 

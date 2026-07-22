@@ -21,23 +21,31 @@ type CreateRequest struct {
 	// mcpServers snippet (mcp-v1.md §3, "服务标识"). Optional on the wire —
 	// when omitted or empty the server auto-slugifies Name. Must match
 	// ^[a-z0-9-]{1,64}$ after normalization. Unique per Space among live rows.
-	Slug          string            `json:"slug"`
-	Slogan        string            `json:"slogan"`
-	Category      string            `json:"category"`
-	Icon          string            `json:"icon"`
-	Tags          []string          `json:"tags"`
-	Transport     Transport         `json:"transport"`
-	URL           string            `json:"url"`
-	Command       string            `json:"command"`
-	Args          []string          `json:"args"`
-	Env           map[string]string `json:"env"`
-	Headers       map[string]string `json:"headers"`
-	AuthType      string            `json:"auth_type"`
-	Tools         []Tool            `json:"tools"`
-	UsageExamples []string          `json:"usage_examples"`
-	FAQs          []FAQ             `json:"faqs"`
-	Notes         []string          `json:"notes"`
-	Visibility    Visibility        `json:"visibility"`
+	Slug      string            `json:"slug"`
+	Slogan    string            `json:"slogan"`
+	Category  string            `json:"category"`
+	Icon      string            `json:"icon"`
+	Tags      []string          `json:"tags"`
+	Transport Transport         `json:"transport"`
+	URL       string            `json:"url"`
+	Command   string            `json:"command"`
+	Args      []string          `json:"args"`
+	Env       map[string]string `json:"env"`
+	// EnvUserSupplied lists env keys whose value must be filled locally by
+	// each consumer (doc §5). Keys not listed here are persisted with their
+	// submitted value; keys listed here may carry any value on write (the
+	// value is stored verbatim for owner-side edit round-trip) and are
+	// blanked to non-owners on read via detailForCaller (§5.3).
+	EnvUserSupplied []string          `json:"env_user_supplied"`
+	Headers         map[string]string `json:"headers"`
+	// HeadersUserSupplied — same semantics as EnvUserSupplied for headers.
+	HeadersUserSupplied []string   `json:"headers_user_supplied"`
+	AuthType            string     `json:"auth_type"`
+	Tools               []Tool     `json:"tools"`
+	UsageExamples       []string   `json:"usage_examples"`
+	FAQs                []FAQ      `json:"faqs"`
+	Notes               []string   `json:"notes"`
+	Visibility          Visibility `json:"visibility"`
 }
 
 // PatchRequest is the FLAT partial-update body (doc §4.5). Every field is a
@@ -49,23 +57,27 @@ type PatchRequest struct {
 	// Slug — same rules as CreateRequest.Slug. Nil pointer leaves the
 	// existing slug untouched; a non-nil empty string is rejected as
 	// slug_invalid (empty is not a valid identifier).
-	Slug          *string            `json:"slug"`
-	Slogan        *string            `json:"slogan"`
-	Category      *string            `json:"category"`
-	Icon          *string            `json:"icon"`
-	Tags          *[]string          `json:"tags"`
-	Transport     *Transport         `json:"transport"`
-	URL           *string            `json:"url"`
-	Command       *string            `json:"command"`
-	Args          *[]string          `json:"args"`
-	Env           *map[string]string `json:"env"`
-	Headers       *map[string]string `json:"headers"`
-	AuthType      *string            `json:"auth_type"`
-	Tools         *[]Tool            `json:"tools"`
-	UsageExamples *[]string          `json:"usage_examples"`
-	FAQs          *[]FAQ             `json:"faqs"`
-	Notes         *[]string          `json:"notes"`
-	Visibility    *Visibility        `json:"visibility"`
+	Slug      *string            `json:"slug"`
+	Slogan    *string            `json:"slogan"`
+	Category  *string            `json:"category"`
+	Icon      *string            `json:"icon"`
+	Tags      *[]string          `json:"tags"`
+	Transport *Transport         `json:"transport"`
+	URL       *string            `json:"url"`
+	Command   *string            `json:"command"`
+	Args      *[]string          `json:"args"`
+	Env       *map[string]string `json:"env"`
+	// See CreateRequest.EnvUserSupplied. A nil pointer leaves the persisted
+	// list untouched; a non-nil pointer replaces it wholesale.
+	EnvUserSupplied     *[]string          `json:"env_user_supplied"`
+	Headers             *map[string]string `json:"headers"`
+	HeadersUserSupplied *[]string          `json:"headers_user_supplied"`
+	AuthType            *string            `json:"auth_type"`
+	Tools               *[]Tool            `json:"tools"`
+	UsageExamples       *[]string          `json:"usage_examples"`
+	FAQs                *[]FAQ             `json:"faqs"`
+	Notes               *[]string          `json:"notes"`
+	Visibility          *Visibility        `json:"visibility"`
 }
 
 // QuickStart is the NESTED connection block on read responses (doc §3.3).
@@ -77,13 +89,19 @@ type QuickStart struct {
 	// snippet. Frontend template prefers this over ServerName when generating
 	// the config; always present in responses for records created after
 	// migration 03.
-	Slug     string            `json:"slug,omitempty"`
-	URL      string            `json:"url,omitempty"`
-	Command  string            `json:"command,omitempty"`
-	Args     []string          `json:"args,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	AuthType string            `json:"auth_type,omitempty"`
+	Slug    string            `json:"slug,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	// EnvUserSupplied — env keys whose value each consumer must fill locally.
+	// The frontend copy-snippet path renders these as the visible token
+	// placeholder (doc §5).
+	EnvUserSupplied []string          `json:"env_user_supplied,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	// HeadersUserSupplied — same semantics as EnvUserSupplied for headers.
+	HeadersUserSupplied []string `json:"headers_user_supplied,omitempty"`
+	AuthType            string   `json:"auth_type,omitempty"`
 }
 
 // Detail is the full record returned by GET /mcps/{id}, POST /mcps, PATCH
@@ -172,15 +190,17 @@ func (m *MCP) ToDetail() Detail {
 		CreatedByBotUID:  m.CreatedByBotUID,
 		CreatedByBotName: m.CreatedByBotName,
 		QuickStart: QuickStart{
-			Transport:  m.Transport,
-			ServerName: serverName,
-			Slug:       m.Slug,
-			URL:        m.Connection.URL,
-			Command:    m.Connection.Command,
-			Args:       emptyToNilStrings(m.Connection.Args),
-			Env:        emptyToNilMap(m.Connection.Env),
-			Headers:    emptyToNilMap(m.Connection.Headers),
-			AuthType:   m.Connection.AuthType,
+			Transport:           m.Transport,
+			ServerName:          serverName,
+			Slug:                m.Slug,
+			URL:                 m.Connection.URL,
+			Command:             m.Connection.Command,
+			Args:                emptyToNilStrings(m.Connection.Args),
+			Env:                 emptyToNilMap(m.Connection.Env),
+			EnvUserSupplied:     emptyToNilStrings(m.Connection.EnvUserSupplied),
+			Headers:             emptyToNilMap(m.Connection.Headers),
+			HeadersUserSupplied: emptyToNilStrings(m.Connection.HeadersUserSupplied),
+			AuthType:            m.Connection.AuthType,
 		},
 		Tools:         nonNilTools(m.Tools),
 		UsageExamples: nonNilStrings(m.UsageExamples),

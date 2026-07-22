@@ -87,17 +87,29 @@ type FAQ struct {
 	Answer   string `json:"answer"`
 }
 
-// Connection is the persisted, redacted connection config. It is stored in the
-// config_json column and projected onto QuickStart on read (doc §3.3). It never
-// contains secret values (doc §5).
+// Connection is the persisted connection config. Stored in the config_json
+// column and projected onto QuickStart on read (doc §3.3). Values under
+// keys named in EnvUserSupplied / HeadersUserSupplied are persisted
+// verbatim so the owner can round-trip them on their own edit view; on a
+// non-owner read they are blanked by detailForCaller (doc §5.3). Other
+// values persist verbatim on any visibility (subject to the strict-
+// visibility guardrail for shared secret-shaped keys — doc §5.1 rule 2).
 type Connection struct {
-	URL        string            `json:"url,omitempty"`
-	Command    string            `json:"command,omitempty"`
-	Args       []string          `json:"args,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	AuthType   string            `json:"authType,omitempty"`
-	ServerName string            `json:"serverName,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	// EnvUserSupplied lists the env keys whose value each consumer must
+	// fill locally in their copy of the mcpServers snippet. The value under
+	// such a key IS persisted (owner-visible reference) but blanked to
+	// non-owners; the market snippet flow substitutes the placeholder.
+	EnvUserSupplied []string          `json:"envUserSupplied,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	// HeadersUserSupplied lists the header keys whose value each consumer
+	// must fill locally. Same wire contract as EnvUserSupplied.
+	HeadersUserSupplied []string `json:"headersUserSupplied,omitempty"`
+	AuthType            string   `json:"authType,omitempty"`
+	ServerName          string   `json:"serverName,omitempty"`
 }
 
 // MCP is the domain model persisted in mcp_servers. JSON collections are held

@@ -443,10 +443,14 @@ func (s *Service) buildSystemFromCreate(caller Caller, req model.CreateRequest) 
 	if apiErr := validateContent(name, req); apiErr != nil {
 		return nil, apiErr
 	}
-	env, headers, apiErr := redactConnectionSecrets(req.Env, req.Headers)
-	if apiErr != nil {
-		return nil, apiErr
-	}
+	// System rows are cross-Space and never surfaced in the public listing;
+	// their env / headers are still normalized on write (sentinel → "") via
+	// redactConnectionSecrets. No secret-shape rejection anymore — see §5.1.
+	env, headers := redactConnectionSecrets(
+		req.Env, req.Headers,
+		req.EnvUserSupplied, req.HeadersUserSupplied,
+		model.VisibilityPublic,
+	)
 	now := s.now()
 	m := &model.MCP{
 		ID:            id.New(),
@@ -469,13 +473,15 @@ func (s *Service) buildSystemFromCreate(caller Caller, req model.CreateRequest) 
 		CreatedByType: model.CreatedByHuman,
 		Transport:     req.Transport,
 		Connection: model.Connection{
-			URL:        req.URL,
-			Command:    req.Command,
-			Args:       req.Args,
-			Env:        env,
-			Headers:    headers,
-			AuthType:   normalizeAuthType(req.AuthType),
-			ServerName: name,
+			URL:                 req.URL,
+			Command:             req.Command,
+			Args:                req.Args,
+			Env:                 env,
+			EnvUserSupplied:     req.EnvUserSupplied,
+			Headers:             headers,
+			HeadersUserSupplied: req.HeadersUserSupplied,
+			AuthType:            normalizeAuthType(req.AuthType),
+			ServerName:          name,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -658,10 +664,11 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 		return nil, apiErr
 	}
 
-	env, headers, apiErr := redactConnectionSecrets(req.Env, req.Headers)
-	if apiErr != nil {
-		return nil, apiErr
-	}
+	env, headers := redactConnectionSecrets(
+		req.Env, req.Headers,
+		req.EnvUserSupplied, req.HeadersUserSupplied,
+		visibility,
+	)
 
 	now := s.now()
 	m := &model.MCP{
@@ -685,13 +692,15 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 		CreatedByBotName: caller.BotName,
 		Transport:        req.Transport,
 		Connection: model.Connection{
-			URL:        req.URL,
-			Command:    req.Command,
-			Args:       req.Args,
-			Env:        env,
-			Headers:    headers,
-			AuthType:   normalizeAuthType(req.AuthType),
-			ServerName: name,
+			URL:                 req.URL,
+			Command:             req.Command,
+			Args:                req.Args,
+			Env:                 env,
+			EnvUserSupplied:     req.EnvUserSupplied,
+			Headers:             headers,
+			HeadersUserSupplied: req.HeadersUserSupplied,
+			AuthType:            normalizeAuthType(req.AuthType),
+			ServerName:          name,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -766,18 +775,36 @@ func (s *Service) applyPatch(m *model.MCP, req model.PatchRequest) *apierr.Error
 	if req.Args != nil {
 		m.Connection.Args = *req.Args
 	}
-	if req.Env != nil {
-		redacted, leaks := redactSecrets(*req.Env, "env")
-		if len(leaks) > 0 {
-			return apierr.SecretLeaked(leaks...)
+	// Visibility must still be resolved before env / headers so the merged
+	// record has a coherent visibility value for downstream projections.
+	// (The public-secret guardrail that used to read visibility here — rule
+	// 2 in §5.1 — has been removed.)
+	if req.Visibility != nil {
+		visibility, apiErr := validateClientVisibility(*req.Visibility)
+		if apiErr != nil {
+			return apiErr
 		}
+		m.Visibility = visibility
+	}
+	// The two "value + user_supplied" pairs are patched together so redact
+	// sees a coherent view. When only one half of the pair is in the request,
+	// the other half stays at its persisted value.
+	if req.EnvUserSupplied != nil {
+		m.Connection.EnvUserSupplied = *req.EnvUserSupplied
+	}
+	if req.Env != nil {
+		redacted, _ := redactSecrets(
+			*req.Env, "env", m.Connection.EnvUserSupplied, m.Visibility,
+		)
 		m.Connection.Env = redacted
 	}
+	if req.HeadersUserSupplied != nil {
+		m.Connection.HeadersUserSupplied = *req.HeadersUserSupplied
+	}
 	if req.Headers != nil {
-		redacted, leaks := redactSecrets(*req.Headers, "headers")
-		if len(leaks) > 0 {
-			return apierr.SecretLeaked(leaks...)
-		}
+		redacted, _ := redactSecrets(
+			*req.Headers, "headers", m.Connection.HeadersUserSupplied, m.Visibility,
+		)
 		m.Connection.Headers = redacted
 	}
 	if req.AuthType != nil {
@@ -794,13 +821,6 @@ func (s *Service) applyPatch(m *model.MCP, req model.PatchRequest) *apierr.Error
 	}
 	if req.Notes != nil {
 		m.Notes = normalizeStringList(*req.Notes)
-	}
-	if req.Visibility != nil {
-		visibility, apiErr := validateClientVisibility(*req.Visibility)
-		if apiErr != nil {
-			return apiErr
-		}
-		m.Visibility = visibility
 	}
 	// Length (bug #2) checks run over the fully merged record so every field —
 	// freshly patched or carried over — stays within bounds.
@@ -961,16 +981,19 @@ func tooLongAt(field string, index int, value string, max int) *apierr.Error {
 	return nil
 }
 
-// redactConnectionSecrets redacts both maps and combines any leaks into a
-// single secret_leaked error (doc §5.1).
-func redactConnectionSecrets(env, headers map[string]string) (map[string]string, map[string]string, *apierr.Error) {
-	redactedEnv, envLeaks := redactSecrets(env, "env")
-	redactedHeaders, headerLeaks := redactSecrets(headers, "headers")
-	leaks := append(envLeaks, headerLeaks...)
-	if len(leaks) > 0 {
-		return nil, nil, apierr.SecretLeaked(leaks...)
-	}
-	return redactedEnv, redactedHeaders, nil
+// redactConnectionSecrets normalizes both env and headers on write. After the
+// §5.1 relaxation (rules 1 and 2 removed) this is purely a sentinel
+// normalization pass — values are never rejected, so the signature drops the
+// error return. `visibility` and the `*UserSupplied` slices are kept for
+// signature stability with older call sites but are unused.
+func redactConnectionSecrets(
+	env, headers map[string]string,
+	envUserSupplied, headersUserSupplied []string,
+	visibility model.Visibility,
+) (map[string]string, map[string]string) {
+	redactedEnv, _ := redactSecrets(env, "env", envUserSupplied, visibility)
+	redactedHeaders, _ := redactSecrets(headers, "headers", headersUserSupplied, visibility)
+	return redactedEnv, redactedHeaders
 }
 
 // validateClientVisibility accepts only public/private from a client write;
