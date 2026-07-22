@@ -1,12 +1,27 @@
 package db
 
 import (
+	"strings"
 	"testing"
 
 	migrate "github.com/rubenv/sql-migrate"
 
 	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
 )
+
+func TestCurrentVersionBackfillUsesExplicitCollation(t *testing.T) {
+	const migration = "20260717-06-backfill-current-version.sql"
+
+	content, err := migrationsql.FS.ReadFile(migration)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error=%v", migration, err)
+	}
+
+	const collation = "COLLATE utf8mb4_unicode_ci"
+	if got, want := strings.Count(string(content), collation), 8; got != want {
+		t.Fatalf("%s contains %d explicit collations, want %d", migration, got, want)
+	}
+}
 
 // TestMigrationsParseUpDown verifies that all embedded migration files can be
 // read and that each file has both Up and Down sections.
