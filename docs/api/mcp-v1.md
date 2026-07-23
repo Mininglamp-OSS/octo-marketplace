@@ -300,7 +300,7 @@ Returns every record visible to the caller inside their current Space:
 
 | Name | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, `creator_name`, each entry of `tags`, `tools[].name`, `tools[].description`, and `usage_examples`. |
+| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, `creator_name`, and each entry of `tags`. **Tool names / descriptions and `usage_examples` are intentionally excluded** so keyword hits match card-visible fields only. |
 | `category` | string (repeatable) | `all` | Category key; `all` disables the filter. Repeat or comma-separate (`?category=dev,search`) to OR-combine. |
 | `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to OR-combine. |
 | `transport` | string (repeatable) | — | Transport filter (`stdio` / `sse` / `streamable-http`); repeat or comma-separate to OR-combine. |

@@ -550,18 +550,12 @@ func enrichListItem(item *model.ListItem, m *model.MCP, keyword, callerUID strin
 			break
 		}
 	}
-	for _, tool := range m.Tools {
-		if strings.Contains(strings.ToLower(tool.Name), kw) || strings.Contains(strings.ToLower(tool.Description), kw) {
-			add("tool:"+tool.Name, 7)
-			break
-		}
-	}
-	for _, example := range m.UsageExamples {
-		if strings.Contains(strings.ToLower(example), kw) {
-			add("usage_example", 1)
-			break
-		}
-	}
+	// Tool names / descriptions and usage_examples are intentionally NOT part
+	// of keyword search. Product decision: keyword search should only match
+	// fields visible on the marketplace card (name / slogan / tags / creator +
+	// category). Tools are catalog details a user only sees after opening the
+	// detail modal, so a keyword hit inside a rarely-visible field surprised
+	// users more than it helped them. See octo-web #1009 discussion.
 	if strings.Contains(strings.ToLower(m.CreatorName), kw) {
 		add("creator:"+m.CreatorName, 1)
 	}

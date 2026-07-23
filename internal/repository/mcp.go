@@ -243,17 +243,15 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 // Every searchable field participates with the same weight and stable tie-breakers.
 // JSON columns are matched case-insensitively via LOWER(CAST(...)) LIKE with a
 // lowercased keyword so the SQL ranking agrees with the Go-side substring check
-// (which lowercases both sides). The tools OR-group is wrapped in COALESCE so
-// JSON_EXTRACT returning NULL on an empty tools_json (`'[]'` → SQL NULL) does
-// not collapse the whole additive score to NULL and bury exact-name matches.
+// (which lowercases both sides). Tool names / descriptions and usage_examples
+// are intentionally excluded — search matches only fields visible on the
+// marketplace card (name / slogan / category / tags / creator).
 func relevanceOrder(keyword string) (string, []any) {
 	like := "%" + escapeLike(strings.ToLower(strings.TrimSpace(keyword))) + "%"
 	order := `((name LIKE ?) * 8 + (slogan LIKE ?) * 2 + (category LIKE ?) * 3 + ` +
 		`(LOWER(CAST(tags_json AS CHAR)) LIKE ?) * 6 + ` +
-		`COALESCE(LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ? OR ` +
-		`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ?, 0) * 7 + ` +
-		`(LOWER(CAST(usage_examples_json AS CHAR)) LIKE ?) + (creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
-	return order, []any{like, like, like, like, like, like, like, like}
+		`(creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
+	return order, []any{like, like, like, like, like}
 }
 
 func (r *Repository) count(ctx context.Context, where string, args []any) (int, error) {
@@ -316,12 +314,9 @@ func (f ListFilter) buildWhere() (string, []any) {
 
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {
 		clauses = append(clauses, `(name LIKE ? OR slogan LIKE ? OR category LIKE ? OR `+
-			`LOWER(CAST(tags_json AS CHAR)) LIKE ? OR `+
-			`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ? OR `+
-			`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ? OR `+
-			`LOWER(CAST(usage_examples_json AS CHAR)) LIKE ? OR creator_name LIKE ?)`)
+			`LOWER(CAST(tags_json AS CHAR)) LIKE ? OR creator_name LIKE ?)`)
 		like := "%" + escapeLike(strings.ToLower(kw)) + "%"
-		args = append(args, like, like, like, like, like, like, like, like)
+		args = append(args, like, like, like, like, like)
 	}
 
 	appendIn := func(column string, values []string) {
