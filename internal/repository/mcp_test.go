@@ -443,3 +443,71 @@ func TestRelevanceSortDoesNotBuryEmptyToolsRows(t *testing.T) {
 			strongIdx, weakIdx)
 	}
 }
+
+// TestSortUpdatedOrdersByUpdatedAtDesc guards the sort=updated branch (the
+// browse-without-keyword default the marketplace frontend requests). Seed
+// two rows created in the same tick, then bump the second via Update. The
+// second must sort first under sort=updated even though it was created
+// second, because created_at ties on the seed and updated_at is the
+// tie-breaker key.
+func TestSortUpdatedOrdersByUpdatedAtDesc(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	repo := New(database)
+
+	const (
+		owner = "owner-sort-updated"
+		space = "space-sort-updated"
+	)
+	nameOlder := "older sort-updated row"
+	nameNewer := "newer sort-updated row"
+	cleanTuple(t, database, owner, space, nameOlder)
+	cleanTuple(t, database, owner, space, nameNewer)
+	t.Cleanup(func() {
+		cleanTuple(t, database, owner, space, nameOlder)
+		cleanTuple(t, database, owner, space, nameNewer)
+	})
+
+	older := newTestMCP(nameOlder, owner, space)
+	if err := repo.Create(ctx, older); err != nil {
+		t.Fatalf("seed older: %v", err)
+	}
+	newer := newTestMCP(nameNewer, owner, space)
+	if err := repo.Create(ctx, newer); err != nil {
+		t.Fatalf("seed newer: %v", err)
+	}
+	// Bump the older row's updated_at so it should surface first under
+	// sort=updated. Slogan change is enough to trigger an UPDATE.
+	older.Slogan = "bumped for sort test"
+	older.UpdatedAt = time.Now().Add(time.Second)
+	if err := repo.Update(ctx, older); err != nil {
+		t.Fatalf("bump older: %v", err)
+	}
+
+	list, _, _, err := repo.List(ctx, ListFilter{
+		CallerUID: owner,
+		SpaceID:   space,
+		Sort:      "updated",
+		MineOnly:  true,
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var olderIdx, newerIdx = -1, -1
+	for i, m := range list {
+		switch m.ID {
+		case older.ID:
+			olderIdx = i
+		case newer.ID:
+			newerIdx = i
+		}
+	}
+	if olderIdx == -1 || newerIdx == -1 {
+		t.Fatalf("both rows must appear: olderIdx=%d newerIdx=%d", olderIdx, newerIdx)
+	}
+	if olderIdx >= newerIdx {
+		t.Fatalf("bumped older row (idx=%d) must sort ABOVE the newer row (idx=%d) under sort=updated",
+			olderIdx, newerIdx)
+	}
+}

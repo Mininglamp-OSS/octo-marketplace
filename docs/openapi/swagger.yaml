@@ -2413,6 +2413,11 @@ paths:
         name: limit
         schema:
           type: integer
+      - description: 'Scope: \'
+        in: query
+        name: mode
+        schema:
+          type: string
       requestBody:
         content:
           application/json:

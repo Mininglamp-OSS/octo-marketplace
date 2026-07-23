@@ -215,6 +215,11 @@ type TagListParams struct {
 	Query string
 	// Limit is the max number of tags returned. Clamped by the handler.
 	Limit int
+	// MineOnly restricts the aggregate to rows the caller owns in the current
+	// Space, mirroring `GET /mcps/mine`. The frontend forwards this when the
+	// tag popover is opened from the "我的" tab so the suggestions match the
+	// list actually being filtered.
+	MineOnly bool
 }
 
 // ListTags aggregates tag names from records visible to the caller in the
@@ -229,6 +234,7 @@ func (s *Service) ListTags(ctx context.Context, caller Caller, p TagListParams) 
 		SpaceID:   caller.SpaceID,
 		Query:     p.Query,
 		Limit:     p.Limit,
+		MineOnly:  p.MineOnly,
 	})
 	if err != nil {
 		return nil, apierr.Internal()

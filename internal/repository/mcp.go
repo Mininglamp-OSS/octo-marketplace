@@ -210,10 +210,19 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 
 	pageWhere := where
 	pageArgs := append([]any{}, args...)
+	// Default order: freshest by creation. `sort=updated` (frontend browse
+	// case when no keyword is present) surfaces recently-edited rows first,
+	// which is what the marketplace picker actually wants when a user is
+	// re-checking a listing after a slogan/icon change. `sort=relevance` is
+	// only meaningful with a keyword — every row scores 0 otherwise — so
+	// we ignore it in that case and fall back to created_at.
 	orderBy := "created_at DESC, id DESC"
-	if f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "" {
+	switch {
+	case f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "":
 		orderBy, args = relevanceOrder(f.Keyword)
 		pageArgs = append(pageArgs, args...)
+	case f.Sort == "updated":
+		orderBy = "updated_at DESC, id DESC"
 	}
 	q := `SELECT ` + columns + ` FROM mcp_servers WHERE ` + pageWhere +
 		` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
@@ -290,8 +299,9 @@ func (r *Repository) categoryCounts(ctx context.Context, where string, args []an
 }
 
 // TagListFilter drives ListTags. Visibility scope mirrors ListFilter's non-mine
-// branch: the caller sees tags on system rows + rows in their Space (public
-// or their own).
+// branch by default: the caller sees tags on system rows + rows in their
+// Space (public or their own). When MineOnly is set, aggregation restricts
+// to the caller's owned rows only (mirrors GET /mcps/mine).
 type TagListFilter struct {
 	CallerUID string
 	SpaceID   string
@@ -300,6 +310,10 @@ type TagListFilter struct {
 	Query string
 	// Limit caps the row count. Zero / negative → default 50; > 100 → 100.
 	Limit int
+	// MineOnly restricts the aggregate to rows owned by CallerUID inside
+	// SpaceID. Matches the ListMine list surface so the tag popover in the
+	// "我的" tab suggests tags actually reachable via that list.
+	MineOnly bool
 }
 
 // ListTags aggregates distinct tag names from records visible to the caller,
@@ -323,8 +337,16 @@ func (r *Repository) ListTags(ctx context.Context, f TagListFilter) ([]model.Tag
 		limit = 100
 	}
 	kw := strings.TrimSpace(f.Query)
-	// Args in order: space_id, caller_uid, (like, like if kw), limit.
-	args := []any{f.SpaceID, f.CallerUID}
+	// Args order: visibility args, [kw like], limit.
+	var visibilityClause string
+	var args []any
+	if f.MineOnly {
+		visibilityClause = "m.owner_uid = ? AND m.space_id = ?"
+		args = append(args, f.CallerUID, f.SpaceID)
+	} else {
+		visibilityClause = "m.visibility = 'system' OR (m.space_id = ? AND (m.visibility = 'public' OR m.owner_uid = ?))"
+		args = append(args, f.SpaceID, f.CallerUID)
+	}
 	kwClause := ""
 	if kw != "" {
 		like := "%" + escapeLike(strings.ToLower(kw)) + "%"
@@ -339,7 +361,7 @@ func (r *Repository) ListTags(ctx context.Context, f TagListFilter) ([]model.Tag
 			  '$[*]' COLUMNS (tag VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PATH '$')
 			) AS t
 			WHERE m.deleted_at IS NULL
-			  AND (m.visibility = 'system' OR (m.space_id = ? AND (m.visibility = 'public' OR m.owner_uid = ?)))
+			  AND (` + visibilityClause + `)
 			  AND t.tag IS NOT NULL AND t.tag <> ''` + kwClause + `
 			GROUP BY t.tag
 			ORDER BY cnt DESC, t.tag ASC

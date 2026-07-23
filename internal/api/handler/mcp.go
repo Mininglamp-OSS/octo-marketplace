@@ -183,6 +183,7 @@ func (h *MCP) ListCategories(c *gin.Context) {
 // @Security Bearer
 // @Param q query string false "Fuzzy tag search (case-insensitive substring)"
 // @Param limit query int false "Max items returned; default 50, max 100"
+// @Param mode query string false "Scope: \"mine\" restricts aggregation to caller-owned records (mirrors GET /mcps/mine)"
 // @Success 200 {object} apiresponse.Data[[]model.TagFilter]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
@@ -199,8 +200,9 @@ func (h *MCP) ListTags(c *gin.Context) {
 	// populate the tag-filter popover so it can suggest tags not yet on the
 	// current page (aggregation from state.items misses cross-page tags).
 	tags, apiErr := h.svc.ListTags(c.Request.Context(), caller, service.TagListParams{
-		Query: strings.TrimSpace(c.Query("q")),
-		Limit: parseTagLimit(c.Query("limit")),
+		Query:    strings.TrimSpace(c.Query("q")),
+		Limit:    parseTagLimit(c.Query("limit")),
+		MineOnly: c.Query("mode") == "mine",
 	})
 	if apiErr != nil {
 		writeError(c, apiErr)
@@ -209,9 +211,10 @@ func (h *MCP) ListTags(c *gin.Context) {
 	apiresponse.OK(c, tags)
 }
 
-// parseTagLimit clamps the `limit` query param to [1, 100] with default 50.
-// Mirrors dmworkskillmarket's tag-limit convention so a caller migrating
-// from the Skill tag surface gets identical bounds.
+// parseTagLimit clamps the `limit` query param to `maxLimit`, defaulting to
+// `def` when the input is missing, unparseable, or non-positive. Mirrors
+// dmworkskillmarket's tag-limit convention so a caller migrating from the
+// Skill tag surface gets identical bounds.
 func parseTagLimit(raw string) int {
 	const (
 		def      = 50
