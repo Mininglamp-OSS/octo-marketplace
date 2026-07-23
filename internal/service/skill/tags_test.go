@@ -31,13 +31,13 @@ func TestNormalizeRawTagsRejectsTooManyTags(t *testing.T) {
 }
 
 func TestNormalizeRawTagsRejectsLongUnicodeTag(t *testing.T) {
-	if _, _, err := normalizeRawTags(json.RawMessage(`["这是一个超过二十四个字符的中文标签用于验证后端限制"]`)); err != ErrInvalidTags {
+	if _, _, err := normalizeRawTags(json.RawMessage(`["这是超过十个字符的中文标签"]`)); err != ErrInvalidTags {
 		t.Fatalf("err = %v, want ErrInvalidTags", err)
 	}
 }
 
 func TestNormalizeRawTagsAcceptsBoundaryValues(t *testing.T) {
-	raw, names, err := normalizeRawTags(json.RawMessage(`["123456789012345678901234","two","three","four","five","six","seven","eight","nine","ten"]`))
+	raw, names, err := normalizeRawTags(json.RawMessage(`["1234567890","two","three","four","five","six","seven","eight","nine","ten"]`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

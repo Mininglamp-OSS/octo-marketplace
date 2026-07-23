@@ -122,7 +122,7 @@ type AdminCreateRequest struct {
 	IconURL     string   `json:"icon_url"`
 	Description string   `json:"description"`
 	CategoryID  string   `json:"category_id"`
-	Tags        []string `json:"tags" binding:"omitempty,max=10,dive,max=24" maxLength:"24"`
+	Tags        []string `json:"tags" binding:"omitempty,max=10,dive,max=10" maxLength:"10"`
 	Version     string   `json:"version"`
 }
 
@@ -184,7 +184,7 @@ func (h *Handler) AdminCreate(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidTags) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 24 characters each", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
@@ -200,7 +200,7 @@ type AdminUpdateRequest struct {
 	IconURL     *string   `json:"icon_url"`
 	Description *string   `json:"description"`
 	CategoryID  *string   `json:"category_id"`
-	Tags        *[]string `json:"tags" binding:"omitempty,max=10,dive,max=24" maxLength:"24"`
+	Tags        *[]string `json:"tags" binding:"omitempty,max=10,dive,max=10" maxLength:"10"`
 }
 
 // AdminUpdate godoc
@@ -254,7 +254,7 @@ func (h *Handler) AdminUpdate(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidTags) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 24 characters each", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
@@ -338,7 +338,7 @@ type AdminReuploadRequest struct {
 	ParseTaskID string   `json:"parse_task_id" binding:"required"`
 	Version     string   `json:"version"`
 	Changelog   string   `json:"changelog"`
-	Tags        []string `json:"tags" binding:"omitempty,max=10,dive,max=24" maxLength:"24"`
+	Tags        []string `json:"tags" binding:"omitempty,max=10,dive,max=10" maxLength:"10"`
 }
 
 // AdminReupload godoc
@@ -400,7 +400,7 @@ func (h *Handler) AdminReupload(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidTags) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 24 characters each", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")

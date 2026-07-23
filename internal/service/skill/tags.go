@@ -9,7 +9,7 @@ import (
 
 const (
 	MaxSkillTags      = 10
-	MaxSkillTagLength = 24
+	MaxSkillTagLength = 10
 )
 
 func rawTagsToStrings(raw json.RawMessage) []string {

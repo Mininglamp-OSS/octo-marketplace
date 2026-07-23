@@ -224,7 +224,7 @@ type CreateRequest struct {
 	IconURL       string   `json:"icon_url"`
 	Description   string   `json:"description"`
 	CategoryID    string   `json:"category_id"`
-	Tags          []string `json:"tags" binding:"omitempty,max=10,dive,max=24" maxLength:"24"`
+	Tags          []string `json:"tags" binding:"omitempty,max=10,dive,max=10" maxLength:"10"`
 	Visibility    string   `json:"visibility"`
 	Version       string   `json:"version"`
 	Changelog     string   `json:"changelog"`
@@ -304,7 +304,7 @@ func (h *Handler) Create(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidTags) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 24 characters each", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
@@ -333,7 +333,7 @@ type UpdateRequest struct {
 	IconURL     *string   `json:"icon_url"`
 	Description *string   `json:"description"`
 	CategoryID  *string   `json:"category_id"`
-	Tags        *[]string `json:"tags" binding:"omitempty,max=10,dive,max=24" maxLength:"24"`
+	Tags        *[]string `json:"tags" binding:"omitempty,max=10,dive,max=10" maxLength:"10"`
 	Visibility  *string   `json:"visibility"`
 	Version     *string   `json:"version"`
 	ParseTaskID string    `json:"parse_task_id"`
@@ -415,7 +415,7 @@ func (h *Handler) Update(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidTags) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 24 characters each", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
