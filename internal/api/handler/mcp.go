@@ -214,8 +214,8 @@ func (h *MCP) ListTags(c *gin.Context) {
 // from the Skill tag surface gets identical bounds.
 func parseTagLimit(raw string) int {
 	const (
-		def = 50
-		max = 100
+		def      = 50
+		maxLimit = 100
 	)
 	if raw == "" {
 		return def
@@ -224,8 +224,8 @@ func parseTagLimit(raw string) int {
 	if err != nil || n <= 0 {
 		return def
 	}
-	if n > max {
-		return max
+	if n > maxLimit {
+		return maxLimit
 	}
 	return n
 }
@@ -452,7 +452,7 @@ func listParams(c *gin.Context) (service.ListParams, int, int) {
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	categories := splitQuery(c.QueryArray("category"))
+	categories := splitCategoryQuery(c.QueryArray("category"))
 	return service.ListParams{
 		Keyword:        strings.TrimSpace(c.Query("keyword")),
 		Categories:     categories,
@@ -467,16 +467,38 @@ func listParams(c *gin.Context) (service.ListParams, int, int) {
 	}, page, pageSize
 }
 
+// splitQuery normalizes repeated / comma-separated query values by trimming
+// whitespace and dropping empties. It is shared by every list filter — DO NOT
+// add value-specific sentinels here (see splitCategoryQuery for the
+// category-only "all" sentinel), otherwise a legal tag / source / transport
+// value that happens to match the sentinel gets silently swallowed.
 func splitQuery(values []string) []string {
 	var result []string
 	for _, value := range values {
 		for _, item := range strings.Split(value, ",") {
-			if item = strings.TrimSpace(item); item != "" && item != model.CategoryKeyAll {
+			if item = strings.TrimSpace(item); item != "" {
 				result = append(result, item)
 			}
 		}
 	}
 	return result
+}
+
+// splitCategoryQuery is splitQuery + the "all" sentinel (mcp-v1.md §0):
+// category="all" disables the filter, so it must be stripped before the
+// service builds a WHERE clause. Other filters (tag / source / transport)
+// use splitQuery directly — a tag literally named "all" is a legal value
+// there.
+func splitCategoryQuery(values []string) []string {
+	filtered := splitQuery(values)
+	kept := filtered[:0]
+	for _, item := range filtered {
+		if item == model.CategoryKeyAll {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
 }
 
 func positiveInt(value string, fallback int) int {

@@ -307,6 +307,13 @@ type TagListFilter struct {
 // inline in each mcp_servers row's tags_json (JSON array of strings) so this
 // query uses JSON_TABLE to unnest before grouping — there is no separate tag
 // catalog table (unlike dmworkskillmarket's skill_tags).
+//
+// The JSON_TABLE column is `VARCHAR(1024) COLLATE utf8mb4_bin` to (a) survive
+// tags longer than 255 chars without truncation / strict-mode error, and (b)
+// make GROUP BY case-sensitive so it agrees with the JSON_CONTAINS filter
+// applied on the parent list endpoint. The default MySQL 8 collation
+// (utf8mb4_0900_ai_ci) would otherwise collapse "Official" and "official"
+// into one row and hand the frontend a suggestion the tag filter can't hit.
 func (r *Repository) ListTags(ctx context.Context, f TagListFilter) ([]model.TagFilter, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -329,7 +336,7 @@ func (r *Repository) ListTags(ctx context.Context, f TagListFilter) ([]model.Tag
 			FROM mcp_servers m
 			CROSS JOIN JSON_TABLE(
 			  IFNULL(m.tags_json, JSON_ARRAY()),
-			  '$[*]' COLUMNS (tag VARCHAR(255) PATH '$')
+			  '$[*]' COLUMNS (tag VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PATH '$')
 			) AS t
 			WHERE m.deleted_at IS NULL
 			  AND (m.visibility = 'system' OR (m.space_id = ? AND (m.visibility = 'public' OR m.owner_uid = ?)))

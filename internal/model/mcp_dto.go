@@ -161,7 +161,7 @@ type CategoryFilter struct {
 	Count int    `json:"count"`
 }
 
-// TagFilter is one tag suggestion in the tag-list popover (doc §4.X). Same
+// TagFilter is one tag suggestion in the tag-list popover (doc §4.8). Same
 // shape as CategoryFilter but keyed on tag name — MCP tags are free-form
 // strings, not enum keys, so `name` is the value the client sends back in
 // the `tag` query param.
