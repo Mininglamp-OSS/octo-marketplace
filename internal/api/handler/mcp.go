@@ -136,7 +136,7 @@ func (h *MCP) ListMine(c *gin.Context) { h.list(c, true) }
 // @Accept json
 // @Produce json
 // @Security Bearer
-// @Param mode query string false "Scope: \"mine\" restricts counts to caller-owned records"
+// @Param mode query string false "Scope: mine restricts counts to caller-owned records"
 // @Param created_by_type query []string false "Provenance filter (human, bot, import); repeatable or comma-separated"
 // @Success 200 {object} apiresponse.Data[[]model.CategoryFilter]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
@@ -183,7 +183,7 @@ func (h *MCP) ListCategories(c *gin.Context) {
 // @Security Bearer
 // @Param q query string false "Fuzzy tag search (case-insensitive substring)"
 // @Param limit query int false "Max items returned; default 50, max 100"
-// @Param mode query string false "Scope: \"mine\" restricts aggregation to caller-owned records (mirrors GET /mcps/mine)"
+// @Param mode query string false "Scope: mine restricts aggregation to caller-owned records (mirrors GET /mcps/mine)"
 // @Success 200 {object} apiresponse.Data[[]model.TagFilter]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"

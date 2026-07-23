@@ -307,7 +307,7 @@ Returns every record visible to the caller inside their current Space:
 | `visibility` | string (repeatable) | — | Visibility filter (`system` / `public` / `private`); repeat or comma-separate. Absent → no filter (still bounded by the visible-set rule above). |
 | `source` | string (repeatable) | — | Source facet (`system` / `space` / `mine`). Predicates partition the set the same way the response's `source` label does — a caller-owned row is labeled `mine`, not `space`. |
 | `created_by_type` | string (repeatable) | — | Provenance filter. Accepts `human` / `bot` / `import`. Repeat or comma-separate to OR-combine. Absent → no filter. |
-| `sort` | string | — | Ranking selector. `relevance` (only meaningful together with a non-empty `keyword`) orders by a fixed weighted match score against every searchable field; any other value falls back to the default order. |
+| `sort` | string | — | Ranking selector. `relevance` (only meaningful together with a non-empty `keyword`) orders by a fixed weighted match score against every searchable field. `updated` orders by `updated_at DESC, id DESC` — the browse-case default the marketplace frontend requests when no keyword is present. Any other value falls back to the default order (creation-time). |
 | `page` | int | `1` | One-based page number. |
 | `page_size` | int | `20` | Page size, max `100`. |
 
@@ -329,8 +329,10 @@ Returns every record visible to the caller inside their current Space:
 - Category filter options are supplied by the dedicated category API; MCP list
   responses do not embed category facets.
 - Default order: newest first (`created_at DESC`, tie-broken by `id DESC`).
-  Pass `sort=relevance` together with a non-empty `keyword` to switch to the
-  weighted match score; any other `sort` value falls back to the default.
+  `sort=relevance` (with a non-empty `keyword`) switches to the weighted
+  match score; `sort=updated` switches to `updated_at DESC, id DESC` so a
+  recently-edited row surfaces first. Any other `sort` value falls back to
+  the default.
 
 **Errors:** 401 / 403.
 
@@ -508,6 +510,7 @@ Skill's `skill_tags` table). The endpoint unnests `tags_json` on read.
 | --- | --- | --- | --- |
 | `q` | string | — | Case-insensitive substring match on tag name. Empty → return every visible tag. |
 | `limit` | int | `50` | Max items returned. Clamped to `[1, 100]`. |
+| `mode` | string | — | `mine` restricts aggregation to caller-owned rows (mirrors `GET /mcps/mine`). Absent → aggregate over the full visible set (system + space + owned). |
 
 **Response body:**
 

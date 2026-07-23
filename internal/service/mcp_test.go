@@ -23,7 +23,7 @@ type fakeStore struct {
 	updated *model.MCP
 	deleted string
 
-	lastFilter repository.ListFilter
+	lastFilter    repository.ListFilter
 	listResult    []model.MCP
 	listTotal     int
 	listCats      []model.CategoryFilter

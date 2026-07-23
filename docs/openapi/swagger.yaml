@@ -2279,7 +2279,7 @@ paths:
         Space.
       operationId: mcp_category.list
       parameters:
-      - description: 'Scope: \'
+      - description: 'Scope: mine restricts counts to caller-owned records'
         in: query
         name: mode
         schema:
@@ -2413,7 +2413,8 @@ paths:
         name: limit
         schema:
           type: integer
-      - description: 'Scope: \'
+      - description: 'Scope: mine restricts aggregation to caller-owned records (mirrors
+          GET /mcps/mine)'
         in: query
         name: mode
         schema:
