@@ -353,12 +353,16 @@ func (f ListFilter) buildWhere() (string, []any) {
 		}
 	}
 	if len(f.Tags) > 0 {
+		// Tag filter is AND: every selected tag must be present on a row.
+		// Matches dmworkskillmarket's tag semantics — users selecting three
+		// tags expect results whose intersection carries all three, not the
+		// union that OR would surface.
 		parts := make([]string, 0, len(f.Tags))
 		for _, tag := range f.Tags {
 			parts = append(parts, "JSON_CONTAINS(tags_json, JSON_QUOTE(?))")
 			args = append(args, tag)
 		}
-		clauses = append(clauses, "("+strings.Join(parts, " OR ")+")")
+		clauses = append(clauses, "("+strings.Join(parts, " AND ")+")")
 	}
 
 	return strings.Join(clauses, " AND "), args

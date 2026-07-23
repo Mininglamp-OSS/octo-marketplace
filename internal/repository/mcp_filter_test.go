@@ -101,3 +101,20 @@ func TestSourceSpaceExcludesCallerOwnedRows(t *testing.T) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }
+
+// TestTagFilterIsAND asserts multi-tag selection intersects rather than unions
+// (matches dmworkskillmarket's tag semantics — mcp-v1.md §4.2). A row must
+// carry every selected tag to survive the filter.
+func TestTagFilterIsAND(t *testing.T) {
+	where, args := (ListFilter{CallerUID: "u1", SpaceID: "s1", Tags: []string{"official", "featured"}}).buildWhere()
+	if strings.Contains(where, "JSON_CONTAINS(tags_json, JSON_QUOTE(?)) OR JSON_CONTAINS(tags_json, JSON_QUOTE(?))") {
+		t.Fatalf("tag filter must AND-combine, not OR-combine: %s", where)
+	}
+	if !strings.Contains(where, "JSON_CONTAINS(tags_json, JSON_QUOTE(?)) AND JSON_CONTAINS(tags_json, JSON_QUOTE(?))") {
+		t.Fatalf("tag filter must AND-combine JSON_CONTAINS clauses: %s", where)
+	}
+	want := []any{"s1", "u1", "official", "featured"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}

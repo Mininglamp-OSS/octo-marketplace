@@ -302,7 +302,7 @@ Returns every record visible to the caller inside their current Space:
 | --- | --- | --- | --- |
 | `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, `creator_name`, and each entry of `tags`. **Tool names / descriptions and `usage_examples` are intentionally excluded** so keyword hits match card-visible fields only. |
 | `category` | string (repeatable) | `all` | Category key; `all` disables the filter. Repeat or comma-separate (`?category=dev,search`) to OR-combine. |
-| `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to OR-combine. |
+| `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to AND-combine (each selected tag must be present on a row — matches dmworkskillmarket's tag semantics). |
 | `transport` | string (repeatable) | — | Transport filter (`stdio` / `sse` / `streamable-http`); repeat or comma-separate to OR-combine. |
 | `visibility` | string (repeatable) | — | Visibility filter (`system` / `public` / `private`); repeat or comma-separate. Absent → no filter (still bounded by the visible-set rule above). |
 | `source` | string (repeatable) | — | Source facet (`system` / `space` / `mine`). Predicates partition the set the same way the response's `source` label does — a caller-owned row is labeled `mine`, not `space`. |
