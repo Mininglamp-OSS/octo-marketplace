@@ -334,6 +334,9 @@ components:
             type: string
           type: array
           uniqueItems: false
+        view_count:
+          minimum: 0
+          type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
       type: object
@@ -384,6 +387,9 @@ components:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Transport'
         updated_at:
           type: string
+        view_count:
+          minimum: 0
+          type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
       type: object

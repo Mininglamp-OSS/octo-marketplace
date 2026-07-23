@@ -147,5 +147,6 @@ type MCP struct {
 	Connection       Connection
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	ViewCount        int64
 	DeletedAt        *time.Time
 }
