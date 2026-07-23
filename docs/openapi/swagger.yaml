@@ -193,6 +193,17 @@ components:
           additionalProperties:
             type: string
           type: object
+        env_user_supplied:
+          description: |-
+            EnvUserSupplied lists env keys whose value must be filled locally by
+            each consumer (doc §5). Keys not listed here are persisted with their
+            submitted value; keys listed here may carry any value on write (the
+            value is stored verbatim for owner-side edit round-trip) and are
+            blanked to non-owners on read via detailForCaller (§5.3).
+          items:
+            type: string
+          type: array
+          uniqueItems: false
         faqs:
           items:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.FAQ'
@@ -202,6 +213,13 @@ components:
           additionalProperties:
             type: string
           type: object
+        headers_user_supplied:
+          description: HeadersUserSupplied — same semantics as EnvUserSupplied for
+            headers.
+          items:
+            type: string
+          type: array
+          uniqueItems: false
         icon:
           type: string
         name:
@@ -378,6 +396,14 @@ components:
           additionalProperties:
             type: string
           type: object
+        env_user_supplied:
+          description: |-
+            See CreateRequest.EnvUserSupplied. A nil pointer leaves the persisted
+            list untouched; a non-nil pointer replaces it wholesale.
+          items:
+            type: string
+          type: array
+          uniqueItems: false
         faqs:
           items:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.FAQ'
@@ -387,6 +413,11 @@ components:
           additionalProperties:
             type: string
           type: object
+        headers_user_supplied:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
         icon:
           type: string
         name:
@@ -441,10 +472,26 @@ components:
           additionalProperties:
             type: string
           type: object
+        env_user_supplied:
+          description: |-
+            EnvUserSupplied — env keys whose value each consumer must fill locally.
+            The frontend copy-snippet path renders these as the visible token
+            placeholder (doc §5).
+          items:
+            type: string
+          type: array
+          uniqueItems: false
         headers:
           additionalProperties:
             type: string
           type: object
+        headers_user_supplied:
+          description: HeadersUserSupplied — same semantics as EnvUserSupplied for
+            headers.
+          items:
+            type: string
+          type: array
+          uniqueItems: false
         server_name:
           type: string
         slug:
