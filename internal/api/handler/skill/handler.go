@@ -264,7 +264,7 @@ func (h *Handler) Create(c *gin.Context) {
 
 	var req CreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "parse_task_id is required", nil, "")
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "invalid request body", nil, "")
 		return
 	}
 

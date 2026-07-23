@@ -151,7 +151,7 @@ func (h *Handler) AdminCreate(c *gin.Context) {
 	}
 	var req AdminCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "parse_task_id is required", nil, "")
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "invalid request body", nil, "")
 		return
 	}
 	item, err := h.svc.AdminCreate(c.Request.Context(), skillsvc.AdminCreateParams{
@@ -368,7 +368,7 @@ func (h *Handler) AdminReupload(c *gin.Context) {
 	id := c.Param("skill_id")
 	var req AdminReuploadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "parse_task_id is required", nil, "")
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "invalid request body", nil, "")
 		return
 	}
 	item, err := h.svc.AdminReupload(c.Request.Context(), id, skillsvc.AdminReuploadParams{
