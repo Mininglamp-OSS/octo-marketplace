@@ -31,6 +31,7 @@ type MCPService interface {
 	Delete(context.Context, service.Caller, string) *apierr.Error
 	List(context.Context, service.Caller, service.ListParams) (model.ListResponse, *apierr.Error)
 	ListMine(context.Context, service.Caller, service.ListParams) (model.ListResponse, *apierr.Error)
+	ListTags(context.Context, service.Caller, service.TagListParams) ([]model.TagFilter, *apierr.Error)
 	Probe(context.Context, service.ProbeRequest) (service.ProbeResponse, *apierr.Error)
 	UploadIcon(context.Context, service.Caller, string, []byte, string) (service.IconResult, *apierr.Error)
 }
@@ -170,6 +171,63 @@ func (h *MCP) ListCategories(c *gin.Context) {
 		return
 	}
 	apiresponse.OK(c, result.Categories)
+}
+
+// ListTags godoc
+// @Summary List MCP tags
+// @Description Return tags aggregated from MCPs visible to the caller in the current Space. Free-form strings — no dedicated tag catalog table. Supports fuzzy match by `q` and sorts by descending row count (ties broken alphabetically).
+// @Tags mcp
+// @ID mcp_tag.list
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param q query string false "Fuzzy tag search (case-insensitive substring)"
+// @Param limit query int false "Max items returned; default 50, max 100"
+// @Success 200 {object} apiresponse.Data[[]model.TagFilter]
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
+// @Router /mcp_tags [get]
+func (h *MCP) ListTags(c *gin.Context) {
+	caller, ok := callerFromContext(c)
+	if !ok {
+		writeError(c, apierr.Unauthorized())
+		return
+	}
+	// Aggregate over the SAME visible set as List (space+visibility rules);
+	// callers only see tags on rows they could open. Frontend uses this to
+	// populate the tag-filter popover so it can suggest tags not yet on the
+	// current page (aggregation from state.items misses cross-page tags).
+	tags, apiErr := h.svc.ListTags(c.Request.Context(), caller, service.TagListParams{
+		Query: strings.TrimSpace(c.Query("q")),
+		Limit: parseTagLimit(c.Query("limit")),
+	})
+	if apiErr != nil {
+		writeError(c, apiErr)
+		return
+	}
+	apiresponse.OK(c, tags)
+}
+
+// parseTagLimit clamps the `limit` query param to [1, 100] with default 50.
+// Mirrors dmworkskillmarket's tag-limit convention so a caller migrating
+// from the Skill tag surface gets identical bounds.
+func parseTagLimit(raw string) int {
+	const (
+		def = 50
+		max = 100
+	)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
 }
 
 func (h *MCP) list(c *gin.Context, mine bool) {

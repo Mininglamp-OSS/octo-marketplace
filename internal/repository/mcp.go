@@ -289,6 +289,75 @@ func (r *Repository) categoryCounts(ctx context.Context, where string, args []an
 	return cats, nil
 }
 
+// TagListFilter drives ListTags. Visibility scope mirrors ListFilter's non-mine
+// branch: the caller sees tags on system rows + rows in their Space (public
+// or their own).
+type TagListFilter struct {
+	CallerUID string
+	SpaceID   string
+	// Query is a case-insensitive substring filter on tag name. Empty →
+	// no filter (all visible tags returned).
+	Query string
+	// Limit caps the row count. Zero / negative → default 50; > 100 → 100.
+	Limit int
+}
+
+// ListTags aggregates distinct tag names from records visible to the caller,
+// ordered by descending count with alphabetical tie-break. Tags are stored
+// inline in each mcp_servers row's tags_json (JSON array of strings) so this
+// query uses JSON_TABLE to unnest before grouping — there is no separate tag
+// catalog table (unlike dmworkskillmarket's skill_tags).
+func (r *Repository) ListTags(ctx context.Context, f TagListFilter) ([]model.TagFilter, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	kw := strings.TrimSpace(f.Query)
+	// Args in order: space_id, caller_uid, (like, like if kw), limit.
+	args := []any{f.SpaceID, f.CallerUID}
+	kwClause := ""
+	if kw != "" {
+		like := "%" + escapeLike(strings.ToLower(kw)) + "%"
+		kwClause = " AND LOWER(t.tag) LIKE ?"
+		args = append(args, like)
+	}
+	args = append(args, limit)
+	q := `SELECT t.tag, COUNT(*) AS cnt
+			FROM mcp_servers m
+			CROSS JOIN JSON_TABLE(
+			  IFNULL(m.tags_json, JSON_ARRAY()),
+			  '$[*]' COLUMNS (tag VARCHAR(255) PATH '$')
+			) AS t
+			WHERE m.deleted_at IS NULL
+			  AND (m.visibility = 'system' OR (m.space_id = ? AND (m.visibility = 'public' OR m.owner_uid = ?)))
+			  AND t.tag IS NOT NULL AND t.tag <> ''` + kwClause + `
+			GROUP BY t.tag
+			ORDER BY cnt DESC, t.tag ASC
+			LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tags := make([]model.TagFilter, 0, limit)
+	for rows.Next() {
+		var name string
+		var count int
+		if err := rows.Scan(&name, &count); err != nil {
+			return nil, err
+		}
+		tags = append(tags, model.TagFilter{Name: name, Count: count})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tags, nil
+}
+
 // buildWhere composes the visibility-scoped predicate. It always includes
 // deleted_at IS NULL. The visible-set rule (doc §4.2/§4.4) is:
 //

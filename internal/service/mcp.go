@@ -32,6 +32,9 @@ type Store interface {
 	GetByID(ctx context.Context, id string) (*model.MCP, error)
 	SoftDelete(ctx context.Context, id string, now time.Time) error
 	List(ctx context.Context, f repository.ListFilter) ([]model.MCP, int, []model.CategoryFilter, error)
+	// ListTags aggregates distinct tag names from rows visible to the caller
+	// (same predicates as List). Returns rows sorted by count desc, name asc.
+	ListTags(ctx context.Context, f repository.TagListFilter) ([]model.TagFilter, error)
 	// SystemNameExists / SystemSlugExists guard the admin Create/Update path
 	// against duplicate name/slug across live visibility=system rows. The
 	// DB UNIQUE index does not catch these because system rows carry
@@ -203,6 +206,37 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) (model.
 // ListMine returns records owned by the caller in the current Space (doc §4.3).
 func (s *Service) ListMine(ctx context.Context, caller Caller, p ListParams) (model.ListResponse, *apierr.Error) {
 	return s.list(ctx, caller, p, true)
+}
+
+// TagListParams carries the query parameters for the tag suggestion endpoint.
+type TagListParams struct {
+	// Query is a case-insensitive substring to filter tag names by. Empty
+	// returns all tags visible to the caller.
+	Query string
+	// Limit is the max number of tags returned. Clamped by the handler.
+	Limit int
+}
+
+// ListTags aggregates tag names from records visible to the caller in the
+// current Space (same predicates as List). Returns items sorted by count
+// desc, name asc — so the popover surfaces the most-used tags first without
+// the frontend needing to re-sort. Mirrors dmworkskillmarket's /skills/tags
+// UX from the caller's perspective; the storage layer differs (MCP tags live
+// inline in tags_json rather than in a dedicated tag table).
+func (s *Service) ListTags(ctx context.Context, caller Caller, p TagListParams) ([]model.TagFilter, *apierr.Error) {
+	tags, err := s.store.ListTags(ctx, repository.TagListFilter{
+		CallerUID: caller.UID,
+		SpaceID:   caller.SpaceID,
+		Query:     p.Query,
+		Limit:     p.Limit,
+	})
+	if err != nil {
+		return nil, apierr.Internal()
+	}
+	if tags == nil {
+		tags = []model.TagFilter{}
+	}
+	return tags, nil
 }
 
 // IconResult is what UploadIcon returns to the handler: the public URL the

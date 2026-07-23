@@ -491,6 +491,49 @@ standard §2 envelope (`err.marketplace.*`) with a non-2xx status.
 - 401 `err.marketplace.auth.unauthorized`.
 - 403 `err.marketplace.auth.forbidden_space`.
 
+### 4.8 `GET /mcp_tags` — tag suggestions
+
+Returns tags aggregated from MCPs visible to the caller in the current Space,
+sorted by descending row count (alphabetical tie-break). Powers the tag-filter
+popover in `octo-web`'s MCP marketplace search bar: the frontend uses the
+`name` values here as the `tag=` query values on `GET /mcps`.
+
+Tags are stored inline in each `mcps.tags_json` array — there is no dedicated
+tag catalog table (mirrors the marketplace's free-form tag design, unlike
+Skill's `skill_tags` table). The endpoint unnests `tags_json` on read.
+
+**Query parameters:**
+
+| Name | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `q` | string | — | Case-insensitive substring match on tag name. Empty → return every visible tag. |
+| `limit` | int | `50` | Max items returned. Clamped to `[1, 100]`. |
+
+**Response body:**
+
+```json
+{
+  "data": [
+    { "name": "热门", "count": 12 },
+    { "name": "官方", "count": 8 }
+  ]
+}
+```
+
+**Semantics notes:**
+
+- Visibility scope is the same as `GET /mcps` (§4.2): `system` rows are
+  always visible; non-system rows require Space membership + (public OR
+  ownership). Empty tags and soft-deleted rows are excluded.
+- The endpoint is intentionally lightweight — no pagination, no created_by /
+  timestamp metadata. If a caller needs those the tag ships back as part of
+  the parent MCP record.
+
+**Errors:**
+
+- 401 `err.marketplace.auth.unauthorized`.
+- 403 `err.marketplace.auth.forbidden_space`.
+
 ## 5. Secret handling
 
 Applied on every write (`POST`, `PATCH`) BEFORE persistence.
