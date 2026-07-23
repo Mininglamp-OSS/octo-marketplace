@@ -97,6 +97,7 @@ func main() {
 	)
 
 	mcpSvc := service.New(repository.New(database)).WithProbeAllowPrivate(cfg.ProbeAllowPrivate)
+	metricssvc.RegisterResolver("mcp", metricssvc.NewMCPResolver(mcpSvc))
 	if cfg.Storage.Enabled() {
 		mcpSvc.WithIconStore(
 			blob.NewS3Client(blob.S3Config{

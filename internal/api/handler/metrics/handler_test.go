@@ -37,6 +37,12 @@ type mockMetricsRedis struct {
 	err error
 }
 
+type visibleResolver struct{}
+
+func (visibleResolver) CanView(context.Context, string, metricssvc.Caller) (bool, error) {
+	return true, nil
+}
+
 func (m *mockMetricsRedis) TrackView(context.Context, string, string) error     { return m.err }
 func (m *mockMetricsRedis) TrackDownload(context.Context, string, string) error { return m.err }
 func (m *mockMetricsRedis) TrackInstall(context.Context, string, string) error  { return m.err }
@@ -50,6 +56,7 @@ func setupTestRouter(redisErr error) *gin.Engine {
 		},
 	}
 	metricssvc.RegisterResolver("skill", metricssvc.NewSkillResolver(skillService))
+	metricssvc.RegisterResolver("mcp", visibleResolver{})
 
 	redis := &mockMetricsRedis{err: redisErr}
 	svc := metricssvc.New(redis)
@@ -65,6 +72,20 @@ func setupTestRouter(redisErr error) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	h.Register(v1)
 	return r
+}
+
+func TestTrack_MCPSuccess(t *testing.T) {
+	r := setupTestRouter(nil)
+	defer metricssvc.ResetResolvers()
+
+	w := doTrack(r, map[string]string{
+		"resource_type": "mcp",
+		"resource_id":   "mcp-1",
+		"event_type":    "view",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
 }
 
 func doTrack(r *gin.Engine, body map[string]string) *httptest.ResponseRecorder {
@@ -112,8 +133,8 @@ func TestTrack_UnsupportedResourceType(t *testing.T) {
 	defer metricssvc.ResetResolvers()
 
 	w := doTrack(r, map[string]string{
-		"resource_type": "mcp",
-		"resource_id":   "mcp-1",
+		"resource_type": "unknown",
+		"resource_id":   "resource-1",
 		"event_type":    "view",
 	})
 	if w.Code != http.StatusBadRequest {

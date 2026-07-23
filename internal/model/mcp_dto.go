@@ -114,6 +114,7 @@ type Detail struct {
 	Icon        string     `json:"icon"`
 	Tags        []string   `json:"tags"`
 	ToolCount   int        `json:"tool_count"`
+	ViewCount   int64      `json:"view_count" minimum:"0"`
 	Visibility  Visibility `json:"visibility"`
 	CreatorName string     `json:"creator_name"`
 	// CreatedByType is always present (falls back to "human" for legacy rows
@@ -141,6 +142,7 @@ type ListItem struct {
 	Icon        string     `json:"icon"`
 	Tags        []string   `json:"tags"`
 	ToolCount   int        `json:"tool_count"`
+	ViewCount   int64      `json:"view_count" minimum:"0"`
 	Visibility  Visibility `json:"visibility"`
 	CreatorName string     `json:"creator_name"`
 	// Same shape + semantics as Detail (see there for rationale).
@@ -184,6 +186,7 @@ func (m *MCP) ToDetail() Detail {
 		Icon:             m.Icon,
 		Tags:             nonNilStrings(m.Tags),
 		ToolCount:        len(m.Tools),
+		ViewCount:        nonNegativeCount(m.ViewCount),
 		Visibility:       m.Visibility,
 		CreatorName:      m.CreatorName,
 		CreatedByType:    normalizeCreatedByType(m.CreatedByType),
@@ -221,6 +224,7 @@ func (m *MCP) ToListItem() ListItem {
 		Icon:             m.Icon,
 		Tags:             nonNilStrings(m.Tags),
 		ToolCount:        len(m.Tools),
+		ViewCount:        nonNegativeCount(m.ViewCount),
 		Visibility:       m.Visibility,
 		CreatorName:      m.CreatorName,
 		CreatedByType:    normalizeCreatedByType(m.CreatedByType),
@@ -229,6 +233,13 @@ func (m *MCP) ToListItem() ListItem {
 		Transport:        m.Transport,
 		UpdatedAt:        m.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+}
+
+func nonNegativeCount(count int64) int64 {
+	if count < 0 {
+		return 0
+	}
+	return count
 }
 
 // normalizeCreatedByType guarantees a non-empty value on the wire (doc §3.1:
