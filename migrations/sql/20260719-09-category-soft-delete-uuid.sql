@@ -8,7 +8,7 @@ ALTER TABLE categories ADD INDEX idx_categories_deleted (deleted_at);
 CREATE TEMPORARY TABLE category_id_map (
   old_id VARCHAR(36) PRIMARY KEY,
   new_id VARCHAR(36) NOT NULL
-);
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 INSERT INTO category_id_map (old_id, new_id) VALUES
   ('starter',               UUID()),
