@@ -850,7 +850,9 @@ components:
           type: string
         tags:
           items:
+            maxLength: 10
             type: string
+          maxItems: 10
           type: array
           uniqueItems: false
         version:
@@ -866,7 +868,9 @@ components:
           type: string
         tags:
           items:
+            maxLength: 10
             type: string
+          maxItems: 10
           type: array
           uniqueItems: false
         version:
@@ -888,7 +892,9 @@ components:
           type: string
         tags:
           items:
+            maxLength: 10
             type: string
+          maxItems: 10
           type: array
           uniqueItems: false
       type: object
@@ -912,7 +918,9 @@ components:
           type: string
         tags:
           items:
+            maxLength: 10
             type: string
+          maxItems: 10
           type: array
           uniqueItems: false
         version:
@@ -1005,7 +1013,9 @@ components:
           type: string
         tags:
           items:
+            maxLength: 10
             type: string
+          maxItems: 10
           type: array
           uniqueItems: false
         version:
@@ -1035,7 +1045,9 @@ components:
           type: string
         tags:
           items:
+            maxLength: 10
             type: string
+          maxItems: 10
           type: array
           uniqueItems: false
         upload_url:

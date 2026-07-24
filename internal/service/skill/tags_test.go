@@ -24,6 +24,28 @@ func TestNormalizeRawTagsRejectsNonStringArray(t *testing.T) {
 	}
 }
 
+func TestNormalizeRawTagsRejectsTooManyTags(t *testing.T) {
+	if _, _, err := normalizeRawTags(json.RawMessage(`["one","two","three","four","five","six","seven","eight","nine","ten","eleven"]`)); err != ErrInvalidTags {
+		t.Fatalf("err = %v, want ErrInvalidTags", err)
+	}
+}
+
+func TestNormalizeRawTagsRejectsLongUnicodeTag(t *testing.T) {
+	if _, _, err := normalizeRawTags(json.RawMessage(`["这是超过十个字符的中文标签"]`)); err != ErrInvalidTags {
+		t.Fatalf("err = %v, want ErrInvalidTags", err)
+	}
+}
+
+func TestNormalizeRawTagsAcceptsBoundaryValues(t *testing.T) {
+	raw, names, err := normalizeRawTags(json.RawMessage(`["1234567890","two","three","four","five","six","seven","eight","nine","ten"]`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(names) != MaxSkillTags || len(raw) == 0 {
+		t.Fatalf("raw = %s, names = %#v", raw, names)
+	}
+}
+
 func TestParseTagFilters(t *testing.T) {
 	got := ParseTagFilters("ai, dev", "ai", " ops ")
 	want := []string{"ai", "dev", "ops"}

@@ -4,6 +4,12 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+)
+
+const (
+	MaxSkillTags      = 10
+	MaxSkillTagLength = 10
 )
 
 func rawTagsToStrings(raw json.RawMessage) []string {
@@ -78,6 +84,14 @@ func normalizeRawTags(raw json.RawMessage) (json.RawMessage, []string, error) {
 	tags = normalizeTags(tags)
 	if tags == nil {
 		tags = []string{}
+	}
+	if len(tags) > MaxSkillTags {
+		return nil, nil, ErrInvalidTags
+	}
+	for _, tag := range tags {
+		if utf8.RuneCountInString(tag) > MaxSkillTagLength {
+			return nil, nil, ErrInvalidTags
+		}
 	}
 	out, err := json.Marshal(tags)
 	if err != nil {
