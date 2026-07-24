@@ -373,6 +373,56 @@ func TestKeywordSearchCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestMCPMetricsJoinAndRelevanceOrdering(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	repo := New(database)
+
+	const (
+		owner = "owner-metrics-join"
+		space = "space-metrics-join"
+		name  = "Metrics Join Search"
+	)
+	cleanTuple(t, database, owner, space, name)
+	mcp := newTestMCP(name, owner, space)
+	if err := repo.Create(ctx, mcp); err != nil {
+		t.Fatalf("seed MCP: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(ctx, `DELETE FROM resource_metrics WHERE resource_type = 'mcp' AND resource_id = ?`, mcp.ID)
+		cleanTuple(t, database, owner, space, name)
+	})
+	if _, err := database.ExecContext(ctx,
+		`INSERT INTO resource_metrics (resource_type, resource_id, view_count) VALUES ('mcp', ?, 37)`,
+		mcp.ID,
+	); err != nil {
+		t.Fatalf("seed metrics: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, mcp.ID)
+	if err != nil {
+		t.Fatalf("GetByID with metrics JOIN: %v", err)
+	}
+	if got.ViewCount != 37 {
+		t.Fatalf("GetByID view count = %d, want 37", got.ViewCount)
+	}
+
+	list, _, _, err := repo.List(ctx, ListFilter{
+		CallerUID: owner,
+		SpaceID:   space,
+		Keyword:   "metrics",
+		Sort:      "relevance",
+		MineOnly:  true,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("List relevance with metrics JOIN: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != mcp.ID || list[0].ViewCount != 37 {
+		t.Fatalf("unexpected joined list result: %+v", list)
+	}
+}
+
 // TestRelevanceSortDoesNotBuryEmptyToolsRows is the DB-backed regression for
 // the JSON_EXTRACT NULL-propagation bug (PR #9 yujiawei P1). Before the fix,
 // an exact name match with an empty tools_json produced a NULL relevance score
