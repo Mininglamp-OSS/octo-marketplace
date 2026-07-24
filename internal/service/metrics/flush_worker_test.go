@@ -422,25 +422,44 @@ func (r *contextCancelRepo) UpsertCountsOnce(ctx context.Context, flushID, resou
 	return r.mockRepo.UpsertCountsOnce(ctx, flushID, resourceType, resourceID, viewDelta, downloadDelta, installDelta)
 }
 
-func TestFlushWorker_NonSkillType_Requeued(t *testing.T) {
+func TestFlushWorker_MCPTypeFlushed(t *testing.T) {
 	repo := &mockRepo{}
 	w, mr := setupTestWorker(t, repo)
 
 	ctx := context.Background()
 
-	// Non-skill type in dirty set
 	mr.Set("metrics:mcp:mcp-1:view", "10")
 	mr.SAdd("metrics:dirty", "mcp:mcp-1")
 
 	w.flush(ctx)
 
-	// Should not process non-skill types in v1
-	if len(repo.calls) != 0 {
-		t.Fatalf("expected 0 upserts for non-skill type, got %d", len(repo.calls))
+	if len(repo.calls) != 1 {
+		t.Fatalf("expected 1 MCP upsert, got %d", len(repo.calls))
+	}
+	if repo.calls[0].ResourceType != "mcp" || repo.calls[0].ResourceID != "mcp-1" || repo.calls[0].ViewDelta != 10 {
+		t.Fatalf("unexpected MCP upsert: %+v", repo.calls[0])
 	}
 	members, _ := mr.Members("metrics:dirty")
-	if len(members) != 1 || members[0] != "mcp:mcp-1" {
-		t.Fatalf("expected non-skill member to be requeued, got %v", members)
+	if len(members) != 0 {
+		t.Fatalf("expected MCP member to be acknowledged, got %v", members)
+	}
+}
+
+func TestFlushWorker_UnsupportedTypeRequeued(t *testing.T) {
+	repo := &mockRepo{}
+	w, mr := setupTestWorker(t, repo)
+
+	mr.Set("metrics:unknown:item-1:view", "10")
+	mr.SAdd("metrics:dirty", "unknown:item-1")
+
+	w.flush(context.Background())
+
+	if len(repo.calls) != 0 {
+		t.Fatalf("expected no upserts for unsupported type, got %d", len(repo.calls))
+	}
+	members, _ := mr.Members("metrics:dirty")
+	if len(members) != 1 || members[0] != "unknown:item-1" {
+		t.Fatalf("expected unsupported member to remain dirty, got %v", members)
 	}
 }
 

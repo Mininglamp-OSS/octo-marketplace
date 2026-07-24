@@ -30,6 +30,18 @@ func TestRelevanceOrderCoversEverySearchableField(t *testing.T) {
 	if len(args) != 8 {
 		t.Fatalf("ranking args = %d, want 8", len(args))
 	}
+	if !strings.Contains(order, "mcp_servers.updated_at DESC, mcp_servers.id DESC") {
+		t.Fatalf("ranking tie-breakers must qualify joined columns: %s", order)
+	}
+}
+
+func TestMetricsJoinUsesCompatibleCollation(t *testing.T) {
+	if !strings.Contains(selectColumns, "COALESCE(rm.view_count, 0)") {
+		t.Fatal("MCP select columns must include the joined view count")
+	}
+	if !strings.Contains(metricsJoinClause, "rm.resource_id COLLATE utf8mb4_unicode_ci = mcp_servers.id") {
+		t.Fatal("metrics join must normalize the resource ID collation")
+	}
 }
 
 // TestKeywordSearchIsCaseInsensitiveOnJSONColumns guards the fix for yujiawei P1:
