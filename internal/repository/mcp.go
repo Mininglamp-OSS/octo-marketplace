@@ -132,7 +132,9 @@ func (r *Repository) Update(ctx context.Context, m *model.MCP) error {
 // applies the visibility rule (doc §4.4) after loading so it can distinguish
 // owner from non-owner and choose the right error.
 func (r *Repository) GetByID(ctx context.Context, id string) (*model.MCP, error) {
-	const q = `SELECT ` + columns + ` FROM mcp_servers WHERE id = ? AND deleted_at IS NULL`
+	const q = `SELECT ` + selectColumns + ` FROM mcp_servers
+		` + metricsJoinClause + `
+		WHERE mcp_servers.id = ? AND mcp_servers.deleted_at IS NULL`
 	row := r.db.QueryRowContext(ctx, q, id)
 	m, err := scanRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -210,12 +212,14 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 
 	pageWhere := where
 	pageArgs := append([]any{}, args...)
-	orderBy := "created_at DESC, id DESC"
+	orderBy := "mcp_servers.created_at DESC, mcp_servers.id DESC"
 	if f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "" {
 		orderBy, args = relevanceOrder(f.Keyword)
 		pageArgs = append(pageArgs, args...)
 	}
-	q := `SELECT ` + columns + ` FROM mcp_servers WHERE ` + pageWhere +
+	q := `SELECT ` + selectColumns + ` FROM mcp_servers
+		` + metricsJoinClause + `
+		WHERE ` + pageWhere +
 		` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
 	pageArgs = append(pageArgs, f.Limit, f.Offset)
 
@@ -252,7 +256,7 @@ func relevanceOrder(keyword string) (string, []any) {
 		`(LOWER(CAST(tags_json AS CHAR)) LIKE ?) * 6 + ` +
 		`COALESCE(LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ? OR ` +
 		`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ?, 0) * 7 + ` +
-		`(LOWER(CAST(usage_examples_json AS CHAR)) LIKE ?) + (creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
+		`(LOWER(CAST(usage_examples_json AS CHAR)) LIKE ?) + (creator_name LIKE ?)) DESC, mcp_servers.updated_at DESC, mcp_servers.id DESC`
 	return order, []any{like, like, like, like, like, like, like, like}
 }
 
@@ -446,10 +450,12 @@ func nullableString(s string) any {
 	return s
 }
 
-const columns = `id, name, slug, slogan, category, icon, icon_version, tags_json, tools_json,
-	usage_examples_json, faqs_json, notes_json, visibility, owner_uid, space_id,
-	creator_name, created_by_type, created_by_bot_uid, created_by_bot_name,
-	transport, config_json, created_at, updated_at, deleted_at`
+const selectColumns = `mcp_servers.id, mcp_servers.name, mcp_servers.slug, mcp_servers.slogan, mcp_servers.category, mcp_servers.icon, mcp_servers.icon_version, mcp_servers.tags_json, mcp_servers.tools_json,
+	mcp_servers.usage_examples_json, mcp_servers.faqs_json, mcp_servers.notes_json, mcp_servers.visibility, mcp_servers.owner_uid, mcp_servers.space_id,
+	mcp_servers.creator_name, mcp_servers.created_by_type, mcp_servers.created_by_bot_uid, mcp_servers.created_by_bot_name,
+	mcp_servers.transport, mcp_servers.config_json, mcp_servers.created_at, mcp_servers.updated_at, mcp_servers.deleted_at, COALESCE(rm.view_count, 0)`
+
+const metricsJoinClause = `LEFT JOIN resource_metrics rm ON rm.resource_id COLLATE utf8mb4_unicode_ci = mcp_servers.id AND rm.resource_type = 'mcp'`
 
 type marshaledColumns struct {
 	tags   []byte
@@ -516,6 +522,7 @@ func scanRow(s rowScanner) (*model.MCP, error) {
 		&visibility, &m.OwnerUID, &spaceID, &m.CreatorName,
 		&createdByType, &createdByBotUID, &createdByBotName,
 		&transport, &config, &m.CreatedAt, &m.UpdatedAt, &deletedAt,
+		&m.ViewCount,
 	); err != nil {
 		return nil, err
 	}

@@ -464,14 +464,13 @@ func TestIntegration_ZeroDelta_SkipsUpsert(t *testing.T) {
 	}
 }
 
-// --- 8. Non-skill resource type is requeued ---
+// --- 8. MCP resource type is flushed ---
 
-func TestIntegration_NonSkillType_RequeuedByFlush(t *testing.T) {
+func TestIntegration_MCPTypeFlushed(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	ctx := context.Background()
 
-	// Add a "mcp" type (not "skill") to dirty set
 	rdb.Set(ctx, "metrics:mcp:mcp-001:view", "100", 0)
 	rdb.SAdd(ctx, "metrics:dirty", "mcp:mcp-001")
 
@@ -479,16 +478,18 @@ func TestIntegration_NonSkillType_RequeuedByFlush(t *testing.T) {
 	w := NewFlushWorker(rdb, repo, DefaultFlushWorkerConfig())
 	w.flush(ctx)
 
-	// v1 only processes "skill"; unsupported types remain dirty for a future worker.
-	if len(repo.calls) != 0 {
-		t.Fatalf("expected 0 upserts for non-skill type, got %d", len(repo.calls))
+	if len(repo.calls) != 1 {
+		t.Fatalf("expected 1 MCP upsert, got %d", len(repo.calls))
+	}
+	if repo.calls[0].ResourceType != "mcp" || repo.calls[0].ResourceID != "mcp-001" || repo.calls[0].ViewDelta != 100 {
+		t.Fatalf("unexpected MCP upsert: %+v", repo.calls[0])
 	}
 	isMember, err := rdb.SIsMember(ctx, "metrics:dirty", "mcp:mcp-001").Result()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !isMember {
-		t.Fatal("non-skill member should be re-added to dirty set")
+	if isMember {
+		t.Fatal("MCP member should be removed from dirty set after flush")
 	}
 }
 

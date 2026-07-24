@@ -61,9 +61,8 @@ func (h *Handler) Track(c *gin.Context) {
 		return
 	}
 
-	// v1 only accepts resource_type=skill
-	if req.ResourceType != "skill" {
-		apiresponse.Fail(c, http.StatusBadRequest, errcode.MetricsUnsupportedResource, "Unsupported resource_type; only \"skill\" is accepted.", map[string]any{"field": "resource_type", "reason": "unsupported"}, "")
+	if req.ResourceType != "skill" && req.ResourceType != "mcp" {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.MetricsUnsupportedResource, "Unsupported resource_type; only \"skill\" and \"mcp\" are accepted.", map[string]any{"field": "resource_type", "reason": "unsupported"}, "")
 		return
 	}
 

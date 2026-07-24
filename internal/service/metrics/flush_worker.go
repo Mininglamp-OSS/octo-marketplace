@@ -271,7 +271,7 @@ func (w *FlushWorker) processDirtyMember(ctx context.Context, member string, tot
 	resourceType := parts[0]
 	resourceID := parts[1]
 
-	if resourceType != "skill" {
+	if resourceType != "skill" && resourceType != "mcp" {
 		log.Printf("[flush-worker] WARN: unsupported dirty resource type %q for member %q, leaving dirty", resourceType, member)
 		return false
 	}
