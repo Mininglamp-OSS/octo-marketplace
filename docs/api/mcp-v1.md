@@ -300,14 +300,14 @@ Returns every record visible to the caller inside their current Space:
 
 | Name | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, `creator_name`, each entry of `tags`, `tools[].name`, `tools[].description`, and `usage_examples`. |
+| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, and `creator_name`. **Tags, tool names / descriptions, and `usage_examples` are intentionally excluded.** Tags are owned by the dedicated `tag` filter (below), so a keyword hit on a tag would double-count the same signal; tools / usage examples are only visible in the detail modal, so a keyword hit there surprised users more than it helped. |
 | `category` | string (repeatable) | `all` | Category key; `all` disables the filter. Repeat or comma-separate (`?category=dev,search`) to OR-combine. |
-| `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to OR-combine. |
+| `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to AND-combine (each selected tag must be present on a row — matches dmworkskillmarket's tag semantics). |
 | `transport` | string (repeatable) | — | Transport filter (`stdio` / `sse` / `streamable-http`); repeat or comma-separate to OR-combine. |
 | `visibility` | string (repeatable) | — | Visibility filter (`system` / `public` / `private`); repeat or comma-separate. Absent → no filter (still bounded by the visible-set rule above). |
 | `source` | string (repeatable) | — | Source facet (`system` / `space` / `mine`). Predicates partition the set the same way the response's `source` label does — a caller-owned row is labeled `mine`, not `space`. |
 | `created_by_type` | string (repeatable) | — | Provenance filter. Accepts `human` / `bot` / `import`. Repeat or comma-separate to OR-combine. Absent → no filter. |
-| `sort` | string | — | Ranking selector. `relevance` (only meaningful together with a non-empty `keyword`) orders by a fixed weighted match score against every searchable field; any other value falls back to the default order. |
+| `sort` | string | — | Ranking selector. `relevance` (only meaningful together with a non-empty `keyword`) orders by a fixed weighted match score against every searchable field. `updated` orders by `updated_at DESC, id DESC` — the browse-case default the marketplace frontend requests when no keyword is present. Any other value falls back to the default order (creation-time). |
 | `page` | int | `1` | One-based page number. |
 | `page_size` | int | `20` | Page size, max `100`. |
 
@@ -329,8 +329,10 @@ Returns every record visible to the caller inside their current Space:
 - Category filter options are supplied by the dedicated category API; MCP list
   responses do not embed category facets.
 - Default order: newest first (`created_at DESC`, tie-broken by `id DESC`).
-  Pass `sort=relevance` together with a non-empty `keyword` to switch to the
-  weighted match score; any other `sort` value falls back to the default.
+  `sort=relevance` (with a non-empty `keyword`) switches to the weighted
+  match score; `sort=updated` switches to `updated_at DESC, id DESC` so a
+  recently-edited row surfaces first. Any other `sort` value falls back to
+  the default.
 
 **Errors:** 401 / 403.
 
@@ -488,6 +490,50 @@ standard §2 envelope (`err.marketplace.*`) with a non-2xx status.
 - 400 `err.marketplace.mcp.invalid_request` — missing / malformed URL.
 - 400 `err.marketplace.mcp.invalid_transport` — unknown transport.
 - 400 `err.marketplace.mcp.probe_unsupported` — `stdio` transport.
+- 401 `err.marketplace.auth.unauthorized`.
+- 403 `err.marketplace.auth.forbidden_space`.
+
+### 4.8 `GET /mcp_tags` — tag suggestions
+
+Returns tags aggregated from MCPs visible to the caller in the current Space,
+sorted by descending row count (alphabetical tie-break). Powers the tag-filter
+popover in `octo-web`'s MCP marketplace search bar: the frontend uses the
+`name` values here as the `tag=` query values on `GET /mcps`.
+
+Tags are stored inline in each `mcps.tags_json` array — there is no dedicated
+tag catalog table (mirrors the marketplace's free-form tag design, unlike
+Skill's `skill_tags` table). The endpoint unnests `tags_json` on read.
+
+**Query parameters:**
+
+| Name | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `q` | string | — | Case-insensitive substring match on tag name. Empty → return every visible tag. |
+| `limit` | int | `50` | Max items returned. Clamped to `[1, 100]`. |
+| `mode` | string | — | `mine` restricts aggregation to caller-owned rows (mirrors `GET /mcps/mine`). Absent → aggregate over the full visible set (system + space + owned). |
+
+**Response body:**
+
+```json
+{
+  "data": [
+    { "name": "热门", "count": 12 },
+    { "name": "官方", "count": 8 }
+  ]
+}
+```
+
+**Semantics notes:**
+
+- Visibility scope is the same as `GET /mcps` (§4.2): `system` rows are
+  always visible; non-system rows require Space membership + (public OR
+  ownership). Empty tags and soft-deleted rows are excluded.
+- The endpoint is intentionally lightweight — no pagination, no created_by /
+  timestamp metadata. If a caller needs those the tag ships back as part of
+  the parent MCP record.
+
+**Errors:**
+
 - 401 `err.marketplace.auth.unauthorized`.
 - 403 `err.marketplace.auth.forbidden_space`.
 

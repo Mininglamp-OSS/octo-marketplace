@@ -32,6 +32,9 @@ type Store interface {
 	GetByID(ctx context.Context, id string) (*model.MCP, error)
 	SoftDelete(ctx context.Context, id string, now time.Time) error
 	List(ctx context.Context, f repository.ListFilter) ([]model.MCP, int, []model.CategoryFilter, error)
+	// ListTags aggregates distinct tag names from rows visible to the caller
+	// (same predicates as List). Returns rows sorted by count desc, name asc.
+	ListTags(ctx context.Context, f repository.TagListFilter) ([]model.TagFilter, error)
 	// SystemNameExists / SystemSlugExists guard the admin Create/Update path
 	// against duplicate name/slug across live visibility=system rows. The
 	// DB UNIQUE index does not catch these because system rows carry
@@ -203,6 +206,43 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) (model.
 // ListMine returns records owned by the caller in the current Space (doc §4.3).
 func (s *Service) ListMine(ctx context.Context, caller Caller, p ListParams) (model.ListResponse, *apierr.Error) {
 	return s.list(ctx, caller, p, true)
+}
+
+// TagListParams carries the query parameters for the tag suggestion endpoint.
+type TagListParams struct {
+	// Query is a case-insensitive substring to filter tag names by. Empty
+	// returns all tags visible to the caller.
+	Query string
+	// Limit is the max number of tags returned. Clamped by the handler.
+	Limit int
+	// MineOnly restricts the aggregate to rows the caller owns in the current
+	// Space, mirroring `GET /mcps/mine`. The frontend forwards this when the
+	// tag popover is opened from the "我的" tab so the suggestions match the
+	// list actually being filtered.
+	MineOnly bool
+}
+
+// ListTags aggregates tag names from records visible to the caller in the
+// current Space (same predicates as List). Returns items sorted by count
+// desc, name asc — so the popover surfaces the most-used tags first without
+// the frontend needing to re-sort. Mirrors dmworkskillmarket's /skills/tags
+// UX from the caller's perspective; the storage layer differs (MCP tags live
+// inline in tags_json rather than in a dedicated tag table).
+func (s *Service) ListTags(ctx context.Context, caller Caller, p TagListParams) ([]model.TagFilter, *apierr.Error) {
+	tags, err := s.store.ListTags(ctx, repository.TagListFilter{
+		CallerUID: caller.UID,
+		SpaceID:   caller.SpaceID,
+		Query:     p.Query,
+		Limit:     p.Limit,
+		MineOnly:  p.MineOnly,
+	})
+	if err != nil {
+		return nil, apierr.Internal()
+	}
+	if tags == nil {
+		tags = []model.TagFilter{}
+	}
+	return tags, nil
 }
 
 // IconResult is what UploadIcon returns to the handler: the public URL the
@@ -544,24 +584,12 @@ func enrichListItem(item *model.ListItem, m *model.MCP, keyword, callerUID strin
 	if strings.Contains(strings.ToLower(m.Category), kw) {
 		add("category", 3)
 	}
-	for _, tag := range m.Tags {
-		if strings.Contains(strings.ToLower(tag), kw) {
-			add("tag:"+tag, 6)
-			break
-		}
-	}
-	for _, tool := range m.Tools {
-		if strings.Contains(strings.ToLower(tool.Name), kw) || strings.Contains(strings.ToLower(tool.Description), kw) {
-			add("tool:"+tool.Name, 7)
-			break
-		}
-	}
-	for _, example := range m.UsageExamples {
-		if strings.Contains(strings.ToLower(example), kw) {
-			add("usage_example", 1)
-			break
-		}
-	}
+	// Tags are NOT part of keyword search: the marketplace UI ships a separate
+	// tag chip filter (octo-web #1009) that owns tag-based filtering. Matching
+	// tags here again would double-count the same signal and confuse users
+	// about why a row surfaced. Tool names / descriptions and usage_examples
+	// remain excluded for the same product reason — keyword search should only
+	// match fields the user can see as free text on the card.
 	if strings.Contains(strings.ToLower(m.CreatorName), kw) {
 		add("creator:"+m.CreatorName, 1)
 	}

@@ -23,10 +23,12 @@ type fakeStore struct {
 	updated *model.MCP
 	deleted string
 
-	lastFilter repository.ListFilter
-	listResult []model.MCP
-	listTotal  int
-	listCats   []model.CategoryFilter
+	lastFilter    repository.ListFilter
+	listResult    []model.MCP
+	listTotal     int
+	listCats      []model.CategoryFilter
+	listTags      []model.TagFilter
+	lastTagFilter repository.TagListFilter
 }
 
 func newFakeStore() *fakeStore {
@@ -74,6 +76,14 @@ func (s *fakeStore) SoftDelete(_ context.Context, id string, _ time.Time) error 
 func (s *fakeStore) List(_ context.Context, f repository.ListFilter) ([]model.MCP, int, []model.CategoryFilter, error) {
 	s.lastFilter = f
 	return s.listResult, s.listTotal, s.listCats, nil
+}
+
+// ListTags is a minimal stub — the service tests don't exercise the tag
+// aggregation path (that's covered by the repository DB test). Returns the
+// pre-canned slice on the fake so a test that DOES care can seed it.
+func (s *fakeStore) ListTags(_ context.Context, f repository.TagListFilter) ([]model.TagFilter, error) {
+	s.lastTagFilter = f
+	return s.listTags, nil
 }
 
 // SystemNameExists / SystemSlugExists back the admin uniqueness pre-check.
@@ -736,6 +746,46 @@ func TestListDefaultsAndClampsPagination(t *testing.T) {
 	}
 	if store.lastFilter.MineOnly {
 		t.Fatalf("List must not set MineOnly")
+	}
+}
+
+func TestListTagsForwardsCallerScopeAndReturnsSlice(t *testing.T) {
+	store := newFakeStore()
+	store.listTags = []model.TagFilter{
+		{Name: "热门", Count: 12},
+		{Name: "官方", Count: 8},
+	}
+	svc := New(store)
+
+	got, apiErr := svc.ListTags(context.Background(), caller, TagListParams{Query: "官", Limit: 20})
+	if apiErr != nil {
+		t.Fatalf("unexpected error: %v", apiErr)
+	}
+	if len(got) != 2 || got[0].Name != "热门" || got[1].Name != "官方" {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	if store.lastTagFilter.CallerUID != "u1" || store.lastTagFilter.SpaceID != "space-a" {
+		t.Fatalf("caller scope not forwarded: %+v", store.lastTagFilter)
+	}
+	if store.lastTagFilter.Query != "官" || store.lastTagFilter.Limit != 20 {
+		t.Fatalf("query/limit not forwarded: %+v", store.lastTagFilter)
+	}
+}
+
+func TestListTagsReturnsEmptySliceWhenStoreReturnsNil(t *testing.T) {
+	store := newFakeStore()
+	store.listTags = nil
+	svc := New(store)
+
+	got, apiErr := svc.ListTags(context.Background(), caller, TagListParams{})
+	if apiErr != nil {
+		t.Fatalf("unexpected error: %v", apiErr)
+	}
+	if got == nil {
+		t.Fatalf("expected non-nil slice for JSON marshalling ([] over null)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %+v", got)
 	}
 }
 

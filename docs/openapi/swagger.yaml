@@ -25,6 +25,14 @@ components:
           type: array
           uniqueItems: false
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-array_github_com_Mininglamp-OSS_octo-marketplace_internal_model_TagFilter
+    : properties:
+        data:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.TagFilter'
+          type: array
+          uniqueItems: false
+      type: object
     ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-array_github_com_Mininglamp-OSS_octo-marketplace_internal_service_category_AdminItem
     : properties:
         data:
@@ -522,6 +530,13 @@ components:
           description: 'JSON: {"type":"s3","object_key":"...","readme_key":"..."}'
           type: string
         version:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.TagFilter:
+      properties:
+        count:
+          type: integer
+        name:
           type: string
       type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.Tool:
@@ -2264,7 +2279,7 @@ paths:
         Space.
       operationId: mcp_category.list
       parameters:
-      - description: 'Scope: \'
+      - description: 'Scope: mine restricts counts to caller-owned records'
         in: query
         name: mode
         schema:
@@ -2379,6 +2394,64 @@ paths:
       security:
       - Bearer: []
       summary: Initialize MCP icon upload
+      tags:
+      - mcp
+  /mcp_tags:
+    get:
+      description: Return tags aggregated from MCPs visible to the caller in the current
+        Space. Free-form strings — no dedicated tag catalog table. Supports fuzzy
+        match by `q` and sorts by descending row count (ties broken alphabetically).
+      operationId: mcp_tag.list
+      parameters:
+      - description: Fuzzy tag search (case-insensitive substring)
+        in: query
+        name: q
+        schema:
+          type: string
+      - description: Max items returned; default 50, max 100
+        in: query
+        name: limit
+        schema:
+          type: integer
+      - description: 'Scope: mine restricts aggregation to caller-owned records (mirrors
+          GET /mcps/mine)'
+        in: query
+        name: mode
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-array_github_com_Mininglamp-OSS_octo-marketplace_internal_model_TagFilter'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: List MCP tags
       tags:
       - mcp
   /mcps:

@@ -31,6 +31,7 @@ type MCPService interface {
 	Delete(context.Context, service.Caller, string) *apierr.Error
 	List(context.Context, service.Caller, service.ListParams) (model.ListResponse, *apierr.Error)
 	ListMine(context.Context, service.Caller, service.ListParams) (model.ListResponse, *apierr.Error)
+	ListTags(context.Context, service.Caller, service.TagListParams) ([]model.TagFilter, *apierr.Error)
 	Probe(context.Context, service.ProbeRequest) (service.ProbeResponse, *apierr.Error)
 	UploadIcon(context.Context, service.Caller, string, []byte, string) (service.IconResult, *apierr.Error)
 }
@@ -135,7 +136,7 @@ func (h *MCP) ListMine(c *gin.Context) { h.list(c, true) }
 // @Accept json
 // @Produce json
 // @Security Bearer
-// @Param mode query string false "Scope: \"mine\" restricts counts to caller-owned records"
+// @Param mode query string false "Scope: mine restricts counts to caller-owned records"
 // @Param created_by_type query []string false "Provenance filter (human, bot, import); repeatable or comma-separated"
 // @Success 200 {object} apiresponse.Data[[]model.CategoryFilter]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
@@ -170,6 +171,66 @@ func (h *MCP) ListCategories(c *gin.Context) {
 		return
 	}
 	apiresponse.OK(c, result.Categories)
+}
+
+// ListTags godoc
+// @Summary List MCP tags
+// @Description Return tags aggregated from MCPs visible to the caller in the current Space. Free-form strings — no dedicated tag catalog table. Supports fuzzy match by `q` and sorts by descending row count (ties broken alphabetically).
+// @Tags mcp
+// @ID mcp_tag.list
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param q query string false "Fuzzy tag search (case-insensitive substring)"
+// @Param limit query int false "Max items returned; default 50, max 100"
+// @Param mode query string false "Scope: mine restricts aggregation to caller-owned records (mirrors GET /mcps/mine)"
+// @Success 200 {object} apiresponse.Data[[]model.TagFilter]
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
+// @Router /mcp_tags [get]
+func (h *MCP) ListTags(c *gin.Context) {
+	caller, ok := callerFromContext(c)
+	if !ok {
+		writeError(c, apierr.Unauthorized())
+		return
+	}
+	// Aggregate over the SAME visible set as List (space+visibility rules);
+	// callers only see tags on rows they could open. Frontend uses this to
+	// populate the tag-filter popover so it can suggest tags not yet on the
+	// current page (aggregation from state.items misses cross-page tags).
+	tags, apiErr := h.svc.ListTags(c.Request.Context(), caller, service.TagListParams{
+		Query:    strings.TrimSpace(c.Query("q")),
+		Limit:    parseTagLimit(c.Query("limit")),
+		MineOnly: c.Query("mode") == "mine",
+	})
+	if apiErr != nil {
+		writeError(c, apiErr)
+		return
+	}
+	apiresponse.OK(c, tags)
+}
+
+// parseTagLimit clamps the `limit` query param to `maxLimit`, defaulting to
+// `def` when the input is missing, unparseable, or non-positive. Mirrors
+// dmworkskillmarket's tag-limit convention so a caller migrating from the
+// Skill tag surface gets identical bounds.
+func parseTagLimit(raw string) int {
+	const (
+		def      = 50
+		maxLimit = 100
+	)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n > maxLimit {
+		return maxLimit
+	}
+	return n
 }
 
 func (h *MCP) list(c *gin.Context, mine bool) {
@@ -394,7 +455,7 @@ func listParams(c *gin.Context) (service.ListParams, int, int) {
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	categories := splitQuery(c.QueryArray("category"))
+	categories := splitCategoryQuery(c.QueryArray("category"))
 	return service.ListParams{
 		Keyword:        strings.TrimSpace(c.Query("keyword")),
 		Categories:     categories,
@@ -409,16 +470,38 @@ func listParams(c *gin.Context) (service.ListParams, int, int) {
 	}, page, pageSize
 }
 
+// splitQuery normalizes repeated / comma-separated query values by trimming
+// whitespace and dropping empties. It is shared by every list filter — DO NOT
+// add value-specific sentinels here (see splitCategoryQuery for the
+// category-only "all" sentinel), otherwise a legal tag / source / transport
+// value that happens to match the sentinel gets silently swallowed.
 func splitQuery(values []string) []string {
 	var result []string
 	for _, value := range values {
 		for _, item := range strings.Split(value, ",") {
-			if item = strings.TrimSpace(item); item != "" && item != model.CategoryKeyAll {
+			if item = strings.TrimSpace(item); item != "" {
 				result = append(result, item)
 			}
 		}
 	}
 	return result
+}
+
+// splitCategoryQuery is splitQuery + the "all" sentinel (mcp-v1.md §0):
+// category="all" disables the filter, so it must be stripped before the
+// service builds a WHERE clause. Other filters (tag / source / transport)
+// use splitQuery directly — a tag literally named "all" is a legal value
+// there.
+func splitCategoryQuery(values []string) []string {
+	filtered := splitQuery(values)
+	kept := filtered[:0]
+	for _, item := range filtered {
+		if item == model.CategoryKeyAll {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
 }
 
 func positiveInt(value string, fallback int) int {
