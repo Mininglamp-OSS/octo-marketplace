@@ -263,15 +263,16 @@ Publish a new MCP owned by the caller.
   ],
   "usage_examples": ["帮我建 Issue"],
   "faqs": [],
-  "notes": [],
-  "visibility": "public"
+  "notes": []
 }
 ```
 
 - `name` is required; every other field has a documented default.
 - `transport` decides which of `url` / `command`+`args`+`env` is meaningful.
-- `visibility` accepts only `public` or `private`. Any other value —
-  including `system` — yields `err.marketplace.mcp.invalid_visibility`.
+- New records are always persisted as `public`. The legacy `visibility` field
+  may be omitted; `public` and `private` are accepted for compatibility but
+  ignored. `system` and unknown values still yield
+  `err.marketplace.mcp.invalid_visibility`.
 - Client-supplied `mcp_id`, `owner_uid`, `space_id`, `creator_name`,
   `created_at`, `updated_at`, `tool_count` are rejected as unknown fields (§3.3).
 
@@ -371,8 +372,9 @@ else receives `err.marketplace.mcp.forbidden`.
 
 **Mutable fields:** `name`, `slug`, `slogan`, `category`, `icon`, `tags`,
 `transport`, `url`, `command`, `args`, `env`, `headers`, `auth_type`,
-`tools`, `usage_examples`, `faqs`, `notes`, `visibility` (`public` /
-`private` only). `slug` follows the same shape rules as create (§3.1
+`tools`, `usage_examples`, `faqs`, `notes`. The legacy `visibility` field is
+accepted for compatibility but ignored, preserving the record's current
+visibility. `slug` follows the same shape rules as create (§3.1
 field notes); a non-nil empty string is rejected as `slug_invalid`.
 
 **Immutable fields:** `mcp_id`, `owner_uid`, `space_id`, `creator_name`,

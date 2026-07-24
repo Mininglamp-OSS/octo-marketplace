@@ -217,6 +217,28 @@ func TestCreateRejectsSystemVisibility(t *testing.T) {
 	}
 }
 
+func TestCreateAlwaysPersistsPublicVisibility(t *testing.T) {
+	for _, visibility := range []model.Visibility{"", model.VisibilityPublic, model.VisibilityPrivate} {
+		t.Run(string(visibility), func(t *testing.T) {
+			store := newFakeStore()
+			svc := New(store)
+			req := baseCreate()
+			req.Visibility = visibility
+
+			detail, apiErr := svc.Create(context.Background(), caller, req)
+			if apiErr != nil {
+				t.Fatalf("unexpected error: %v", apiErr)
+			}
+			if store.created.Visibility != model.VisibilityPublic {
+				t.Fatalf("persisted visibility = %q, want public", store.created.Visibility)
+			}
+			if detail.Visibility != model.VisibilityPublic {
+				t.Fatalf("response visibility = %q, want public", detail.Visibility)
+			}
+		})
+	}
+}
+
 func TestCreateRejectsInvalidTransport(t *testing.T) {
 	svc := New(newFakeStore())
 	req := baseCreate()
@@ -340,10 +362,10 @@ func TestCreatePublicAcceptsSharedSecretValue(t *testing.T) {
 	}
 }
 
-func TestCreatePrivateAcceptsSharedSecretValue(t *testing.T) {
-	// Same request shape, private visibility → allowed. This is the whole
-	// point of the toggle model: a private MCP is essentially a personal
-	// config file and can persist a real credential.
+func TestCreateLegacyPrivateInputStillPersistsPublicSharedSecret(t *testing.T) {
+	// Legacy clients may still send private. The request remains accepted, but
+	// the record is public and owner-only secret projection still protects the
+	// stored value from non-owner detail responses.
 	store := newFakeStore()
 	svc := New(store)
 	req := baseCreate()
@@ -353,7 +375,10 @@ func TestCreatePrivateAcceptsSharedSecretValue(t *testing.T) {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
 	if got := store.created.Connection.Headers["Authorization"]; got != "Bearer sk-live-abc" {
-		t.Fatalf("private shared secret was not persisted verbatim: %q", got)
+		t.Fatalf("shared secret was not persisted verbatim: %q", got)
+	}
+	if store.created.Visibility != model.VisibilityPublic {
+		t.Fatalf("persisted visibility = %q, want public", store.created.Visibility)
 	}
 }
 
@@ -618,13 +643,7 @@ func TestOwnerCanPatchAndDelete(t *testing.T) {
 	}
 }
 
-// TestPatchVisibilityFlipAcceptsPersistedSecrets covers a private→public
-// promotion carrying a previously-persisted shared secret. Post-relaxation
-// (rules 1 and 2 removed) the flip is accepted: the value stays in the DB
-// and is blanked to non-owners by detailForCaller (§5.3). The prior
-// guardrail intentionally rejected this flip — the test is preserved with
-// inverted expectations to lock in the new posture.
-func TestPatchVisibilityFlipAcceptsPersistedSecrets(t *testing.T) {
+func TestPatchIgnoresVisibilityAndPreservesPrivate(t *testing.T) {
 	store := newFakeStore()
 	svc := New(store)
 	seed(store, model.MCP{
@@ -644,27 +663,24 @@ func TestPatchVisibilityFlipAcceptsPersistedSecrets(t *testing.T) {
 	if _, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{
 		Visibility: &newVis,
 	}); apiErr != nil {
-		t.Fatalf("visibility flip should be accepted, got %v", apiErr)
+		t.Fatalf("legacy visibility field rejected: %v", apiErr)
 	}
 	got := store.records["own"]
-	if got.Visibility != model.VisibilityPublic {
-		t.Fatalf("visibility not applied: %q", got.Visibility)
+	if got.Visibility != model.VisibilityPrivate {
+		t.Fatalf("visibility changed: %q", got.Visibility)
 	}
 	if got.Connection.Headers["Authorization"] != "Bearer real-token" {
 		t.Fatalf("shared secret altered on flip: %q", got.Connection.Headers["Authorization"])
 	}
 }
 
-// TestPatchVisibilityFlipHonoursUserSupplied confirms the same flip is
-// accepted when the sensitive header is user-supplied (stored verbatim
-// for the owner, blanked to non-owners by detailForCaller — §5.3).
-func TestPatchVisibilityFlipHonoursUserSupplied(t *testing.T) {
+func TestPatchIgnoresVisibilityAndPreservesPublic(t *testing.T) {
 	store := newFakeStore()
 	svc := New(store)
 	seed(store, model.MCP{
 		ID:         "own",
-		Name:       "Safe flip",
-		Visibility: model.VisibilityPrivate,
+		Name:       "Public MCP",
+		Visibility: model.VisibilityPublic,
 		OwnerUID:   "u1",
 		SpaceID:    "space-a",
 		Transport:  model.TransportStreamableHTTP,
@@ -674,11 +690,14 @@ func TestPatchVisibilityFlipHonoursUserSupplied(t *testing.T) {
 			HeadersUserSupplied: []string{"Authorization"},
 		},
 	})
-	newVis := model.VisibilityPublic
+	newVis := model.VisibilityPrivate
 	if _, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{
 		Visibility: &newVis,
 	}); apiErr != nil {
-		t.Fatalf("safe visibility flip rejected: %v", apiErr)
+		t.Fatalf("legacy visibility field rejected: %v", apiErr)
+	}
+	if got := store.records["own"].Visibility; got != model.VisibilityPublic {
+		t.Fatalf("visibility changed: %q", got)
 	}
 }
 
