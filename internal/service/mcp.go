@@ -678,10 +678,10 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 	if !model.ValidTransport(req.Transport) {
 		return nil, apierr.InvalidTransport()
 	}
-	visibility, apiErr := validateClientVisibility(req.Visibility)
-	if apiErr != nil {
+	if apiErr := validatePublicCreateVisibility(req.Visibility); apiErr != nil {
 		return nil, apiErr
 	}
+	visibility := model.VisibilityPublic
 
 	slug, apiErr := resolveSlug(req.Slug, name)
 	if apiErr != nil {
@@ -803,17 +803,10 @@ func (s *Service) applyPatch(m *model.MCP, req model.PatchRequest) *apierr.Error
 	if req.Args != nil {
 		m.Connection.Args = *req.Args
 	}
-	// Visibility must still be resolved before env / headers so the merged
-	// record has a coherent visibility value for downstream projections.
-	// (The public-secret guardrail that used to read visibility here — rule
-	// 2 in §5.1 — has been removed.)
-	if req.Visibility != nil {
-		visibility, apiErr := validateClientVisibility(*req.Visibility)
-		if apiErr != nil {
-			return apiErr
-		}
-		m.Visibility = visibility
-	}
+	// Public PATCH keeps accepting the legacy field for wire compatibility,
+	// but visibility is no longer user-editable. Ignore any decoded value so
+	// existing private records stay private and existing public records stay
+	// public. The admin service remains the only writer of system visibility.
 	// The two "value + user_supplied" pairs are patched together so redact
 	// sees a coherent view. When only one half of the pair is in the request,
 	// the other half stays at its persisted value.
@@ -1024,17 +1017,16 @@ func redactConnectionSecrets(
 	return redactedEnv, redactedHeaders
 }
 
-// validateClientVisibility accepts only public/private from a client write;
-// system (or anything else) is rejected (doc §4.1). An empty value defaults to
-// private, matching the schema default and the private-by-omission posture.
-func validateClientVisibility(v model.Visibility) (model.Visibility, *apierr.Error) {
+// validatePublicCreateVisibility keeps the public create endpoint backward
+// compatible with clients that still send public/private while preventing
+// system or unknown values from crossing the public API boundary. The caller
+// always persists public after this validation.
+func validatePublicCreateVisibility(v model.Visibility) *apierr.Error {
 	switch v {
-	case "":
-		return model.VisibilityPrivate, nil
-	case model.VisibilityPublic, model.VisibilityPrivate:
-		return v, nil
+	case "", model.VisibilityPublic, model.VisibilityPrivate:
+		return nil
 	default:
-		return "", apierr.InvalidVisibility()
+		return apierr.InvalidVisibility()
 	}
 }
 
