@@ -498,6 +498,12 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 	if p.Tags != nil {
 		normalized, tagNames, err := normalizeRawTags(p.Tags)
 		if err != nil {
+			normalized, tagNames, err = normalizeRawTagsWithLegacy(
+				p.Tags,
+				s.rawTagsToNames(ctx, row.Tags, nil),
+			)
+		}
+		if err != nil {
 			return nil, ErrInvalidTags
 		}
 		repoParams.Tags = normalized

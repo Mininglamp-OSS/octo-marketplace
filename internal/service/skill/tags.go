@@ -74,6 +74,13 @@ func rawTagsToIDStrings(raw json.RawMessage) []string {
 }
 
 func normalizeRawTags(raw json.RawMessage) (json.RawMessage, []string, error) {
+	return normalizeRawTagsWithLegacy(raw, nil)
+}
+
+// normalizeRawTagsWithLegacy enforces the current tag contract while allowing
+// unchanged tag names that were valid under an older, wider length limit.
+// This keeps unrelated edits possible without permitting new oversized tags.
+func normalizeRawTagsWithLegacy(raw json.RawMessage, legacyTags []string) (json.RawMessage, []string, error) {
 	if raw == nil {
 		return nil, nil, nil
 	}
@@ -88,9 +95,15 @@ func normalizeRawTags(raw json.RawMessage) (json.RawMessage, []string, error) {
 	if len(tags) > MaxSkillTags {
 		return nil, nil, ErrInvalidTags
 	}
+	legacy := make(map[string]struct{}, len(legacyTags))
+	for _, tag := range normalizeTags(legacyTags) {
+		legacy[tag] = struct{}{}
+	}
 	for _, tag := range tags {
 		if utf8.RuneCountInString(tag) > MaxSkillTagLength {
-			return nil, nil, ErrInvalidTags
+			if _, ok := legacy[tag]; !ok {
+				return nil, nil, ErrInvalidTags
+			}
 		}
 	}
 	out, err := json.Marshal(tags)

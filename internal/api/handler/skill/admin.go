@@ -200,7 +200,7 @@ type AdminUpdateRequest struct {
 	IconURL     *string   `json:"icon_url"`
 	Description *string   `json:"description"`
 	CategoryID  *string   `json:"category_id"`
-	Tags        *[]string `json:"tags" binding:"omitempty,max=10,dive,max=10" maxLength:"10"`
+	Tags        *[]string `json:"tags" binding:"omitempty,max=10" maxLength:"10"`
 }
 
 // AdminUpdate godoc

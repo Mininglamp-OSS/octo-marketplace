@@ -2,6 +2,7 @@ package skill
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -33,6 +34,32 @@ func TestNormalizeRawTagsRejectsTooManyTags(t *testing.T) {
 func TestNormalizeRawTagsRejectsLongUnicodeTag(t *testing.T) {
 	if _, _, err := normalizeRawTags(json.RawMessage(`["这是超过十个字符的中文标签"]`)); err != ErrInvalidTags {
 		t.Fatalf("err = %v, want ErrInvalidTags", err)
+	}
+}
+
+func TestNormalizeRawTagsWithLegacyAllowsUnchangedLongTag(t *testing.T) {
+	raw, names, err := normalizeRawTagsWithLegacy(
+		json.RawMessage(`["productivity","new"]`),
+		[]string{"productivity"},
+	)
+	if err != nil {
+		t.Fatalf("normalizeRawTagsWithLegacy() error = %v", err)
+	}
+	if got, want := string(raw), `["productivity","new"]`; got != want {
+		t.Fatalf("raw = %s, want %s", got, want)
+	}
+	if !reflect.DeepEqual(names, []string{"productivity", "new"}) {
+		t.Fatalf("names = %#v", names)
+	}
+}
+
+func TestNormalizeRawTagsWithLegacyRejectsNewLongTag(t *testing.T) {
+	_, _, err := normalizeRawTagsWithLegacy(
+		json.RawMessage(`["development"]`),
+		[]string{"productivity"},
+	)
+	if err != ErrInvalidTags {
+		t.Fatalf("error = %v, want ErrInvalidTags", err)
 	}
 }
 
