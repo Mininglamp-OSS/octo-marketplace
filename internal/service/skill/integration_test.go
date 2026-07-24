@@ -47,7 +47,7 @@ func TestCreate_FullFlow_VerifiesStoragePath(t *testing.T) {
 		"task-int-1", "upload-int-1", "skill.zip", int64(len(zipData)),
 		"skill-uploads/upload-int-1/skill.zip", testSHA256Hex(zipData),
 		"success", "Integration Skill", "Integration test description", "2.0.0",
-		[]byte(`["integration","test"]`), "# Integration Skill\nBody", "", "", nil, 0,
+		[]byte(`["integrate","test"]`), "# Integration Skill\nBody", "", "", nil, 0,
 		"user-int", "space-int", "",
 	)
 	mock.ExpectQuery("SELECT .+ FROM parse_tasks WHERE id").
@@ -58,13 +58,13 @@ func TestCreate_FullFlow_VerifiesStoragePath(t *testing.T) {
 	mock.ExpectExec("UPDATE parse_tasks SET status").
 		WithArgs("task-int-1", "user-int", "space-int").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	expectResolveOrCreateTagIDs(mock, "space-int", "user-int", []string{"integration", "test"}, []int64{1, 2})
+	expectResolveOrCreateTagIDs(mock, "space-int", "user-int", []string{"integrate", "test"}, []int64{1, 2})
 	mock.ExpectExec("INSERT INTO skills").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO skill_versions").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	expectResolveTagNames(mock, []int64{1, 2}, []string{"integration", "test"})
+	expectResolveTagNames(mock, []int64{1, 2}, []string{"integrate", "test"})
 
 	ctx := context.Background()
 	item, err := svc.Create(ctx, CreateParams{
