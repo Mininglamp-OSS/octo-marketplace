@@ -311,14 +311,12 @@ func TestConcurrentCreateSameSlug(t *testing.T) {
 }
 
 // TestKeywordSearchCaseInsensitive is the DB-backed regression for the JSON
-// case-sensitivity fix (PR #9 yujiawei P1). Before the fix, JSON_SEARCH on
-// tags_json used binary collation so a keyword like "github" missed a row
-// whose only match was tag="GitHub" — the WHERE clause dropped the row
-// entirely, disagreeing with enrichListItem which lowercased both sides.
-// This test seeds a tags row and asserts the JSON path resolves case-
-// insensitively; sibling tool-name / tool-desc / usage-example rows are
-// also seeded to confirm they are NOT returned any more (search only
-// matches card-visible fields).
+// case-sensitivity fix (PR #9 yujiawei P1) — the SQL side must lowercase both
+// operands so mixed-case rows aren't silently dropped. Since tags left the
+// keyword field set (owned by the dedicated tag chip filter), this test now
+// seeds a mixed-case `name` row as the positive case and asserts the previous
+// tag / tools / usage-example rows are NOT returned — search should only
+// match card-visible free-text fields (name / slogan / category / creator).
 func TestKeywordSearchCaseInsensitive(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()
@@ -340,6 +338,7 @@ func TestKeywordSearchCaseInsensitive(t *testing.T) {
 		}
 		return m.ID
 	}
+	nameRow := seed("KW Case GitHub Client", nil, nil, nil)
 	tagsRow := seed("KW Case Tag", []string{"GitHub"}, nil, nil)
 	toolNameRow := seed("KW Case ToolName", nil, []model.Tool{{Name: "GitHubSearch", Description: "search"}}, nil)
 	toolDescRow := seed("KW Case ToolDesc", nil, []model.Tool{{Name: "search", Description: "Uses the GitHub API"}}, nil)
@@ -359,10 +358,11 @@ func TestKeywordSearchCaseInsensitive(t *testing.T) {
 	for _, m := range list {
 		got[m.ID] = true
 	}
-	if !got[tagsRow] {
-		t.Fatalf("case-insensitive keyword search missed tags_json row (id=%s); got=%v", tagsRow, got)
+	if !got[nameRow] {
+		t.Fatalf("case-insensitive keyword search missed name row (id=%s); got=%v", nameRow, got)
 	}
 	for label, id := range map[string]string{
+		"tags_json":           tagsRow,
 		"tools_json.name":     toolNameRow,
 		"tools_json.desc":     toolDescRow,
 		"usage_examples_json": usageRow,

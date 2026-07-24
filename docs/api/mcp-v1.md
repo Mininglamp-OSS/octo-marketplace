@@ -300,7 +300,7 @@ Returns every record visible to the caller inside their current Space:
 
 | Name | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, `creator_name`, and each entry of `tags`. **Tool names / descriptions and `usage_examples` are intentionally excluded** so keyword hits match card-visible fields only. |
+| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, and `creator_name`. **Tags, tool names / descriptions, and `usage_examples` are intentionally excluded.** Tags are owned by the dedicated `tag` filter (below), so a keyword hit on a tag would double-count the same signal; tools / usage examples are only visible in the detail modal, so a keyword hit there surprised users more than it helped. |
 | `category` | string (repeatable) | `all` | Category key; `all` disables the filter. Repeat or comma-separate (`?category=dev,search`) to OR-combine. |
 | `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to AND-combine (each selected tag must be present on a row — matches dmworkskillmarket's tag semantics). |
 | `transport` | string (repeatable) | — | Transport filter (`stdio` / `sse` / `streamable-http`); repeat or comma-separate to OR-combine. |
