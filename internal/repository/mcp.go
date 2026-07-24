@@ -133,7 +133,7 @@ func (r *Repository) Update(ctx context.Context, m *model.MCP) error {
 // owner from non-owner and choose the right error.
 func (r *Repository) GetByID(ctx context.Context, id string) (*model.MCP, error) {
 	const q = `SELECT ` + selectColumns + ` FROM mcp_servers
-		LEFT JOIN resource_metrics rm ON rm.resource_id = mcp_servers.id AND rm.resource_type = 'mcp'
+		` + metricsJoinClause + `
 		WHERE mcp_servers.id = ? AND mcp_servers.deleted_at IS NULL`
 	row := r.db.QueryRowContext(ctx, q, id)
 	m, err := scanRow(row)
@@ -218,16 +218,16 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 	// re-checking a listing after a slogan/icon change. `sort=relevance` is
 	// only meaningful with a keyword — every row scores 0 otherwise — so
 	// we ignore it in that case and fall back to created_at.
-	orderBy := "created_at DESC, id DESC"
+	orderBy := "mcp_servers.created_at DESC, mcp_servers.id DESC"
 	switch {
 	case f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "":
 		orderBy, args = relevanceOrder(f.Keyword)
 		pageArgs = append(pageArgs, args...)
 	case f.Sort == "updated":
-		orderBy = "updated_at DESC, id DESC"
+		orderBy = "mcp_servers.updated_at DESC, mcp_servers.id DESC"
 	}
 	q := `SELECT ` + selectColumns + ` FROM mcp_servers
-		LEFT JOIN resource_metrics rm ON rm.resource_id = mcp_servers.id AND rm.resource_type = 'mcp'
+		` + metricsJoinClause + `
 		WHERE ` + pageWhere +
 		` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
 	pageArgs = append(pageArgs, f.Limit, f.Offset)
@@ -264,7 +264,7 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 func relevanceOrder(keyword string) (string, []any) {
 	like := "%" + escapeLike(strings.ToLower(strings.TrimSpace(keyword))) + "%"
 	order := `((name LIKE ?) * 8 + (slogan LIKE ?) * 2 + (category LIKE ?) * 3 + ` +
-		`(creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
+		`(creator_name LIKE ?)) DESC, mcp_servers.updated_at DESC, mcp_servers.id DESC`
 	return order, []any{like, like, like, like}
 }
 
@@ -552,6 +552,8 @@ const selectColumns = `mcp_servers.id, mcp_servers.name, mcp_servers.slug, mcp_s
 	mcp_servers.usage_examples_json, mcp_servers.faqs_json, mcp_servers.notes_json, mcp_servers.visibility, mcp_servers.owner_uid, mcp_servers.space_id,
 	mcp_servers.creator_name, mcp_servers.created_by_type, mcp_servers.created_by_bot_uid, mcp_servers.created_by_bot_name,
 	mcp_servers.transport, mcp_servers.config_json, mcp_servers.created_at, mcp_servers.updated_at, mcp_servers.deleted_at, COALESCE(rm.view_count, 0)`
+
+const metricsJoinClause = `LEFT JOIN resource_metrics rm ON rm.resource_id COLLATE utf8mb4_unicode_ci = mcp_servers.id COLLATE utf8mb4_unicode_ci AND rm.resource_type = 'mcp'`
 
 type marshaledColumns struct {
 	tags   []byte
