@@ -23,6 +23,34 @@ func TestCurrentVersionBackfillUsesExplicitCollation(t *testing.T) {
 	}
 }
 
+func TestMarketplaceCreateTablesUseExplicitUnicodeCollation(t *testing.T) {
+	migrations := []string{
+		"20260714-01-skill-marketplace.sql",
+		"20260715-03-skill-versions.sql",
+		"20260717-02-skill-tags.sql",
+		"20260717-07-resource-metrics.sql",
+		"20260721-00-resource-metric-flushes.sql",
+	}
+
+	for _, migration := range migrations {
+		t.Run(migration, func(t *testing.T) {
+			content, err := migrationsql.FS.ReadFile(migration)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error=%v", migration, err)
+			}
+
+			text := string(content)
+			createTables := strings.Count(text, "CREATE TABLE")
+			if createTables == 0 {
+				t.Fatalf("%s has no CREATE TABLE statements", migration)
+			}
+			if got := strings.Count(text, "COLLATE=utf8mb4_unicode_ci"); got < createTables {
+				t.Fatalf("%s has %d CREATE TABLE statements but only %d explicit table collations", migration, createTables, got)
+			}
+		})
+	}
+}
+
 // TestMigrationsParseUpDown verifies that all embedded migration files can be
 // read and that each file has both Up and Down sections.
 func TestMigrationsParseUpDown(t *testing.T) {
