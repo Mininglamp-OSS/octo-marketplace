@@ -3151,6 +3151,24 @@ paths:
     get:
       description: Return all Skill categories and their visible Skill counts.
       operationId: skill_category.list
+      parameters:
+      - description: Fuzzy search keyword
+        in: query
+        name: q
+        schema:
+          type: string
+      - description: Comma-separated tag names
+        in: query
+        name: tags
+        schema:
+          type: string
+      - description: Repeated tag names
+        in: query
+        name: tag
+        schema:
+          items:
+            type: string
+          type: array
       requestBody:
         content:
           application/json:
