@@ -2296,6 +2296,18 @@ paths:
         name: mode
         schema:
           type: string
+      - description: Search keyword
+        in: query
+        name: keyword
+        schema:
+          type: string
+      - description: Tag filters
+        in: query
+        name: tag
+        schema:
+          items:
+            type: string
+          type: array
       - description: Provenance filter (human, bot, import); repeatable or comma-separated
         in: query
         name: created_by_type

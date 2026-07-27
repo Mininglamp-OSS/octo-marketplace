@@ -137,6 +137,8 @@ func (h *MCP) ListMine(c *gin.Context) { h.list(c, true) }
 // @Produce json
 // @Security Bearer
 // @Param mode query string false "Scope: mine restricts counts to caller-owned records"
+// @Param keyword query string false "Search keyword"
+// @Param tag query []string false "Tag filters"
 // @Param created_by_type query []string false "Provenance filter (human, bot, import); repeatable or comma-separated"
 // @Success 200 {object} apiresponse.Data[[]model.CategoryFilter]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
@@ -150,15 +152,11 @@ func (h *MCP) ListCategories(c *gin.Context) {
 		writeError(c, apierr.Unauthorized())
 		return
 	}
-	// Categories share the SAME predicates as the list endpoints so counts
-	// stay coherent when the two filters combine (issue #894 follow-up: a
-	// user narrowing to "Bot 创建" expects every category pill to shrink
-	// accordingly). Only `created_by_type` is honoured today — the other
-	// filters (keyword/tags/…) are still ignored by design because clicking
-	// a pill would zero itself out otherwise.
-	params := service.ListParams{
-		CreatedByTypes: splitQuery(c.QueryArray("created_by_type")),
-	}
+	// Categories share the same keyword/tag/provenance predicates as the list
+	// endpoint so pill counts describe the current filtered result set.
+	// Category itself is intentionally not accepted here: clicking a category
+	// should not zero out every other category pill.
+	params := categoryListParams(c)
 	var result model.ListResponse
 	var apiErr *apierr.Error
 	if c.Query("mode") == "mine" {
@@ -252,6 +250,14 @@ func (h *MCP) list(c *gin.Context, mine bool) {
 		return
 	}
 	apiresponse.Offset(c, resp.Items, resp.Total, page, pageSize)
+}
+
+func categoryListParams(c *gin.Context) service.ListParams {
+	return service.ListParams{
+		Keyword:        strings.TrimSpace(c.Query("keyword")),
+		Tags:           splitQuery(c.QueryArray("tag")),
+		CreatedByTypes: splitQuery(c.QueryArray("created_by_type")),
+	}
 }
 
 // Get godoc

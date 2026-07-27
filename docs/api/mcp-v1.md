@@ -327,8 +327,11 @@ Returns every record visible to the caller inside their current Space:
 
 - `total` is the count after `keyword` + `category` filters, before
   pagination.
-- Category filter options are supplied by the dedicated category API; MCP list
-  responses do not embed category facets.
+- Category filter options are supplied by `GET /mcp_categories`; MCP list
+  responses do not embed category facets. Category counts should receive the
+  same `keyword` and `tag` filters as the list request, but not the active
+  `category` filter, so users can still switch between categories within the
+  current search/tag result set.
 - Default order: newest first (`created_at DESC`, tie-broken by `id DESC`).
   `sort=relevance` (with a non-empty `keyword`) switches to the weighted
   match score; `sort=updated` switches to `updated_at DESC, id DESC` so a

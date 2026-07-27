@@ -64,3 +64,23 @@ func TestCategoryAllSentinelDroppedFromCategoryOnly(t *testing.T) {
 		t.Fatalf("created_by_type='all' must survive, got %v", p3.CreatedByTypes)
 	}
 }
+
+func TestCategoryListParamsForwardsSearchAndTagsButNotCategory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/mcp_categories?keyword=%20github%20&tag=official&tag=v1.0,beta&category=dev&created_by_type=bot", nil)
+
+	p := categoryListParams(c)
+	if p.Keyword != "github" {
+		t.Fatalf("keyword = %q, want github", p.Keyword)
+	}
+	if !reflect.DeepEqual(p.Tags, []string{"official", "v1.0", "beta"}) {
+		t.Fatalf("tags = %v", p.Tags)
+	}
+	if len(p.Categories) != 0 {
+		t.Fatalf("category filter must not affect category counts, got %v", p.Categories)
+	}
+	if !reflect.DeepEqual(p.CreatedByTypes, []string{"bot"}) {
+		t.Fatalf("created_by_type = %v", p.CreatedByTypes)
+	}
+}
