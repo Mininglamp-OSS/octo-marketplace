@@ -7,6 +7,7 @@ import (
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	categorysvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/category"
+	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,6 +36,9 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 // @Accept json
 // @Produce json
 // @Security Bearer
+// @Param q query string false "Fuzzy search keyword"
+// @Param tags query string false "Comma-separated tag names"
+// @Param tag query []string false "Repeated tag names"
 // @Success 200 {object} apiresponse.Data[[]categorysvc.CategoryItem]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
@@ -49,7 +53,14 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	spaceID := middleware.SpaceID(c)
 
-	items, err := h.svc.List(c.Request.Context(), spaceID, identity.UID)
+	tags := append([]string{}, c.QueryArray("tags")...)
+	tags = append(tags, c.QueryArray("tag")...)
+	items, err := h.svc.List(c.Request.Context(), categorysvc.ListParams{
+		SpaceID: spaceID,
+		UserID:  identity.UID,
+		Query:   c.Query("q"),
+		Tags:    skillsvc.ParseTagFilters(tags...),
+	})
 	if err != nil {
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return

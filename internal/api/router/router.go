@@ -134,7 +134,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			panic("unsupported STORAGE_DRIVER: " + storageCfg.Driver)
 		}
 
-		catSvc := categorysvc.New(catRepo)
+		catSvc := categorysvc.New(catRepo, skRepo)
 		skSvc := skillsvc.New(skRepo, catRepo, store, generateID)
 		skSvc.SetMaxArchiveBytes(int64(storageCfg.MaxMB) << 20)
 
