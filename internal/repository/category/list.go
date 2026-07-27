@@ -21,6 +21,7 @@ func (r *Repo) ListWithCount(ctx context.Context, spaceID, userID string) ([]Cat
 			COUNT(s.id) AS skill_count
 		FROM categories c
 		LEFT JOIN skills s ON s.category_id = c.id
+			AND s.is_deleted = 0
 			AND (
 				s.visibility = 'public'
 				OR (s.visibility = 'space' AND s.space_id = ?)
