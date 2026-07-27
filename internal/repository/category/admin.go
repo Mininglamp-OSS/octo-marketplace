@@ -43,7 +43,7 @@ func (r *Repo) Delete(ctx context.Context, id string) (int64, error) {
 func (r *Repo) SkillCountByCategory(ctx context.Context, categoryID string) (int, error) {
 	var count int
 	err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(1) FROM skills WHERE category_id = ?", categoryID).Scan(&count)
+		"SELECT COUNT(1) FROM skills WHERE category_id = ? AND is_deleted = 0", categoryID).Scan(&count)
 	return count, err
 }
 

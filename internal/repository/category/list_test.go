@@ -14,7 +14,7 @@ func TestListWithCount_PublicSkillsAreNotScopedToCurrentSpace(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery("LEFT JOIN skills s").
+	mock.ExpectQuery("LEFT JOIN skills s ON s.category_id = c.id\\s+AND s.is_deleted = 0").
 		WithArgs("space-1", "user-1", "space-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "icon_key", "sort_order", "skill_count"}).
 			AddRow("cat-1", "Category 1", "icon", 10, 2))
