@@ -14,6 +14,7 @@ import (
 	skillhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/skill"
 	uploadhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/upload"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	metricsredis "github.com/Mininglamp-OSS/octo-marketplace/internal/redis"
@@ -77,7 +78,7 @@ func Public(database Pinger, authenticator *marketmiddleware.Authenticator, admi
 
 func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, authEnabled bool, parseCfg ParseConfig, redisCfg RedisConfig) *gin.Engine {
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), corsMiddleware(storageCfg.CORSAllowedOrigins))
+	r.Use(logging.RequestID(), logging.AccessLog(), logging.Recovery(), corsMiddleware(storageCfg.CORSAllowedOrigins))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

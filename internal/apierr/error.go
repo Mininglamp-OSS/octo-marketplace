@@ -35,6 +35,7 @@ type Error struct {
 	Message string   `json:"message"`
 	Details []Detail `json:"-"`
 	Hint    string   `json:"-"`
+	Cause   error    `json:"-"`
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
@@ -115,6 +116,10 @@ func ProbeUnsupported(message string) *Error {
 	return New(http.StatusBadRequest, CodeProbeUnsupported, message)
 }
 
-func Internal() *Error {
-	return New(http.StatusInternalServerError, CodeInternal, "Internal server error")
+func Internal(cause ...error) *Error {
+	e := New(http.StatusInternalServerError, CodeInternal, "Internal server error")
+	if len(cause) > 0 {
+		e.Cause = cause[0]
+	}
+	return e
 }

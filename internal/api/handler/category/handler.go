@@ -51,7 +51,7 @@ func (h *Handler) List(c *gin.Context) {
 
 	items, err := h.svc.List(c.Request.Context(), spaceID, identity.UID)
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill_category.list")
 		return
 	}
 

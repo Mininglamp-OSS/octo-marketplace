@@ -67,6 +67,19 @@ type Config struct {
 	OSSSigningHost     string
 	OSSDownloadSigned  bool
 	MaxUploadMB        int
+
+	Log LogConfig
+}
+
+type LogConfig struct {
+	Level       string
+	Format      string
+	AddCaller   bool
+	FileEnabled bool
+	Dir         string
+	MaxSizeMB   int
+	MaxBackups  int
+	MaxAgeDays  int
 }
 
 // StorageConfig configures the S3-compatible object store used for MCP icons.
@@ -143,6 +156,16 @@ func Load() Config {
 		OSSSigningHost:     strings.TrimSpace(env("OSS_SIGNING_HOST", "")),
 		OSSDownloadSigned:  envBool("OSS_DOWNLOAD_SIGNED", false),
 		MaxUploadMB:        envInt("MAX_UPLOAD_MB", 20),
+		Log: LogConfig{
+			Level:       env("LOG_LEVEL", "info"),
+			Format:      env("LOG_FORMAT", "console"),
+			AddCaller:   envBool("LOG_ADD_CALLER", false),
+			FileEnabled: envBool("LOG_FILE_ENABLED", false),
+			Dir:         env("LOG_DIR", "/var/log/octo-marketplace"),
+			MaxSizeMB:   envInt("LOG_MAX_SIZE_MB", 20),
+			MaxBackups:  envInt("LOG_MAX_BACKUPS", 3),
+			MaxAgeDays:  envInt("LOG_MAX_AGE_DAYS", 7),
+		},
 	}
 }
 

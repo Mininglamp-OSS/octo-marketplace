@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -529,9 +528,18 @@ func decodeJSON(c *gin.Context, dst any) *apierr.Error {
 	return nil
 }
 
-func writeError(c *gin.Context, e *apierr.Error) {
+func writeError(c *gin.Context, e *apierr.Error, operation ...string) {
 	if e.Status >= http.StatusInternalServerError {
-		log.Printf("[handler] %s", e.Error())
+		op := c.FullPath()
+		if len(operation) > 0 && strings.TrimSpace(operation[0]) != "" {
+			op = operation[0]
+		}
+		cause := e.Cause
+		if cause == nil {
+			cause = e
+		}
+		apiresponse.Internal(c, cause, op)
+		return
 	}
 	details := map[string]any{}
 	if len(e.Details) == 1 {

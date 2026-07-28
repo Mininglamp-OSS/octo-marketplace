@@ -1,9 +1,8 @@
 package handler
 
 import (
-	"net/http"
+	"errors"
 
-	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/gin-gonic/gin"
@@ -46,7 +45,7 @@ type SessionResponse struct {
 func (h *Session) Get(c *gin.Context) {
 	identity, ok := marketmiddleware.Identity(c)
 	if !ok {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, errors.New("authenticated route missing identity context"), "session.get")
 		return
 	}
 	apiresponse.OK(c, SessionResponse{

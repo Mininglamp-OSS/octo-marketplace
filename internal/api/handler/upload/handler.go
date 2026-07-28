@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
@@ -19,6 +19,7 @@ import (
 	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 const defaultBotPublishTimeout = 2 * time.Minute
@@ -205,8 +206,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "Skill parse failed. Please retry later.", map[string]any{"parse_error_code": "INTERNAL_ERROR"}, "")
 			return
 		}
-		log.Printf("[BotPublishSkill] parse upload failed: %v", err)
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "bot.skill_publish.parse")
 		return
 	}
 	if result.Status != "success" {
@@ -270,8 +270,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "source skill not found or inaccessible", nil, "")
 			return
 		}
-		log.Printf("[BotPublishSkill] create skill failed: %v", err)
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "bot.skill_publish.create")
 		return
 	}
 
@@ -411,7 +410,7 @@ func (h *Handler) InitUpload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill_upload.init")
 		return
 	}
 
@@ -462,8 +461,7 @@ func (h *Handler) TriggerParse(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusTooManyRequests, errcode.RateLimited, "parse queue is busy, retry later", nil, "")
 			return
 		}
-		log.Printf("[TriggerParse] internal error for uploadID=%s: %v", uploadID, err)
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill_upload.parse")
 		return
 	}
 
@@ -499,7 +497,7 @@ func (h *Handler) PollParse(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "task not found", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill_parse_task.get")
 		return
 	}
 
@@ -599,7 +597,7 @@ func (h *Handler) InitReupload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.reupload.init.check")
 		return
 	}
 	if skill.OwnerID != identity.UID {
@@ -627,7 +625,7 @@ func (h *Handler) InitReupload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.reupload.init")
 		return
 	}
 
@@ -676,14 +674,19 @@ func (h *Handler) Download(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "no file available", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.download")
 		return
 	}
 
 	// Track download after successful URL generation — fire-and-forget.
 	if h.metricsSvc != nil {
 		if trackErr := h.metricsSvc.TrackDownload(c.Request.Context(), "skill", skillID); trackErr != nil {
-			log.Printf("[download] WARN: TrackDownload failed for skill %s: %v", skillID, trackErr)
+			logging.Warn("download_metric_track_failed",
+				zap.String("operation", "skill.download.track"),
+				zap.String("resource_type", "skill"),
+				zap.String("resource_id", skillID),
+				logging.ErrorField(trackErr),
+			)
 		}
 	}
 
@@ -729,7 +732,7 @@ func (h *Handler) AdminDownload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "no file available", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "admin.skill.download")
 		return
 	}
 

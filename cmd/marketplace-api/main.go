@@ -15,6 +15,7 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/blob"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/config"
 	marketdb "github.com/Mininglamp-OSS/octo-marketplace/internal/db"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/repository"
@@ -56,6 +57,22 @@ import (
 func main() {
 	gin.SetMode(gin.ReleaseMode)
 	cfg := config.Load()
+	if err := logging.Configure(logging.Options{
+		Level:       cfg.Log.Level,
+		Format:      cfg.Log.Format,
+		AddCaller:   cfg.Log.AddCaller,
+		FileEnabled: cfg.Log.FileEnabled,
+		Dir:         cfg.Log.Dir,
+		MaxSizeMB:   cfg.Log.MaxSizeMB,
+		MaxBackups:  cfg.Log.MaxBackups,
+		MaxAgeDays:  cfg.Log.MaxAgeDays,
+	}); err != nil {
+		log.Fatal(err)
+	}
+	defer logging.Sync()
+	undoStdLog := logging.RedirectStdLog()
+	defer undoStdLog()
+
 	if err := cfg.ValidateAPI(); err != nil {
 		log.Fatal(err)
 	}
