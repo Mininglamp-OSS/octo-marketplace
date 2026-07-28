@@ -22,9 +22,27 @@ func TestScrubMasksSensitiveValues(t *testing.T) {
 			t.Fatalf("Scrub(%q) = %q, still contains %q", input, got, forbidden)
 		}
 	}
-	for _, want := range []string{"Authorization:***", "password=***", "OSS_SECRET_KEY=***"} {
+	for _, want := range []string{"Authorization: Bearer ***", "password=***", "OSS_SECRET_KEY=***"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Scrub(%q) = %q, missing %q", input, got, want)
+		}
+	}
+}
+
+func TestScrubMasksStructuredAndURLSecrets(t *testing.T) {
+	inputs := []string{
+		`{"access_token":"eyJhbGciOi.abc.def"}`,
+		`{"password": "hunter2"}`,
+		`redis://default:sup3rs3cret@redis:6379/0`,
+		`Set-Cookie: session=abcdef; HttpOnly`,
+		`user:pw@tcp(mysql:3306)/db`,
+	}
+	for _, input := range inputs {
+		got := Scrub(input)
+		for _, forbidden := range []string{"eyJhbGciOi.abc.def", "hunter2", "sup3rs3cret", "abcdef", "user:pw", "mysql:3306"} {
+			if strings.Contains(got, forbidden) {
+				t.Fatalf("Scrub(%q) = %q, still contains %q", input, got, forbidden)
+			}
 		}
 	}
 }

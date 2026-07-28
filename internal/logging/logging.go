@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -154,7 +155,24 @@ func Sync() {
 }
 
 func RedirectStdLog() func() {
-	return zap.RedirectStdLog(Logger())
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	log.SetFlags(0)
+	log.SetPrefix("")
+	log.SetOutput(scrubbedStdLogWriter{})
+	return func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+	}
+}
+
+type scrubbedStdLogWriter struct{}
+
+func (scrubbedStdLogWriter) Write(p []byte) (int, error) {
+	Info(strings.TrimSpace(Scrub(string(p))))
+	return len(p), nil
 }
 
 func Info(msg string, fields ...zap.Field) {
@@ -281,6 +299,9 @@ func RequestIDFromGin(c *gin.Context) string {
 			return id
 		}
 	}
+	if c.Request == nil {
+		return ""
+	}
 	return RequestIDFromContext(c.Request.Context())
 }
 
@@ -292,25 +313,19 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-var scrubbers = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`),
-	regexp.MustCompile(`(?i)\b(Token|Authorization|X-Admin-Token)\s*[:=]\s*[^,\s]+`),
-	regexp.MustCompile(`(?i)\b[A-Za-z0-9_]*(password|passwd|secret|token|credential|access[_-]?key|secret[_-]?key|dsn)[A-Za-z0-9_]*\s*[:=]\s*[^,\s&]+`),
-	regexp.MustCompile(`(?i)[^:\s/@]+:[^@\s]+@tcp\([^)]+\)`),
-}
+var (
+	bearerSecret    = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
+	keySecret       = regexp.MustCompile(`(?i)(["']?[A-Za-z0-9_-]*(?:password|passwd|secret|token|credential|access[_-]?key|secret[_-]?key|dsn)[A-Za-z0-9_-]*["']?\s*[:=]\s*["']?)[^"',\s&;}]+`)
+	urlSecret       = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://)[^/@\s:]+:[^@\s]+@`)
+	mysqlDSNSecret  = regexp.MustCompile(`(?i)[^:\s/@]+:[^@\s]+@tcp\([^)]+\)`)
+	setCookieSecret = regexp.MustCompile(`(?i)(Set-Cookie:\s*[^=;,\s]+)=([^;,\s]+)`)
+)
 
 func Scrub(value string) string {
-	out := value
-	for _, re := range scrubbers {
-		out = re.ReplaceAllStringFunc(out, func(match string) string {
-			if strings.Contains(match, "Bearer ") || strings.Contains(match, "bearer ") {
-				return "Bearer ***"
-			}
-			if idx := strings.IndexAny(match, ":="); idx >= 0 {
-				return match[:idx+1] + "***"
-			}
-			return "***@tcp(***)"
-		})
-	}
+	out := bearerSecret.ReplaceAllString(value, "Bearer ***")
+	out = keySecret.ReplaceAllString(out, `${1}***`)
+	out = urlSecret.ReplaceAllString(out, `${1}***:***@`)
+	out = mysqlDSNSecret.ReplaceAllString(out, `***@tcp(***)`)
+	out = setCookieSecret.ReplaceAllString(out, `${1}=***`)
 	return out
 }

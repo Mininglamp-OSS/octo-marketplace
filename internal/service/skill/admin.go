@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -66,7 +67,7 @@ func (s *Service) AdminList(ctx context.Context, p AdminListParams) (*ListResult
 		return &ListResult{Items: []SkillItem{}, Total: 0}, nil
 	}
 	repoResult, err := s.repo.AdminList(ctx, skillrepo.AdminListFilter{
-		Query:       p.Query,
+		Query:       strings.TrimSpace(p.Query),
 		CategoryID:  p.CategoryID,
 		Tags:        tags,
 		TagIDGroups: tagIDGroups,

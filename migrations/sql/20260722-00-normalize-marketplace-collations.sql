@@ -1,5 +1,38 @@
 -- +migrate Up
 
+-- Preflight the unique text keys under the target PAD SPACE collation before
+-- changing any persistent table. A collision fails while only temporary
+-- tables exist, so MySQL's per-DDL implicit commits cannot leave the schema
+-- half converted.
+CREATE TEMPORARY TABLE collation_guard_categories (
+  name VARCHAR(64) COLLATE utf8mb4_unicode_ci PRIMARY KEY
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+INSERT INTO collation_guard_categories (name)
+SELECT TRIM(TRAILING ' ' FROM name) FROM categories WHERE deleted_at IS NULL;
+
+CREATE TEMPORARY TABLE collation_guard_skills (
+  owner_id VARCHAR(64) COLLATE utf8mb4_unicode_ci,
+  space_id VARCHAR(64) COLLATE utf8mb4_unicode_ci,
+  name VARCHAR(128) COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (owner_id, space_id, name)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+INSERT INTO collation_guard_skills (owner_id, space_id, name)
+SELECT owner_id, space_id, TRIM(TRAILING ' ' FROM name) FROM skills;
+
+CREATE TEMPORARY TABLE collation_guard_skill_tags (
+  space_id VARCHAR(64) COLLATE utf8mb4_unicode_ci,
+  name VARCHAR(64) COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (space_id, name)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+INSERT INTO collation_guard_skill_tags (space_id, name)
+SELECT space_id, TRIM(TRAILING ' ' FROM name) FROM skill_tags;
+
+DROP TEMPORARY TABLE collation_guard_skill_tags;
+DROP TEMPORARY TABLE collation_guard_skills;
+DROP TEMPORARY TABLE collation_guard_categories;
+
+ALTER DATABASE CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 ALTER TABLE categories
   CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

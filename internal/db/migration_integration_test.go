@@ -115,6 +115,62 @@ func TestRunMigrationsUpDown(t *testing.T) {
 			t.Errorf("table %s still exists after migrate Down", table)
 		}
 	}
+	var databaseCollation string
+	if err := database.QueryRow(
+		"SELECT DEFAULT_COLLATION_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = DATABASE()",
+	).Scan(&databaseCollation); err != nil {
+		t.Fatalf("query database collation: %v", err)
+	}
+	if databaseCollation != "utf8mb4_unicode_ci" {
+		t.Errorf("database collation=%s want=utf8mb4_unicode_ci", databaseCollation)
+	}
+}
+
+func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
+	dsn := testDSN(t)
+	database, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
+	t.Cleanup(func() { _, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down) })
+	migrations, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const target = "20260722-00-normalize-marketplace-collations.sql"
+	previous := make([]*migrate.Migration, 0, len(migrations)-1)
+	for _, migration := range migrations {
+		if migration.Id != target {
+			previous = append(previous, migration)
+		}
+	}
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
+		t.Fatalf("apply previous migrations: %v", err)
+	}
+	for _, table := range normalizedCollationTables {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
+			t.Fatalf("set legacy collation on %s: %v", table, err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('space-guard', 'prod', 'u'), ('space-guard', 'prod ', 'u')`); err != nil {
+		t.Fatalf("seed collision: %v", err)
+	}
+	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
+		t.Fatal("collation migration unexpectedly accepted trailing-space collision")
+	}
+	for _, table := range normalizedCollationTables {
+		var collation string
+		if err := database.QueryRow("SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table).Scan(&collation); err != nil {
+			t.Fatal(err)
+		}
+		if collation != "utf8mb4_0900_ai_ci" {
+			t.Errorf("table %s partially converted to %s", table, collation)
+		}
+	}
 }
 
 // TestCollationMigrationUpgradesExistingTables verifies that the forward
