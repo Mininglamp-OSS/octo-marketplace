@@ -158,7 +158,7 @@ func (s *Service) List(ctx context.Context, p ListParams) (*ListResult, error) {
 	repoResult, err := s.repo.List(ctx, skillrepo.ListFilter{
 		SpaceID:     p.SpaceID,
 		UserID:      p.UserID,
-		Query:       p.Query,
+		Query:       strings.TrimSpace(p.Query),
 		CategoryID:  p.CategoryID,
 		Tags:        tags,
 		TagIDGroups: tagIDGroups,
@@ -189,7 +189,7 @@ func (s *Service) ListMine(ctx context.Context, p ListParams) (*ListResult, erro
 	repoResult, err := s.repo.List(ctx, skillrepo.ListFilter{
 		SpaceID:     p.SpaceID,
 		UserID:      p.UserID,
-		Query:       p.Query,
+		Query:       strings.TrimSpace(p.Query),
 		Tags:        tags,
 		TagIDGroups: tagIDGroups,
 		Cursor:      p.Cursor,
