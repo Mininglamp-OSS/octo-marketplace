@@ -34,20 +34,42 @@ func testDSN(t *testing.T) string {
 	return dsn
 }
 
+func isolatedTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	config, err := mysql.ParseDSN(testDSN(t))
+	if err != nil {
+		t.Fatalf("parse test DSN: %v", err)
+	}
+	adminConfig := *config
+	adminConfig.DBName = ""
+	admin, err := sql.Open("mysql", adminConfig.FormatDSN())
+	if err != nil {
+		t.Fatalf("open admin connection: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+
+	databaseName := fmt.Sprintf("octo_marketplace_test_%d", time.Now().UnixNano())
+	if _, err := admin.Exec("CREATE DATABASE `" + databaseName + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"); err != nil {
+		t.Fatalf("create isolated database: %v", err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec("DROP DATABASE `" + databaseName + "`") })
+
+	config.DBName = databaseName
+	database, err := sql.Open("mysql", config.FormatDSN())
+	if err != nil {
+		t.Fatalf("open isolated database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.Ping(); err != nil {
+		t.Fatalf("ping isolated database: %v", err)
+	}
+	return database
+}
+
 // TestRunMigrationsUpDown executes all migrations Up, asserts the three
 // marketplace tables exist, then runs Down and asserts they are dropped.
 func TestRunMigrationsUpDown(t *testing.T) {
-	dsn := testDSN(t)
-
-	database, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-
-	if err := database.Ping(); err != nil {
-		t.Fatalf("Ping: %v", err)
-	}
+	database := isolatedTestDB(t)
 
 	source := &migrate.EmbedFileSystemMigrationSource{
 		FileSystem: migrationsql.FS,
@@ -133,12 +155,7 @@ func TestRunMigrationsUpDown(t *testing.T) {
 }
 
 func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
-	dsn := testDSN(t)
-	database, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
+	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
 	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
@@ -165,6 +182,9 @@ func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('space-guard', 'prod', 'u'), ('space-guard', 'prod ', 'u')`); err != nil {
 		t.Fatalf("seed collision: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = database.Exec(`DELETE FROM skill_tags WHERE space_id = 'space-guard'`)
+	})
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
 		t.Fatal("collation migration unexpectedly accepted trailing-space collision")
 	}
@@ -180,12 +200,7 @@ func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
 }
 
 func TestCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
-	dsn := testDSN(t)
-	database, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
+	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
 	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
@@ -212,6 +227,9 @@ func TestCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO skill_versions (id, skill_id, version) VALUES ('version-1', 'skill-1', '1.0.0'), ('version-2', 'skill-1', '1.0.0 ')`); err != nil {
 		t.Fatalf("seed version collision: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = database.Exec(`DELETE FROM skill_versions WHERE id IN ('version-1', 'version-2')`)
+	})
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
 		t.Fatal("collation migration unexpectedly accepted skill version collision")
 	}
@@ -227,12 +245,7 @@ func TestCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 }
 
 func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
-	dsn := testDSN(t)
-	database, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
+	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
 	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
@@ -272,30 +285,7 @@ func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 }
 
 func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
-	config, err := mysql.ParseDSN(testDSN(t))
-	if err != nil {
-		t.Fatalf("parse test DSN: %v", err)
-	}
-	adminConfig := *config
-	adminConfig.DBName = ""
-	admin, err := sql.Open("mysql", adminConfig.FormatDSN())
-	if err != nil {
-		t.Fatalf("open admin connection: %v", err)
-	}
-	defer admin.Close()
-
-	databaseName := fmt.Sprintf("octo_marketplace_legacy_%d", time.Now().UnixNano())
-	if _, err := admin.Exec("CREATE DATABASE `" + databaseName + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"); err != nil {
-		t.Fatalf("create isolated database: %v", err)
-	}
-	defer func() { _, _ = admin.Exec("DROP DATABASE `" + databaseName + "`") }()
-
-	config.DBName = databaseName
-	database, err := sql.Open("mysql", config.FormatDSN())
-	if err != nil {
-		t.Fatalf("open isolated database: %v", err)
-	}
-	defer database.Close()
+	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
 	migrations, err := fullSource.FindMigrations()
@@ -327,17 +317,7 @@ func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
 // migration repairs a database where every earlier migration is already
 // recorded and the tables still use MySQL 8's default collation.
 func TestCollationMigrationUpgradesExistingTables(t *testing.T) {
-	dsn := testDSN(t)
-
-	database, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-
-	if err := database.Ping(); err != nil {
-		t.Fatalf("Ping: %v", err)
-	}
+	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{
 		FileSystem: migrationsql.FS,
@@ -404,17 +384,7 @@ func TestCollationMigrationUpgradesExistingTables(t *testing.T) {
 // TestRunMigrationsFunc verifies that RunMigrations successfully applies
 // all migrations via the production code path.
 func TestRunMigrationsFunc(t *testing.T) {
-	dsn := testDSN(t)
-
-	database, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer database.Close()
-
-	if err := database.Ping(); err != nil {
-		t.Fatalf("Ping: %v", err)
-	}
+	database := isolatedTestDB(t)
 
 	// Clean state: run all Down first.
 	source := &migrate.EmbedFileSystemMigrationSource{
