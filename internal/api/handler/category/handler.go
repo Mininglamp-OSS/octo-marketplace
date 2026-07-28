@@ -37,8 +37,8 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 // @Produce json
 // @Security Bearer
 // @Param q query string false "Fuzzy search keyword"
-// @Param tags query string false "Comma-separated tag names"
-// @Param tag query []string false "Repeated tag names"
+// @Param tags query string false "Comma-separated tag names; any tag may match"
+// @Param tag query []string false "Repeated tag names; any tag may match"
 // @Success 200 {object} apiresponse.Data[[]categorysvc.CategoryItem]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"

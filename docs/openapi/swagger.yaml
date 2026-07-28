@@ -3157,12 +3157,12 @@ paths:
         name: q
         schema:
           type: string
-      - description: Comma-separated tag names
+      - description: Comma-separated tag names; any tag may match
         in: query
         name: tags
         schema:
           type: string
-      - description: Repeated tag names
+      - description: Repeated tag names; any tag may match
         in: query
         name: tag
         schema:
