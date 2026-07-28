@@ -311,13 +311,12 @@ func TestConcurrentCreateSameSlug(t *testing.T) {
 }
 
 // TestKeywordSearchCaseInsensitive is the DB-backed regression for the JSON
-// case-sensitivity fix (PR #9 yujiawei P1). Before the fix, JSON_SEARCH on
-// tags_json / tools_json / usage_examples_json used binary collation so a
-// keyword like "github" missed a row whose only match was tag="GitHub",
-// tool.Name="GitHubSearch", or usage_example="use GitHub" — the WHERE clause
-// dropped the row entirely, disagreeing with enrichListItem which lowercased
-// both sides. This test seeds exactly such a row and asserts every JSON path
-// resolves case-insensitively.
+// case-sensitivity fix (PR #9 yujiawei P1) — the SQL side must lowercase both
+// operands so mixed-case rows aren't silently dropped. Since tags left the
+// keyword field set (owned by the dedicated tag chip filter), this test now
+// seeds a mixed-case `name` row as the positive case and asserts the previous
+// tag / tools / usage-example rows are NOT returned — search should only
+// match card-visible free-text fields (name / slogan / category / creator).
 func TestKeywordSearchCaseInsensitive(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()
@@ -339,6 +338,7 @@ func TestKeywordSearchCaseInsensitive(t *testing.T) {
 		}
 		return m.ID
 	}
+	nameRow := seed("KW Case GitHub Client", nil, nil, nil)
 	tagsRow := seed("KW Case Tag", []string{"GitHub"}, nil, nil)
 	toolNameRow := seed("KW Case ToolName", nil, []model.Tool{{Name: "GitHubSearch", Description: "search"}}, nil)
 	toolDescRow := seed("KW Case ToolDesc", nil, []model.Tool{{Name: "search", Description: "Uses the GitHub API"}}, nil)
@@ -358,14 +358,17 @@ func TestKeywordSearchCaseInsensitive(t *testing.T) {
 	for _, m := range list {
 		got[m.ID] = true
 	}
+	if !got[nameRow] {
+		t.Fatalf("case-insensitive keyword search missed name row (id=%s); got=%v", nameRow, got)
+	}
 	for label, id := range map[string]string{
 		"tags_json":           tagsRow,
 		"tools_json.name":     toolNameRow,
 		"tools_json.desc":     toolDescRow,
 		"usage_examples_json": usageRow,
 	} {
-		if !got[id] {
-			t.Fatalf("case-insensitive keyword search missed %s row (id=%s); got=%v", label, id, got)
+		if got[id] {
+			t.Fatalf("keyword search must not match %s row (id=%s) — search should exclude non-card-visible fields; got=%v", label, id, got)
 		}
 	}
 }
@@ -438,5 +441,73 @@ func TestRelevanceSortDoesNotBuryEmptyToolsRows(t *testing.T) {
 	if strongIdx >= weakIdx {
 		t.Fatalf("exact-name-no-tools row (idx=%d) must sort ABOVE the weaker slogan-only-with-tools row (idx=%d) — NULL propagation regression",
 			strongIdx, weakIdx)
+	}
+}
+
+// TestSortUpdatedOrdersByUpdatedAtDesc guards the sort=updated branch (the
+// browse-without-keyword default the marketplace frontend requests). Seed
+// two rows created in the same tick, then bump the second via Update. The
+// second must sort first under sort=updated even though it was created
+// second, because created_at ties on the seed and updated_at is the
+// tie-breaker key.
+func TestSortUpdatedOrdersByUpdatedAtDesc(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	repo := New(database)
+
+	const (
+		owner = "owner-sort-updated"
+		space = "space-sort-updated"
+	)
+	nameOlder := "older sort-updated row"
+	nameNewer := "newer sort-updated row"
+	cleanTuple(t, database, owner, space, nameOlder)
+	cleanTuple(t, database, owner, space, nameNewer)
+	t.Cleanup(func() {
+		cleanTuple(t, database, owner, space, nameOlder)
+		cleanTuple(t, database, owner, space, nameNewer)
+	})
+
+	older := newTestMCP(nameOlder, owner, space)
+	if err := repo.Create(ctx, older); err != nil {
+		t.Fatalf("seed older: %v", err)
+	}
+	newer := newTestMCP(nameNewer, owner, space)
+	if err := repo.Create(ctx, newer); err != nil {
+		t.Fatalf("seed newer: %v", err)
+	}
+	// Bump the older row's updated_at so it should surface first under
+	// sort=updated. Slogan change is enough to trigger an UPDATE.
+	older.Slogan = "bumped for sort test"
+	older.UpdatedAt = time.Now().Add(time.Second)
+	if err := repo.Update(ctx, older); err != nil {
+		t.Fatalf("bump older: %v", err)
+	}
+
+	list, _, _, err := repo.List(ctx, ListFilter{
+		CallerUID: owner,
+		SpaceID:   space,
+		Sort:      "updated",
+		MineOnly:  true,
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var olderIdx, newerIdx = -1, -1
+	for i, m := range list {
+		switch m.ID {
+		case older.ID:
+			olderIdx = i
+		case newer.ID:
+			newerIdx = i
+		}
+	}
+	if olderIdx == -1 || newerIdx == -1 {
+		t.Fatalf("both rows must appear: olderIdx=%d newerIdx=%d", olderIdx, newerIdx)
+	}
+	if olderIdx >= newerIdx {
+		t.Fatalf("bumped older row (idx=%d) must sort ABOVE the newer row (idx=%d) under sort=updated",
+			olderIdx, newerIdx)
 	}
 }

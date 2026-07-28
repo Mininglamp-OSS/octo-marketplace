@@ -32,6 +32,9 @@ type Store interface {
 	GetByID(ctx context.Context, id string) (*model.MCP, error)
 	SoftDelete(ctx context.Context, id string, now time.Time) error
 	List(ctx context.Context, f repository.ListFilter) ([]model.MCP, int, []model.CategoryFilter, error)
+	// ListTags aggregates distinct tag names from rows visible to the caller
+	// (same predicates as List). Returns rows sorted by count desc, name asc.
+	ListTags(ctx context.Context, f repository.TagListFilter) ([]model.TagFilter, error)
 	// SystemNameExists / SystemSlugExists guard the admin Create/Update path
 	// against duplicate name/slug across live visibility=system rows. The
 	// DB UNIQUE index does not catch these because system rows carry
@@ -203,6 +206,43 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) (model.
 // ListMine returns records owned by the caller in the current Space (doc §4.3).
 func (s *Service) ListMine(ctx context.Context, caller Caller, p ListParams) (model.ListResponse, *apierr.Error) {
 	return s.list(ctx, caller, p, true)
+}
+
+// TagListParams carries the query parameters for the tag suggestion endpoint.
+type TagListParams struct {
+	// Query is a case-insensitive substring to filter tag names by. Empty
+	// returns all tags visible to the caller.
+	Query string
+	// Limit is the max number of tags returned. Clamped by the handler.
+	Limit int
+	// MineOnly restricts the aggregate to rows the caller owns in the current
+	// Space, mirroring `GET /mcps/mine`. The frontend forwards this when the
+	// tag popover is opened from the "我的" tab so the suggestions match the
+	// list actually being filtered.
+	MineOnly bool
+}
+
+// ListTags aggregates tag names from records visible to the caller in the
+// current Space (same predicates as List). Returns items sorted by count
+// desc, name asc — so the popover surfaces the most-used tags first without
+// the frontend needing to re-sort. Mirrors dmworkskillmarket's /skills/tags
+// UX from the caller's perspective; the storage layer differs (MCP tags live
+// inline in tags_json rather than in a dedicated tag table).
+func (s *Service) ListTags(ctx context.Context, caller Caller, p TagListParams) ([]model.TagFilter, *apierr.Error) {
+	tags, err := s.store.ListTags(ctx, repository.TagListFilter{
+		CallerUID: caller.UID,
+		SpaceID:   caller.SpaceID,
+		Query:     p.Query,
+		Limit:     p.Limit,
+		MineOnly:  p.MineOnly,
+	})
+	if err != nil {
+		return nil, apierr.Internal()
+	}
+	if tags == nil {
+		tags = []model.TagFilter{}
+	}
+	return tags, nil
 }
 
 // IconResult is what UploadIcon returns to the handler: the public URL the
@@ -443,10 +483,14 @@ func (s *Service) buildSystemFromCreate(caller Caller, req model.CreateRequest) 
 	if apiErr := validateContent(name, req); apiErr != nil {
 		return nil, apiErr
 	}
-	env, headers, apiErr := redactConnectionSecrets(req.Env, req.Headers)
-	if apiErr != nil {
-		return nil, apiErr
-	}
+	// System rows are cross-Space and never surfaced in the public listing;
+	// their env / headers are still normalized on write (sentinel → "") via
+	// redactConnectionSecrets. No secret-shape rejection anymore — see §5.1.
+	env, headers := redactConnectionSecrets(
+		req.Env, req.Headers,
+		req.EnvUserSupplied, req.HeadersUserSupplied,
+		model.VisibilityPublic,
+	)
 	now := s.now()
 	m := &model.MCP{
 		ID:            id.New(),
@@ -469,13 +513,15 @@ func (s *Service) buildSystemFromCreate(caller Caller, req model.CreateRequest) 
 		CreatedByType: model.CreatedByHuman,
 		Transport:     req.Transport,
 		Connection: model.Connection{
-			URL:        req.URL,
-			Command:    req.Command,
-			Args:       req.Args,
-			Env:        env,
-			Headers:    headers,
-			AuthType:   normalizeAuthType(req.AuthType),
-			ServerName: name,
+			URL:                 req.URL,
+			Command:             req.Command,
+			Args:                req.Args,
+			Env:                 env,
+			EnvUserSupplied:     req.EnvUserSupplied,
+			Headers:             headers,
+			HeadersUserSupplied: req.HeadersUserSupplied,
+			AuthType:            normalizeAuthType(req.AuthType),
+			ServerName:          name,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -538,24 +584,12 @@ func enrichListItem(item *model.ListItem, m *model.MCP, keyword, callerUID strin
 	if strings.Contains(strings.ToLower(m.Category), kw) {
 		add("category", 3)
 	}
-	for _, tag := range m.Tags {
-		if strings.Contains(strings.ToLower(tag), kw) {
-			add("tag:"+tag, 6)
-			break
-		}
-	}
-	for _, tool := range m.Tools {
-		if strings.Contains(strings.ToLower(tool.Name), kw) || strings.Contains(strings.ToLower(tool.Description), kw) {
-			add("tool:"+tool.Name, 7)
-			break
-		}
-	}
-	for _, example := range m.UsageExamples {
-		if strings.Contains(strings.ToLower(example), kw) {
-			add("usage_example", 1)
-			break
-		}
-	}
+	// Tags are NOT part of keyword search: the marketplace UI ships a separate
+	// tag chip filter (octo-web #1009) that owns tag-based filtering. Matching
+	// tags here again would double-count the same signal and confuse users
+	// about why a row surfaced. Tool names / descriptions and usage_examples
+	// remain excluded for the same product reason — keyword search should only
+	// match fields the user can see as free text on the card.
 	if strings.Contains(strings.ToLower(m.CreatorName), kw) {
 		add("creator:"+m.CreatorName, 1)
 	}
@@ -644,10 +678,10 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 	if !model.ValidTransport(req.Transport) {
 		return nil, apierr.InvalidTransport()
 	}
-	visibility, apiErr := validateClientVisibility(req.Visibility)
-	if apiErr != nil {
+	if apiErr := validatePublicCreateVisibility(req.Visibility); apiErr != nil {
 		return nil, apiErr
 	}
+	visibility := model.VisibilityPublic
 
 	slug, apiErr := resolveSlug(req.Slug, name)
 	if apiErr != nil {
@@ -658,10 +692,11 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 		return nil, apiErr
 	}
 
-	env, headers, apiErr := redactConnectionSecrets(req.Env, req.Headers)
-	if apiErr != nil {
-		return nil, apiErr
-	}
+	env, headers := redactConnectionSecrets(
+		req.Env, req.Headers,
+		req.EnvUserSupplied, req.HeadersUserSupplied,
+		visibility,
+	)
 
 	now := s.now()
 	m := &model.MCP{
@@ -685,13 +720,15 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 		CreatedByBotName: caller.BotName,
 		Transport:        req.Transport,
 		Connection: model.Connection{
-			URL:        req.URL,
-			Command:    req.Command,
-			Args:       req.Args,
-			Env:        env,
-			Headers:    headers,
-			AuthType:   normalizeAuthType(req.AuthType),
-			ServerName: name,
+			URL:                 req.URL,
+			Command:             req.Command,
+			Args:                req.Args,
+			Env:                 env,
+			EnvUserSupplied:     req.EnvUserSupplied,
+			Headers:             headers,
+			HeadersUserSupplied: req.HeadersUserSupplied,
+			AuthType:            normalizeAuthType(req.AuthType),
+			ServerName:          name,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -766,18 +803,29 @@ func (s *Service) applyPatch(m *model.MCP, req model.PatchRequest) *apierr.Error
 	if req.Args != nil {
 		m.Connection.Args = *req.Args
 	}
+	// Public PATCH keeps accepting the legacy field for wire compatibility,
+	// but visibility is no longer user-editable. Ignore any decoded value so
+	// existing private records stay private and existing public records stay
+	// public. The admin service remains the only writer of system visibility.
+	// The two "value + user_supplied" pairs are patched together so redact
+	// sees a coherent view. When only one half of the pair is in the request,
+	// the other half stays at its persisted value.
+	if req.EnvUserSupplied != nil {
+		m.Connection.EnvUserSupplied = *req.EnvUserSupplied
+	}
 	if req.Env != nil {
-		redacted, leaks := redactSecrets(*req.Env, "env")
-		if len(leaks) > 0 {
-			return apierr.SecretLeaked(leaks...)
-		}
+		redacted, _ := redactSecrets(
+			*req.Env, "env", m.Connection.EnvUserSupplied, m.Visibility,
+		)
 		m.Connection.Env = redacted
 	}
+	if req.HeadersUserSupplied != nil {
+		m.Connection.HeadersUserSupplied = *req.HeadersUserSupplied
+	}
 	if req.Headers != nil {
-		redacted, leaks := redactSecrets(*req.Headers, "headers")
-		if len(leaks) > 0 {
-			return apierr.SecretLeaked(leaks...)
-		}
+		redacted, _ := redactSecrets(
+			*req.Headers, "headers", m.Connection.HeadersUserSupplied, m.Visibility,
+		)
 		m.Connection.Headers = redacted
 	}
 	if req.AuthType != nil {
@@ -794,13 +842,6 @@ func (s *Service) applyPatch(m *model.MCP, req model.PatchRequest) *apierr.Error
 	}
 	if req.Notes != nil {
 		m.Notes = normalizeStringList(*req.Notes)
-	}
-	if req.Visibility != nil {
-		visibility, apiErr := validateClientVisibility(*req.Visibility)
-		if apiErr != nil {
-			return apiErr
-		}
-		m.Visibility = visibility
 	}
 	// Length (bug #2) checks run over the fully merged record so every field —
 	// freshly patched or carried over — stays within bounds.
@@ -961,29 +1002,31 @@ func tooLongAt(field string, index int, value string, max int) *apierr.Error {
 	return nil
 }
 
-// redactConnectionSecrets redacts both maps and combines any leaks into a
-// single secret_leaked error (doc §5.1).
-func redactConnectionSecrets(env, headers map[string]string) (map[string]string, map[string]string, *apierr.Error) {
-	redactedEnv, envLeaks := redactSecrets(env, "env")
-	redactedHeaders, headerLeaks := redactSecrets(headers, "headers")
-	leaks := append(envLeaks, headerLeaks...)
-	if len(leaks) > 0 {
-		return nil, nil, apierr.SecretLeaked(leaks...)
-	}
-	return redactedEnv, redactedHeaders, nil
+// redactConnectionSecrets normalizes both env and headers on write. After the
+// §5.1 relaxation (rules 1 and 2 removed) this is purely a sentinel
+// normalization pass — values are never rejected, so the signature drops the
+// error return. `visibility` and the `*UserSupplied` slices are kept for
+// signature stability with older call sites but are unused.
+func redactConnectionSecrets(
+	env, headers map[string]string,
+	envUserSupplied, headersUserSupplied []string,
+	visibility model.Visibility,
+) (map[string]string, map[string]string) {
+	redactedEnv, _ := redactSecrets(env, "env", envUserSupplied, visibility)
+	redactedHeaders, _ := redactSecrets(headers, "headers", headersUserSupplied, visibility)
+	return redactedEnv, redactedHeaders
 }
 
-// validateClientVisibility accepts only public/private from a client write;
-// system (or anything else) is rejected (doc §4.1). An empty value defaults to
-// private, matching the schema default and the private-by-omission posture.
-func validateClientVisibility(v model.Visibility) (model.Visibility, *apierr.Error) {
+// validatePublicCreateVisibility keeps the public create endpoint backward
+// compatible with clients that still send public/private while preventing
+// system or unknown values from crossing the public API boundary. The caller
+// always persists public after this validation.
+func validatePublicCreateVisibility(v model.Visibility) *apierr.Error {
 	switch v {
-	case "":
-		return model.VisibilityPrivate, nil
-	case model.VisibilityPublic, model.VisibilityPrivate:
-		return v, nil
+	case "", model.VisibilityPublic, model.VisibilityPrivate:
+		return nil
 	default:
-		return "", apierr.InvalidVisibility()
+		return apierr.InvalidVisibility()
 	}
 }
 

@@ -115,6 +115,9 @@ func (s *reachedService) List(context.Context, service.Caller, service.ListParam
 func (s *reachedService) ListMine(context.Context, service.Caller, service.ListParams) (model.ListResponse, *apierr.Error) {
 	return model.ListResponse{}, nil
 }
+func (s *reachedService) ListTags(context.Context, service.Caller, service.TagListParams) ([]model.TagFilter, *apierr.Error) {
+	return []model.TagFilter{}, nil
+}
 func (s *reachedService) Probe(context.Context, service.ProbeRequest) (service.ProbeResponse, *apierr.Error) {
 	return service.ProbeResponse{OK: true, Tools: []model.Tool{}}, nil
 }

@@ -206,7 +206,9 @@ func registerMCP(r *gin.Engine, authenticator *marketmiddleware.Authenticator, m
 	rg.PATCH("/:mcp_id", mcp.Patch)
 	rg.DELETE("/:mcp_id", mcp.Delete)
 	rg.POST("/:mcp_id/icon", mcp.UploadIcon)
-	r.Group("/api/v1", authenticator.Handler()).GET("/mcp_categories", mcp.ListCategories)
+	v1 := r.Group("/api/v1", authenticator.Handler())
+	v1.GET("/mcp_categories", mcp.ListCategories)
+	v1.GET("/mcp_tags", mcp.ListTags)
 }
 
 // registerAdminMCP mounts the admin surface for system MCPs at /api/v1/admin/mcps.

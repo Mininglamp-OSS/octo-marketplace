@@ -9,7 +9,6 @@ const (
 	CodeInvalidRequest    = "VALIDATION_ERROR"
 	CodeInvalidVisibility = "VALIDATION_ERROR"
 	CodeInvalidTransport  = "VALIDATION_ERROR"
-	CodeSecretLeaked      = "VALIDATION_ERROR"
 	CodeNotFound          = "NOT_FOUND"
 	CodeForbidden         = "FORBIDDEN"
 	CodeNameTaken         = "DUPLICATE"
@@ -67,10 +66,6 @@ func InvalidVisibility() *Error {
 
 func InvalidTransport() *Error {
 	return New(http.StatusBadRequest, CodeInvalidTransport, "Transport must be one of stdio, streamable-http, sse")
-}
-
-func SecretLeaked(details ...Detail) *Error {
-	return (&Error{Status: http.StatusBadRequest, Code: CodeSecretLeaked, Message: "Secret value must not be submitted"}).WithDetails(details...)
 }
 
 func Unauthorized() *Error {

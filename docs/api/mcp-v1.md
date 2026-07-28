@@ -116,8 +116,9 @@ Field names match the `octo-web` `dmworkmcp` package where the type overlaps;
     "server_name": "GitHub MCP",
     "slug": "github-mcp",
     "url": "https://mcp.deepminer.com.cn/github/mcp",
-    "auth_type": "bearer",
-    "headers": { "X-Trace-Origin": "octo-web" }
+    "auth_type": "none",
+    "headers": { "X-Trace-Origin": "octo-web", "Authorization": "" },
+    "headers_user_supplied": ["Authorization"]
   },
   "tools": [
     { "name": "list_repositories", "description": "列出仓库" }
@@ -170,9 +171,10 @@ Field notes:
   are distinct fields on purpose: `server_name` is the display label in
   prompts, `slug` is the JSON key — separating them lets a Chinese
   display name coexist with an ASCII config key.
-- `quick_start.headers` / `quick_start.env`: values for keys matching
-  `(?i)token|key|secret|password|pwd|auth` are always empty in responses
-  (see §5 Secret redaction).
+- `quick_start.headers` / `quick_start.env`: values under keys listed in
+  the companion `*_user_supplied` arrays are stored verbatim but blanked
+  to non-owners at read time (§5.1 / §5.3); shared values also persist
+  verbatim on any visibility and are similarly blanked to non-owners.
 - `usage_examples` / `notes`: string arrays. Empty entries filtered out.
 - `faqs`: array of `{question, answer}`; entries with an empty question are
   filtered out.
@@ -213,9 +215,11 @@ mapping is fixed here so both sides implement one translation, not two:
 | `url` | `quick_start.url` | Empty string collapses to omitted in response. |
 | `command` | `quick_start.command` | stdio only. |
 | `args` | `quick_start.args` | Array. Empty array collapses to omitted. |
-| `env` | `quick_start.env` | Record. Empty record collapses to omitted. |
-| `headers` | `quick_start.headers` | Record. Empty record collapses to omitted. Secret-key values are stripped (§5). |
-| `auth_type` | `quick_start.auth_type` | Default `"none"`. |
+| `env` | `quick_start.env` | Record. Empty record collapses to omitted. Values under keys named in `env_user_supplied` are stored verbatim for the owner and blanked to non-owners at read time (§5.1 / §5.3). |
+| `env_user_supplied` | `quick_start.env_user_supplied` | String array. Lists env keys whose value each consumer fills locally (§5). Empty array collapses to omitted. |
+| `headers` | `quick_start.headers` | Record. Empty record collapses to omitted. Values under keys named in `headers_user_supplied` are stored verbatim for the owner and blanked to non-owners at read time (§5.1 / §5.3). |
+| `headers_user_supplied` | `quick_start.headers_user_supplied` | String array. Same semantics as `env_user_supplied` for headers. |
+| `auth_type` | `quick_start.auth_type` | Default `"none"`. Metadata only; does NOT gate any server behaviour under the toggle model (§5.2). |
 | `slug` | `quick_start.slug` | Client sends flat; server echoes nested. Auto-derived from `name` when omitted. See field notes above. |
 | *server-derived* | `quick_start.server_name` | Server sets to `name.trim()`. Not accepted from client. |
 
@@ -229,12 +233,6 @@ Fields set by the server, never by the client:
 `created_at`, `updated_at`, `quick_start.server_name`. Request bodies are
 strict: client-supplied server fields or any other unknown field are rejected
 with `VALIDATION_ERROR`.
-
-Auth-related fields never on the wire:
-`config.headers.Authorization` is stripped on write and never returned.
-The frontend re-generates the `Authorization: Bearer <sentinel>` line
-locally when it renders the JSON quick-start snippet, purely from the
-`auth_type` marker.
 
 ## 4. Endpoints
 
@@ -253,25 +251,28 @@ Publish a new MCP owned by the caller.
   "tags": ["个人"],
   "transport": "streamable-http",
   "url": "https://mcp.example.com/github",
-  "auth_type": "bearer",
-  "headers": { "X-Trace": "web" },
+  "auth_type": "none",
+  "headers": { "X-Trace": "web", "Authorization": "" },
+  "headers_user_supplied": ["Authorization"],
   "command": null,
   "args": [],
   "env": {},
+  "env_user_supplied": [],
   "tools": [
     { "name": "create_issue", "description": "创建 Issue" }
   ],
   "usage_examples": ["帮我建 Issue"],
   "faqs": [],
-  "notes": [],
-  "visibility": "public"
+  "notes": []
 }
 ```
 
 - `name` is required; every other field has a documented default.
 - `transport` decides which of `url` / `command`+`args`+`env` is meaningful.
-- `visibility` accepts only `public` or `private`. Any other value —
-  including `system` — yields `err.marketplace.mcp.invalid_visibility`.
+- New records are always persisted as `public`. The legacy `visibility` field
+  may be omitted; `public` and `private` are accepted for compatibility but
+  ignored. `system` and unknown values still yield
+  `err.marketplace.mcp.invalid_visibility`.
 - Client-supplied `mcp_id`, `owner_uid`, `space_id`, `creator_name`,
   `created_at`, `updated_at`, `tool_count` are rejected as unknown fields (§3.3).
 
@@ -282,7 +283,6 @@ same shape as `GET /mcps/{mcp_id}`. Frontend picks up `mcp_id` from the response
 - 400 `err.marketplace.mcp.invalid_request` /
       `err.marketplace.mcp.invalid_visibility` /
       `err.marketplace.mcp.invalid_transport` /
-      `err.marketplace.mcp.secret_leaked` /
       `err.marketplace.mcp.slug_invalid`
 - 401 `err.marketplace.auth.unauthorized`
 - 403 `err.marketplace.auth.forbidden_space`
@@ -301,14 +301,14 @@ Returns every record visible to the caller inside their current Space:
 
 | Name | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, `creator_name`, each entry of `tags`, `tools[].name`, `tools[].description`, and `usage_examples`. |
+| `keyword` | string | — | Case-insensitive substring match against `name`, `slogan`, `category`, and `creator_name`. **Tags, tool names / descriptions, and `usage_examples` are intentionally excluded.** Tags are owned by the dedicated `tag` filter (below), so a keyword hit on a tag would double-count the same signal; tools / usage examples are only visible in the detail modal, so a keyword hit there surprised users more than it helped. |
 | `category` | string (repeatable) | `all` | Category key; `all` disables the filter. Repeat or comma-separate (`?category=dev,search`) to OR-combine. |
-| `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to OR-combine. |
+| `tag` | string (repeatable) | — | Tag filter; repeat or comma-separate to AND-combine (each selected tag must be present on a row — matches dmworkskillmarket's tag semantics). |
 | `transport` | string (repeatable) | — | Transport filter (`stdio` / `sse` / `streamable-http`); repeat or comma-separate to OR-combine. |
 | `visibility` | string (repeatable) | — | Visibility filter (`system` / `public` / `private`); repeat or comma-separate. Absent → no filter (still bounded by the visible-set rule above). |
 | `source` | string (repeatable) | — | Source facet (`system` / `space` / `mine`). Predicates partition the set the same way the response's `source` label does — a caller-owned row is labeled `mine`, not `space`. |
 | `created_by_type` | string (repeatable) | — | Provenance filter. Accepts `human` / `bot` / `import`. Repeat or comma-separate to OR-combine. Absent → no filter. |
-| `sort` | string | — | Ranking selector. `relevance` (only meaningful together with a non-empty `keyword`) orders by a fixed weighted match score against every searchable field; any other value falls back to the default order. |
+| `sort` | string | — | Ranking selector. `relevance` (only meaningful together with a non-empty `keyword`) orders by a fixed weighted match score against every searchable field. `updated` orders by `updated_at DESC, id DESC` — the browse-case default the marketplace frontend requests when no keyword is present. Any other value falls back to the default order (creation-time). |
 | `page` | int | `1` | One-based page number. |
 | `page_size` | int | `20` | Page size, max `100`. |
 
@@ -330,8 +330,10 @@ Returns every record visible to the caller inside their current Space:
 - Category filter options are supplied by the dedicated category API; MCP list
   responses do not embed category facets.
 - Default order: newest first (`created_at DESC`, tie-broken by `id DESC`).
-  Pass `sort=relevance` together with a non-empty `keyword` to switch to the
-  weighted match score; any other `sort` value falls back to the default.
+  `sort=relevance` (with a non-empty `keyword`) switches to the weighted
+  match score; `sort=updated` switches to `updated_at DESC, id DESC` so a
+  recently-edited row surfaces first. Any other `sort` value falls back to
+  the default.
 
 **Errors:** 401 / 403.
 
@@ -370,8 +372,9 @@ else receives `err.marketplace.mcp.forbidden`.
 
 **Mutable fields:** `name`, `slug`, `slogan`, `category`, `icon`, `tags`,
 `transport`, `url`, `command`, `args`, `env`, `headers`, `auth_type`,
-`tools`, `usage_examples`, `faqs`, `notes`, `visibility` (`public` /
-`private` only). `slug` follows the same shape rules as create (§3.1
+`tools`, `usage_examples`, `faqs`, `notes`. The legacy `visibility` field is
+accepted for compatibility but ignored, preserving the record's current
+visibility. `slug` follows the same shape rules as create (§3.1
 field notes); a non-nil empty string is rejected as `slug_invalid`.
 
 **Immutable fields:** `mcp_id`, `owner_uid`, `space_id`, `creator_name`,
@@ -492,43 +495,114 @@ standard §2 envelope (`err.marketplace.*`) with a non-2xx status.
 - 401 `err.marketplace.auth.unauthorized`.
 - 403 `err.marketplace.auth.forbidden_space`.
 
-## 5. Secret redaction
+### 4.8 `GET /mcp_tags` — tag suggestions
+
+Returns tags aggregated from MCPs visible to the caller in the current Space,
+sorted by descending row count (alphabetical tie-break). Powers the tag-filter
+popover in `octo-web`'s MCP marketplace search bar: the frontend uses the
+`name` values here as the `tag=` query values on `GET /mcps`.
+
+Tags are stored inline in each `mcps.tags_json` array — there is no dedicated
+tag catalog table (mirrors the marketplace's free-form tag design, unlike
+Skill's `skill_tags` table). The endpoint unnests `tags_json` on read.
+
+**Query parameters:**
+
+| Name | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `q` | string | — | Case-insensitive substring match on tag name. Empty → return every visible tag. |
+| `limit` | int | `50` | Max items returned. Clamped to `[1, 100]`. |
+| `mode` | string | — | `mine` restricts aggregation to caller-owned rows (mirrors `GET /mcps/mine`). Absent → aggregate over the full visible set (system + space + owned). |
+
+**Response body:**
+
+```json
+{
+  "data": [
+    { "name": "热门", "count": 12 },
+    { "name": "官方", "count": 8 }
+  ]
+}
+```
+
+**Semantics notes:**
+
+- Visibility scope is the same as `GET /mcps` (§4.2): `system` rows are
+  always visible; non-system rows require Space membership + (public OR
+  ownership). Empty tags and soft-deleted rows are excluded.
+- The endpoint is intentionally lightweight — no pagination, no created_by /
+  timestamp metadata. If a caller needs those the tag ships back as part of
+  the parent MCP record.
+
+**Errors:**
+
+- 401 `err.marketplace.auth.unauthorized`.
+- 403 `err.marketplace.auth.forbidden_space`.
+
+## 5. Secret handling
 
 Applied on every write (`POST`, `PATCH`) BEFORE persistence.
 
-### 5.1 `config.env` and `config.headers`
+### 5.1 `config.env` / `config.headers` and their `*_user_supplied` companions
 
-For each entry `(k, v)`:
+Each write body carries two independent arrays alongside the value maps:
 
-1. If `k` matches
-   `(?i)^(authorization|token|.*token|.*key|.*secret|password|pwd|api[-_]?key)$`:
-   - If `v` is empty OR equal to the shared
-     `SECRET_PLACEHOLDER_SENTINEL` (§0) — accept, store empty string.
-   - Otherwise — reject the entire request with
-     `err.marketplace.mcp.secret_leaked` and `err.details[]` naming the
-     key.
-2. Non-matching keys are stored as-is.
+- `env_user_supplied` — env keys whose value each consumer must fill locally.
+- `headers_user_supplied` — same, for headers.
 
-Rationale for the sentinel over a natural-language placeholder: the
-frontend runs under multiple locales (zh-CN, en-US). A localized
-placeholder like `"请把这里换成你的 Token"` vs
-`"Please replace with your token"` would fail case-1 comparison under
-the wrong locale, forcing the user through a `secret_leaked` error
-before every real submit. The ASCII sentinel is locale-independent and
-grep-friendly.
+For each entry `(k, v)` in `env` or `headers`, the value is persisted
+verbatim — irrespective of `visibility` or whether `k` is in the companion
+`*_user_supplied` array. The `*_user_supplied` array is echoed unchanged
+so the frontend can rebuild its per-row toggle state on read.
+
+Non-owner reads are the single defense line: `detailForCaller` (§5.3)
+blanks EVERY value in `config.env` / `config.headers` before returning
+the record to anyone other than the owner. This means the author can
+persist a shared secret under a public record — but only the owner ever
+sees it via the API; consumers see an empty map value and are expected
+to install through their own path.
+
+Security posture: rule 1 (must_be_empty on user-supplied) and rule 2
+(public_secret_disallowed on secret-shaped shared keys) have both been
+removed in this revision. The `secret_leaked` error code and its
+`must_be_empty` / `public_secret_disallowed` detail reasons are no
+longer emitted by the server. Owner-scoped blanking in §5.3 is the
+sole guard keeping author tokens out of consumer-facing responses;
+any change to `detailForCaller` must preserve that invariant.
+
+Legacy note: the empty string and `SECRET_PLACEHOLDER_SENTINEL` (§0)
+remain valid submissions and are stored verbatim (frontends that predate
+the relaxation continue to work). `entriesFromWire` on the client
+normalizes the sentinel back to "" for display.
 
 ### 5.2 `auth_type`
 
-- `auth_type: "bearer"` is a marker only. Server never persists the
-  token.
+Metadata only. Under the toggle model the "consumer fills a Bearer token"
+signal is expressed by adding `Authorization` to `headers_user_supplied`,
+not by setting `auth_type`. The field is still accepted on write and
+echoed on read for backwards-compat display in card / detail badges;
+it does NOT gate any server behaviour and does NOT cause the
+`Authorization` header to be stripped or synthesised.
+
 - `auth_type: "none"` is the default; when the field is absent or empty
   the server writes `"none"`.
+- `auth_type: "bearer"` is accepted but has no side effect.
 
 ### 5.3 Response side
 
-The redaction is one-way in this contract; a value that was never
-persisted does not come back. Responses always show empty strings for
-the sensitive keys above.
+The `env` / `headers` maps and their `*_user_supplied` companions are
+returned verbatim to the owner — including any value the owner persisted
+under a `*_user_supplied` key (see §5.1 rule 1). Non-owner reads of a
+public record blank map values (`config.env` / `config.headers`) as a
+read-side defence — callers see keys and structure but not values, and
+the shared-value snippet flow expects each consumer to install through
+their own path.
+
+This blanking is the ONLY line of defense keeping author-persisted
+values under `*_user_supplied` keys from leaking to non-owners; the
+write path no longer forces those values to empty (see §5.1 rule 1).
+Any code touching `detailForCaller` / equivalent must preserve this
+invariant.
 
 ## 6. Examples
 
@@ -542,7 +616,9 @@ Content-Type: application/json
 
 {"name":"Slack MCP","slug":"slack-mcp","category":"productivity",
  "transport":"streamable-http","url":"https://mcp.example.com/slack",
- "auth_type":"bearer","visibility":"public","tools":[]}
+ "auth_type":"none",
+ "headers":{"Authorization":""},"headers_user_supplied":["Authorization"],
+ "visibility":"public","tools":[]}
 ```
 
 ```http
@@ -554,8 +630,9 @@ Content-Type: application/json
  "visibility":"public","creator_name":"李世超",
  "quick_start":{"transport":"streamable-http","server_name":"Slack MCP",
                "slug":"slack-mcp",
-               "url":"https://mcp.example.com/slack","auth_type":"bearer",
-               "headers":{}},
+               "url":"https://mcp.example.com/slack","auth_type":"none",
+               "headers":{"Authorization":""},
+               "headers_user_supplied":["Authorization"]},
  "tools":[],"usage_examples":[],"faqs":[],"notes":[],
  "created_at":"2026-07-14T18:30:12.123+08:00",
  "updated_at":"2026-07-14T18:30:12.123+08:00"}
@@ -580,14 +657,20 @@ Content-Type: application/json
  "pagination":{"total":1,"page":1,"page_size":20}}
 ```
 
-### 6.3 Sentinel accepted / plain token rejected
+### 6.3 User-supplied key accepts any value (owner-visible reference)
 
-Accepted — client submitted the sentinel:
+Post §5.1-relaxation, values under `*_user_supplied` keys are persisted
+verbatim and echoed back to the owner. Non-owner reads are blanked by
+§5.3. The sentinel is still accepted for backwards compat and normalized
+to `""` on storage.
+
+Accepted — sentinel input, stored as `""`:
 
 ```http
 POST /market/api/v1/mcps
 {"name":"x","transport":"stdio","command":"npx",
  "env":{"GITHUB_TOKEN":"__OCTO_SECRET_PLACEHOLDER__"},
+ "env_user_supplied":["GITHUB_TOKEN"],
  "visibility":"private"}
 ```
 
@@ -596,20 +679,38 @@ HTTP/1.1 201 Created
 … env.GITHUB_TOKEN persisted as "" …
 ```
 
-Rejected — client submitted a real token by accident:
+Accepted — real value input, stored verbatim; owner will see it on their
+own detail read; a non-owner GET of this record (if it were public) sees
+`env.GITHUB_TOKEN: ""` per §5.3.
 
 ```http
 POST /market/api/v1/mcps
 {"name":"x","transport":"stdio","command":"npx",
- "env":{"GITHUB_TOKEN":"ghp_realTokenPastedByAccident"},
+ "env":{"GITHUB_TOKEN":"ghp_realAuthorToken"},
+ "env_user_supplied":["GITHUB_TOKEN"],
  "visibility":"private"}
 ```
 
 ```http
-HTTP/1.1 400 Bad Request
-{"err":{"code":"err.marketplace.mcp.secret_leaked",
-        "message":"Secret value must not be submitted",
-        "details":[{"field":"env.GITHUB_TOKEN","reason":"non_empty"}]}}
+HTTP/1.1 201 Created
+… env.GITHUB_TOKEN persisted as "ghp_realAuthorToken" …
+```
+
+### 6.4 Public visibility accepts a shared secret-shaped value
+
+Accepted — public record persisting an `Authorization` header inline;
+non-owner reads see `headers.Authorization: ""` per §5.3 blanking:
+
+```http
+POST /market/api/v1/mcps
+{"name":"x","transport":"streamable-http","url":"https://x",
+ "headers":{"Authorization":"Bearer sk-live-abc"},
+ "visibility":"public","tools":[]}
+```
+
+```http
+HTTP/1.1 201 Created
+… stored verbatim; owner-scoped read returns the real value, others get "" …
 ```
 
 ## 7. Performance & limits (v1 posture)
@@ -696,7 +797,7 @@ octo-server during local development.
   `creator_name` = the configured admin identity, and no space
   attribution on the wire.
 - Errors: 400 `invalid_request` / `invalid_transport` /
-  `secret_leaked` / `slug_invalid`; 401 `auth.admin_unauthorized`;
+  `slug_invalid`; 401 `auth.admin_unauthorized`;
   409 `name_taken` / `slug_taken`
   (the `(owner_uid, space_id=NULL, name)` uniqueness constraint applies
   per §7).
@@ -730,7 +831,7 @@ octo-server during local development.
 - Response (200): the refreshed `McpDetail` (§3.1). Secret redaction
   rules from §5 apply to any touched `env` / `headers` entries.
 - Errors: 400 `invalid_request` / `invalid_transport` /
-  `invalid_visibility` / `secret_leaked` / `slug_invalid`; 401
+  `invalid_visibility` / `slug_invalid`; 401
   `auth.admin_unauthorized`; 404 `not_found`; 409 `name_taken` /
   `slug_taken`.
 

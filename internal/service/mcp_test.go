@@ -23,10 +23,12 @@ type fakeStore struct {
 	updated *model.MCP
 	deleted string
 
-	lastFilter repository.ListFilter
-	listResult []model.MCP
-	listTotal  int
-	listCats   []model.CategoryFilter
+	lastFilter    repository.ListFilter
+	listResult    []model.MCP
+	listTotal     int
+	listCats      []model.CategoryFilter
+	listTags      []model.TagFilter
+	lastTagFilter repository.TagListFilter
 }
 
 func newFakeStore() *fakeStore {
@@ -74,6 +76,14 @@ func (s *fakeStore) SoftDelete(_ context.Context, id string, _ time.Time) error 
 func (s *fakeStore) List(_ context.Context, f repository.ListFilter) ([]model.MCP, int, []model.CategoryFilter, error) {
 	s.lastFilter = f
 	return s.listResult, s.listTotal, s.listCats, nil
+}
+
+// ListTags is a minimal stub — the service tests don't exercise the tag
+// aggregation path (that's covered by the repository DB test). Returns the
+// pre-canned slice on the fake so a test that DOES care can seed it.
+func (s *fakeStore) ListTags(_ context.Context, f repository.TagListFilter) ([]model.TagFilter, error) {
+	s.lastTagFilter = f
+	return s.listTags, nil
 }
 
 // SystemNameExists / SystemSlugExists back the admin uniqueness pre-check.
@@ -207,6 +217,28 @@ func TestCreateRejectsSystemVisibility(t *testing.T) {
 	}
 }
 
+func TestCreateAlwaysPersistsPublicVisibility(t *testing.T) {
+	for _, visibility := range []model.Visibility{"", model.VisibilityPublic, model.VisibilityPrivate} {
+		t.Run(string(visibility), func(t *testing.T) {
+			store := newFakeStore()
+			svc := New(store)
+			req := baseCreate()
+			req.Visibility = visibility
+
+			detail, apiErr := svc.Create(context.Background(), caller, req)
+			if apiErr != nil {
+				t.Fatalf("unexpected error: %v", apiErr)
+			}
+			if store.created.Visibility != model.VisibilityPublic {
+				t.Fatalf("persisted visibility = %q, want public", store.created.Visibility)
+			}
+			if detail.Visibility != model.VisibilityPublic {
+				t.Fatalf("response visibility = %q, want public", detail.Visibility)
+			}
+		})
+	}
+}
+
 func TestCreateRejectsInvalidTransport(t *testing.T) {
 	svc := New(newFakeStore())
 	req := baseCreate()
@@ -242,16 +274,18 @@ func TestCreateSentinelAndBlankSecretsAccepted(t *testing.T) {
 		"API_KEY":      "",
 		"REGION":       "us-east-1", // non-secret passes through
 	}
+	req.EnvUserSupplied = []string{"GITHUB_TOKEN", "API_KEY"}
 	req.Headers = map[string]string{
 		"Authorization": model.SecretPlaceholderSentinel,
 		"X-Trace":       "web",
 	}
+	req.HeadersUserSupplied = []string{"Authorization"}
 
 	detail, apiErr := svc.Create(context.Background(), caller, req)
 	if apiErr != nil {
 		t.Fatalf("unexpected error: %v", apiErr)
 	}
-	// Secret keys survive as empty strings; Authorization never persists a value.
+	// User-supplied keys survive as empty strings (backend accepts sentinel/blank).
 	if store.created.Connection.Env["GITHUB_TOKEN"] != "" {
 		t.Fatalf("GITHUB_TOKEN not blanked: %q", store.created.Connection.Env["GITHUB_TOKEN"])
 	}
@@ -261,7 +295,15 @@ func TestCreateSentinelAndBlankSecretsAccepted(t *testing.T) {
 	if store.created.Connection.Env["REGION"] != "us-east-1" {
 		t.Fatalf("non-secret REGION altered: %q", store.created.Connection.Env["REGION"])
 	}
-	// Response never re-surfaces a secret value.
+	// user_supplied lists round-trip on the response so the frontend can
+	// rebuild its per-row toggle state.
+	if got := detail.QuickStart.EnvUserSupplied; len(got) != 2 {
+		t.Fatalf("env_user_supplied not echoed: %#v", got)
+	}
+	if got := detail.QuickStart.HeadersUserSupplied; len(got) != 1 || got[0] != "Authorization" {
+		t.Fatalf("headers_user_supplied not echoed: %#v", got)
+	}
+	// Response never re-surfaces a value for a user-supplied key.
 	if detail.QuickStart.Env["GITHUB_TOKEN"] != "" {
 		t.Fatalf("response leaked GITHUB_TOKEN: %q", detail.QuickStart.Env["GITHUB_TOKEN"])
 	}
@@ -270,7 +312,11 @@ func TestCreateSentinelAndBlankSecretsAccepted(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsPlaintextSecret(t *testing.T) {
+func TestCreateAcceptsPlaintextOnUserSuppliedKey(t *testing.T) {
+	// Post §5.1-relaxation: user-supplied keys carry a real value verbatim
+	// so the owner can pre-fill their own edit form later. Non-owner
+	// blanking (detailForCaller / §5.3) is the sole guardrail keeping the
+	// value out of consumer-facing responses.
 	store := newFakeStore()
 	svc := New(store)
 
@@ -278,27 +324,61 @@ func TestCreateRejectsPlaintextSecret(t *testing.T) {
 	req.Transport = model.TransportStdio
 	req.Command = "npx"
 	req.URL = ""
-	req.Env = map[string]string{"GITHUB_TOKEN": "ghp_realTokenPastedByAccident"}
+	req.Env = map[string]string{"GITHUB_TOKEN": "ghp_realTokenPastedByAuthor"}
+	req.EnvUserSupplied = []string{"GITHUB_TOKEN"}
 
 	_, apiErr := svc.Create(context.Background(), caller, req)
-	if apiErr == nil || apiErr.Code != apierr.CodeSecretLeaked {
-		t.Fatalf("expected secret_leaked, got %v", apiErr)
+	if apiErr != nil {
+		t.Fatalf("expected accept, got apiErr = %v", apiErr)
 	}
-	if len(apiErr.Details) != 1 || apiErr.Details[0].Field != "env.GITHUB_TOKEN" {
-		t.Fatalf("expected detail env.GITHUB_TOKEN, got %#v", apiErr.Details)
+	if store.created == nil {
+		t.Fatalf("record not persisted")
 	}
-	if store.created != nil {
-		t.Fatalf("record persisted despite secret leak")
+	if store.created.Connection.Env["GITHUB_TOKEN"] != "ghp_realTokenPastedByAuthor" {
+		t.Fatalf(
+			"user-supplied value not preserved: %q",
+			store.created.Connection.Env["GITHUB_TOKEN"],
+		)
 	}
 }
 
-func TestCreateRejectsPlaintextAuthorizationHeader(t *testing.T) {
-	svc := New(newFakeStore())
-	req := baseCreate()
+func TestCreatePublicAcceptsSharedSecretValue(t *testing.T) {
+	// Post-relaxation: rule 2 (public_secret_disallowed) is removed. A shared
+	// secret-shaped value on a public record is now persisted verbatim. The
+	// value is still owner-only via detailForCaller (§5.3) blanking — no
+	// consumer sees it through the API.
+	store := newFakeStore()
+	svc := New(store)
+	req := baseCreate() // Visibility public
 	req.Headers = map[string]string{"Authorization": "Bearer sk-live-abc"}
-	_, apiErr := svc.Create(context.Background(), caller, req)
-	if apiErr == nil || apiErr.Code != apierr.CodeSecretLeaked {
-		t.Fatalf("expected secret_leaked, got %v", apiErr)
+	if _, apiErr := svc.Create(context.Background(), caller, req); apiErr != nil {
+		t.Fatalf("public shared secret should be accepted, got %v", apiErr)
+	}
+	if store.created == nil {
+		t.Fatalf("record not persisted")
+	}
+	if got := store.created.Connection.Headers["Authorization"]; got != "Bearer sk-live-abc" {
+		t.Fatalf("Authorization not preserved: %q", got)
+	}
+}
+
+func TestCreateLegacyPrivateInputStillPersistsPublicSharedSecret(t *testing.T) {
+	// Legacy clients may still send private. The request remains accepted, but
+	// the record is public and owner-only secret projection still protects the
+	// stored value from non-owner detail responses.
+	store := newFakeStore()
+	svc := New(store)
+	req := baseCreate()
+	req.Visibility = model.VisibilityPrivate
+	req.Headers = map[string]string{"Authorization": "Bearer sk-live-abc"}
+	if _, apiErr := svc.Create(context.Background(), caller, req); apiErr != nil {
+		t.Fatalf("unexpected error: %v", apiErr)
+	}
+	if got := store.created.Connection.Headers["Authorization"]; got != "Bearer sk-live-abc" {
+		t.Fatalf("shared secret was not persisted verbatim: %q", got)
+	}
+	if store.created.Visibility != model.VisibilityPublic {
+		t.Fatalf("persisted visibility = %q, want public", store.created.Visibility)
 	}
 }
 
@@ -367,6 +447,123 @@ func TestGetPublicPeerBlanksConnectionValues(t *testing.T) {
 	if got := detail.QuickStart.Headers["X-Trace"]; got != "" {
 		t.Fatalf("header value should be blanked for non-owner, got %q", got)
 	}
+}
+
+func TestGetUserSuppliedValuePreservedForOwnerBlankedForPeer(t *testing.T) {
+	// Post-§5.1-relaxation defense line: owner sees the value they persisted
+	// under a *_user_supplied key on their own edit; a peer (non-owner) sees
+	// it blanked by detailForCaller. Regressing the blanking here would leak
+	// author tokens to consumers, so lock the invariant with an explicit test.
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "x",
+		Name:       "Owner-only reference value",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1", // matches `caller` (the default fake owner in this file)
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{
+			URL:                 "https://mcp.example.com",
+			Headers:             map[string]string{"Authorization": "Bearer author-token"},
+			HeadersUserSupplied: []string{"Authorization"},
+		},
+	})
+
+	// Owner sees the value verbatim.
+	ownerDetail, apiErr := svc.Get(context.Background(), caller, "x")
+	if apiErr != nil {
+		t.Fatalf("owner Get failed: %v", apiErr)
+	}
+	if got := ownerDetail.QuickStart.Headers["Authorization"]; got != "Bearer author-token" {
+		t.Fatalf("owner should see user-supplied value verbatim, got %q", got)
+	}
+	if !contains(ownerDetail.QuickStart.HeadersUserSupplied, "Authorization") {
+		t.Fatalf("owner should see the user-supplied array, got %#v", ownerDetail.QuickStart.HeadersUserSupplied)
+	}
+
+	// Peer (different UID, same space, public visibility) sees blank.
+	peer := Caller{UID: "u-peer", SpaceID: "space-a"}
+	peerDetail, apiErr := svc.Get(context.Background(), peer, "x")
+	if apiErr != nil {
+		t.Fatalf("peer Get failed: %v", apiErr)
+	}
+	if got := peerDetail.QuickStart.Headers["Authorization"]; got != "" {
+		t.Fatalf(
+			"peer must NOT see the user-supplied value — this is the sole "+
+				"defense line for author tokens, got %q",
+			got,
+		)
+	}
+	// The key + user-supplied array are still visible; only the VALUE is
+	// blanked. Peer needs the key so their frontend renders "Authorization:
+	// <TOKEN>" in the copy-paste snippet.
+	if _, ok := peerDetail.QuickStart.Headers["Authorization"]; !ok {
+		t.Fatalf("peer should still see the header KEY, got %#v", peerDetail.QuickStart.Headers)
+	}
+	if !contains(peerDetail.QuickStart.HeadersUserSupplied, "Authorization") {
+		t.Fatalf("peer should still see the user-supplied array, got %#v", peerDetail.QuickStart.HeadersUserSupplied)
+	}
+}
+
+func TestGetPublicPeerBlanksSharedSecretValue(t *testing.T) {
+	// Post-rule-2-removal: a public MCP may persist a real secret-shaped value
+	// under a NON user-supplied key (author decided to publish a "shared"
+	// value). The invariant is that a non-owner still gets it blanked by
+	// detailForCaller — this is the sole defense line for the author's token.
+	// Regressing the blanking here would leak the token to every consumer.
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "shared",
+		Name:       "Shared secret on public",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{
+			URL:     "https://mcp.example.com",
+			Headers: map[string]string{"Authorization": "Bearer team-shared-token"},
+			// Note: NOT in HeadersUserSupplied. Author chose to share it.
+		},
+	})
+
+	// Owner sees the real value.
+	ownerDetail, apiErr := svc.Get(context.Background(), caller, "shared")
+	if apiErr != nil {
+		t.Fatalf("owner Get failed: %v", apiErr)
+	}
+	if got := ownerDetail.QuickStart.Headers["Authorization"]; got != "Bearer team-shared-token" {
+		t.Fatalf("owner should see shared value verbatim, got %q", got)
+	}
+
+	// Peer sees blank — the defense line.
+	peer := Caller{UID: "u-peer", SpaceID: "space-a"}
+	peerDetail, apiErr := svc.Get(context.Background(), peer, "shared")
+	if apiErr != nil {
+		t.Fatalf("peer Get failed: %v", apiErr)
+	}
+	if got := peerDetail.QuickStart.Headers["Authorization"]; got != "" {
+		t.Fatalf(
+			"peer must NOT see the shared value on a public record — this is "+
+				"the sole defense line after rule 2 was removed, got %q",
+			got,
+		)
+	}
+	// Key must still be visible so the consumer's copy-paste snippet
+	// shows "Authorization: " and they know they need to supply it.
+	if _, ok := peerDetail.QuickStart.Headers["Authorization"]; !ok {
+		t.Fatalf("peer should still see the header KEY, got %#v", peerDetail.QuickStart.Headers)
+	}
+}
+
+func contains(xs []string, x string) bool {
+	for _, s := range xs {
+		if s == x {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGetSystemVisibleAcrossSpaces(t *testing.T) {
@@ -446,6 +643,93 @@ func TestOwnerCanPatchAndDelete(t *testing.T) {
 	}
 }
 
+func TestPatchIgnoresVisibilityAndPreservesPrivate(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "Private → Public",
+		Visibility: model.VisibilityPrivate,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{
+			URL:     "https://x",
+			Headers: map[string]string{"Authorization": "Bearer real-token"},
+		},
+	})
+
+	newVis := model.VisibilityPublic
+	if _, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{
+		Visibility: &newVis,
+	}); apiErr != nil {
+		t.Fatalf("legacy visibility field rejected: %v", apiErr)
+	}
+	got := store.records["own"]
+	if got.Visibility != model.VisibilityPrivate {
+		t.Fatalf("visibility changed: %q", got.Visibility)
+	}
+	if got.Connection.Headers["Authorization"] != "Bearer real-token" {
+		t.Fatalf("shared secret altered on flip: %q", got.Connection.Headers["Authorization"])
+	}
+}
+
+func TestPatchIgnoresVisibilityAndPreservesPublic(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "Public MCP",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{
+			URL:                 "https://x",
+			Headers:             map[string]string{"Authorization": ""},
+			HeadersUserSupplied: []string{"Authorization"},
+		},
+	})
+	newVis := model.VisibilityPrivate
+	if _, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{
+		Visibility: &newVis,
+	}); apiErr != nil {
+		t.Fatalf("legacy visibility field rejected: %v", apiErr)
+	}
+	if got := store.records["own"].Visibility; got != model.VisibilityPublic {
+		t.Fatalf("visibility changed: %q", got)
+	}
+}
+
+// TestPatchSystemRowAcceptsSharedSecret exercises the system path. Post-
+// relaxation (rule 2 removed), a system record accepts a shared bearer
+// on PATCH; consumer reads still see it blanked by detailForCaller.
+func TestPatchSystemRowAcceptsSharedSecret(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "System MCP",
+		Visibility: model.VisibilitySystem,
+		OwnerUID:   "u1",
+		SpaceID:    "", // system rows are cross-Space
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://x"},
+	})
+	newHeaders := map[string]string{"Authorization": "Bearer real"}
+	if _, apiErr := svc.UpdateSystem(context.Background(), "sys", model.PatchRequest{
+		Headers: &newHeaders,
+	}); apiErr != nil {
+		t.Fatalf("shared secret on system row should be accepted, got %v", apiErr)
+	}
+	if store.records["sys"].Connection.Headers["Authorization"] != "Bearer real" {
+		t.Fatalf(
+			"headers not applied: %q",
+			store.records["sys"].Connection.Headers["Authorization"],
+		)
+	}
+}
+
 // --- List / mine (Acceptance) ---
 
 func TestListMineSetsOwnerScopedFilter(t *testing.T) {
@@ -481,6 +765,46 @@ func TestListDefaultsAndClampsPagination(t *testing.T) {
 	}
 	if store.lastFilter.MineOnly {
 		t.Fatalf("List must not set MineOnly")
+	}
+}
+
+func TestListTagsForwardsCallerScopeAndReturnsSlice(t *testing.T) {
+	store := newFakeStore()
+	store.listTags = []model.TagFilter{
+		{Name: "热门", Count: 12},
+		{Name: "官方", Count: 8},
+	}
+	svc := New(store)
+
+	got, apiErr := svc.ListTags(context.Background(), caller, TagListParams{Query: "官", Limit: 20})
+	if apiErr != nil {
+		t.Fatalf("unexpected error: %v", apiErr)
+	}
+	if len(got) != 2 || got[0].Name != "热门" || got[1].Name != "官方" {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	if store.lastTagFilter.CallerUID != "u1" || store.lastTagFilter.SpaceID != "space-a" {
+		t.Fatalf("caller scope not forwarded: %+v", store.lastTagFilter)
+	}
+	if store.lastTagFilter.Query != "官" || store.lastTagFilter.Limit != 20 {
+		t.Fatalf("query/limit not forwarded: %+v", store.lastTagFilter)
+	}
+}
+
+func TestListTagsReturnsEmptySliceWhenStoreReturnsNil(t *testing.T) {
+	store := newFakeStore()
+	store.listTags = nil
+	svc := New(store)
+
+	got, apiErr := svc.ListTags(context.Background(), caller, TagListParams{})
+	if apiErr != nil {
+		t.Fatalf("unexpected error: %v", apiErr)
+	}
+	if got == nil {
+		t.Fatalf("expected non-nil slice for JSON marshalling ([] over null)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %+v", got)
 	}
 }
 
@@ -561,17 +885,24 @@ func TestCreateSystemForcesVisibilityAndClearsSpace(t *testing.T) {
 	}
 }
 
-func TestCreateSystemStillRunsSecretRedaction(t *testing.T) {
-	// A plaintext token in env must be rejected on the admin path too — admin
-	// is not a free pass around the redaction rule (docs/api/mcp-v1.md §5).
+func TestCreateSystemAcceptsSharedSecretValue(t *testing.T) {
+	// Post-relaxation: rule 2 (public_secret_disallowed) is removed. Admin
+	// creation of a system MCP with a secret-shaped shared env value is
+	// accepted; the value is stored verbatim and blanked to non-owners via
+	// detailForCaller (§5.3).
 	store := newFakeStore()
 	svc := New(store)
 	req := baseCreate()
-	req.Env = map[string]string{"GITHUB_TOKEN": "ghp_realTokenLeakedThroughAdmin"}
+	req.Env = map[string]string{"GITHUB_TOKEN": "ghp_realTokenViaAdmin"}
 
-	_, apiErr := svc.CreateSystem(context.Background(), adminCaller, req)
-	if apiErr == nil || apiErr.Code != apierr.CodeSecretLeaked {
-		t.Fatalf("expected secret_leaked, got %v", apiErr)
+	if _, apiErr := svc.CreateSystem(context.Background(), adminCaller, req); apiErr != nil {
+		t.Fatalf("system create with shared secret should be accepted, got %v", apiErr)
+	}
+	if store.created == nil {
+		t.Fatalf("record not persisted")
+	}
+	if got := store.created.Connection.Env["GITHUB_TOKEN"]; got != "ghp_realTokenViaAdmin" {
+		t.Fatalf("env not preserved: %q", got)
 	}
 }
 

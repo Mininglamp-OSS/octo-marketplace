@@ -1,50 +1,45 @@
 package service
 
 import (
-	"regexp"
-	"strings"
-
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/apierr"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
-// secretKeyPattern matches token-like keys (doc §5.1). It intentionally covers
-// common password/session/auth credential names so write-time redaction is not
-// bypassed by alternate key names.
-var secretKeyPattern = regexp.MustCompile(`(?i)^(authorization|.*authorization|token|.*token|.*key|.*secret|password|.*password|pwd|.*pwd|passwd|pass|passphrase|api[-_]?key|pat|cookie|.*cookie|credential|credentials|.*credential|auth|.*auth|bearer|.*bearer|session|.*session|sessionid|jwt|.*jwt|dsn|.*dsn|connection[-_]?string|.*connection[-_]?string|access|.*access)$`)
-
-// isSecretKey reports whether k names a token-like field.
-func isSecretKey(k string) bool {
-	return secretKeyPattern.MatchString(strings.TrimSpace(k))
-}
-
-// redactSecrets applies the write-time redaction rules from doc §5 to an
-// env/header map, in place-free fashion, returning the sanitized copy. field
-// prefixes the key in any error detail (e.g. "env" or "headers").
+// redactSecrets normalizes an env/header map on write. The prior write-time
+// guardrails (must_be_empty on user-supplied keys, public_secret_disallowed on
+// secret-shaped shared keys) have both been removed — values are now persisted
+// verbatim on any visibility. The single defense line is detailForCaller
+// (§5.3): non-owner reads blank every value in `config.env` / `config.headers`
+// so consumers never see the author's persisted tokens through the API. The
+// consumer-facing snippet on the client further substitutes the shared
+// placeholder for any `*_user_supplied` key.
 //
-// For each token-like key:
-//   - empty OR the shared sentinel  -> accepted, stored as empty string
-//   - any other non-empty value     -> whole request rejected (secret_leaked)
+// SecretPlaceholderSentinel is still accepted from legacy clients and
+// normalized to "" so the DB doesn't accumulate the placeholder literal.
 //
-// Non-matching keys pass through verbatim. The Authorization header is always
-// forced to empty even though the pattern already covers it, matching the doc's
-// "config.headers.Authorization is stripped on write and never returned".
-func redactSecrets(in map[string]string, field string) (map[string]string, []apierr.Detail) {
+// The `apierr.Detail` return remains for signature stability with older
+// callers, but is always nil — no reason path in this function rejects.
+// `field` / `userSupplied` / `visibility` parameters are similarly retained
+// for compat with the surrounding call sites.
+func redactSecrets(
+	in map[string]string,
+	field string,
+	userSupplied []string,
+	visibility model.Visibility,
+) (map[string]string, []apierr.Detail) {
+	_ = field
+	_ = userSupplied
+	_ = visibility
 	if len(in) == 0 {
 		return in, nil
 	}
 	out := make(map[string]string, len(in))
-	var leaks []apierr.Detail
 	for k, v := range in {
-		if !isSecretKey(k) {
-			out[k] = v
-			continue
-		}
-		if v == "" || v == model.SecretPlaceholderSentinel {
+		if v == model.SecretPlaceholderSentinel {
 			out[k] = ""
-			continue
+		} else {
+			out[k] = v
 		}
-		leaks = append(leaks, apierr.Detail{Field: field + "." + k, Reason: "non_empty"})
 	}
-	return out, leaks
+	return out, nil
 }

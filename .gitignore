@@ -26,6 +26,13 @@ coverage.html
 .env.test.local
 .env.production.local
 
+# ---------- Local docker compose overrides ----------
+# Compose auto-loads this alongside docker-compose.yaml; it's a per-machine
+# dev convenience (e.g. pointing at a host-managed redis) and must never
+# ship with the base compose file.
+docker-compose.override.yaml
+docker-compose.override.yml
+
 # ---------- Node / JS (web assets, tooling) ----------
 node_modules
 .pnp

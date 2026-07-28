@@ -210,10 +210,19 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 
 	pageWhere := where
 	pageArgs := append([]any{}, args...)
+	// Default order: freshest by creation. `sort=updated` (frontend browse
+	// case when no keyword is present) surfaces recently-edited rows first,
+	// which is what the marketplace picker actually wants when a user is
+	// re-checking a listing after a slogan/icon change. `sort=relevance` is
+	// only meaningful with a keyword — every row scores 0 otherwise — so
+	// we ignore it in that case and fall back to created_at.
 	orderBy := "created_at DESC, id DESC"
-	if f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "" {
+	switch {
+	case f.Sort == "relevance" && strings.TrimSpace(f.Keyword) != "":
 		orderBy, args = relevanceOrder(f.Keyword)
 		pageArgs = append(pageArgs, args...)
+	case f.Sort == "updated":
+		orderBy = "updated_at DESC, id DESC"
 	}
 	q := `SELECT ` + columns + ` FROM mcp_servers WHERE ` + pageWhere +
 		` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
@@ -241,19 +250,18 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]model.MCP, int, 
 
 // relevanceOrder is the single ranking contract mirrored by service.enrichListItem.
 // Every searchable field participates with the same weight and stable tie-breakers.
-// JSON columns are matched case-insensitively via LOWER(CAST(...)) LIKE with a
-// lowercased keyword so the SQL ranking agrees with the Go-side substring check
-// (which lowercases both sides). The tools OR-group is wrapped in COALESCE so
-// JSON_EXTRACT returning NULL on an empty tools_json (`'[]'` → SQL NULL) does
-// not collapse the whole additive score to NULL and bury exact-name matches.
+// Keyword search matches only name / slogan / category / creator — the fields
+// the marketplace card renders as free text. Tags were previously in the mix
+// but were pulled once the tag chip filter shipped: tag matching now belongs
+// to that dedicated filter, so a keyword hit on a tag would double-count the
+// same signal and confuse users about why a row surfaced. Tool names /
+// descriptions and usage_examples remain excluded for the same reason (see
+// octo-web #1009 discussion).
 func relevanceOrder(keyword string) (string, []any) {
 	like := "%" + escapeLike(strings.ToLower(strings.TrimSpace(keyword))) + "%"
 	order := `((name LIKE ?) * 8 + (slogan LIKE ?) * 2 + (category LIKE ?) * 3 + ` +
-		`(LOWER(CAST(tags_json AS CHAR)) LIKE ?) * 6 + ` +
-		`COALESCE(LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ? OR ` +
-		`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ?, 0) * 7 + ` +
-		`(LOWER(CAST(usage_examples_json AS CHAR)) LIKE ?) + (creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
-	return order, []any{like, like, like, like, like, like, like, like}
+		`(creator_name LIKE ?)) DESC, updated_at DESC, id DESC`
+	return order, []any{like, like, like, like}
 }
 
 func (r *Repository) count(ctx context.Context, where string, args []any) (int, error) {
@@ -291,6 +299,95 @@ func (r *Repository) categoryCounts(ctx context.Context, where string, args []an
 	return cats, nil
 }
 
+// TagListFilter drives ListTags. Visibility scope mirrors ListFilter's non-mine
+// branch by default: the caller sees tags on system rows + rows in their
+// Space (public or their own). When MineOnly is set, aggregation restricts
+// to the caller's owned rows only (mirrors GET /mcps/mine).
+type TagListFilter struct {
+	CallerUID string
+	SpaceID   string
+	// Query is a case-insensitive substring filter on tag name. Empty →
+	// no filter (all visible tags returned).
+	Query string
+	// Limit caps the row count. Zero / negative → default 50; > 100 → 100.
+	Limit int
+	// MineOnly restricts the aggregate to rows owned by CallerUID inside
+	// SpaceID. Matches the ListMine list surface so the tag popover in the
+	// "我的" tab suggests tags actually reachable via that list.
+	MineOnly bool
+}
+
+// ListTags aggregates distinct tag names from records visible to the caller,
+// ordered by descending count with alphabetical tie-break. Tags are stored
+// inline in each mcp_servers row's tags_json (JSON array of strings) so this
+// query uses JSON_TABLE to unnest before grouping — there is no separate tag
+// catalog table (unlike dmworkskillmarket's skill_tags).
+//
+// The JSON_TABLE column is `VARCHAR(1024) COLLATE utf8mb4_bin` to (a) survive
+// tags longer than 255 chars without truncation / strict-mode error, and (b)
+// make GROUP BY case-sensitive so it agrees with the JSON_CONTAINS filter
+// applied on the parent list endpoint. The default MySQL 8 collation
+// (utf8mb4_0900_ai_ci) would otherwise collapse "Official" and "official"
+// into one row and hand the frontend a suggestion the tag filter can't hit.
+func (r *Repository) ListTags(ctx context.Context, f TagListFilter) ([]model.TagFilter, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	kw := strings.TrimSpace(f.Query)
+	// Args order: visibility args, [kw like], limit.
+	var visibilityClause string
+	var args []any
+	if f.MineOnly {
+		visibilityClause = "m.owner_uid = ? AND m.space_id = ?"
+		args = append(args, f.CallerUID, f.SpaceID)
+	} else {
+		visibilityClause = "m.visibility = 'system' OR (m.space_id = ? AND (m.visibility = 'public' OR m.owner_uid = ?))"
+		args = append(args, f.SpaceID, f.CallerUID)
+	}
+	kwClause := ""
+	if kw != "" {
+		like := "%" + escapeLike(strings.ToLower(kw)) + "%"
+		kwClause = " AND LOWER(t.tag) LIKE ?"
+		args = append(args, like)
+	}
+	args = append(args, limit)
+	q := `SELECT t.tag, COUNT(*) AS cnt
+			FROM mcp_servers m
+			CROSS JOIN JSON_TABLE(
+			  IFNULL(m.tags_json, JSON_ARRAY()),
+			  '$[*]' COLUMNS (tag VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PATH '$')
+			) AS t
+			WHERE m.deleted_at IS NULL
+			  AND (` + visibilityClause + `)
+			  AND t.tag IS NOT NULL AND t.tag <> ''` + kwClause + `
+			GROUP BY t.tag
+			ORDER BY cnt DESC, t.tag ASC
+			LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tags := make([]model.TagFilter, 0, limit)
+	for rows.Next() {
+		var name string
+		var count int
+		if err := rows.Scan(&name, &count); err != nil {
+			return nil, err
+		}
+		tags = append(tags, model.TagFilter{Name: name, Count: count})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tags, nil
+}
+
 // buildWhere composes the visibility-scoped predicate. It always includes
 // deleted_at IS NULL. The visible-set rule (doc §4.2/§4.4) is:
 //
@@ -316,12 +413,9 @@ func (f ListFilter) buildWhere() (string, []any) {
 
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {
 		clauses = append(clauses, `(name LIKE ? OR slogan LIKE ? OR category LIKE ? OR `+
-			`LOWER(CAST(tags_json AS CHAR)) LIKE ? OR `+
-			`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ? OR `+
-			`LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ? OR `+
-			`LOWER(CAST(usage_examples_json AS CHAR)) LIKE ? OR creator_name LIKE ?)`)
+			`creator_name LIKE ?)`)
 		like := "%" + escapeLike(strings.ToLower(kw)) + "%"
-		args = append(args, like, like, like, like, like, like, like, like)
+		args = append(args, like, like, like, like)
 	}
 
 	appendIn := func(column string, values []string) {
@@ -358,12 +452,16 @@ func (f ListFilter) buildWhere() (string, []any) {
 		}
 	}
 	if len(f.Tags) > 0 {
+		// Tag filter is AND: every selected tag must be present on a row.
+		// Matches dmworkskillmarket's tag semantics — users selecting three
+		// tags expect results whose intersection carries all three, not the
+		// union that OR would surface.
 		parts := make([]string, 0, len(f.Tags))
 		for _, tag := range f.Tags {
 			parts = append(parts, "JSON_CONTAINS(tags_json, JSON_QUOTE(?))")
 			args = append(args, tag)
 		}
-		clauses = append(clauses, "("+strings.Join(parts, " OR ")+")")
+		clauses = append(clauses, "("+strings.Join(parts, " AND ")+")")
 	}
 
 	return strings.Join(clauses, " AND "), args

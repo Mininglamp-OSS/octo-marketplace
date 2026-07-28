@@ -22,38 +22,44 @@ func TestListFilterCategoryORTransportAND(t *testing.T) {
 
 func TestRelevanceOrderCoversEverySearchableField(t *testing.T) {
 	order, args := relevanceOrder("issue")
-	for _, field := range []string{"name LIKE", "slogan LIKE", "category LIKE", "tags_json", "tools_json", "usage_examples_json", "creator_name LIKE"} {
+	for _, field := range []string{"name LIKE", "slogan LIKE", "category LIKE", "creator_name LIKE"} {
 		if !strings.Contains(order, field) {
 			t.Fatalf("ranking omits %s: %s", field, order)
 		}
 	}
-	if len(args) != 8 {
-		t.Fatalf("ranking args = %d, want 8", len(args))
+	// Tags moved to the dedicated tag chip filter — keyword ranking must NOT
+	// double-count them. Tool names / descriptions and usage_examples remain
+	// excluded (never card-visible free text).
+	for _, field := range []string{"tags_json", "tools_json", "usage_examples_json"} {
+		if strings.Contains(order, field) {
+			t.Fatalf("ranking must not include %s (not part of keyword search): %s", field, order)
+		}
+	}
+	if len(args) != 4 {
+		t.Fatalf("ranking args = %d, want 4 (name/slogan/category/creator)", len(args))
 	}
 }
 
-// TestKeywordSearchIsCaseInsensitiveOnJSONColumns guards the fix for yujiawei P1:
-// JSON_SEARCH uses binary collation on JSON columns, so the SQL side was
-// case-sensitive while enrichListItem was case-insensitive — mixed-case tags,
-// tool names, and usage examples were silently dropped from the result set.
-// The keyword clause and relevance ranking must both lowercase the JSON side
-// (via LOWER(CAST(... AS CHAR))) and match against a lowercased keyword.
-func TestKeywordSearchIsCaseInsensitiveOnJSONColumns(t *testing.T) {
+// TestKeywordSearchIsCaseInsensitive guards the fix for yujiawei P1: mixed-case
+// keywords must be lowercased before the LIKE match so results agree between
+// SQL and the Go-side enrichListItem (which lowercases both sides). Previously
+// this test also asserted case-insensitivity on tags_json — tags are now owned
+// by the dedicated tag chip filter and no longer participate in keyword search.
+func TestKeywordSearchIsCaseInsensitive(t *testing.T) {
 	where, args := (ListFilter{CallerUID: "u1", SpaceID: "s1", Keyword: "GitHub"}).buildWhere()
 	for _, needle := range []string{
-		"LOWER(CAST(tags_json AS CHAR)) LIKE ?",
-		"LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].name') AS CHAR)) LIKE ?",
-		"LOWER(CAST(JSON_EXTRACT(tools_json, '$[*].description') AS CHAR)) LIKE ?",
-		"LOWER(CAST(usage_examples_json AS CHAR)) LIKE ?",
+		"tags_json",
+		"JSON_EXTRACT(tools_json",
+		"usage_examples_json",
 	} {
-		if !strings.Contains(where, needle) {
-			t.Fatalf("keyword clause missing case-insensitive JSON match %q: %s", needle, where)
+		if strings.Contains(where, needle) {
+			t.Fatalf("keyword clause must not include %s (not part of keyword search): %s", needle, where)
 		}
 	}
 	if strings.Contains(where, "JSON_SEARCH") {
 		t.Fatalf("keyword clause must not use case-sensitive JSON_SEARCH: %s", where)
 	}
-	// keyword args must be lowercased; args = [space_id, caller_uid, 8x like]
+	// keyword args must be lowercased; args = [space_id, caller_uid, 4x like]
 	if len(args) < 3 {
 		t.Fatalf("args too short: %#v", args)
 	}
@@ -87,6 +93,23 @@ func TestSourceSpaceExcludesCallerOwnedRows(t *testing.T) {
 		t.Fatalf("source=space must exclude caller-owned rows: %s", where)
 	}
 	want := []any{"s1", "u1", "s1", "u1"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+// TestTagFilterIsAND asserts multi-tag selection intersects rather than unions
+// (matches dmworkskillmarket's tag semantics — mcp-v1.md §4.2). A row must
+// carry every selected tag to survive the filter.
+func TestTagFilterIsAND(t *testing.T) {
+	where, args := (ListFilter{CallerUID: "u1", SpaceID: "s1", Tags: []string{"official", "featured"}}).buildWhere()
+	if strings.Contains(where, "JSON_CONTAINS(tags_json, JSON_QUOTE(?)) OR JSON_CONTAINS(tags_json, JSON_QUOTE(?))") {
+		t.Fatalf("tag filter must AND-combine, not OR-combine: %s", where)
+	}
+	if !strings.Contains(where, "JSON_CONTAINS(tags_json, JSON_QUOTE(?)) AND JSON_CONTAINS(tags_json, JSON_QUOTE(?))") {
+		t.Fatalf("tag filter must AND-combine JSON_CONTAINS clauses: %s", where)
+	}
+	want := []any{"s1", "u1", "official", "featured"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}
