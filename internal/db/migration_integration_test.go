@@ -52,6 +52,11 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		FileSystem: migrationsql.FS,
 		Root:       ".",
 	}
+	// Integration tests share the configured database and run in shuffled
+	// order in CI. Always normalize the starting state explicitly.
+	if _, err := migrate.Exec(database, "mysql", source, migrate.Down); err != nil {
+		t.Fatalf("reset migrations: %v", err)
+	}
 
 	// --- Up ---
 	n, err := migrate.Exec(database, "mysql", source, migrate.Up)
