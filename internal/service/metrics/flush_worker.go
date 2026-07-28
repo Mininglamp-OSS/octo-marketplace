@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	goredis "github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // FlushWorkerConfig holds configuration for the flush worker.
@@ -82,8 +83,11 @@ func withFlushWorkerDefaults(cfg FlushWorkerConfig) FlushWorkerConfig {
 
 // Start begins the flush loop. It blocks until ctx is cancelled.
 func (w *FlushWorker) Start(ctx context.Context) {
-	log.Printf("[flush-worker] started (interval=%s, batch=%d, lockTTL=%s, instance=%s)",
-		w.cfg.Interval, w.cfg.Batch, w.cfg.LockTTL, w.instanceID)
+	w.info("metrics_flush_worker_started",
+		zap.Duration("interval", w.cfg.Interval),
+		zap.Int64("batch", w.cfg.Batch),
+		zap.Duration("lock_ttl", w.cfg.LockTTL),
+	)
 
 	ticker := time.NewTicker(w.cfg.Interval)
 	defer ticker.Stop()
@@ -91,7 +95,7 @@ func (w *FlushWorker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[flush-worker] shutting down")
+			w.info("metrics_flush_worker_stopping")
 			return
 		case <-ticker.C:
 			w.flush(ctx)
@@ -152,11 +156,11 @@ func (w *FlushWorker) flush(ctx context.Context) {
 
 	acquired, err := w.acquireLock(ctx)
 	if err != nil {
-		log.Printf("[flush-worker] lock acquire error: %v", err)
+		w.err("metrics_flush_lock_acquire_failed", logging.ErrorField(err))
 		return
 	}
 	if !acquired {
-		log.Printf("[flush-worker] lock held by another instance, skipping")
+		w.info("metrics_flush_lock_held")
 		return
 	}
 	defer func() {
@@ -167,7 +171,10 @@ func (w *FlushWorker) flush(ctx context.Context) {
 
 	dirtySize, _ := w.rdb.SCard(ctx, dirtySetKey).Result()
 	pendingSize, _ := w.rdb.SCard(ctx, pendingSetKey).Result()
-	log.Printf("[flush-worker] starting flush, dirty_set_size=%d, pending_set_size=%d", dirtySize, pendingSize)
+	w.info("metrics_flush_started",
+		zap.Int64("dirty_set_size", dirtySize),
+		zap.Int64("pending_set_size", pendingSize),
+	)
 	w.cleanupFlushLedger(ctx)
 
 	var totalProcessed int64
@@ -186,7 +193,7 @@ func (w *FlushWorker) flush(ctx context.Context) {
 
 		members, err := w.rdb.SRandMemberN(ctx, dirtySetKey, w.cfg.Batch).Result()
 		if err != nil {
-			log.Printf("[flush-worker] dirty sample error: %v", err)
+			w.err("metrics_flush_dirty_sample_failed", logging.ErrorField(err))
 			break
 		}
 		if len(members) == 0 {
@@ -216,8 +223,12 @@ func (w *FlushWorker) logFlushResult(start time.Time, totalProcessed, totalDBFai
 	if totalDBFails > 0 {
 		result = "partial_failure"
 	}
-	log.Printf("[flush-worker] flush complete: result=%s, resources_processed=%d, db_failures=%d, duration=%s",
-		result, totalProcessed, totalDBFails, duration)
+	w.info("metrics_flush_completed",
+		zap.String("result", result),
+		zap.Int64("resources_processed", totalProcessed),
+		zap.Int64("db_failures", totalDBFails),
+		zap.Duration("duration", duration),
+	)
 }
 
 func (w *FlushWorker) cleanupFlushLedger(ctx context.Context) {
@@ -230,7 +241,7 @@ func (w *FlushWorker) cleanupFlushLedger(ctx context.Context) {
 	}
 	pendingSize, err := w.rdb.SCard(ctx, pendingSetKey).Result()
 	if err != nil {
-		log.Printf("[flush-worker] WARN: ledger cleanup pending check failed: %v", err)
+		w.warn("metrics_flush_ledger_pending_check_failed", logging.ErrorField(err))
 		return
 	}
 	if pendingSize > 0 {
@@ -244,7 +255,7 @@ func (w *FlushWorker) cleanupFlushLedger(ctx context.Context) {
 	cleanupKey := flushLockKey + ":ledger_cleanup"
 	acquired, err := w.rdb.SetNX(ctx, cleanupKey, w.instanceID, gap).Result()
 	if err != nil {
-		log.Printf("[flush-worker] WARN: ledger cleanup throttle failed: %v", err)
+		w.warn("metrics_flush_ledger_cleanup_throttle_failed", logging.ErrorField(err))
 		return
 	}
 	if !acquired {
@@ -255,16 +266,22 @@ func (w *FlushWorker) cleanupFlushLedger(ctx context.Context) {
 	defer cancel()
 	cutoff := time.Now().Add(-w.cfg.FlushLedgerRetention)
 	if err := cleaner.DeleteAppliedFlushesBefore(cleanupCtx, cutoff); err != nil {
-		log.Printf("[flush-worker] WARN: ledger cleanup failed: %v", err)
+		w.warn("metrics_flush_ledger_cleanup_failed",
+			zap.Time("cutoff", cutoff),
+			logging.ErrorField(err),
+		)
 	}
 }
 
 func (w *FlushWorker) processDirtyMember(ctx context.Context, member string, totalProcessed, totalDBFails *int64) bool {
 	parts := strings.SplitN(member, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		log.Printf("[flush-worker] WARN: invalid dirty key %q, removing", member)
+		w.warn("metrics_flush_invalid_dirty_member", zap.String("member", member))
 		if err := w.rdb.SRem(ctx, dirtySetKey, member).Err(); err != nil {
-			log.Printf("[flush-worker] WARN: failed to remove invalid dirty key %q: %v", member, err)
+			w.warn("metrics_flush_invalid_dirty_member_remove_failed",
+				zap.String("member", member),
+				logging.ErrorField(err),
+			)
 		}
 		return true
 	}
@@ -272,13 +289,20 @@ func (w *FlushWorker) processDirtyMember(ctx context.Context, member string, tot
 	resourceID := parts[1]
 
 	if resourceType != "skill" {
-		log.Printf("[flush-worker] WARN: unsupported dirty resource type %q for member %q, leaving dirty", resourceType, member)
+		w.warn("metrics_flush_unsupported_dirty_resource",
+			zap.String("resource_type", resourceType),
+			zap.String("member", member),
+		)
 		return false
 	}
 
 	pending, hasDelta, err := w.drainToPending(ctx, member, resourceType, resourceID)
 	if err != nil {
-		log.Printf("[flush-worker] ERROR: drain counters for %s/%s: %v", resourceType, resourceID, err)
+		w.err("metrics_flush_drain_failed",
+			zap.String("resource_type", resourceType),
+			zap.String("resource_id", resourceID),
+			logging.ErrorField(err),
+		)
 		*totalDBFails++
 		return false
 	}
@@ -295,7 +319,7 @@ func (w *FlushWorker) processPending(ctx context.Context, totalProcessed, totalD
 		}
 		flushIDs, err := w.rdb.SRandMemberN(ctx, pendingSetKey, w.cfg.Batch).Result()
 		if err != nil {
-			log.Printf("[flush-worker] pending sample error: %v", err)
+			w.err("metrics_flush_pending_sample_failed", logging.ErrorField(err))
 			*totalDBFails++
 			return
 		}
@@ -309,7 +333,10 @@ func (w *FlushWorker) processPending(ctx context.Context, totalProcessed, totalD
 			}
 			pending, err := w.loadPendingDelta(ctx, flushID)
 			if err != nil {
-				log.Printf("[flush-worker] ERROR: load pending delta %s: %v", flushID, err)
+				w.err("metrics_flush_load_pending_failed",
+					zap.String("flush_id", flushID),
+					logging.ErrorField(err),
+				)
 				*totalDBFails++
 				return
 			}
@@ -383,7 +410,10 @@ func (w *FlushWorker) loadPendingDelta(ctx context.Context, flushID string) (*pe
 func (w *FlushWorker) processPendingDelta(ctx context.Context, pending pendingDelta, totalProcessed, totalDBFails *int64) bool {
 	if pending.ViewDelta == 0 && pending.DownloadDelta == 0 && pending.InstallDelta == 0 {
 		if err := w.ackPending(ctx, pending.FlushID); err != nil {
-			log.Printf("[flush-worker] ERROR: ack zero pending %s: %v", pending.FlushID, err)
+			w.err("metrics_flush_ack_zero_pending_failed",
+				zap.String("flush_id", pending.FlushID),
+				logging.ErrorField(err),
+			)
 			*totalDBFails++
 			return false
 		}
@@ -391,13 +421,20 @@ func (w *FlushWorker) processPendingDelta(ctx context.Context, pending pendingDe
 	}
 
 	if err := w.upsertWithRetry(ctx, pending); err != nil {
-		log.Printf("[flush-worker] ERROR: db upsert failed for %s/%s flush=%s after retries: %v",
-			pending.ResourceType, pending.ResourceID, pending.FlushID, err)
+		w.err("metrics_flush_db_upsert_failed",
+			zap.String("resource_type", pending.ResourceType),
+			zap.String("resource_id", pending.ResourceID),
+			zap.String("flush_id", pending.FlushID),
+			logging.ErrorField(err),
+		)
 		*totalDBFails++
 		return false
 	}
 	if err := w.ackPending(ctx, pending.FlushID); err != nil {
-		log.Printf("[flush-worker] ERROR: ack pending %s: %v", pending.FlushID, err)
+		w.err("metrics_flush_ack_pending_failed",
+			zap.String("flush_id", pending.FlushID),
+			logging.ErrorField(err),
+		)
 		*totalDBFails++
 		return false
 	}
@@ -456,7 +493,7 @@ func (w *FlushWorker) releaseLock(ctx context.Context) {
 	const script = `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`
 	err := w.rdb.Eval(ctx, script, []string{flushLockKey}, w.instanceID).Err()
 	if err != nil && err != goredis.Nil {
-		log.Printf("[flush-worker] WARN: lock release failed: %v", err)
+		w.warn("metrics_flush_lock_release_failed", logging.ErrorField(err))
 	}
 }
 
@@ -466,6 +503,25 @@ func (w *FlushWorker) newFlushID() string {
 
 func pendingKey(flushID string) string {
 	return pendingKeyPrefix + flushID
+}
+
+func (w *FlushWorker) info(msg string, fields ...zap.Field) {
+	logging.Info(msg, append(w.logFields(), fields...)...)
+}
+
+func (w *FlushWorker) warn(msg string, fields ...zap.Field) {
+	logging.Warn(msg, append(w.logFields(), fields...)...)
+}
+
+func (w *FlushWorker) err(msg string, fields ...zap.Field) {
+	logging.Error(msg, append(w.logFields(), fields...)...)
+}
+
+func (w *FlushWorker) logFields() []zap.Field {
+	return []zap.Field{
+		zap.String("operation", "metrics.flush_worker"),
+		zap.String("instance_id", w.instanceID),
+	}
 }
 
 func generateInstanceID() string {

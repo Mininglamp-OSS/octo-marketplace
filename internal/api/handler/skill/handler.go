@@ -116,7 +116,7 @@ func (h *Handler) List(c *gin.Context) {
 		UseCursor:  useCursor,
 	})
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.list")
 		return
 	}
 
@@ -171,7 +171,7 @@ func (h *Handler) ListMine(c *gin.Context) {
 		Limit:   limit,
 	})
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.mine.list")
 		return
 	}
 
@@ -209,7 +209,7 @@ func (h *Handler) Get(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.get")
 		return
 	}
 
@@ -319,7 +319,7 @@ func (h *Handler) Create(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public skills can only be changed by administrators", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.create")
 		return
 	}
 
@@ -426,7 +426,7 @@ func (h *Handler) Update(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public skills can only be changed by administrators", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.update")
 		return
 	}
 
@@ -457,7 +457,7 @@ func (h *Handler) ListTags(c *gin.Context) {
 	spaceID := middleware.SpaceID(c)
 	items, err := h.svc.ListTags(c.Request.Context(), spaceID, c.Query("q"), parseTagLimit(c.Query("limit")))
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.tag.list")
 		return
 	}
 	apiresponse.OK(c, gin.H{"items": items})
@@ -497,7 +497,7 @@ func (h *Handler) Delete(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public skills can only be changed by administrators", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.delete")
 		return
 	}
 
@@ -534,7 +534,7 @@ func (h *Handler) ListVersions(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.version.list")
 		return
 	}
 
@@ -580,7 +580,7 @@ func (h *Handler) GetSkillMD(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "skill-md not available for this version", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill.skillmd.get")
 		return
 	}
 

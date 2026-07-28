@@ -3,10 +3,11 @@ package redis
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	goredis "github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // Key prefix constants for metrics.
@@ -52,7 +53,13 @@ func (c *Client) trackEvent(ctx context.Context, resourceType, resourceID, event
 
 	_, err := trackEventScript.Run(ctx, c.rdb, []string{counterKey, dirtySetKey}, strconv.FormatInt(1, 10), dirtyMember).Result()
 	if err != nil {
-		log.Printf("[metrics-redis] WARN: failed to track %s for %s/%s: %v", eventType, resourceType, resourceID, err)
+		logging.Warn("metrics_redis_track_failed",
+			zap.String("operation", "metrics.redis.track"),
+			zap.String("event_type", eventType),
+			zap.String("resource_type", resourceType),
+			zap.String("resource_id", resourceID),
+			logging.ErrorField(err),
+		)
 	}
 	return err
 }

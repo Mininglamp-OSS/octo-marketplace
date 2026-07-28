@@ -62,7 +62,7 @@ func (h *Handler) List(c *gin.Context) {
 		Tags:    skillsvc.ParseTagFilters(tags...),
 	})
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "skill_category.list")
 		return
 	}
 

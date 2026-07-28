@@ -4,10 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	migrate "github.com/rubenv/sql-migrate"
+	"go.uber.org/zap"
 
 	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
 )
@@ -19,7 +20,7 @@ const (
 
 func RunMigrations(database *sql.DB) (int, error) {
 	if os.Getenv("SKIP_MIGRATION") == "true" {
-		log.Printf("[migrate] SKIP_MIGRATION=true, skipping")
+		logging.Info("migration_skipped", zap.String("operation", "db.migrate"))
 		return 0, nil
 	}
 

@@ -93,7 +93,7 @@ func (h *Handler) Track(c *gin.Context) {
 		case errors.Is(err, metricssvc.ErrResourceNotVisible):
 			apiresponse.Fail(c, http.StatusNotFound, errcode.MetricsResourceNotVisible, "Resource not found or not visible.", map[string]any{"resource": req.ResourceType}, "")
 		default:
-			apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "Internal error.", nil, "")
+			apiresponse.Internal(c, err, "metrics.track")
 		}
 		return
 	}

@@ -53,7 +53,7 @@ func (h *Handler) AdminList(c *gin.Context) {
 	}
 	items, err := h.svc.AdminList(c.Request.Context())
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "admin.skill_category.list")
 		return
 	}
 	apiresponse.OK(c, items)
@@ -92,7 +92,7 @@ func (h *Handler) AdminCreate(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "category name already exists", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "admin.skill_category.create")
 		return
 	}
 	apiresponse.Created(c, item)
@@ -135,7 +135,7 @@ func (h *Handler) AdminUpdate(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "admin.skill_category.update")
 		return
 	}
 	apiresponse.OK(c, item)
@@ -172,7 +172,7 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "admin.skill_category.delete")
 		return
 	}
 	apiresponse.Empty(c)
