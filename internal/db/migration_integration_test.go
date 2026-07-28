@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysql "github.com/go-sql-driver/mysql"
 	migrate "github.com/rubenv/sql-migrate"
 
 	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
@@ -42,7 +43,7 @@ func TestRunMigrationsUpDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 
 	if err := database.Ping(); err != nil {
 		t.Fatalf("Ping: %v", err)
@@ -137,7 +138,7 @@ func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
 	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
@@ -184,7 +185,7 @@ func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
 	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
@@ -223,6 +224,58 @@ func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 	}
 }
 
+func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
+	config, err := mysql.ParseDSN(testDSN(t))
+	if err != nil {
+		t.Fatalf("parse test DSN: %v", err)
+	}
+	adminConfig := *config
+	adminConfig.DBName = ""
+	admin, err := sql.Open("mysql", adminConfig.FormatDSN())
+	if err != nil {
+		t.Fatalf("open admin connection: %v", err)
+	}
+	defer admin.Close()
+
+	databaseName := fmt.Sprintf("octo_marketplace_legacy_%d", time.Now().UnixNano())
+	if _, err := admin.Exec("CREATE DATABASE `" + databaseName + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"); err != nil {
+		t.Fatalf("create isolated database: %v", err)
+	}
+	defer func() { _, _ = admin.Exec("DROP DATABASE `" + databaseName + "`") }()
+
+	config.DBName = databaseName
+	database, err := sql.Open("mysql", config.FormatDSN())
+	if err != nil {
+		t.Fatalf("open isolated database: %v", err)
+	}
+	defer database.Close()
+
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	migrations, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const legacyCutoff = "20260719-09-category-soft-delete-uuid.sql"
+	legacy := make([]*migrate.Migration, 0, len(migrations))
+	for _, migration := range migrations {
+		if migration.Id <= legacyCutoff {
+			legacy = append(legacy, migration)
+		}
+	}
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: legacy}, migrate.Up); err != nil {
+		t.Fatalf("provision legacy database: %v", err)
+	}
+	for _, table := range []string{"categories", "skills"} {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
+			t.Fatalf("set legacy collation on %s: %v", table, err)
+		}
+	}
+	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err != nil {
+		t.Fatalf("upgrade legacy database: %v", err)
+	}
+}
+
 // TestCollationMigrationUpgradesExistingTables verifies that the forward
 // migration repairs a database where every earlier migration is already
 // recorded and the tables still use MySQL 8's default collation.
@@ -233,7 +286,7 @@ func TestCollationMigrationUpgradesExistingTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 
 	if err := database.Ping(); err != nil {
 		t.Fatalf("Ping: %v", err)
