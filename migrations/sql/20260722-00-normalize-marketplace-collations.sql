@@ -29,6 +29,18 @@ CREATE TEMPORARY TABLE collation_guard_skill_tags (
 INSERT INTO collation_guard_skill_tags (space_id, name)
 SELECT space_id, TRIM(TRAILING ' ' FROM name) FROM skill_tags;
 
+CREATE TEMPORARY TABLE collation_guard_skill_versions (
+  skill_id VARCHAR(36) COLLATE utf8mb4_unicode_ci,
+  version VARCHAR(32) COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (skill_id, version)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+INSERT INTO collation_guard_skill_versions (skill_id, version)
+SELECT skill_id, TRIM(TRAILING ' ' FROM version) FROM skill_versions;
+
+-- The remaining converted text keys are generated identifiers: UUID primary
+-- keys, resource_type enum values, resource IDs, and flush UUIDs. Application
+-- writes cannot produce PAD-SPACE variants for those keys.
+DROP TEMPORARY TABLE collation_guard_skill_versions;
 DROP TEMPORARY TABLE collation_guard_skill_tags;
 DROP TEMPORARY TABLE collation_guard_skills;
 DROP TEMPORARY TABLE collation_guard_categories;

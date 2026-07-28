@@ -179,6 +179,53 @@ func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
 	}
 }
 
+func TestCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
+	dsn := testDSN(t)
+	database, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
+	t.Cleanup(func() { _, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down) })
+	migrations, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const target = "20260722-00-normalize-marketplace-collations.sql"
+	previous := make([]*migrate.Migration, 0, len(migrations)-1)
+	for _, migration := range migrations {
+		if migration.Id != target {
+			previous = append(previous, migration)
+		}
+	}
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
+		t.Fatalf("apply previous migrations: %v", err)
+	}
+	for _, table := range normalizedCollationTables {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
+			t.Fatalf("set legacy collation on %s: %v", table, err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO skill_versions (id, skill_id, version) VALUES ('version-1', 'skill-1', '1.0.0'), ('version-2', 'skill-1', '1.0.0 ')`); err != nil {
+		t.Fatalf("seed version collision: %v", err)
+	}
+	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
+		t.Fatal("collation migration unexpectedly accepted skill version collision")
+	}
+	for _, table := range normalizedCollationTables {
+		var collation string
+		if err := database.QueryRow("SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table).Scan(&collation); err != nil {
+			t.Fatal(err)
+		}
+		if collation != "utf8mb4_0900_ai_ci" {
+			t.Errorf("table %s partially converted to %s", table, collation)
+		}
+	}
+}
+
 func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 	dsn := testDSN(t)
 	database, err := sql.Open("mysql", dsn)
