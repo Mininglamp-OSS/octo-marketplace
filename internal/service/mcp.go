@@ -237,7 +237,7 @@ func (s *Service) ListTags(ctx context.Context, caller Caller, p TagListParams) 
 		MineOnly:  p.MineOnly,
 	})
 	if err != nil {
-		return nil, apierr.Internal()
+		return nil, apierr.Internal(err)
 	}
 	if tags == nil {
 		tags = []model.TagFilter{}
@@ -286,7 +286,7 @@ func (s *Service) UploadIcon(ctx context.Context, caller Caller, mcpID string, d
 	if err != nil {
 		// The bucket error (endpoint, creds, network) must not leak to the
 		// client; the handler logs the internal 500 cause.
-		return IconResult{}, apierr.Internal()
+		return IconResult{}, apierr.Internal(err)
 	}
 
 	m.Icon = url
@@ -1066,6 +1066,6 @@ func mapStoreError(err error) *apierr.Error {
 	case errors.Is(err, repository.ErrSlugTaken):
 		return apierr.SlugTaken()
 	default:
-		return apierr.Internal()
+		return apierr.Internal(err)
 	}
 }

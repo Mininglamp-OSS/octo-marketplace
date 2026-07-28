@@ -3,7 +3,10 @@ package response
 import (
 	"net/http"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // Data is the standard successful response envelope.
@@ -101,4 +104,16 @@ func Fail(c *gin.Context, status int, code, message string, details map[string]a
 		Details: details,
 		Hint:    hint,
 	}})
+}
+
+func Internal(c *gin.Context, err error, operation string, fields ...zap.Field) {
+	logFields := append(logging.RequestFields(c),
+		zap.String("operation", operation),
+		zap.Int("status", http.StatusInternalServerError),
+		zap.String("code", errcode.InternalError),
+		logging.ErrorField(err),
+	)
+	logFields = append(logFields, fields...)
+	logging.Error("internal_api_error", logFields...)
+	Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 }

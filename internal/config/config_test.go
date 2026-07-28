@@ -25,6 +25,30 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.WriteTimeout <= cfg.BotPublishTimeout {
 		t.Fatalf("WriteTimeout=%v must be greater than BotPublishTimeout=%v", cfg.WriteTimeout, cfg.BotPublishTimeout)
 	}
+	if cfg.Log.Level != "info" {
+		t.Fatalf("Log.Level=%q want=info", cfg.Log.Level)
+	}
+	if cfg.Log.Format != "console" {
+		t.Fatalf("Log.Format=%q want=console", cfg.Log.Format)
+	}
+	if cfg.Log.AddCaller {
+		t.Fatal("Log.AddCaller=true want=false")
+	}
+	if cfg.Log.FileEnabled {
+		t.Fatal("Log.FileEnabled=true want=false")
+	}
+	if cfg.Log.Dir != "/var/log/octo-marketplace" {
+		t.Fatalf("Log.Dir=%q want=/var/log/octo-marketplace", cfg.Log.Dir)
+	}
+	if cfg.Log.MaxSizeMB != 20 {
+		t.Fatalf("Log.MaxSizeMB=%d want=20", cfg.Log.MaxSizeMB)
+	}
+	if cfg.Log.MaxBackups != 3 {
+		t.Fatalf("Log.MaxBackups=%d want=3", cfg.Log.MaxBackups)
+	}
+	if cfg.Log.MaxAgeDays != 7 {
+		t.Fatalf("Log.MaxAgeDays=%d want=7", cfg.Log.MaxAgeDays)
+	}
 }
 
 func TestPublicBaseURLTrimsTrailingSlash(t *testing.T) {

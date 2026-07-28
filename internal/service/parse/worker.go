@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,8 +16,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	mdsanitize "github.com/Mininglamp-OSS/octo-marketplace/internal/markdown"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
+	"go.uber.org/zap"
 )
 
 const defaultWorkerPoolSize = 10
@@ -95,7 +96,12 @@ func (w *Worker) runJob(job parseJob) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[parse-worker] panic recovered for task %s: %v", job.taskID, r)
+			logging.Error("parse_worker_panic_recovered",
+				zap.String("operation", "parse.worker.run_job"),
+				zap.String("task_id", job.taskID),
+				zap.String("panic", logging.Scrub(fmt.Sprint(r))),
+				zap.Stack("stack"),
+			)
 			w.updateFailed(job.taskID, "INTERNAL_ERROR", fmt.Sprintf("panic: %v", r))
 		}
 	}()
@@ -324,7 +330,11 @@ func (w *Worker) deleteOversizedObject(key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
 	defer cancel()
 	if err := w.store.DeleteObject(ctx, key); err != nil {
-		log.Printf("[parse-worker] failed to delete oversized object %s: %v", key, err)
+		logging.Warn("parse_worker_delete_oversized_object_failed",
+			zap.String("operation", "parse.worker.delete_oversized_object"),
+			zap.String("object_key", key),
+			logging.ErrorField(err),
+		)
 	}
 }
 
@@ -345,7 +355,12 @@ func (w *Worker) updateFailed(taskID, errorCode, errorMessage string) {
 	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
 	defer cancel()
 	if errorMessage != "" {
-		log.Printf("[parse-worker] task %s failed code=%s detail=%s", taskID, errorCode, errorMessage)
+		logging.Warn("parse_worker_task_failed",
+			zap.String("operation", "parse.worker.update_failed"),
+			zap.String("task_id", taskID),
+			zap.String("error_code", errorCode),
+			zap.String("detail", logging.Scrub(errorMessage)),
+		)
 	}
 	_ = w.repo.UpdateFailed(ctx, taskID, errorCode, publicParseErrorMessageWithDetail(errorCode, errorMessage))
 }
@@ -354,7 +369,11 @@ func (w *Worker) updateSuccess(taskID string, name string, description *string, 
 	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
 	defer cancel()
 	if err := w.repo.UpdateSuccess(ctx, taskID, name, description, version, tags, readme, sha256, resultID, forkedFrom, metadata); err != nil {
-		log.Printf("[parse-worker] update success failed for task %s: %v", taskID, err)
+		logging.Error("parse_worker_update_success_failed",
+			zap.String("operation", "parse.worker.update_success"),
+			zap.String("task_id", taskID),
+			logging.ErrorField(err),
+		)
 	}
 }
 
@@ -445,7 +464,10 @@ func (w *Worker) checkReuploadNameMatch(ctx context.Context, name, spaceID, owne
 		return "目标 Skill 不存在或无权限"
 	}
 	if err != nil {
-		log.Printf("[parse-worker] checkReuploadNameMatch query error: %v", err)
+		logging.Error("parse_worker_check_reupload_name_failed",
+			zap.String("operation", "parse.worker.check_reupload_name"),
+			logging.ErrorField(err),
+		)
 		return "internal error: unable to verify reuploaded Skill name"
 	}
 	if name != currentName {
@@ -476,7 +498,10 @@ func (w *Worker) checkNameDuplicate(ctx context.Context, name, spaceID, ownerID,
 		return ""
 	}
 	if err != nil {
-		log.Printf("[parse-worker] checkNameDuplicate query error: %v", err)
+		logging.Error("parse_worker_check_name_duplicate_failed",
+			zap.String("operation", "parse.worker.check_name_duplicate"),
+			logging.ErrorField(err),
+		)
 		return "internal error: unable to verify Skill name uniqueness"
 	}
 	return fmt.Sprintf("skill name \"%s\" 已存在（ID: %s），请使用其他名称", name, existingID)
