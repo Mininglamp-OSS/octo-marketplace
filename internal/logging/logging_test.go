@@ -31,7 +31,9 @@ func TestScrubMasksSensitiveValues(t *testing.T) {
 
 func TestScrubMasksStructuredAndURLSecrets(t *testing.T) {
 	inputs := []string{
+		`Authorization: Basic dXNlcjpwYXNz`,
 		`{"access_token":"eyJhbGciOi.abc.def"}`,
+		`{"api_key":"api-secret","private_key":"private-secret","jwt":"jwt-secret"}`,
 		`{"password": "hunter2"}`,
 		`redis://default:sup3rs3cret@redis:6379/0`,
 		`Set-Cookie: session=abcdef; HttpOnly`,
@@ -39,11 +41,33 @@ func TestScrubMasksStructuredAndURLSecrets(t *testing.T) {
 	}
 	for _, input := range inputs {
 		got := Scrub(input)
-		for _, forbidden := range []string{"eyJhbGciOi.abc.def", "hunter2", "sup3rs3cret", "abcdef", "user:pw", "mysql:3306"} {
+		for _, forbidden := range []string{"dXNlcjpwYXNz", "eyJhbGciOi.abc.def", "api-secret", "private-secret", "jwt-secret", "hunter2", "sup3rs3cret", "abcdef", "user:pw", "mysql:3306"} {
 			if strings.Contains(got, forbidden) {
 				t.Fatalf("Scrub(%q) = %q, still contains %q", input, got, forbidden)
 			}
 		}
+	}
+}
+
+func TestRequestIDRejectsInvalidClientValues(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, supplied := range []string{strings.Repeat("a", maxRequestIDLen+1), "request/id"} {
+		t.Run(supplied[:min(len(supplied), 16)], func(t *testing.T) {
+			r := gin.New()
+			r.Use(RequestID())
+			r.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set(RequestIDHeader, supplied)
+			r.ServeHTTP(w, req)
+
+			got := w.Header().Get(RequestIDHeader)
+			if got == supplied || !validRequestID(got) {
+				t.Fatalf("generated request ID %q is invalid or reused supplied value", got)
+			}
+		})
 	}
 }
 

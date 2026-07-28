@@ -17,11 +17,13 @@ CREATE TEMPORARY TABLE collation_guard_skills (
   PRIMARY KEY (owner_id, space_id, name)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 INSERT INTO collation_guard_skills (owner_id, space_id, name)
-SELECT owner_id, space_id, TRIM(TRAILING ' ' FROM name) FROM skills;
+SELECT owner_id, space_id, TRIM(TRAILING ' ' FROM name)
+FROM skills
+WHERE is_deleted = 0;
 
 CREATE TEMPORARY TABLE collation_guard_skill_tags (
   space_id VARCHAR(64) COLLATE utf8mb4_unicode_ci,
-  name VARCHAR(64) COLLATE utf8mb4_unicode_ci,
+  name VARCHAR(128) COLLATE utf8mb4_unicode_ci,
   PRIMARY KEY (space_id, name)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 INSERT INTO collation_guard_skill_tags (space_id, name)

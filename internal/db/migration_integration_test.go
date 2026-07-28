@@ -178,6 +178,51 @@ func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
 	}
 }
 
+func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
+	dsn := testDSN(t)
+	database, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
+	t.Cleanup(func() { _, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down) })
+	migrations, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const target = "20260722-00-normalize-marketplace-collations.sql"
+	previous := make([]*migrate.Migration, 0, len(migrations)-1)
+	for _, migration := range migrations {
+		if migration.Id != target {
+			previous = append(previous, migration)
+		}
+	}
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
+		t.Fatalf("apply previous migrations: %v", err)
+	}
+	for _, table := range normalizedCollationTables {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
+			t.Fatalf("set legacy collation on %s: %v", table, err)
+		}
+	}
+	const insert = `INSERT INTO skills
+		(id, name, description, category_id, tags, owner_id, owner_name, space_id,
+		 visibility, readme_content, file_name, file_url, is_deleted)
+		VALUES (?, ?, '', '', JSON_ARRAY(), 'owner', '', 'space', 'private', '', '', '', ?)`
+	if _, err := database.Exec(insert, "live", "example", 0); err != nil {
+		t.Fatalf("seed live skill: %v", err)
+	}
+	if _, err := database.Exec(insert, "deleted", "example ", 1); err != nil {
+		t.Fatalf("seed deleted skill: %v", err)
+	}
+	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err != nil {
+		t.Fatalf("collation migration rejected collision with soft-deleted skill: %v", err)
+	}
+}
+
 // TestCollationMigrationUpgradesExistingTables verifies that the forward
 // migration repairs a database where every earlier migration is already
 // recorded and the tables still use MySQL 8's default collation.

@@ -24,6 +24,7 @@ import (
 
 const (
 	RequestIDHeader = "X-Request-Id"
+	maxRequestIDLen = 128
 
 	fileLogName = "marketplace.log"
 
@@ -190,7 +191,7 @@ func Error(msg string, fields ...zap.Field) {
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := strings.TrimSpace(c.GetHeader(RequestIDHeader))
-		if id == "" {
+		if !validRequestID(id) {
 			id = newRequestID()
 		}
 		c.Set(requestIDGinKey, id)
@@ -198,6 +199,20 @@ func RequestID() gin.HandlerFunc {
 		c.Request = c.Request.WithContext(WithRequestID(c.Request.Context(), id))
 		c.Next()
 	}
+}
+
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLen {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func AccessLog() gin.HandlerFunc {
@@ -315,7 +330,8 @@ func newRequestID() string {
 
 var (
 	bearerSecret    = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
-	keySecret       = regexp.MustCompile(`(?i)(["']?[A-Za-z0-9_-]*(?:password|passwd|secret|token|credential|access[_-]?key|secret[_-]?key|dsn)[A-Za-z0-9_-]*["']?\s*[:=]\s*["']?)[^"',\s&;}]+`)
+	basicSecret     = regexp.MustCompile(`(?i)\bBasic\s+[A-Za-z0-9+/=]+`)
+	keySecret       = regexp.MustCompile(`(?i)(["']?[A-Za-z0-9_-]*(?:password|passwd|secret|token|credential|access[_-]?key|secret[_-]?key|api[_-]?key|private[_-]?key|jwt|dsn)[A-Za-z0-9_-]*["']?\s*[:=]\s*["']?)[^"',\s&;}]+`)
 	urlSecret       = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://)[^/@\s:]+:[^@\s]+@`)
 	mysqlDSNSecret  = regexp.MustCompile(`(?i)[^:\s/@]+:[^@\s]+@tcp\([^)]+\)`)
 	setCookieSecret = regexp.MustCompile(`(?i)(Set-Cookie:\s*[^=;,\s]+)=([^;,\s]+)`)
@@ -323,6 +339,7 @@ var (
 
 func Scrub(value string) string {
 	out := bearerSecret.ReplaceAllString(value, "Bearer ***")
+	out = basicSecret.ReplaceAllString(out, "Basic ***")
 	out = keySecret.ReplaceAllString(out, `${1}***`)
 	out = urlSecret.ReplaceAllString(out, `${1}***:***@`)
 	out = mysqlDSNSecret.ReplaceAllString(out, `***@tcp(***)`)
