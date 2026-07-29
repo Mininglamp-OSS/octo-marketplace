@@ -33,7 +33,7 @@ func (h *Handler) localUploadProxy(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", map[string]any{"max_bytes": maxBytes}, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
+		apiresponse.Internal(c, err, "local_upload_proxy.write")
 		return
 	}
 	c.Status(http.StatusOK)

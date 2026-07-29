@@ -9,15 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"time"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	mdsanitize "github.com/Mininglamp-OSS/octo-marketplace/internal/markdown"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
+	"go.uber.org/zap"
 )
 
 // Service handles business logic for skills.
@@ -157,7 +158,7 @@ func (s *Service) List(ctx context.Context, p ListParams) (*ListResult, error) {
 	repoResult, err := s.repo.List(ctx, skillrepo.ListFilter{
 		SpaceID:     p.SpaceID,
 		UserID:      p.UserID,
-		Query:       p.Query,
+		Query:       strings.TrimSpace(p.Query),
 		CategoryID:  p.CategoryID,
 		Tags:        tags,
 		TagIDGroups: tagIDGroups,
@@ -188,7 +189,7 @@ func (s *Service) ListMine(ctx context.Context, p ListParams) (*ListResult, erro
 	repoResult, err := s.repo.List(ctx, skillrepo.ListFilter{
 		SpaceID:     p.SpaceID,
 		UserID:      p.UserID,
-		Query:       p.Query,
+		Query:       strings.TrimSpace(p.Query),
 		Tags:        tags,
 		TagIDGroups: tagIDGroups,
 		Cursor:      p.Cursor,
@@ -921,7 +922,10 @@ func (s *Service) rawTagsToNames(ctx context.Context, raw json.RawMessage, tagNa
 		var err error
 		nameByID, err = s.repo.ResolveTagNames(ctx, ids)
 		if err != nil {
-			log.Printf("[skill] resolve tag names failed: %v", err)
+			logging.Warn("skill_resolve_tag_names_failed",
+				zap.String("operation", "skill.resolve_tag_names"),
+				logging.ErrorField(err),
+			)
 			return []string{}
 		}
 	}
@@ -973,7 +977,10 @@ func (s *Service) resolveListTagNames(ctx context.Context, rows []skillrepo.Skil
 	}
 	names, err := s.repo.ResolveTagNames(ctx, ids)
 	if err != nil {
-		log.Printf("[skill] resolve list tag names failed: %v", err)
+		logging.Warn("skill_resolve_list_tag_names_failed",
+			zap.String("operation", "skill.resolve_list_tag_names"),
+			logging.ErrorField(err),
+		)
 		return map[int64]string{}
 	}
 	return names

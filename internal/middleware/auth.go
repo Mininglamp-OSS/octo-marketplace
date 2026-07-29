@@ -7,8 +7,10 @@ import (
 
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type contextKey string
@@ -102,11 +104,19 @@ func (a *Authenticator) Handler() gin.HandlerFunc {
 // by the time a request reaches here.
 func resolveUserIdentity(c *gin.Context, resolver auth.Resolver, token string) (model.Identity, bool) {
 	if resolver == nil {
+		logging.Error("auth_resolver_failed", append(logging.RequestFields(c),
+			zap.String("operation", "auth.resolve"),
+			zap.String("reason", "nil_resolver"),
+		)...)
 		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
 		return model.Identity{}, false
 	}
 	identity, err := resolver.Resolve(c.Request.Context(), token)
 	if err != nil {
+		logging.Error("auth_resolver_failed", append(logging.RequestFields(c),
+			zap.String("operation", "auth.resolve"),
+			logging.ErrorField(err),
+		)...)
 		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
 		return model.Identity{}, false
 	}
@@ -115,6 +125,11 @@ func resolveUserIdentity(c *gin.Context, resolver auth.Resolver, token string) (
 		return model.Identity{}, false
 	}
 	if !identity.ContextIncluded {
+		logging.Error("auth_resolver_failed", append(logging.RequestFields(c),
+			zap.String("operation", "auth.resolve"),
+			zap.String("reason", "missing_context"),
+			zap.String("uid", identity.UID),
+		)...)
 		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authorization context is unavailable.")
 		return model.Identity{}, false
 	}
@@ -123,11 +138,19 @@ func resolveUserIdentity(c *gin.Context, resolver auth.Resolver, token string) (
 
 func (a *Authenticator) authenticateBot(c *gin.Context, token string) {
 	if a.botResolver == nil {
+		logging.Error("auth_resolver_failed", append(logging.RequestFields(c),
+			zap.String("operation", "auth.resolve_bot"),
+			zap.String("reason", "nil_resolver"),
+		)...)
 		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
 		return
 	}
 	bot, err := a.botResolver.ResolveBot(c.Request.Context(), token)
 	if err != nil {
+		logging.Error("auth_resolver_failed", append(logging.RequestFields(c),
+			zap.String("operation", "auth.resolve_bot"),
+			logging.ErrorField(err),
+		)...)
 		abortError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Authentication service is unavailable.")
 		return
 	}

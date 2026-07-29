@@ -3,9 +3,10 @@ package metrics
 import (
 	"context"
 	"errors"
-	"log"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	metricsredis "github.com/Mininglamp-OSS/octo-marketplace/internal/redis"
+	"go.uber.org/zap"
 )
 
 // Errors returned by the metrics service.
@@ -63,7 +64,7 @@ func (s *Service) TrackView(ctx context.Context, resourceType, resourceID string
 	}
 
 	if err := s.redis.TrackView(ctx, resourceType, resourceID); err != nil {
-		log.Printf("[metrics] WARN: redis TrackView failed for %s/%s: %v", resourceType, resourceID, err)
+		logMetricsRedisFailure("metrics.track_view", resourceType, resourceID, err)
 	}
 	return nil
 }
@@ -82,7 +83,7 @@ func (s *Service) TrackDownload(ctx context.Context, resourceType, resourceID st
 	_ = resolver // resolver found means type is valid
 
 	if err := s.redis.TrackDownload(ctx, resourceType, resourceID); err != nil {
-		log.Printf("[metrics] WARN: redis TrackDownload failed for %s/%s: %v", resourceType, resourceID, err)
+		logMetricsRedisFailure("metrics.track_download", resourceType, resourceID, err)
 	}
 	return nil
 }
@@ -101,9 +102,18 @@ func (s *Service) TrackInstall(ctx context.Context, resourceType, resourceID str
 	_ = resolver
 
 	if err := s.redis.TrackInstall(ctx, resourceType, resourceID); err != nil {
-		log.Printf("[metrics] WARN: redis TrackInstall failed for %s/%s: %v", resourceType, resourceID, err)
+		logMetricsRedisFailure("metrics.track_install", resourceType, resourceID, err)
 	}
 	return nil
+}
+
+func logMetricsRedisFailure(operation, resourceType, resourceID string, err error) {
+	logging.Warn("metrics_redis_failed",
+		zap.String("operation", operation),
+		zap.String("resource_type", resourceType),
+		zap.String("resource_id", resourceID),
+		logging.ErrorField(err),
+	)
 }
 
 func validateParams(resourceType, resourceID string) error {

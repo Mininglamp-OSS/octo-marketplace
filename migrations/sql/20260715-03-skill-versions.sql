@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS skill_versions (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uk_skill_version (skill_id, version),
   INDEX idx_skill_id (skill_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +migrate Down
 DROP TABLE IF EXISTS skill_versions;

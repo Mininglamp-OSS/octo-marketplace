@@ -15,6 +15,7 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/blob"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/config"
 	marketdb "github.com/Mininglamp-OSS/octo-marketplace/internal/db"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/repository"
@@ -23,6 +24,7 @@ import (
 	metricssvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/metrics"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // @title Octo Marketplace API
@@ -56,16 +58,32 @@ import (
 func main() {
 	gin.SetMode(gin.ReleaseMode)
 	cfg := config.Load()
-	if err := cfg.ValidateAPI(); err != nil {
+	if err := logging.Configure(logging.Options{
+		Level:       cfg.Log.Level,
+		Format:      cfg.Log.Format,
+		AddCaller:   cfg.Log.AddCaller,
+		FileEnabled: cfg.Log.FileEnabled,
+		Dir:         cfg.Log.Dir,
+		MaxSizeMB:   cfg.Log.MaxSizeMB,
+		MaxBackups:  cfg.Log.MaxBackups,
+		MaxAgeDays:  cfg.Log.MaxAgeDays,
+	}); err != nil {
 		log.Fatal(err)
+	}
+	defer logging.Sync()
+	undoStdLog := logging.RedirectStdLog()
+	defer undoStdLog()
+
+	if err := cfg.ValidateAPI(); err != nil {
+		fatal("configuration invalid", err)
 	}
 	database, err := marketdb.Open(cfg.MySQLDSN)
 	if err != nil {
-		log.Fatal(err)
+		fatal("database unavailable", err)
 	}
 	defer database.Close()
 	if n, err := marketdb.RunMigrations(database); err != nil {
-		log.Fatalf("[main] migration failed: %v", err)
+		fatal("migration failed", err)
 	} else if n > 0 {
 		log.Printf("[main] applied %d migration(s)", n)
 	}
@@ -143,7 +161,7 @@ func main() {
 			go fw.Start(flushCtx)
 			log.Printf("[flush-worker] enabled (interval=%s)", cfg.MetricsFlushInterval)
 		} else {
-			log.Printf("[flush-worker] disabled: invalid REDIS_URL: %v", err)
+			logging.Warn("flush_worker_disabled", zap.String("reason", "invalid REDIS_URL"), logging.ErrorField(err))
 		}
 	} else {
 		log.Printf("[flush-worker] disabled: REDIS_URL not set")
@@ -202,6 +220,12 @@ func publicBaseURL(cfg config.Config) string {
 func serve(name string, server *http.Server) {
 	log.Printf("[%s] listening on %s", name, server.Addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("[%s] %v", name, err)
+		fatal(name+" server failed", err)
 	}
+}
+
+func fatal(message string, err error) {
+	logging.Error(message, logging.ErrorField(err))
+	logging.Sync()
+	os.Exit(1)
 }

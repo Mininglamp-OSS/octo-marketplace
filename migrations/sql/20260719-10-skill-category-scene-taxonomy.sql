@@ -5,7 +5,7 @@ CREATE TEMPORARY TABLE category_taxonomy (
   name VARCHAR(64) NOT NULL PRIMARY KEY,
   icon_key VARCHAR(64) NOT NULL,
   sort_order INT NOT NULL
-);
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 INSERT INTO category_taxonomy (legacy_name, name, icon_key, sort_order) VALUES
   ('办公协作', '办公效率',      'BriefcaseBusiness', 1),
@@ -25,7 +25,7 @@ INSERT INTO category_taxonomy (legacy_name, name, icon_key, sort_order) VALUES
 CREATE TEMPORARY TABLE category_remap (
   from_name VARCHAR(64) NOT NULL PRIMARY KEY,
   to_name VARCHAR(64) NOT NULL
-);
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 INSERT INTO category_remap (from_name, to_name) VALUES
   ('全部',     '其他'),
@@ -48,15 +48,15 @@ INSERT INTO category_remap (from_name, to_name) VALUES
 
 -- Refresh categories that already exist under the target name.
 UPDATE categories c
-JOIN category_taxonomy t ON t.name = c.name
+JOIN category_taxonomy t ON t.name = c.name COLLATE utf8mb4_unicode_ci
 SET c.icon_key = t.icon_key,
     c.sort_order = t.sort_order,
     c.deleted_at = NULL;
 
 -- Rename legacy seed categories to the new taxonomy when the target name is free.
 UPDATE categories c
-JOIN category_taxonomy t ON t.legacy_name = c.name
-LEFT JOIN categories existing ON existing.name = t.name AND existing.id <> c.id
+JOIN category_taxonomy t ON t.legacy_name = c.name COLLATE utf8mb4_unicode_ci
+LEFT JOIN categories existing ON existing.name COLLATE utf8mb4_unicode_ci = t.name AND existing.id <> c.id
 SET c.name = t.name,
     c.icon_key = t.icon_key,
     c.sort_order = t.sort_order,
@@ -67,28 +67,28 @@ WHERE existing.id IS NULL;
 INSERT INTO categories (id, name, icon_key, sort_order, created_at, updated_at)
 SELECT UUID(), t.name, t.icon_key, t.sort_order, NOW(), NOW()
 FROM category_taxonomy t
-LEFT JOIN categories c ON c.name = t.name
+LEFT JOIN categories c ON c.name COLLATE utf8mb4_unicode_ci = t.name
 WHERE c.id IS NULL;
 
 -- Move Skills off retired legacy categories before those categories are hidden.
 UPDATE skills s
 JOIN categories old_category ON old_category.id = s.category_id
-JOIN category_remap r ON r.from_name = old_category.name
-JOIN categories new_category ON new_category.name = r.to_name
+JOIN category_remap r ON r.from_name = old_category.name COLLATE utf8mb4_unicode_ci
+JOIN categories new_category ON new_category.name COLLATE utf8mb4_unicode_ci = r.to_name
 SET s.category_id = new_category.id
 WHERE old_category.id <> new_category.id;
 
 -- Hide retired seed categories. Custom categories are intentionally preserved.
 UPDATE categories c
-JOIN category_remap r ON r.from_name = c.name
-LEFT JOIN category_taxonomy t ON t.name = c.name
+JOIN category_remap r ON r.from_name = c.name COLLATE utf8mb4_unicode_ci
+LEFT JOIN category_taxonomy t ON t.name = c.name COLLATE utf8mb4_unicode_ci
 SET c.deleted_at = NOW()
 WHERE t.name IS NULL
   AND c.deleted_at IS NULL;
 
 -- Final pass keeps the visible taxonomy order deterministic.
 UPDATE categories c
-JOIN category_taxonomy t ON t.name = c.name
+JOIN category_taxonomy t ON t.name = c.name COLLATE utf8mb4_unicode_ci
 SET c.icon_key = t.icon_key,
     c.sort_order = t.sort_order,
     c.deleted_at = NULL;
