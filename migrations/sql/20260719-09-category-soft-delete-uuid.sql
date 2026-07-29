@@ -6,9 +6,9 @@ ALTER TABLE categories ADD INDEX idx_categories_deleted (deleted_at);
 -- 2. 将seed数据的slug id替换为UUID（保持名称不变）
 --    先加临时列存映射
 CREATE TEMPORARY TABLE category_id_map (
-  old_id VARCHAR(36) PRIMARY KEY,
-  new_id VARCHAR(36) NOT NULL
-);
+  old_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci PRIMARY KEY,
+  new_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO category_id_map (old_id, new_id) VALUES
   ('starter',               UUID()),

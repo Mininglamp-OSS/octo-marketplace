@@ -1,11 +1,11 @@
 -- +migrate Up
 
 CREATE TEMPORARY TABLE category_taxonomy (
-  legacy_name VARCHAR(64) NULL,
-  name VARCHAR(64) NOT NULL PRIMARY KEY,
-  icon_key VARCHAR(64) NOT NULL,
+  legacy_name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL,
+  name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL PRIMARY KEY,
+  icon_key VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   sort_order INT NOT NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO category_taxonomy (legacy_name, name, icon_key, sort_order) VALUES
   ('办公协作', '办公效率',      'BriefcaseBusiness', 1),
@@ -23,9 +23,9 @@ INSERT INTO category_taxonomy (legacy_name, name, icon_key, sort_order) VALUES
   ('其他',     '其他',          'MoreHorizontal',   13);
 
 CREATE TEMPORARY TABLE category_remap (
-  from_name VARCHAR(64) NOT NULL PRIMARY KEY,
-  to_name VARCHAR(64) NOT NULL
-);
+  from_name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL PRIMARY KEY,
+  to_name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO category_remap (from_name, to_name) VALUES
   ('全部',     '其他'),

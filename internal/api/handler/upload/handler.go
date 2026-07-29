@@ -205,8 +205,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "Skill parse failed. Please retry later.", map[string]any{"parse_error_code": "INTERNAL_ERROR"}, "")
 			return
 		}
-		log.Printf("[BotPublishSkill] parse upload failed: %v", err)
-		log.Printf("[upload] botPublishSkill failed: %v", err)
+		log.Printf("[upload] botPublishSkill parse failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -271,8 +270,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "source skill not found or inaccessible", nil, "")
 			return
 		}
-		log.Printf("[BotPublishSkill] create skill failed: %v", err)
-		log.Printf("[upload] botPublishSkill failed: %v", err)
+		log.Printf("[upload] botPublishSkill create failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -465,7 +463,7 @@ func (h *Handler) TriggerParse(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusTooManyRequests, errcode.RateLimited, "parse queue is busy, retry later", nil, "")
 			return
 		}
-		log.Printf("[upload] triggerParse failed: uploadID=%s: %v", uploadID, err)
+		log.Printf("[TriggerParse] internal error for uploadID=%s: %v", uploadID, err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

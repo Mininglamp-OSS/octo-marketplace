@@ -54,9 +54,9 @@ WHERE JSON_TYPE(s.tags) = 'ARRAY'
 ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at);
 
 CREATE TEMPORARY TABLE skill_tag_id_json (
-  skill_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PRIMARY KEY,
+  skill_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci PRIMARY KEY,
   tag_ids JSON NOT NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO skill_tag_id_json (skill_id, tag_ids)
 SELECT
@@ -79,13 +79,13 @@ FROM (
     ) AS jt
     LEFT JOIN skill_tags global_tag
       ON global_tag.space_id = ''
-     AND global_tag.name COLLATE utf8mb4_unicode_ci =
-         jt.name COLLATE utf8mb4_unicode_ci
+     AND global_tag.name COLLATE utf8mb4_0900_ai_ci =
+         jt.name COLLATE utf8mb4_0900_ai_ci
     LEFT JOIN skill_tags space_tag
-      ON space_tag.space_id COLLATE utf8mb4_unicode_ci =
-         s.space_id COLLATE utf8mb4_unicode_ci
-     AND space_tag.name COLLATE utf8mb4_unicode_ci =
-         jt.name COLLATE utf8mb4_unicode_ci
+      ON space_tag.space_id COLLATE utf8mb4_0900_ai_ci =
+         s.space_id COLLATE utf8mb4_0900_ai_ci
+     AND space_tag.name COLLATE utf8mb4_0900_ai_ci =
+         jt.name COLLATE utf8mb4_0900_ai_ci
     WHERE JSON_TYPE(s.tags) = 'ARRAY'
       AND JSON_LENGTH(s.tags) > 0
       AND JSON_TYPE(JSON_EXTRACT(s.tags, '$[0]')) = 'STRING'
@@ -99,8 +99,8 @@ GROUP BY skill_id;
 
 UPDATE skills s
 LEFT JOIN skill_tag_id_json m
-  ON m.skill_id COLLATE utf8mb4_unicode_ci =
-     s.id COLLATE utf8mb4_unicode_ci
+  ON m.skill_id COLLATE utf8mb4_0900_ai_ci =
+     s.id COLLATE utf8mb4_0900_ai_ci
 SET s.tags = COALESCE(m.tag_ids, JSON_ARRAY())
 WHERE JSON_TYPE(s.tags) = 'ARRAY'
   AND JSON_LENGTH(s.tags) > 0
@@ -111,9 +111,9 @@ DROP TEMPORARY TABLE skill_tag_id_json;
 -- +migrate Down
 
 CREATE TEMPORARY TABLE skill_tag_name_json (
-  skill_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PRIMARY KEY,
+  skill_id VARCHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci PRIMARY KEY,
   tag_names JSON NOT NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO skill_tag_name_json (skill_id, tag_names)
 SELECT
@@ -145,8 +145,8 @@ GROUP BY skill_id;
 
 UPDATE skills s
 LEFT JOIN skill_tag_name_json m
-  ON m.skill_id COLLATE utf8mb4_unicode_ci =
-     s.id COLLATE utf8mb4_unicode_ci
+  ON m.skill_id COLLATE utf8mb4_0900_ai_ci =
+     s.id COLLATE utf8mb4_0900_ai_ci
 SET s.tags = COALESCE(m.tag_names, JSON_ARRAY())
 WHERE JSON_TYPE(s.tags) = 'ARRAY'
   AND JSON_LENGTH(s.tags) > 0

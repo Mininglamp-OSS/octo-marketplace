@@ -1,10 +1,10 @@
 -- +migrate Up
 
 CREATE TEMPORARY TABLE default_skill_category_taxonomy (
-  name VARCHAR(64) NOT NULL PRIMARY KEY,
-  icon_key VARCHAR(64) NOT NULL,
+  name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL PRIMARY KEY,
+  icon_key VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   sort_order INT NOT NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO default_skill_category_taxonomy (name, icon_key, sort_order) VALUES
   ('办公效率', 'BriefcaseBusiness', 1),
@@ -19,9 +19,9 @@ INSERT INTO default_skill_category_taxonomy (name, icon_key, sort_order) VALUES
   ('其他', 'MoreHorizontal', 10);
 
 CREATE TEMPORARY TABLE default_skill_category_remap (
-  from_name VARCHAR(64) NOT NULL PRIMARY KEY,
-  to_name VARCHAR(64) NOT NULL
-);
+  from_name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL PRIMARY KEY,
+  to_name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO default_skill_category_remap (from_name, to_name) VALUES
   ('全部', '其他'),
