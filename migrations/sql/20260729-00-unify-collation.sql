@@ -11,6 +11,9 @@
 -- rubenv/sql-migrate 以分号分割语句，MySQL 不允许顶层 IF，故用存储过程包裹。
 -- 内层 SELECT 一律返回常量 1，避免 ONLY_FULL_GROUP_BY 错误（MySQL 8.0 默认 sql_mode）。
 -- mcp_servers 预检排除 space_id IS NULL 的行：MySQL UNIQUE 索引对含 NULL 的元组允许多行。
+-- categories/skills/skill_versions/mcp_servers 主键 id 使用 Crockford base32 ULID（字母表 0-9A-Z 不含 ILOU），
+-- 在 utf8mb4_general_ci 与 utf8mb4_0900_ai_ci 下无新等价对，不会产生 CONVERT TO 时的 1062 重复键错误，
+-- 故不纳入预检。parse_tasks/resource_metric_flushes 同样为 UUID/ULID 主键，安全起见仍保留预检。
 -- 所有 SIGNAL 消息控制在 MySQL 128 字符 MESSAGE_TEXT 上限内。
 
 -- +migrate StatementBegin

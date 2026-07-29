@@ -1,6 +1,7 @@
 package category
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -54,7 +55,9 @@ func (h *Handler) AdminList(c *gin.Context) {
 	}
 	items, err := h.svc.AdminList(c.Request.Context())
 	if err != nil {
-		log.Printf("[category] adminList failed: %v", err)
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[category] adminList failed: %q", err)
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -94,7 +97,9 @@ func (h *Handler) AdminCreate(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "category name already exists", nil, "")
 			return
 		}
-		log.Printf("[category] adminCreate failed: %v", err)
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[category] adminCreate failed: %q", err)
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -138,7 +143,9 @@ func (h *Handler) AdminUpdate(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		log.Printf("[category] adminUpdate failed: %v", err)
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[category] adminUpdate failed: %q", err)
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -176,7 +183,9 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		log.Printf("[category] adminDelete failed: %v", err)
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[category] adminDelete failed: %q", err)
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

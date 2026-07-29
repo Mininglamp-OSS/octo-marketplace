@@ -57,7 +57,7 @@ INSERT INTO default_skill_category_remap (from_name, to_name) VALUES
 
 -- Refresh categories that already exist under the target names.
 UPDATE categories c
-JOIN default_skill_category_taxonomy t ON t.name = c.name
+JOIN default_skill_category_taxonomy t ON t.name COLLATE utf8mb4_0900_ai_ci = c.name COLLATE utf8mb4_0900_ai_ci
 SET c.icon_key = t.icon_key,
     c.sort_order = t.sort_order
 WHERE c.deleted_at IS NULL;
@@ -66,29 +66,29 @@ WHERE c.deleted_at IS NULL;
 INSERT INTO categories (id, name, icon_key, sort_order, created_at, updated_at)
 SELECT UUID(), t.name, t.icon_key, t.sort_order, NOW(), NOW()
 FROM default_skill_category_taxonomy t
-LEFT JOIN categories c ON c.name = t.name AND c.deleted_at IS NULL
+LEFT JOIN categories c ON c.name COLLATE utf8mb4_0900_ai_ci = t.name COLLATE utf8mb4_0900_ai_ci AND c.deleted_at IS NULL
 WHERE c.id IS NULL;
 
 -- Move Skills off retired default categories before those categories are hidden.
 UPDATE skills s
 JOIN categories old_category ON old_category.id = s.category_id
-JOIN default_skill_category_remap r ON r.from_name = old_category.name
-JOIN categories new_category ON new_category.name = r.to_name AND new_category.deleted_at IS NULL
+JOIN default_skill_category_remap r ON r.from_name COLLATE utf8mb4_0900_ai_ci = old_category.name COLLATE utf8mb4_0900_ai_ci
+JOIN categories new_category ON new_category.name COLLATE utf8mb4_0900_ai_ci = r.to_name COLLATE utf8mb4_0900_ai_ci AND new_category.deleted_at IS NULL
 SET s.category_id = new_category.id
 WHERE old_category.id <> new_category.id;
 
 -- Hide retired default categories only. Custom categories outside the known
 -- default taxonomy remain visible.
 UPDATE categories c
-JOIN default_skill_category_remap r ON r.from_name = c.name
-LEFT JOIN default_skill_category_taxonomy t ON t.name = c.name
+JOIN default_skill_category_remap r ON r.from_name COLLATE utf8mb4_0900_ai_ci = c.name COLLATE utf8mb4_0900_ai_ci
+LEFT JOIN default_skill_category_taxonomy t ON t.name COLLATE utf8mb4_0900_ai_ci = c.name COLLATE utf8mb4_0900_ai_ci
 SET c.deleted_at = NOW()
 WHERE t.name IS NULL
   AND c.deleted_at IS NULL;
 
 -- Final pass keeps the target taxonomy order deterministic.
 UPDATE categories c
-JOIN default_skill_category_taxonomy t ON t.name = c.name
+JOIN default_skill_category_taxonomy t ON t.name COLLATE utf8mb4_0900_ai_ci = c.name COLLATE utf8mb4_0900_ai_ci
 SET c.icon_key = t.icon_key,
     c.sort_order = t.sort_order
 WHERE c.deleted_at IS NULL;

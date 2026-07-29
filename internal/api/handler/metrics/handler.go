@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -94,7 +95,9 @@ func (h *Handler) Track(c *gin.Context) {
 		case errors.Is(err, metricssvc.ErrResourceNotVisible):
 			apiresponse.Fail(c, http.StatusNotFound, errcode.MetricsResourceNotVisible, "Resource not found or not visible.", map[string]any{"resource": req.ResourceType}, "")
 		default:
-			log.Printf("[metrics] track failed: %v", err)
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				log.Printf("[metrics] track failed: %q", err)
+			}
 			apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "Internal error.", nil, "")
 		}
 		return

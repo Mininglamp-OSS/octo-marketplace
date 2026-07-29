@@ -1,6 +1,8 @@
 package category
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 
@@ -52,7 +54,9 @@ func (h *Handler) List(c *gin.Context) {
 
 	items, err := h.svc.List(c.Request.Context(), spaceID, identity.UID)
 	if err != nil {
-		log.Printf("[category] list failed: %v", err)
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[category] list failed: %q", err)
+		}
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

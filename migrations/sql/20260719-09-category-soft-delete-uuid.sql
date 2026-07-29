@@ -42,12 +42,12 @@ INSERT INTO category_id_map (old_id, new_id) VALUES
 
 -- 更新skills表的category_id
 UPDATE skills s
-JOIN category_id_map m ON s.category_id = m.old_id
+JOIN category_id_map m ON s.category_id COLLATE utf8mb4_0900_ai_ci = m.old_id COLLATE utf8mb4_0900_ai_ci
 SET s.category_id = m.new_id;
 
 -- 更新categories表的id
 UPDATE categories c
-JOIN category_id_map m ON c.id = m.old_id
+JOIN category_id_map m ON c.id COLLATE utf8mb4_0900_ai_ci = m.old_id COLLATE utf8mb4_0900_ai_ci
 SET c.id = m.new_id;
 
 DROP TEMPORARY TABLE category_id_map;
