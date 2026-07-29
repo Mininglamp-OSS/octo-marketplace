@@ -1,17 +1,15 @@
 -- +migrate Up notransaction
 -- 统一所有业务表字符集/排序规则到 utf8mb4_0900_ai_ci，消除 JOIN 时的 collation conflict。
--- 执行顺序：锁库默认值 → 碰撞预检（存储过程，失败直接 SIGNAL，不执行 DDL）→ ALTER 转换
+-- 执行顺序：碰撞预检（存储过程，失败直接 SIGNAL，不执行 DDL）→ ALTER 转换 → 锁库默认值
 --
 -- gorp_migrations 是 sql-migrate 框架内部表，无 JOIN 收益，且可能触发 utf8mb3→utf8mb4
 -- 隐式转换，不纳入本次修复范围。
-
--- 锁死库默认值，防止后续 migration 漏写 COLLATE 再次出现混合状态
-ALTER DATABASE CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 -- 碰撞预检：utf8mb4_0900_ai_ci 将全角/半角、ß/ss、æ/ae 等视为相等，若业务数据中已存在
 -- 这类等值对，CONVERT TO 会触发 ERROR 1062 Duplicate entry，且 ALTER 隐式 commit
 -- 导致半转换状态。预检在存储过程内完成，通过前不执行任何 DDL。
 -- rubenv/sql-migrate 以分号分割语句，MySQL 不允许顶层 IF，故用存储过程包裹。
+-- 内层 SELECT 一律返回常量 1，避免 ONLY_FULL_GROUP_BY 错误（MySQL 8.0 默认 sql_mode）。
 
 -- +migrate StatementBegin
 DROP PROCEDURE IF EXISTS collation_preflight;
@@ -24,7 +22,7 @@ BEGIN
 
   -- skill_tags: PRIMARY KEY (space_id, name)
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT space_id, name
+    SELECT 1
     FROM skill_tags
     GROUP BY space_id COLLATE utf8mb4_0900_ai_ci, name COLLATE utf8mb4_0900_ai_ci
     HAVING COUNT(*) > 1
@@ -37,7 +35,7 @@ BEGIN
   -- categories: UNIQUE KEY uk_categories_name_live (name_live)
   -- name_live = IF(deleted_at IS NULL, name, NULL) STORED，仅未删除行参与唯一约束
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT name_live
+    SELECT 1
     FROM categories
     WHERE name_live IS NOT NULL
     GROUP BY name_live COLLATE utf8mb4_0900_ai_ci
@@ -51,7 +49,7 @@ BEGIN
   -- skills: UNIQUE KEY uq_skill_owner_space_name_live (owner_id, space_id, name_live)
   -- name_live = IF(is_deleted = 0, name, NULL) STORED，仅 is_deleted=0 行参与唯一约束
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT owner_id, space_id, name_live
+    SELECT 1
     FROM skills
     WHERE is_deleted = 0
     GROUP BY owner_id COLLATE utf8mb4_0900_ai_ci, space_id COLLATE utf8mb4_0900_ai_ci, name_live COLLATE utf8mb4_0900_ai_ci
@@ -64,7 +62,7 @@ BEGIN
 
   -- skill_versions: UNIQUE KEY uk_skill_version (skill_id, version)
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT skill_id, version
+    SELECT 1
     FROM skill_versions
     GROUP BY skill_id COLLATE utf8mb4_0900_ai_ci, version COLLATE utf8mb4_0900_ai_ci
     HAVING COUNT(*) > 1
@@ -76,7 +74,7 @@ BEGIN
 
   -- mcp_servers: UNIQUE KEY uq_owner_space_name_live (owner_uid, space_id, name_live)
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT owner_uid, space_id, name_live
+    SELECT 1
     FROM mcp_servers
     WHERE name_live IS NOT NULL
     GROUP BY owner_uid COLLATE utf8mb4_0900_ai_ci, space_id COLLATE utf8mb4_0900_ai_ci, name_live COLLATE utf8mb4_0900_ai_ci
@@ -89,7 +87,7 @@ BEGIN
 
   -- mcp_servers: UNIQUE KEY uq_space_slug_live (space_id, slug_live)
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT space_id, slug_live
+    SELECT 1
     FROM mcp_servers
     WHERE slug_live IS NOT NULL
     GROUP BY space_id COLLATE utf8mb4_0900_ai_ci, slug_live COLLATE utf8mb4_0900_ai_ci
@@ -102,7 +100,7 @@ BEGIN
 
   -- resource_metrics: PRIMARY KEY (resource_type, resource_id)
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT resource_type, resource_id
+    SELECT 1
     FROM resource_metrics
     GROUP BY resource_type COLLATE utf8mb4_0900_ai_ci, resource_id COLLATE utf8mb4_0900_ai_ci
     HAVING COUNT(*) > 1
@@ -114,7 +112,7 @@ BEGIN
 
   -- resource_metric_flushes: PRIMARY KEY (flush_id) — UUID/ULID 风格，理论无冲突，安全起见预检
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT flush_id
+    SELECT 1
     FROM resource_metric_flushes
     GROUP BY flush_id COLLATE utf8mb4_0900_ai_ci
     HAVING COUNT(*) > 1
@@ -126,7 +124,7 @@ BEGIN
 
   -- parse_tasks: PRIMARY KEY (id) — UUID，理论无冲突，安全起见预检
   SELECT COUNT(*) INTO v_dup FROM (
-    SELECT id FROM parse_tasks GROUP BY id COLLATE utf8mb4_0900_ai_ci HAVING COUNT(*) > 1
+    SELECT 1 FROM parse_tasks GROUP BY id COLLATE utf8mb4_0900_ai_ci HAVING COUNT(*) > 1
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
@@ -149,6 +147,10 @@ ALTER TABLE skill_versions          CONVERT TO CHARACTER SET utf8mb4 COLLATE utf
 ALTER TABLE resource_metrics        CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 ALTER TABLE resource_metric_flushes CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 ALTER TABLE mcp_servers             CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+-- 锁死库默认值，防止后续 migration 漏写 COLLATE 再次出现混合状态
+-- 放在 ALTER 之后：预检失败时不修改库默认值，避免半转换状态
+ALTER DATABASE CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 -- +migrate Down notransaction
 -- collation 统一是单向操作。回滚会恢复到混合 collation 状态，不推荐执行。
