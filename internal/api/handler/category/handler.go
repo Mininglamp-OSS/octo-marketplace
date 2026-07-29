@@ -1,6 +1,7 @@
 package category
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
@@ -51,6 +52,7 @@ func (h *Handler) List(c *gin.Context) {
 
 	items, err := h.svc.List(c.Request.Context(), spaceID, identity.UID)
 	if err != nil {
+		log.Printf("[category] list failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

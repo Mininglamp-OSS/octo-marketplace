@@ -206,6 +206,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			return
 		}
 		log.Printf("[BotPublishSkill] parse upload failed: %v", err)
+		log.Printf("[upload] botPublishSkill failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -271,6 +272,7 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			return
 		}
 		log.Printf("[BotPublishSkill] create skill failed: %v", err)
+		log.Printf("[upload] botPublishSkill failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -411,6 +413,7 @@ func (h *Handler) InitUpload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", nil, "")
 			return
 		}
+		log.Printf("[upload] initUpload failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -462,7 +465,7 @@ func (h *Handler) TriggerParse(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusTooManyRequests, errcode.RateLimited, "parse queue is busy, retry later", nil, "")
 			return
 		}
-		log.Printf("[TriggerParse] internal error for uploadID=%s: %v", uploadID, err)
+		log.Printf("[upload] triggerParse failed: uploadID=%s: %v", uploadID, err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -499,6 +502,7 @@ func (h *Handler) PollParse(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "task not found", nil, "")
 			return
 		}
+		log.Printf("[upload] pollParse failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -599,6 +603,7 @@ func (h *Handler) InitReupload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
+		log.Printf("[upload] initReupload failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -627,6 +632,7 @@ func (h *Handler) InitReupload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", nil, "")
 			return
 		}
+		log.Printf("[upload] initReupload failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -676,6 +682,7 @@ func (h *Handler) Download(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "no file available", nil, "")
 			return
 		}
+		log.Printf("[upload] download failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -729,6 +736,7 @@ func (h *Handler) AdminDownload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "no file available", nil, "")
 			return
 		}
+		log.Printf("[upload] adminDownload failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

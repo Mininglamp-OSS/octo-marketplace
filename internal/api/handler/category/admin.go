@@ -2,6 +2,7 @@ package category
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
@@ -53,6 +54,7 @@ func (h *Handler) AdminList(c *gin.Context) {
 	}
 	items, err := h.svc.AdminList(c.Request.Context())
 	if err != nil {
+		log.Printf("[category] adminList failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -92,6 +94,7 @@ func (h *Handler) AdminCreate(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "category name already exists", nil, "")
 			return
 		}
+		log.Printf("[category] adminCreate failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -135,6 +138,7 @@ func (h *Handler) AdminUpdate(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		log.Printf("[category] adminUpdate failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -172,6 +176,7 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		log.Printf("[category] adminDelete failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

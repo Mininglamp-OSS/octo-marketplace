@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
@@ -93,6 +94,7 @@ func (h *Handler) Track(c *gin.Context) {
 		case errors.Is(err, metricssvc.ErrResourceNotVisible):
 			apiresponse.Fail(c, http.StatusNotFound, errcode.MetricsResourceNotVisible, "Resource not found or not visible.", map[string]any{"resource": req.ResourceType}, "")
 		default:
+			log.Printf("[metrics] track failed: %v", err)
 			apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "Internal error.", nil, "")
 		}
 		return

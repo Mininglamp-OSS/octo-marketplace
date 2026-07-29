@@ -2,6 +2,7 @@ package skill
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
@@ -75,6 +76,7 @@ func (h *Handler) AdminList(c *gin.Context) {
 		Sort:       sort,
 	})
 	if err != nil {
+		log.Printf("[skill] adminList failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -108,6 +110,7 @@ func (h *Handler) AdminGet(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
+		log.Printf("[skill] adminGet failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -187,6 +190,7 @@ func (h *Handler) AdminCreate(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
+		log.Printf("[skill] adminCreate failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -257,6 +261,7 @@ func (h *Handler) AdminUpdate(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
+		log.Printf("[skill] adminUpdate failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -290,6 +295,7 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
+		log.Printf("[skill] adminDelete failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -327,6 +333,7 @@ func (h *Handler) AdminGetSkillMD(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "skill-md not available", nil, "")
 			return
 		}
+		log.Printf("[skill] adminGetSkillMD failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
@@ -403,6 +410,7 @@ func (h *Handler) AdminReupload(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "tags must contain at most 10 strings of at most 10 characters each", nil, "")
 			return
 		}
+		log.Printf("[skill] adminReupload failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

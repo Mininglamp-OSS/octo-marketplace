@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
@@ -46,6 +47,7 @@ type SessionResponse struct {
 func (h *Session) Get(c *gin.Context) {
 	identity, ok := marketmiddleware.Identity(c)
 	if !ok {
+		log.Printf("[session] get failed: identity not found in context")
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}

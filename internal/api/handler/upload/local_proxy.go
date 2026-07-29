@@ -3,6 +3,7 @@ package upload
 import (
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 
@@ -33,6 +34,7 @@ func (h *Handler) localUploadProxy(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "file exceeds upload size limit", map[string]any{"max_bytes": maxBytes}, "")
 			return
 		}
+		log.Printf("[upload] localUploadProxy failed: %v", err)
 		apiresponse.Fail(c, http.StatusInternalServerError, errcode.InternalError, "internal error", nil, "")
 		return
 	}
