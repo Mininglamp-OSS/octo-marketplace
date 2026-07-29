@@ -17,7 +17,7 @@ func TestCurrentVersionBackfillUsesExplicitCollation(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error=%v", migration, err)
 	}
 
-	const collation = "COLLATE utf8mb4_unicode_ci"
+	const collation = "COLLATE utf8mb4_0900_ai_ci"
 	if got, want := strings.Count(string(content), collation), 8; got != want {
 		t.Fatalf("%s contains %d explicit collations, want %d", migration, got, want)
 	}

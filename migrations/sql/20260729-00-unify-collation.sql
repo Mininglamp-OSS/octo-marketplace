@@ -1,20 +1,22 @@
 -- +migrate Up notransaction
 -- 统一所有业务表字符集/排序规则到 utf8mb4_0900_ai_ci，消除 JOIN 时的 collation conflict。
--- 执行顺序：碰撞预检（存储过程，失败直接 SIGNAL，不执行 DDL）→ ALTER 转换 → 锁库默认值
+-- 执行顺序：预检（存储过程，失败直接 SIGNAL，不执行 DDL）→ TRIM 唯一键列首尾空格 → ALTER 转换 → 锁库默认值
 --
 -- gorp_migrations 是 sql-migrate 框架内部表，无 JOIN 收益，且可能触发 utf8mb3→utf8mb4
 -- 隐式转换，不纳入本次修复范围。
-
--- 碰撞预检：utf8mb4_0900_ai_ci 将全角/半角、ß/ss、æ/ae 等视为相等，若业务数据中已存在
--- 这类等值对，CONVERT TO 会触发 ERROR 1062 Duplicate entry，且 ALTER 隐式 commit
--- 导致半转换状态。预检在存储过程内完成，通过前不执行任何 DDL。
--- rubenv/sql-migrate 以分号分割语句，MySQL 不允许顶层 IF，故用存储过程包裹。
--- 内层 SELECT 一律返回常量 1，避免 ONLY_FULL_GROUP_BY 错误（MySQL 8.0 默认 sql_mode）。
--- mcp_servers 预检排除 space_id IS NULL 的行：MySQL UNIQUE 索引对含 NULL 的元组允许多行。
+--
+-- PAD SPACE → NO PAD 说明：utf8mb4_general_ci/unicode_ci 是 PAD SPACE（尾部空格不参与比较），
+-- utf8mb4_0900_ai_ci 是 NO PAD（尾部空格有意义）。转换前必须 TRIM 唯一键列首尾空格，
+-- 否则已有的 "QA" 和 "QA " 会从"相等"变"不等"，破坏唯一约束语义，且可能导致孤儿行。
+-- TRIM 前先做尾空格预检，存在带首尾空格的唯一键值时拒绝执行，要求人工处理。
+--
 -- categories/skills/skill_versions/mcp_servers 主键 id 使用 Crockford base32 ULID（字母表 0-9A-Z 不含 ILOU），
--- 在 utf8mb4_general_ci 与 utf8mb4_0900_ai_ci 下无新等价对，不会产生 CONVERT TO 时的 1062 重复键错误，
--- 故不纳入预检。parse_tasks/resource_metric_flushes 同样为 UUID/ULID 主键，安全起见仍保留预检。
+-- 在 general_ci 与 0900_ai_ci 下无新等价对，不做重复键预检；parse_tasks/resource_metric_flushes 同为
+-- UUID/ULID 主键，安全起见仍保留重复键预检。
 -- 所有 SIGNAL 消息控制在 MySQL 128 字符 MESSAGE_TEXT 上限内。
+-- rubenv/sql-migrate 以分号分割语句，MySQL 不允许顶层 IF，故用存储过程包裹预检逻辑。
+-- 内层 SELECT 一律返回常量 1，避免 ONLY_FULL_GROUP_BY 错误（MySQL 8.0 默认 sql_mode）。
+-- mcp_servers 空间唯一键预检排除 space_id IS NULL 的行：MySQL UNIQUE 索引对含 NULL 的元组允许多行。
 
 -- +migrate StatementBegin
 DROP PROCEDURE IF EXISTS collation_preflight;
@@ -24,6 +26,10 @@ DROP PROCEDURE IF EXISTS collation_preflight;
 CREATE PROCEDURE collation_preflight()
 BEGIN
   DECLARE v_dup BIGINT;
+
+  -- === 重复键预检：utf8mb4_0900_ai_ci 将全角/半角、ß/ss、æ/ae 等视为相等，
+  -- 若业务数据中已存在这类等值对，CONVERT TO 会触发 ERROR 1062 Duplicate entry。
+  -- 预检通过前不执行任何 DDL。===
 
   -- skill_tags: PRIMARY KEY (space_id, name)
   SELECT COUNT(*) INTO v_dup FROM (
@@ -78,7 +84,6 @@ BEGIN
   END IF;
 
   -- mcp_servers: UNIQUE KEY uq_owner_space_name_live (owner_uid, space_id, name_live)
-  -- space_id 为 NULL 时 MySQL UNIQUE 允许多行，排除
   SELECT COUNT(*) INTO v_dup FROM (
     SELECT 1
     FROM mcp_servers
@@ -92,7 +97,6 @@ BEGIN
   END IF;
 
   -- mcp_servers: UNIQUE KEY uq_space_slug_live (space_id, slug_live)
-  -- space_id 为 NULL 时 MySQL UNIQUE 允许多行，排除
   SELECT COUNT(*) INTO v_dup FROM (
     SELECT 1
     FROM mcp_servers
@@ -117,7 +121,7 @@ BEGIN
       SET MESSAGE_TEXT = 'resource_metrics has duplicate primary keys under 0900_ai_ci; de-duplicate before running';
   END IF;
 
-  -- resource_metric_flushes: PRIMARY KEY (flush_id) — UUID/ULID 风格，理论无冲突，安全起见预检
+  -- resource_metric_flushes: PRIMARY KEY (flush_id) — UUID/ULID，安全起见保留预检
   SELECT COUNT(*) INTO v_dup FROM (
     SELECT 1
     FROM resource_metric_flushes
@@ -129,13 +133,66 @@ BEGIN
       SET MESSAGE_TEXT = 'resource_metric_flushes has duplicate PK under 0900_ai_ci; de-duplicate before running this migration';
   END IF;
 
-  -- parse_tasks: PRIMARY KEY (id) — UUID，理论无冲突，安全起见预检
+  -- parse_tasks: PRIMARY KEY (id) — UUID，安全起见保留预检
   SELECT COUNT(*) INTO v_dup FROM (
     SELECT 1 FROM parse_tasks GROUP BY id COLLATE utf8mb4_0900_ai_ci HAVING COUNT(*) > 1
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'parse_tasks has duplicate primary keys under 0900_ai_ci; de-duplicate before running this migration';
+  END IF;
+
+  -- === 尾空格预检：PAD SPACE → NO PAD 后首尾空格变为有意义，
+  -- TRIM 后可能产生唯一键冲突，必须人工处理。
+  -- 覆盖所有参与 UNIQUE 索引的字符串列（含生成列 name_live/slug_live 的基列 name/slug）。===
+
+  -- categories.name（name_live 生成列依赖此列）
+  SELECT COUNT(*) INTO v_dup FROM categories WHERE name <> TRIM(name);
+  IF v_dup > 0 THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'categories.name has leading/trailing whitespace; trim manually before running this migration';
+  END IF;
+
+  -- skills.name（name_live 生成列依赖此列）
+  SELECT COUNT(*) INTO v_dup FROM skills WHERE name <> TRIM(name);
+  IF v_dup > 0 THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'skills.name has leading/trailing whitespace; trim manually before running this migration';
+  END IF;
+
+  -- skill_tags.name（PRIMARY KEY 成员）
+  SELECT COUNT(*) INTO v_dup FROM skill_tags WHERE name <> TRIM(name);
+  IF v_dup > 0 THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'skill_tags.name has leading/trailing whitespace; trim manually before running this migration';
+  END IF;
+
+  -- skill_tags.space_id（PRIMARY KEY 成员）
+  SELECT COUNT(*) INTO v_dup FROM skill_tags WHERE space_id <> TRIM(space_id);
+  IF v_dup > 0 THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'skill_tags.space_id has leading/trailing whitespace; trim manually before running migration';
+  END IF;
+
+  -- skill_versions.version（UNIQUE KEY 成员）
+  SELECT COUNT(*) INTO v_dup FROM skill_versions WHERE version <> TRIM(version);
+  IF v_dup > 0 THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'skill_versions.version has leading/trailing whitespace; trim manually before running migration';
+  END IF;
+
+  -- mcp_servers.name（name_live 生成列依赖此列）
+  SELECT COUNT(*) INTO v_dup FROM mcp_servers WHERE name <> TRIM(name);
+  IF v_dup > 0 THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'mcp_servers.name has leading/trailing whitespace; trim manually before running this migration';
+  END IF;
+
+  -- mcp_servers.slug（slug_live 生成列依赖此列）
+  SELECT COUNT(*) INTO v_dup FROM mcp_servers WHERE slug <> TRIM(slug);
+  IF v_dup > 0 THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'mcp_servers.slug has leading/trailing whitespace; trim manually before running this migration';
   END IF;
 END;
 -- +migrate StatementEnd
@@ -144,7 +201,21 @@ CALL collation_preflight();
 DROP PROCEDURE IF EXISTS collation_preflight;
 
 -- =======================
--- DDL：所有预检通过后才执行，8 张业务表统一转换
+-- TRIM 唯一键列首尾空格，防止 PAD SPACE → NO PAD 语义变化
+-- name_live/slug_live 是 STORED 生成列，TRIM 基列后自动重算
+-- =======================
+UPDATE categories     SET name    = TRIM(name)    WHERE name    <> TRIM(name);
+UPDATE skills         SET name    = TRIM(name)    WHERE name    <> TRIM(name);
+UPDATE skill_tags     SET name    = TRIM(name),
+                          space_id = TRIM(space_id)
+                        WHERE name <> TRIM(name) OR space_id <> TRIM(space_id);
+UPDATE skill_versions SET version = TRIM(version) WHERE version <> TRIM(version);
+UPDATE mcp_servers    SET name    = TRIM(name),
+                          slug    = TRIM(slug)
+                        WHERE name <> TRIM(name) OR slug <> TRIM(slug);
+
+-- =======================
+-- DDL：所有预检通过、TRIM 完成后才执行，8 张业务表统一转换
 -- =======================
 ALTER TABLE categories              CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 ALTER TABLE skills                  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;

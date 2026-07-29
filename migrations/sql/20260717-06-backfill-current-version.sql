@@ -9,11 +9,11 @@ UPDATE skills s
     WHERE created_at = (
       SELECT MAX(created_at)
       FROM skill_versions sv2
-      WHERE sv2.skill_id COLLATE utf8mb4_unicode_ci =
-            sv1.skill_id COLLATE utf8mb4_unicode_ci
+      WHERE sv2.skill_id COLLATE utf8mb4_0900_ai_ci =
+            sv1.skill_id COLLATE utf8mb4_0900_ai_ci
     )
-  ) latest ON latest.skill_id COLLATE utf8mb4_unicode_ci =
-              s.id COLLATE utf8mb4_unicode_ci
+  ) latest ON latest.skill_id COLLATE utf8mb4_0900_ai_ci =
+              s.id COLLATE utf8mb4_0900_ai_ci
 SET s.current_version_id = latest.version_id
 WHERE s.current_version_id = '';
 
@@ -41,8 +41,8 @@ BEGIN
       AND NOT EXISTS (
         SELECT 1
         FROM skill_versions sv
-        WHERE sv.skill_id COLLATE utf8mb4_unicode_ci =
-              s.id COLLATE utf8mb4_unicode_ci
+        WHERE sv.skill_id COLLATE utf8mb4_0900_ai_ci =
+              s.id COLLATE utf8mb4_0900_ai_ci
       );
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 
@@ -60,8 +60,8 @@ BEGIN
 
     UPDATE skills
     SET current_version_id = v_version_id
-    WHERE id COLLATE utf8mb4_unicode_ci =
-          v_skill_id COLLATE utf8mb4_unicode_ci;
+    WHERE id COLLATE utf8mb4_0900_ai_ci =
+          v_skill_id COLLATE utf8mb4_0900_ai_ci;
   END LOOP;
   CLOSE cur;
 END;
