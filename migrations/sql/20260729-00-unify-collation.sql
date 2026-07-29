@@ -144,52 +144,53 @@ BEGIN
 
   -- === 尾空格预检：PAD SPACE → NO PAD 后首尾空格变为有意义，
   -- TRIM 后可能产生唯一键冲突，必须人工处理。
+  -- 用 CHAR_LENGTH 差判断首尾空格，规避 PAD SPACE collation 下字符串比较忽略尾空格的问题。
   -- 覆盖所有参与 UNIQUE 索引的字符串列（含生成列 name_live/slug_live 的基列 name/slug）。===
 
   -- categories.name（name_live 生成列依赖此列）
-  SELECT COUNT(*) INTO v_dup FROM categories WHERE name <> TRIM(name);
+  SELECT COUNT(*) INTO v_dup FROM categories WHERE CHAR_LENGTH(name) <> CHAR_LENGTH(TRIM(name));
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'categories.name has leading/trailing whitespace; trim manually before running this migration';
   END IF;
 
   -- skills.name（name_live 生成列依赖此列）
-  SELECT COUNT(*) INTO v_dup FROM skills WHERE name <> TRIM(name);
+  SELECT COUNT(*) INTO v_dup FROM skills WHERE CHAR_LENGTH(name) <> CHAR_LENGTH(TRIM(name));
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'skills.name has leading/trailing whitespace; trim manually before running this migration';
   END IF;
 
   -- skill_tags.name（PRIMARY KEY 成员）
-  SELECT COUNT(*) INTO v_dup FROM skill_tags WHERE name <> TRIM(name);
+  SELECT COUNT(*) INTO v_dup FROM skill_tags WHERE CHAR_LENGTH(name) <> CHAR_LENGTH(TRIM(name));
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'skill_tags.name has leading/trailing whitespace; trim manually before running this migration';
   END IF;
 
   -- skill_tags.space_id（PRIMARY KEY 成员）
-  SELECT COUNT(*) INTO v_dup FROM skill_tags WHERE space_id <> TRIM(space_id);
+  SELECT COUNT(*) INTO v_dup FROM skill_tags WHERE CHAR_LENGTH(space_id) <> CHAR_LENGTH(TRIM(space_id));
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'skill_tags.space_id has leading/trailing whitespace; trim manually before running migration';
   END IF;
 
   -- skill_versions.version（UNIQUE KEY 成员）
-  SELECT COUNT(*) INTO v_dup FROM skill_versions WHERE version <> TRIM(version);
+  SELECT COUNT(*) INTO v_dup FROM skill_versions WHERE CHAR_LENGTH(version) <> CHAR_LENGTH(TRIM(version));
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'skill_versions.version has leading/trailing whitespace; trim manually before running migration';
   END IF;
 
   -- mcp_servers.name（name_live 生成列依赖此列）
-  SELECT COUNT(*) INTO v_dup FROM mcp_servers WHERE name <> TRIM(name);
+  SELECT COUNT(*) INTO v_dup FROM mcp_servers WHERE CHAR_LENGTH(name) <> CHAR_LENGTH(TRIM(name));
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'mcp_servers.name has leading/trailing whitespace; trim manually before running this migration';
   END IF;
 
   -- mcp_servers.slug（slug_live 生成列依赖此列）
-  SELECT COUNT(*) INTO v_dup FROM mcp_servers WHERE slug <> TRIM(slug);
+  SELECT COUNT(*) INTO v_dup FROM mcp_servers WHERE CHAR_LENGTH(slug) <> CHAR_LENGTH(TRIM(slug));
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'mcp_servers.slug has leading/trailing whitespace; trim manually before running this migration';
@@ -202,17 +203,20 @@ DROP PROCEDURE IF EXISTS collation_preflight;
 
 -- =======================
 -- TRIM 唯一键列首尾空格，防止 PAD SPACE → NO PAD 语义变化
+-- 用 CHAR_LENGTH 差定位需 TRIM 的行，规避 PAD SPACE collation 下 = 比较忽略尾空格的问题
 -- name_live/slug_live 是 STORED 生成列，TRIM 基列后自动重算
 -- =======================
-UPDATE categories     SET name    = TRIM(name)    WHERE name    <> TRIM(name);
-UPDATE skills         SET name    = TRIM(name)    WHERE name    <> TRIM(name);
+UPDATE categories     SET name    = TRIM(name)    WHERE CHAR_LENGTH(name)    <> CHAR_LENGTH(TRIM(name));
+UPDATE skills         SET name    = TRIM(name)    WHERE CHAR_LENGTH(name)    <> CHAR_LENGTH(TRIM(name));
 UPDATE skill_tags     SET name    = TRIM(name),
                           space_id = TRIM(space_id)
-                        WHERE name <> TRIM(name) OR space_id <> TRIM(space_id);
-UPDATE skill_versions SET version = TRIM(version) WHERE version <> TRIM(version);
+                        WHERE CHAR_LENGTH(name) <> CHAR_LENGTH(TRIM(name))
+                           OR CHAR_LENGTH(space_id) <> CHAR_LENGTH(TRIM(space_id));
+UPDATE skill_versions SET version = TRIM(version) WHERE CHAR_LENGTH(version) <> CHAR_LENGTH(TRIM(version));
 UPDATE mcp_servers    SET name    = TRIM(name),
                           slug    = TRIM(slug)
-                        WHERE name <> TRIM(name) OR slug <> TRIM(slug);
+                        WHERE CHAR_LENGTH(name) <> CHAR_LENGTH(TRIM(name))
+                           OR CHAR_LENGTH(slug) <> CHAR_LENGTH(TRIM(slug));
 
 -- =======================
 -- DDL：所有预检通过、TRIM 完成后才执行，8 张业务表统一转换
