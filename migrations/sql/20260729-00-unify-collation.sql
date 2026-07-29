@@ -10,6 +10,8 @@
 -- 导致半转换状态。预检在存储过程内完成，通过前不执行任何 DDL。
 -- rubenv/sql-migrate 以分号分割语句，MySQL 不允许顶层 IF，故用存储过程包裹。
 -- 内层 SELECT 一律返回常量 1，避免 ONLY_FULL_GROUP_BY 错误（MySQL 8.0 默认 sql_mode）。
+-- mcp_servers 预检排除 space_id IS NULL 的行：MySQL UNIQUE 索引对含 NULL 的元组允许多行。
+-- 所有 SIGNAL 消息控制在 MySQL 128 字符 MESSAGE_TEXT 上限内。
 
 -- +migrate StatementBegin
 DROP PROCEDURE IF EXISTS collation_preflight;
@@ -29,7 +31,7 @@ BEGIN
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'skill_tags has duplicate (space_id,name) pairs under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'skill_tags has duplicate keys under 0900_ai_ci; de-duplicate before running this migration';
   END IF;
 
   -- categories: UNIQUE KEY uk_categories_name_live (name_live)
@@ -43,7 +45,7 @@ BEGIN
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'categories has duplicate live names under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'categories has duplicate live names under 0900_ai_ci; de-duplicate before running this migration';
   END IF;
 
   -- skills: UNIQUE KEY uq_skill_owner_space_name_live (owner_id, space_id, name_live)
@@ -57,7 +59,7 @@ BEGIN
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'skills has duplicate live (owner_id,space_id,name) tuples under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'skills has duplicate live owner/space/name keys under 0900_ai_ci; de-duplicate first';
   END IF;
 
   -- skill_versions: UNIQUE KEY uk_skill_version (skill_id, version)
@@ -69,33 +71,35 @@ BEGIN
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'skill_versions has duplicate (skill_id,version) pairs under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'skill_versions has duplicate (skill_id,version) under 0900_ai_ci; de-duplicate before running';
   END IF;
 
   -- mcp_servers: UNIQUE KEY uq_owner_space_name_live (owner_uid, space_id, name_live)
+  -- space_id 为 NULL 时 MySQL UNIQUE 允许多行，排除
   SELECT COUNT(*) INTO v_dup FROM (
     SELECT 1
     FROM mcp_servers
-    WHERE name_live IS NOT NULL
+    WHERE name_live IS NOT NULL AND space_id IS NOT NULL
     GROUP BY owner_uid COLLATE utf8mb4_0900_ai_ci, space_id COLLATE utf8mb4_0900_ai_ci, name_live COLLATE utf8mb4_0900_ai_ci
     HAVING COUNT(*) > 1
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'mcp_servers has duplicate live (owner_uid,space_id,name) tuples under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'mcp_servers has duplicate owner/space/name keys under 0900_ai_ci; de-duplicate first';
   END IF;
 
   -- mcp_servers: UNIQUE KEY uq_space_slug_live (space_id, slug_live)
+  -- space_id 为 NULL 时 MySQL UNIQUE 允许多行，排除
   SELECT COUNT(*) INTO v_dup FROM (
     SELECT 1
     FROM mcp_servers
-    WHERE slug_live IS NOT NULL
+    WHERE slug_live IS NOT NULL AND space_id IS NOT NULL
     GROUP BY space_id COLLATE utf8mb4_0900_ai_ci, slug_live COLLATE utf8mb4_0900_ai_ci
     HAVING COUNT(*) > 1
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'mcp_servers has duplicate live (space_id,slug) tuples under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'mcp_servers has duplicate (space_id,slug) under 0900_ai_ci; de-duplicate before running';
   END IF;
 
   -- resource_metrics: PRIMARY KEY (resource_type, resource_id)
@@ -107,7 +111,7 @@ BEGIN
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'resource_metrics has duplicate primary keys under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'resource_metrics has duplicate primary keys under 0900_ai_ci; de-duplicate before running';
   END IF;
 
   -- resource_metric_flushes: PRIMARY KEY (flush_id) — UUID/ULID 风格，理论无冲突，安全起见预检
@@ -119,7 +123,7 @@ BEGIN
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'resource_metric_flushes has duplicate primary keys under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'resource_metric_flushes has duplicate PK under 0900_ai_ci; de-duplicate before running this migration';
   END IF;
 
   -- parse_tasks: PRIMARY KEY (id) — UUID，理论无冲突，安全起见预检
@@ -128,7 +132,7 @@ BEGIN
   ) t;
   IF v_dup > 0 THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'parse_tasks has duplicate primary keys under utf8mb4_0900_ai_ci; de-duplicate before running this migration';
+      SET MESSAGE_TEXT = 'parse_tasks has duplicate primary keys under 0900_ai_ci; de-duplicate before running this migration';
   END IF;
 END;
 -- +migrate StatementEnd
