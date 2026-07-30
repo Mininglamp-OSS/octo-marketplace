@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -434,97 +435,200 @@ func TestUnifyCollationMigrationUpgradesExistingTables(t *testing.T) {
 	}
 }
 
-// guardedTables 列出所有在 20260730-00 中需要 preflight guard 的含文本唯一键表。
-// 新增含用户输入文本唯一键的 ALTER 目标表时必须同步加入此切片，否则下面的测试会漏检。
-var guardedTables = []struct {
-	name       string
-	// 各表的冲突种子由对应 case 单独处理（列不同无法统一）
-}{
-	{name: "categories"},
-	{name: "skills"},
-	{name: "skill_tags"},
-	{name: "skill_versions"},
-	{name: "mcp_servers"},
+// ucaCollisionSeed 描述某张含文本唯一键的表如何种下一对 UCA 冲突行
+// golang vs gol<U+00AD>ang —— unicode_ci 下区分，0900_ai_ci 下冲突
+type ucaCollisionSeed struct {
+	table  string
+	seed   func(db *sql.DB, softHyphen string) // 在 legacy collation 状态下种入一对冲突行
+	clean  func(db *sql.DB)                    // 清理种子行，避免污染其他 case
 }
 
-// TestUnifyCollationMigrationPreflightCatchesUCACollision verifies that
-// 20260730-00 preflight aborts when a UCA-weight collision (e.g. U+00AD SOFT HYPHEN,
-// weight-ignorable in 0900_ai_ci but not in unicode_ci) exists in a uniquely-keyed
-// text column, leaving all tables at their source collation (no half-conversion).
-// Covers skill_tags and mcp_servers.
+// guardedTables 列出所有在 20260730-00 中需要 preflight guard 的含用户输入文本唯一键表。
+// 新增含文本唯一键的 ALTER 目标表时必须同步加入此表，TestUnifyCollationPreflightGuardsCompleteness 会校验。
+var guardedTables = []ucaCollisionSeed{
+	{
+		table: "categories",
+		seed: func(db *sql.DB, softHyphen string) {
+			// categories.name_live 生成列依赖 deleted_at，初始为 NULL 即 live
+			if _, err := db.Exec(
+				`INSERT INTO categories (id, name, icon_key) VALUES ('uca-cat-1','golang',''), ('uca-cat-2',?,'')`,
+				softHyphen,
+			); err != nil {
+				panic(fmt.Sprintf("seed categories UCA collision: %v", err))
+			}
+		},
+		clean: func(db *sql.DB) {
+			_, _ = db.Exec(`DELETE FROM categories WHERE id IN ('uca-cat-1','uca-cat-2')`)
+		},
+	},
+	{
+		table: "skills",
+		seed: func(db *sql.DB, softHyphen string) {
+			const ins = `INSERT INTO skills
+				(id, name, description, category_id, tags, owner_id, owner_name, space_id,
+				 visibility, readme_content, file_name, file_url)
+			VALUES (?, ?, '', '', JSON_ARRAY(), 'uca-owner', '', 'uca-space', 'private', '', '', '')`
+			if _, err := db.Exec(ins, "uca-skill-1", "golang"); err != nil {
+				panic(fmt.Sprintf("seed skills row 1: %v", err))
+			}
+			if _, err := db.Exec(ins, "uca-skill-2", softHyphen); err != nil {
+				panic(fmt.Sprintf("seed skills UCA collision: %v", err))
+			}
+		},
+		clean: func(db *sql.DB) {
+			_, _ = db.Exec(`DELETE FROM skills WHERE id IN ('uca-skill-1','uca-skill-2')`)
+		},
+	},
+	{
+		table: "skill_tags",
+		seed: func(db *sql.DB, softHyphen string) {
+			if _, err := db.Exec(
+				`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('uca-guard','golang','u'), ('uca-guard',?,'u')`,
+				softHyphen,
+			); err != nil {
+				panic(fmt.Sprintf("seed skill_tags UCA collision: %v", err))
+			}
+		},
+		clean: func(db *sql.DB) {
+			_, _ = db.Exec(`DELETE FROM skill_tags WHERE space_id = 'uca-guard'`)
+		},
+	},
+	{
+		table: "skill_versions",
+		seed: func(db *sql.DB, softHyphen string) {
+			// softHyphen = 'gol<U+00AD>ang'，单独作为版本号时与 'golang' 等价产生唯一键冲突
+			if _, err := db.Exec(
+				`INSERT INTO skill_versions (id, skill_id, version) VALUES ('uca-sv-1','sv-sk','golang'), ('uca-sv-2','sv-sk',?)`,
+				softHyphen,
+			); err != nil {
+				panic(fmt.Sprintf("seed skill_versions UCA collision: %v", err))
+			}
+		},
+		clean: func(db *sql.DB) {
+			_, _ = db.Exec(`DELETE FROM skill_versions WHERE id IN ('uca-sv-1','uca-sv-2')`)
+		},
+	},
+	{
+		table: "mcp_servers",
+		seed: func(db *sql.DB, softHyphen string) {
+			const ins = `INSERT INTO mcp_servers
+				(id, name, owner_uid, space_id, transport, config_json, tags_json, tools_json,
+				 usage_examples_json, faqs_json, notes_json, icon, slogan, category,
+				 visibility, creator_name, created_at, updated_at, deleted_at)
+			VALUES (?, ?, 'uca-owner', 'uca-space', 'stdio', '{}', JSON_ARRAY(), JSON_ARRAY(),
+				JSON_ARRAY(), JSON_ARRAY(), JSON_ARRAY(), '', '', 'cat',
+				'public', '', NOW(), NOW(), NULL)`
+			if _, err := db.Exec(ins, "uca-mcp-1", "golang"); err != nil {
+				panic(fmt.Sprintf("seed mcp_servers row 1: %v", err))
+			}
+			if _, err := db.Exec(ins, "uca-mcp-2", softHyphen); err != nil {
+				panic(fmt.Sprintf("seed mcp_servers UCA collision: %v", err))
+			}
+		},
+		clean: func(db *sql.DB) {
+			_, _ = db.Exec(`DELETE FROM mcp_servers WHERE id IN ('uca-mcp-1','uca-mcp-2')`)
+		},
+	},
+}
+
+// TestUnifyCollationMigrationPreflightCatchesUCACollision 表驱动验证：
+// 每张 guarded table 单独种下 UCA 冲突，确保 preflight abort 且无半转换。
+// 每个 case 独立隔离 DB，删除任意一张表的 guard 会让对应 case 失败。
 func TestUnifyCollationMigrationPreflightCatchesUCACollision(t *testing.T) {
-	database := isolatedTestDB(t)
+	softHyphen := "gol­ang" // gol + U+00AD + ang
+	for _, tc := range guardedTables {
+		tc := tc
+		t.Run(tc.table, func(t *testing.T) {
+			database := isolatedTestDB(t)
 
-	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
-	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
-	t.Cleanup(func() { _, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down) })
+			fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+			_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
+			t.Cleanup(func() { _, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down) })
 
-	migrations, err := fullSource.FindMigrations()
+			migrations, err := fullSource.FindMigrations()
+			if err != nil {
+				t.Fatal(err)
+			}
+			const unifyID = "20260730-00-unify-collation.sql"
+			previous := make([]*migrate.Migration, 0, len(migrations)-1)
+			for _, m := range migrations {
+				if m.Id != unifyID {
+					previous = append(previous, m)
+				}
+			}
+			// 跑到 20260730-00 之前，再强制所有业务表回退到 legacy unicode_ci 模拟存量库
+			if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
+				t.Fatalf("apply migrations before unify: %v", err)
+			}
+			for _, table := range unifiedCollationTables {
+				if table == "gorp_migrations" {
+					continue
+				}
+				if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE %s", table, normalizeCollation)); err != nil {
+					t.Fatalf("set legacy collation on %s: %v", table, err)
+				}
+			}
+
+			tc.seed(database, softHyphen)
+			t.Cleanup(func() { tc.clean(database) })
+
+			if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
+				t.Fatalf("unify-collation migration unexpectedly accepted UCA collision in %s", tc.table)
+			}
+
+			// preflight 必须在任何持久 ALTER 之前 abort，所有业务表仍在 legacy collation
+			for _, table := range unifiedCollationTables {
+				var collation string
+				if err := database.QueryRow(
+					"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+					table,
+				).Scan(&collation); err != nil {
+					t.Fatalf("query collation for %s: %v", table, err)
+				}
+				if collation != normalizeCollation && table != "gorp_migrations" {
+					t.Errorf("table %s partially converted to %s, want %s", table, collation, normalizeCollation)
+				}
+			}
+		})
+	}
+}
+
+// TestUnifyCollationPreflightGuardsCompleteness 静态校验：
+// 20260730-00-unify-collation.sql 中 CREATE TEMPORARY TABLE collation_guard_<table>
+// 的数量必须与 guardedTables 长度一致，防止新增文本唯一键表时忘记加 guard。
+func TestUnifyCollationPreflightGuardsCompleteness(t *testing.T) {
+	content, err := migrationsql.FS.ReadFile("20260730-00-unify-collation.sql")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read unify-collation migration: %v", err)
 	}
-	const unifyID = "20260730-00-unify-collation.sql"
-	previous := make([]*migrate.Migration, 0, len(migrations)-1)
-	for _, migration := range migrations {
-		if migration.Id != unifyID {
-			previous = append(previous, migration)
-		}
+	sqlText := string(content)
+
+	guardedSet := make(map[string]struct{}, len(guardedTables))
+	for _, g := range guardedTables {
+		guardedSet[g.table] = struct{}{}
 	}
-	// Provision all migrations up to (but not including) 20260730-00,
-	// then force business tables back to utf8mb4_unicode_ci to simulate legacy state.
-	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
-		t.Fatalf("apply migrations before unify: %v", err)
-	}
-	for _, table := range unifiedCollationTables {
-		if table == "gorp_migrations" {
+
+	// 解析所有 CREATE TEMPORARY TABLE collation_guard_<table>
+	for _, line := range strings.Split(sqlText, "\n") {
+		const prefix = "CREATE TEMPORARY TABLE collation_guard_"
+		idx := strings.Index(line, prefix)
+		if idx < 0 {
 			continue
 		}
-		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE %s", table, normalizeCollation)); err != nil {
-			t.Fatalf("set legacy collation on %s: %v", table, err)
+		rest := strings.TrimSpace(line[idx+len(prefix):])
+		// 取空格或括号前的表名部分
+		nameEnd := strings.IndexAny(rest, " (")
+		if nameEnd < 0 {
+			nameEnd = len(rest)
 		}
-	}
-	// 'golang' vs 'gol<U+00AD>ang' — distinct under unicode_ci, collision under 0900_ai_ci.
-	softHyphen := "gol­ang"
-	if _, err := database.Exec(
-		`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('uca-guard', 'golang', 'u'), ('uca-guard', ?, 'u')`,
-		softHyphen,
-	); err != nil {
-		t.Fatalf("seed UCA collision in skill_tags: %v", err)
-	}
-	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM skill_tags WHERE space_id = 'uca-guard'`) })
-
-	// mcp_servers.name 也是用户自由输入，同样存在 UCA 权重冲突风险；用 name_live 生成列对应的 live 行
-	const mcpInsert = `INSERT INTO mcp_servers
-		(id, name, owner_uid, space_id, transport, config_json, tags_json, tools_json,
-		 usage_examples_json, faqs_json, notes_json, icon, slogan, category,
-		 visibility, creator_name, created_at, updated_at, deleted_at)
-	VALUES (?, ?, 'uca-owner', 'uca-space', 'stdio', '{}', JSON_ARRAY(), JSON_ARRAY(),
-		JSON_ARRAY(), JSON_ARRAY(), JSON_ARRAY(), '', '', 'cat',
-		'public', '', NOW(), NOW(), NULL)`
-	if _, err := database.Exec(mcpInsert, "mcp-golang", "golang"); err != nil {
-		t.Fatalf("seed mcp_servers row 1: %v", err)
-	}
-	if _, err := database.Exec(mcpInsert, "mcp-shy", softHyphen); err != nil {
-		t.Fatalf("seed UCA collision in mcp_servers: %v", err)
-	}
-	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM mcp_servers WHERE id IN ('mcp-golang','mcp-shy')`) })
-
-	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
-		t.Fatal("unify-collation migration unexpectedly accepted UCA-weight collision")
-	}
-
-	// No table may have been converted — preflight must abort before any persistent ALTER.
-	for _, table := range unifiedCollationTables {
-		var collation string
-		if err := database.QueryRow(
-			"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-			table,
-		).Scan(&collation); err != nil {
-			t.Fatalf("query collation for %s: %v", table, err)
+		tableName := rest[:nameEnd]
+		if _, ok := guardedSet[tableName]; !ok {
+			t.Errorf("collation_guard_%s 存在于 SQL 但未加入 guardedTables", tableName)
 		}
-		if collation != normalizeCollation && table != "gorp_migrations" {
-			t.Errorf("table %s partially converted to %s, want %s", table, collation, normalizeCollation)
-		}
+		delete(guardedSet, tableName)
+	}
+	for table := range guardedSet {
+		t.Errorf("guardedTables 包含 %q 但 SQL 中缺少 collation_guard_%s 临时表", table, table)
 	}
 }
 
