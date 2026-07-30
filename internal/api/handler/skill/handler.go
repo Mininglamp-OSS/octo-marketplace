@@ -3,6 +3,7 @@ package skill
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -116,6 +117,7 @@ func (h *Handler) List(c *gin.Context) {
 		UseCursor:  useCursor,
 	})
 	if err != nil {
+		log.Printf("[skill] list failed: %v", err)
 		apiresponse.Internal(c, err, "skill.list")
 		return
 	}
@@ -171,6 +173,7 @@ func (h *Handler) ListMine(c *gin.Context) {
 		Limit:   limit,
 	})
 	if err != nil {
+		log.Printf("[skill] list mine failed: %v", err)
 		apiresponse.Internal(c, err, "skill.mine.list")
 		return
 	}
@@ -209,6 +212,7 @@ func (h *Handler) Get(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
+		log.Printf("[skill] get failed: %v", err)
 		apiresponse.Internal(c, err, "skill.get")
 		return
 	}
@@ -319,6 +323,7 @@ func (h *Handler) Create(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public skills can only be changed by administrators", nil, "")
 			return
 		}
+		log.Printf("[skill] create failed: %v", err)
 		apiresponse.Internal(c, err, "skill.create")
 		return
 	}
@@ -426,6 +431,7 @@ func (h *Handler) Update(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public skills can only be changed by administrators", nil, "")
 			return
 		}
+		log.Printf("[skill] update failed: %v", err)
 		apiresponse.Internal(c, err, "skill.update")
 		return
 	}
@@ -457,6 +463,7 @@ func (h *Handler) ListTags(c *gin.Context) {
 	spaceID := middleware.SpaceID(c)
 	items, err := h.svc.ListTags(c.Request.Context(), spaceID, c.Query("q"), parseTagLimit(c.Query("limit")))
 	if err != nil {
+		log.Printf("[skill] list tags failed: %v", err)
 		apiresponse.Internal(c, err, "skill.tag.list")
 		return
 	}
@@ -497,6 +504,7 @@ func (h *Handler) Delete(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public skills can only be changed by administrators", nil, "")
 			return
 		}
+		log.Printf("[skill] delete failed: %v", err)
 		apiresponse.Internal(c, err, "skill.delete")
 		return
 	}
@@ -534,6 +542,7 @@ func (h *Handler) ListVersions(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 			return
 		}
+		log.Printf("[skill] list versions failed: %v", err)
 		apiresponse.Internal(c, err, "skill.version.list")
 		return
 	}
@@ -580,6 +589,7 @@ func (h *Handler) GetSkillMD(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "skill-md not available for this version", nil, "")
 			return
 		}
+		log.Printf("[skill] get skill_md failed: %v", err)
 		apiresponse.Internal(c, err, "skill.skillmd.get")
 		return
 	}
