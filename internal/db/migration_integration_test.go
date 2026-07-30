@@ -303,9 +303,8 @@ func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 	}
 }
 
-// TestMigrationsUpgradeLegacyDatabaseCollation verifies that a legacy database
-// provisioned up to 20260719-09 (with a 0900_ai_ci legacy state) upgrades
-// cleanly through all later migrations including 20260730-00.
+// TestMigrationsUpgradeLegacyDatabaseCollation 模拟存量部署（categories/skills 为 utf8mb4_unicode_ci）
+// 跑过 20260719-09 临时表 JOIN 不触发 1267，并最终升级到 20260730-00 统一 collation。
 func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
 	database := isolatedTestDB(t)
 
@@ -325,13 +324,26 @@ func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
 	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: legacy}, migrate.Up); err != nil {
 		t.Fatalf("provision legacy database: %v", err)
 	}
+	// 模拟存量部署：categories/skills 在 20260719-09 之前用 utf8mb4_unicode_ci（PAD SPACE）
 	for _, table := range []string{"categories", "skills"} {
-		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE %s", table, normalizeCollation)); err != nil {
 			t.Fatalf("set legacy collation on %s: %v", table, err)
 		}
 	}
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err != nil {
 		t.Fatalf("upgrade legacy database: %v", err)
+	}
+	for _, table := range unifiedCollationTables {
+		var collation string
+		if err := database.QueryRow(
+			"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&collation); err != nil {
+			t.Fatalf("query collation for %s: %v", table, err)
+		}
+		if collation != targetCollation {
+			t.Errorf("table %s collation=%s want=%s after full upgrade", table, collation, targetCollation)
+		}
 	}
 }
 

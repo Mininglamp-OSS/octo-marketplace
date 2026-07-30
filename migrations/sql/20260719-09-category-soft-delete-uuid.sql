@@ -8,7 +8,10 @@ ALTER TABLE categories ADD INDEX idx_categories_deleted (deleted_at);
 CREATE TEMPORARY TABLE category_id_map (
   old_id VARCHAR(36) PRIMARY KEY,
   new_id VARCHAR(36) NOT NULL
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- 临时表保留 legacy collation：存量部署跑到此处时 categories.id/skills.category_id 尚未被 20260730-00 统一，
+-- 若此处用 utf8mb4_0900_ai_ci，JOIN 两边隐式 collation 不一致会触发 ERROR 1267；
+-- fresh install 下 categories/skills 已是 0900，此处 JOIN 时 MySQL 会做 coercion 向上兼容，不会出错。
 
 INSERT INTO category_id_map (old_id, new_id) VALUES
   ('starter',               UUID()),
