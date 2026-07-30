@@ -303,8 +303,11 @@ func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 	}
 }
 
-// TestMigrationsUpgradeLegacyDatabaseCollation 模拟存量部署（categories/skills 为 utf8mb4_unicode_ci）
-// 跑过 20260719-09 临时表 JOIN 不触发 1267，并最终升级到 20260730-00 统一 collation。
+// TestMigrationsUpgradeLegacyDatabaseCollation 模拟存量部署升级路径：
+// 先 provision 到 20260719-09 之前（categories/skills 由旧 migration 建好），
+// 将两表 ALTER 为 utf8mb4_unicode_ci 模拟存量库状态，再从 20260719-09 开始跑剩余迁移；
+// 验证 20260719-09 的临时表 COLLATE=unicode_ci 不会在 legacy 状态下触发 1267，
+// 且最终所有表统一到 utf8mb4_0900_ai_ci。
 func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
 	database := isolatedTestDB(t)
 
@@ -314,24 +317,26 @@ func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const legacyCutoff = "20260719-09-category-soft-delete-uuid.sql"
-	legacy := make([]*migrate.Migration, 0, len(migrations))
+	// 只跑 20260719-09 之前的迁移（不含 20260719-09 本身），此时 categories/skills 已建好
+	const softDeleteUUID = "20260719-09-category-soft-delete-uuid.sql"
+	before := make([]*migrate.Migration, 0, len(migrations))
 	for _, migration := range migrations {
-		if migration.Id <= legacyCutoff {
-			legacy = append(legacy, migration)
+		if migration.Id < softDeleteUUID {
+			before = append(before, migration)
 		}
 	}
-	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: legacy}, migrate.Up); err != nil {
-		t.Fatalf("provision legacy database: %v", err)
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: before}, migrate.Up); err != nil {
+		t.Fatalf("provision pre-20260719-09 migrations: %v", err)
 	}
-	// 模拟存量部署：categories/skills 在 20260719-09 之前用 utf8mb4_unicode_ci（PAD SPACE）
+	// 模拟存量部署：categories/skills 在旧 migration 下使用 utf8mb4_unicode_ci（PAD SPACE）
 	for _, table := range []string{"categories", "skills"} {
 		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE %s", table, normalizeCollation)); err != nil {
 			t.Fatalf("set legacy collation on %s: %v", table, err)
 		}
 	}
+	// 从 20260719-09 开始继续跑剩余迁移；20260719-09 的临时表必须兼容 legacy collation
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err != nil {
-		t.Fatalf("upgrade legacy database: %v", err)
+		t.Fatalf("upgrade from 20260719-09 onward: %v", err)
 	}
 	for _, table := range unifiedCollationTables {
 		var collation string
