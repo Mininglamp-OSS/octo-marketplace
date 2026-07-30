@@ -166,33 +166,40 @@ func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
 		t.Fatal(err)
 	}
 	const target = "20260722-00-normalize-marketplace-collations.sql"
-	// allBut22：除 20260722-00 外全跑（含 20260730-00），模拟 pre-migration 状态
-	allBut22 := make([]*migrate.Migration, 0, len(migrations)-1)
+	// 仅跑 20260722-00 之前的所有 migration，模拟 pre-migration 状态。
+	// 不能用 m.Id != target，否则后续 20260730-00 会先执行，把表转成 0900_ai_ci（NO PAD），
+	// seed 的尾部空格差异数据在 NO PAD 下为合法独立记录，preflight 测试失效。
+	previous := make([]*migrate.Migration, 0, len(migrations))
 	for _, m := range migrations {
-		if m.Id != target {
-			allBut22 = append(allBut22, m)
+		if m.Id < target {
+			previous = append(previous, m)
 		}
 	}
-	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: allBut22}, migrate.Up); err != nil {
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
 		t.Fatalf("apply previous migrations: %v", err)
 	}
+	// 显式将业务表转为 utf8mb4_0900_ai_ci（NO PAD），使 'prod' 与 'prod '
+	// 在唯一索引中互为独立记录，种子数据可成功写入（模拟 PAD SPACE → NO PAD
+	// 升级后 20260722-00 preflight 仍需 TRIM 去重的场景）。
 	for _, table := range normalizedCollationTables {
 		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
 			t.Fatalf("set pre-migration collation on %s: %v", table, err)
 		}
 	}
-	// 20260722-00 的 preflight 用 TRIM(TRAILING ' ') 归一尾部空格；
-	// 'prod' 与 'prod ' 在 0900（NO PAD）下为两条独立记录，
-	// TRIM 后在 PAD SPACE 临时表中等价，应触发唯一键冲突。
+	// 20260722-00 的 preflight 用 TRIM(TRAILING ' ') 归一尾部空格后写入 PAD SPACE
+	// 临时表；虽然当前表已是 NO PAD（'prod' 与 'prod ' 共存），TRIM 后两者均为
+	// 'prod'，应在 PAD SPACE 临时表主键冲突，触发 ERROR 1062 阻止迁移。
 	if _, err := database.Exec(`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('space-guard', 'prod', 'u'), ('space-guard', 'prod ', 'u')`); err != nil {
 		t.Fatalf("seed collision: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = database.Exec(`DELETE FROM skill_tags WHERE space_id = 'space-guard'`)
 	})
+	// 跑剩余 migration（20260722 + 20260730）；20260722 的 preflight 应拦截冲突。
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
 		t.Fatal("collation migration unexpectedly accepted trailing-space collision")
 	}
+	// preflight 在临时表阶段失败，未落持久 DDL；表保持 NO PAD 状态（未被 unicode_ci 转换）。
 	for _, table := range normalizedCollationTables {
 		var collation string
 		if err := database.QueryRow("SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table).Scan(&collation); err != nil {
@@ -214,16 +221,14 @@ func TestCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// allBut22：除 20260722-00 外的所有 migrations 全跑，模拟 pre-migration 状态，
-	// 再 ALTER 回 0900 以便种下尾部空格差异数据。
 	const target = "20260722-00-normalize-marketplace-collations.sql"
-	allBut22 := make([]*migrate.Migration, 0, len(migrations)-1)
+	previous := make([]*migrate.Migration, 0, len(migrations))
 	for _, m := range migrations {
-		if m.Id != target {
-			allBut22 = append(allBut22, m)
+		if m.Id < target {
+			previous = append(previous, m)
 		}
 	}
-	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: allBut22}, migrate.Up); err != nil {
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
 		t.Fatalf("apply previous migrations: %v", err)
 	}
 	for _, table := range normalizedCollationTables {
@@ -231,9 +236,8 @@ func TestCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 			t.Fatalf("set pre-migration collation on %s: %v", table, err)
 		}
 	}
-	// 20260722-00 的 preflight 用 TRIM(TRAILING ' ') 归一尾部空格；
-	// '1.0.0' 与 '1.0.0 ' 在 0900（NO PAD）下是两条独立记录，
-	// TRIM 后在 PAD SPACE 临时表中应触发唯一键冲突。
+	// '1.0.0' 与 '1.0.0 ' 在 NO PAD 下可共存；20260722-00 preflight TRIM 后
+	// 在 PAD SPACE 临时表中应冲突。
 	if _, err := database.Exec(`INSERT INTO skill_versions (id, skill_id, version) VALUES ('version-1', 'skill-1', '1.0.0'), ('version-2', 'skill-1', '1.0.0 ')`); err != nil {
 		t.Fatalf("seed version collision: %v", err)
 	}
@@ -265,14 +269,13 @@ func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	const target = "20260722-00-normalize-marketplace-collations.sql"
-	// allBut22：除 20260722-00 外全跑（包含后续 20260730-00），模拟 pre-migration 状态
-	allBut22 := make([]*migrate.Migration, 0, len(migrations)-1)
+	previous := make([]*migrate.Migration, 0, len(migrations))
 	for _, m := range migrations {
-		if m.Id != target {
-			allBut22 = append(allBut22, m)
+		if m.Id < target {
+			previous = append(previous, m)
 		}
 	}
-	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: allBut22}, migrate.Up); err != nil {
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
 		t.Fatalf("apply previous migrations: %v", err)
 	}
 	for _, table := range normalizedCollationTables {
