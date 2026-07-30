@@ -13,6 +13,16 @@ import (
 	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
 )
 
+var normalizedCollationTables = []string{
+	"categories",
+	"skills",
+	"parse_tasks",
+	"skill_tags",
+	"skill_versions",
+	"resource_metrics",
+	"resource_metric_flushes",
+}
+
 var unifiedCollationTables = []string{
 	"categories",
 	"skills",
@@ -26,6 +36,7 @@ var unifiedCollationTables = []string{
 }
 
 const targetCollation = "utf8mb4_0900_ai_ci"
+const normalizeCollation = "utf8mb4_unicode_ci"
 
 // testDSN returns the MySQL DSN for integration tests.
 // Skips the test if TEST_MYSQL_DSN is not set.
@@ -70,8 +81,8 @@ func isolatedTestDB(t *testing.T) *sql.DB {
 	return database
 }
 
-// TestRunMigrationsUpDown executes all migrations Up, asserts the three
-// marketplace tables exist, then runs Down and asserts they are dropped.
+// TestRunMigrationsUpDown executes all migrations Up, asserts tables have the
+// target collation, then runs Down.
 func TestRunMigrationsUpDown(t *testing.T) {
 	database := isolatedTestDB(t)
 
@@ -79,8 +90,6 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		FileSystem: migrationsql.FS,
 		Root:       ".",
 	}
-	// Integration tests share the configured database and run in shuffled
-	// order in CI. Always normalize the starting state explicitly.
 	if _, err := migrate.Exec(database, "mysql", source, migrate.Down); err != nil {
 		t.Fatalf("reset migrations: %v", err)
 	}
@@ -94,7 +103,6 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		t.Fatalf("migrate Up applied %d migrations, want >= 2", n)
 	}
 
-	// Assert tables exist by querying INFORMATION_SCHEMA.
 	expectedTables := []string{"categories", "skills", "parse_tasks"}
 	for _, table := range expectedTables {
 		var count int
@@ -133,7 +141,6 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		t.Fatalf("migrate Down applied %d migrations, want >= 2", n)
 	}
 
-	// Assert tables are gone.
 	for _, table := range expectedTables {
 		var count int
 		err := database.QueryRow(
@@ -158,7 +165,10 @@ func TestRunMigrationsUpDown(t *testing.T) {
 	}
 }
 
-func TestUnifyCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
+// TestCollationMigrationPreflightPreventsPartialConversion verifies that
+// 20260722-00 (NO PAD → PAD SPACE) preflight catches tail-space collisions
+// before any persistent table is altered.
+func TestCollationMigrationPreflightPreventsPartialConversion(t *testing.T) {
 	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
@@ -168,7 +178,7 @@ func TestUnifyCollationMigrationPreflightPreventsPartialConversion(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const target = "20260730-00-unify-collation.sql"
+	const target = "20260722-00-normalize-marketplace-collations.sql"
 	previous := make([]*migrate.Migration, 0, len(migrations)-1)
 	for _, migration := range migrations {
 		if migration.Id != target {
@@ -178,18 +188,11 @@ func TestUnifyCollationMigrationPreflightPreventsPartialConversion(t *testing.T)
 	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
 		t.Fatalf("apply previous migrations: %v", err)
 	}
-	for _, table := range unifiedCollationTables {
-		// gorp_migrations is managed by sql-migrate; skip pre-seeding its collation
-		if table == "gorp_migrations" {
-			continue
-		}
-		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", table)); err != nil {
+	for _, table := range normalizedCollationTables {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
 			t.Fatalf("set legacy collation on %s: %v", table, err)
 		}
 	}
-	// 0900_ai_ci 是 NO PAD collation；unicode_ci 是 PAD SPACE。尾部空格在 PAD SPACE 下相等，
-	// 在 NO PAD 下不等，插入一条尾部空格变体应触发 preflight UNIQUE 冲突（error 1062），
-	// 此时所有持久表尚未被 ALTER，保持 legacy collation——即不会出现半转换。
 	if _, err := database.Exec(`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('space-guard', 'prod', 'u'), ('space-guard', 'prod ', 'u')`); err != nil {
 		t.Fatalf("seed collision: %v", err)
 	}
@@ -197,23 +200,22 @@ func TestUnifyCollationMigrationPreflightPreventsPartialConversion(t *testing.T)
 		_, _ = database.Exec(`DELETE FROM skill_tags WHERE space_id = 'space-guard'`)
 	})
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
-		t.Fatal("unify-collation migration unexpectedly accepted trailing-space collision")
+		t.Fatal("collation migration unexpectedly accepted trailing-space collision")
 	}
-	for _, table := range unifiedCollationTables {
-		if table == "gorp_migrations" {
-			continue
-		}
+	for _, table := range normalizedCollationTables {
 		var collation string
 		if err := database.QueryRow("SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table).Scan(&collation); err != nil {
 			t.Fatal(err)
 		}
-		if collation != "utf8mb4_unicode_ci" {
+		if collation != "utf8mb4_0900_ai_ci" {
 			t.Errorf("table %s partially converted to %s", table, collation)
 		}
 	}
 }
 
-func TestUnifyCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
+// TestCollationMigrationPreflightsSkillVersionCollisions verifies that
+// 20260722-00 preflight catches skill version collisions.
+func TestCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
@@ -223,7 +225,7 @@ func TestUnifyCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const target = "20260730-00-unify-collation.sql"
+	const target = "20260722-00-normalize-marketplace-collations.sql"
 	previous := make([]*migrate.Migration, 0, len(migrations)-1)
 	for _, migration := range migrations {
 		if migration.Id != target {
@@ -233,11 +235,8 @@ func TestUnifyCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
 		t.Fatalf("apply previous migrations: %v", err)
 	}
-	for _, table := range unifiedCollationTables {
-		if table == "gorp_migrations" {
-			continue
-		}
-		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", table)); err != nil {
+	for _, table := range normalizedCollationTables {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
 			t.Fatalf("set legacy collation on %s: %v", table, err)
 		}
 	}
@@ -248,23 +247,23 @@ func TestUnifyCollationMigrationPreflightsSkillVersionCollisions(t *testing.T) {
 		_, _ = database.Exec(`DELETE FROM skill_versions WHERE id IN ('version-1', 'version-2')`)
 	})
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
-		t.Fatal("unify-collation migration unexpectedly accepted skill version collision")
+		t.Fatal("collation migration unexpectedly accepted skill version collision")
 	}
-	for _, table := range unifiedCollationTables {
-		if table == "gorp_migrations" {
-			continue
-		}
+	for _, table := range normalizedCollationTables {
 		var collation string
 		if err := database.QueryRow("SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table).Scan(&collation); err != nil {
 			t.Fatal(err)
 		}
-		if collation != "utf8mb4_unicode_ci" {
+		if collation != "utf8mb4_0900_ai_ci" {
 			t.Errorf("table %s partially converted to %s", table, collation)
 		}
 	}
 }
 
-func TestUnifyCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
+// TestCollationMigrationIgnoresSoftDeletedSkillNameCollision verifies that
+// 20260722-00 does not treat a collision between a live and a soft-deleted
+// skill name as an error (deleted rows are excluded by the preflight query).
+func TestCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.T) {
 	database := isolatedTestDB(t)
 
 	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
@@ -274,7 +273,7 @@ func TestUnifyCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	const target = "20260730-00-unify-collation.sql"
+	const target = "20260722-00-normalize-marketplace-collations.sql"
 	previous := make([]*migrate.Migration, 0, len(migrations)-1)
 	for _, migration := range migrations {
 		if migration.Id != target {
@@ -284,11 +283,8 @@ func TestUnifyCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.
 	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
 		t.Fatalf("apply previous migrations: %v", err)
 	}
-	for _, table := range unifiedCollationTables {
-		if table == "gorp_migrations" {
-			continue
-		}
-		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", table)); err != nil {
+	for _, table := range normalizedCollationTables {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
 			t.Fatalf("set legacy collation on %s: %v", table, err)
 		}
 	}
@@ -303,10 +299,46 @@ func TestUnifyCollationMigrationIgnoresSoftDeletedSkillNameCollision(t *testing.
 		t.Fatalf("seed deleted skill: %v", err)
 	}
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err != nil {
-		t.Fatalf("unify-collation migration rejected collision with soft-deleted skill: %v", err)
+		t.Fatalf("collation migration rejected collision with soft-deleted skill: %v", err)
 	}
 }
 
+// TestMigrationsUpgradeLegacyDatabaseCollation verifies that a legacy database
+// provisioned up to 20260719-09 (with a 0900_ai_ci legacy state) upgrades
+// cleanly through all later migrations including 20260730-00.
+func TestMigrationsUpgradeLegacyDatabaseCollation(t *testing.T) {
+	database := isolatedTestDB(t)
+
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	migrations, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const legacyCutoff = "20260719-09-category-soft-delete-uuid.sql"
+	legacy := make([]*migrate.Migration, 0, len(migrations))
+	for _, migration := range migrations {
+		if migration.Id <= legacyCutoff {
+			legacy = append(legacy, migration)
+		}
+	}
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: legacy}, migrate.Up); err != nil {
+		t.Fatalf("provision legacy database: %v", err)
+	}
+	for _, table := range []string{"categories", "skills"} {
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", table)); err != nil {
+			t.Fatalf("set legacy collation on %s: %v", table, err)
+		}
+	}
+	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err != nil {
+		t.Fatalf("upgrade legacy database: %v", err)
+	}
+}
+
+// TestUnifyCollationMigrationUpgradesExistingTables verifies that 20260730-00
+// converts a database where all earlier migrations are applied and tables use
+// utf8mb4_unicode_ci (PAD SPACE) to utf8mb4_0900_ai_ci (NO PAD), including
+// mcp_servers and gorp_migrations.
 func TestUnifyCollationMigrationUpgradesExistingTables(t *testing.T) {
 	database := isolatedTestDB(t)
 
@@ -344,8 +376,8 @@ func TestUnifyCollationMigrationUpgradesExistingTables(t *testing.T) {
 			continue
 		}
 		query := fmt.Sprintf(
-			"ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
-			table,
+			"ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE %s",
+			table, normalizeCollation,
 		)
 		if _, err := database.Exec(query); err != nil {
 			t.Fatalf("set legacy collation on %s: %v", table, err)
@@ -390,14 +422,12 @@ func TestUnifyCollationMigrationUpgradesExistingTables(t *testing.T) {
 func TestRunMigrationsFunc(t *testing.T) {
 	database := isolatedTestDB(t)
 
-	// Clean state: run all Down first.
 	source := &migrate.EmbedFileSystemMigrationSource{
 		FileSystem: migrationsql.FS,
 		Root:       ".",
 	}
 	_, _ = migrate.Exec(database, "mysql", source, migrate.Down)
 
-	// Run via production function.
 	n, err := RunMigrations(database)
 	if err != nil {
 		t.Fatalf("RunMigrations: %v", err)
@@ -406,7 +436,6 @@ func TestRunMigrationsFunc(t *testing.T) {
 		t.Fatalf("RunMigrations applied %d, want >= 2", n)
 	}
 
-	// Verify tables exist.
 	for _, table := range []string{"categories", "skills", "parse_tasks"} {
 		var count int
 		err := database.QueryRow(
@@ -421,6 +450,5 @@ func TestRunMigrationsFunc(t *testing.T) {
 		}
 	}
 
-	// Cleanup: run Down so test is idempotent.
 	_, _ = migrate.Exec(database, "mysql", source, migrate.Down)
 }
