@@ -434,6 +434,46 @@ func TestUnifyCollationMigrationUpgradesExistingTables(t *testing.T) {
 	}
 }
 
+// TestFreshInstallMigrationsSucceedWithUnifiedCollation 验证全新安装路径：
+// 从空库直接跑全量 migrations，20260719-09 的 JOIN 显式 COLLATE 必须兼容
+// categories/skills 已被 20260714-01 建成 utf8mb4_0900_ai_ci 的场景，不触发 ERROR 1267；
+// 最终所有 unifiedCollationTables 统一到 utf8mb4_0900_ai_ci。
+func TestFreshInstallMigrationsSucceedWithUnifiedCollation(t *testing.T) {
+	database := isolatedTestDB(t)
+
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
+
+	// 从空库直接跑全量迁移
+	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err != nil {
+		t.Fatalf("fresh install migrate Up: %v", err)
+	}
+
+	// 断言所有统一管理表最终 collation 为 utf8mb4_0900_ai_ci
+	for _, table := range unifiedCollationTables {
+		var collation string
+		if err := database.QueryRow(
+			"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&collation); err != nil {
+			t.Fatalf("query collation for %s: %v", table, err)
+		}
+		if collation != targetCollation {
+			t.Errorf("table %s collation=%s want=%s", table, collation, targetCollation)
+		}
+	}
+
+	var databaseCollation string
+	if err := database.QueryRow(
+		"SELECT DEFAULT_COLLATION_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = DATABASE()",
+	).Scan(&databaseCollation); err != nil {
+		t.Fatalf("query database collation: %v", err)
+	}
+	if databaseCollation != targetCollation {
+		t.Errorf("database collation=%s want=%s", databaseCollation, targetCollation)
+	}
+}
+
 // TestRunMigrationsFunc verifies that RunMigrations successfully applies
 // all migrations via the production code path.
 func TestRunMigrationsFunc(t *testing.T) {

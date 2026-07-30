@@ -9,9 +9,11 @@ CREATE TEMPORARY TABLE category_id_map (
   old_id VARCHAR(36) PRIMARY KEY,
   new_id VARCHAR(36) NOT NULL
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
--- 临时表保留 legacy collation：存量部署跑到此处时 categories.id/skills.category_id 尚未被 20260730-00 统一，
--- 若此处用 utf8mb4_0900_ai_ci，JOIN 两边隐式 collation 不一致会触发 ERROR 1267；
--- fresh install 下 categories/skills 已是 0900，此处 JOIN 时 MySQL 会做 coercion 向上兼容，不会出错。
+-- 临时表固定为 utf8mb4_unicode_ci，JOIN 谓词侧显式 COLLATE：
+-- legacy 部署跑到此处时 categories.id/skills.category_id 为 utf8mb4_unicode_ci（PAD SPACE），
+-- fresh install 下则为 utf8mb4_0900_ai_ci（NO PAD），两侧 collat​​ion coercibility 相同，
+-- MySQL 不会自动 coerce，必须在列侧显式 COLLATE 以避免 ERROR 1267；
+-- 20260730-00 会在所有迁移跑完后统一转换为 utf8mb4_0900_ai_ci。
 
 INSERT INTO category_id_map (old_id, new_id) VALUES
   ('starter',               UUID()),
@@ -45,12 +47,12 @@ INSERT INTO category_id_map (old_id, new_id) VALUES
 
 -- 更新skills表的category_id
 UPDATE skills s
-JOIN category_id_map m ON s.category_id = m.old_id
+JOIN category_id_map m ON s.category_id COLLATE utf8mb4_unicode_ci = m.old_id
 SET s.category_id = m.new_id;
 
 -- 更新categories表的id
 UPDATE categories c
-JOIN category_id_map m ON c.id = m.old_id
+JOIN category_id_map m ON c.id COLLATE utf8mb4_unicode_ci = m.old_id
 SET c.id = m.new_id;
 
 DROP TEMPORARY TABLE category_id_map;
