@@ -46,8 +46,13 @@ CREATE TEMPORARY TABLE collation_guard_mcp_servers (
   name VARCHAR(128) COLLATE utf8mb4_0900_ai_ci,
   PRIMARY KEY (owner_uid, space_id, name)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+-- 系统 MCP 行（space_id IS NULL）不受唯一索引约束（NULL != NULL），无需预检；
+-- 且 space_id 为 NULL 时写入主键列会触发 STRICT 模式 ERROR 1048，故排除。
 INSERT INTO collation_guard_mcp_servers (owner_uid, space_id, name)
-SELECT owner_uid, space_id, name FROM mcp_servers WHERE deleted_at IS NULL;
+SELECT owner_uid, space_id, name FROM mcp_servers WHERE deleted_at IS NULL AND space_id IS NOT NULL;
+
+-- uq_space_slug_live (space_id, slug_live) 无需预检：slug 字段校验为 ^[a-z0-9-]{1,64}$，
+-- ASCII 标点在两种 collation 下均不可忽略权重，不存在 UCA 权重差异导致的唯一键碰撞。
 
 DROP TEMPORARY TABLE collation_guard_mcp_servers;
 DROP TEMPORARY TABLE collation_guard_skill_versions;
@@ -75,6 +80,9 @@ ALTER TABLE resource_metric_flushes
   CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 ALTER TABLE mcp_servers
   CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+-- gorp_migrations 是 sql-migrate 的记录表（id 为 ASCII 文件名），无碰撞风险；
+-- 在本 migration 内 ALTER 是安全的：MySQL DDL 隐式提交后，后续 INSERT gorp_migrations
+-- 在同一 session 执行，applied 记录能正确写入。
 ALTER TABLE gorp_migrations
   CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
