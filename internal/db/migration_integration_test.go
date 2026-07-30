@@ -434,6 +434,70 @@ func TestUnifyCollationMigrationUpgradesExistingTables(t *testing.T) {
 	}
 }
 
+// TestUnifyCollationMigrationPreflightCatchesUCACollision verifies that
+// 20260730-00 preflight aborts when a UCA-weight collision (e.g. U+00AD SOFT HYPHEN,
+// weight-ignorable in 0900_ai_ci but not in unicode_ci) exists in a uniquely-keyed
+// text column, leaving all tables at their source collation (no half-conversion).
+func TestUnifyCollationMigrationPreflightCatchesUCACollision(t *testing.T) {
+	database := isolatedTestDB(t)
+
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	_, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down)
+	t.Cleanup(func() { _, _ = migrate.Exec(database, "mysql", fullSource, migrate.Down) })
+
+	migrations, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const unifyID = "20260730-00-unify-collation.sql"
+	previous := make([]*migrate.Migration, 0, len(migrations)-1)
+	for _, migration := range migrations {
+		if migration.Id != unifyID {
+			previous = append(previous, migration)
+		}
+	}
+	// Provision all migrations up to (but not including) 20260730-00,
+	// then force business tables back to utf8mb4_unicode_ci to simulate legacy state.
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
+		t.Fatalf("apply migrations before unify: %v", err)
+	}
+	for _, table := range unifiedCollationTables {
+		if table == "gorp_migrations" {
+			continue
+		}
+		if _, err := database.Exec(fmt.Sprintf("ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE %s", table, normalizeCollation)); err != nil {
+			t.Fatalf("set legacy collation on %s: %v", table, err)
+		}
+	}
+	// 'golang' vs 'gol<U+00AD>ang' — distinct under unicode_ci, collision under 0900_ai_ci.
+	softHyphen := "gol­ang"
+	if _, err := database.Exec(
+		`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('uca-guard', 'golang', 'u'), ('uca-guard', ?, 'u')`,
+		softHyphen,
+	); err != nil {
+		t.Fatalf("seed UCA collision: %v", err)
+	}
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM skill_tags WHERE space_id = 'uca-guard'`) })
+
+	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
+		t.Fatal("unify-collation migration unexpectedly accepted UCA-weight collision")
+	}
+
+	// No table may have been converted — preflight must abort before any persistent ALTER.
+	for _, table := range unifiedCollationTables {
+		var collation string
+		if err := database.QueryRow(
+			"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&collation); err != nil {
+			t.Fatalf("query collation for %s: %v", table, err)
+		}
+		if collation != normalizeCollation && table != "gorp_migrations" {
+			t.Errorf("table %s partially converted to %s, want %s", table, collation, normalizeCollation)
+		}
+	}
+}
+
 // TestFreshInstallMigrationsSucceedWithUnifiedCollation 验证全新安装路径：
 // 从空库直接跑全量 migrations，20260719-09 的 JOIN 显式 COLLATE 必须兼容
 // categories/skills 已被 20260714-01 建成 utf8mb4_0900_ai_ci 的场景，不触发 ERROR 1267；

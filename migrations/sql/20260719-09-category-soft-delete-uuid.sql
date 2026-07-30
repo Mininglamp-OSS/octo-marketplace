@@ -9,10 +9,11 @@ CREATE TEMPORARY TABLE category_id_map (
   old_id VARCHAR(36) PRIMARY KEY,
   new_id VARCHAR(36) NOT NULL
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
--- 临时表固定为 utf8mb4_unicode_ci，JOIN 谓词侧显式 COLLATE：
+-- 临时表固定为 utf8mb4_unicode_ci，JOIN 谓词持久列侧显式 COLLATE：
 -- legacy 部署跑到此处时 categories.id/skills.category_id 为 utf8mb4_unicode_ci（PAD SPACE），
--- fresh install 下则为 utf8mb4_0900_ai_ci（NO PAD），两侧 collat​​ion coercibility 相同，
--- MySQL 不会自动 coerce，必须在列侧显式 COLLATE 以避免 ERROR 1267；
+-- fresh install 下则为 utf8mb4_0900_ai_ci（NO PAD），两侧 collation coercibility 相同，
+-- MySQL 不会自动 coerce，必须在持久列侧显式 COLLATE 以避免 ERROR 1267；
+-- COLLATE 加在持久列侧会导致该索引无法用于 eq_ref，但 category_id_map 只有 ~28 行（hash join 即可），
 -- 20260730-00 会在所有迁移跑完后统一转换为 utf8mb4_0900_ai_ci。
 
 INSERT INTO category_id_map (old_id, new_id) VALUES
