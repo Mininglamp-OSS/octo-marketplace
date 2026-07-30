@@ -133,11 +133,7 @@ CREATE TABLE IF NOT EXISTS `mcp_servers` (
 
   -- Soft-delete sweep + admin queries.
   KEY `idx_deleted_at` (`deleted_at`)
-)
-ENGINE = InnoDB
-DEFAULT CHARSET = utf8mb4
-COLLATE = utf8mb4_0900_ai_ci
-COMMENT = 'MCP catalog entries (mcp-catalog-v1)';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='MCP catalog entries (mcp-catalog-v1)';
 -- +migrate StatementEnd
 
 -- +migrate Down
