@@ -115,8 +115,8 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		if err != nil {
 			t.Fatalf("query collation for %s: %v", table, err)
 		}
-		if collation != "utf8mb4_unicode_ci" {
-			t.Errorf("table %s collation=%s want=utf8mb4_unicode_ci", table, collation)
+		if collation != "utf8mb4_0900_ai_ci" {
+			t.Errorf("table %s collation=%s want=utf8mb4_0900_ai_ci", table, collation)
 		}
 	}
 
@@ -149,8 +149,8 @@ func TestRunMigrationsUpDown(t *testing.T) {
 	).Scan(&databaseCollation); err != nil {
 		t.Fatalf("query database collation: %v", err)
 	}
-	if databaseCollation != "utf8mb4_unicode_ci" {
-		t.Errorf("database collation=%s want=utf8mb4_unicode_ci", databaseCollation)
+	if databaseCollation != "utf8mb4_0900_ai_ci" {
+		t.Errorf("database collation=%s want=utf8mb4_0900_ai_ci", databaseCollation)
 	}
 }
 
@@ -375,8 +375,8 @@ func TestCollationMigrationUpgradesExistingTables(t *testing.T) {
 		if err != nil {
 			t.Fatalf("query collation for %s: %v", table, err)
 		}
-		if collation != "utf8mb4_unicode_ci" {
-			t.Errorf("table %s collation=%s want=utf8mb4_unicode_ci", table, collation)
+		if collation != "utf8mb4_0900_ai_ci" {
+			t.Errorf("table %s collation=%s want=utf8mb4_0900_ai_ci", table, collation)
 		}
 	}
 }
