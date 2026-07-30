@@ -1,8 +1,10 @@
 -- +migrate Up
 -- 统一所有表到 utf8mb4_0900_ai_ci（MySQL 8 默认），修复跨表 JOIN 时 collation 不兼容导致的 500 错误。
--- CONVERT 前对含文本唯一键的表做碰撞预检：utf8mb4_unicode_ci (UCA 5.2.0/PAD SPACE) 与
--- utf8mb4_0900_ai_ci (UCA 9.0.0/NO PAD) 不仅 PAD 属性不同，权重可忽略字符集也不同
--- （如 U+00AD SOFT HYPHEN 在 unicode_ci 下区分、0900_ai_ci 下等价），可能触发唯一键冲突；
+-- CONVERT 前对含用户输入文本唯一键的表做碰撞预检：
+--   - PAD SPACE → NO PAD：尾空格从等价变为区分（'QA' 与 'QA ' 不再冲突，唯一性放松，不会触发错误）；
+--     反向（NO PAD → PAD SPACE）才会产生冲突，本迁移方向不存在该问题
+--   - UCA 版本差异：utf8mb4_unicode_ci = UCA 5.2.0，utf8mb4_0900_ai_ci = UCA 9.0.0；
+--     U+00AD SOFT HYPHEN 等字符在 unicode_ci 下区分、0900_ai_ci 下权重可忽略，可能产生唯一键冲突
 -- 预检在临时表阶段即失败，不会留下半转换状态。
 
 CREATE TEMPORARY TABLE collation_guard_categories (
@@ -38,7 +40,23 @@ CREATE TEMPORARY TABLE collation_guard_skill_versions (
 INSERT INTO collation_guard_skill_versions (skill_id, version)
 SELECT skill_id, version FROM skill_versions;
 
--- 其余表的唯一键均为生成标识符（UUID/enum/主键），不会产生 collation 冲突，无需预检
+-- mcp_servers.name 为用户自由输入（可含 CJK/emoji，无 Unicode normalization），UCA-ignorable 字符存在冲突风险；
+-- space_id IS NOT NULL 过滤系统 MCP（system 行 space_id=NULL，多 NULL 在 MySQL 唯一索引中互不等价，不会冲突）；
+-- slug_live 有 ^[a-z0-9-]{1,64}$ ASCII 白名单校验，无需 guard
+CREATE TEMPORARY TABLE collation_guard_mcp_servers (
+  owner_uid VARCHAR(64) COLLATE utf8mb4_0900_ai_ci,
+  space_id VARCHAR(64) COLLATE utf8mb4_0900_ai_ci,
+  name VARCHAR(128) COLLATE utf8mb4_0900_ai_ci,
+  PRIMARY KEY (owner_uid, space_id, name)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+INSERT INTO collation_guard_mcp_servers (owner_uid, space_id, name)
+SELECT owner_uid, space_id, name
+FROM mcp_servers
+WHERE deleted_at IS NULL AND space_id IS NOT NULL;
+
+-- 其余表（parse_tasks/resource_metrics/resource_metric_flushes）唯一键均为 ASCII 标识符或外键，
+-- gorp_migrations.id 是文件名，不存在 UCA/PAD 冲突风险，无需预检
+DROP TEMPORARY TABLE collation_guard_mcp_servers;
 DROP TEMPORARY TABLE collation_guard_skill_versions;
 DROP TEMPORARY TABLE collation_guard_skill_tags;
 DROP TEMPORARY TABLE collation_guard_skills;

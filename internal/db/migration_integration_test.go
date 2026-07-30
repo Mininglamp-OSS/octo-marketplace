@@ -434,10 +434,24 @@ func TestUnifyCollationMigrationUpgradesExistingTables(t *testing.T) {
 	}
 }
 
+// guardedTables 列出所有在 20260730-00 中需要 preflight guard 的含文本唯一键表。
+// 新增含用户输入文本唯一键的 ALTER 目标表时必须同步加入此切片，否则下面的测试会漏检。
+var guardedTables = []struct {
+	name       string
+	// 各表的冲突种子由对应 case 单独处理（列不同无法统一）
+}{
+	{name: "categories"},
+	{name: "skills"},
+	{name: "skill_tags"},
+	{name: "skill_versions"},
+	{name: "mcp_servers"},
+}
+
 // TestUnifyCollationMigrationPreflightCatchesUCACollision verifies that
 // 20260730-00 preflight aborts when a UCA-weight collision (e.g. U+00AD SOFT HYPHEN,
 // weight-ignorable in 0900_ai_ci but not in unicode_ci) exists in a uniquely-keyed
 // text column, leaving all tables at their source collation (no half-conversion).
+// Covers skill_tags and mcp_servers.
 func TestUnifyCollationMigrationPreflightCatchesUCACollision(t *testing.T) {
 	database := isolatedTestDB(t)
 
@@ -475,9 +489,25 @@ func TestUnifyCollationMigrationPreflightCatchesUCACollision(t *testing.T) {
 		`INSERT INTO skill_tags (space_id, name, created_by) VALUES ('uca-guard', 'golang', 'u'), ('uca-guard', ?, 'u')`,
 		softHyphen,
 	); err != nil {
-		t.Fatalf("seed UCA collision: %v", err)
+		t.Fatalf("seed UCA collision in skill_tags: %v", err)
 	}
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM skill_tags WHERE space_id = 'uca-guard'`) })
+
+	// mcp_servers.name 也是用户自由输入，同样存在 UCA 权重冲突风险；用 name_live 生成列对应的 live 行
+	const mcpInsert = `INSERT INTO mcp_servers
+		(id, name, owner_uid, space_id, transport, config_json, tags_json, tools_json,
+		 usage_examples_json, faqs_json, notes_json, icon, slogan, category,
+		 visibility, creator_name, created_at, updated_at, deleted_at)
+	VALUES (?, ?, 'uca-owner', 'uca-space', 'stdio', '{}', JSON_ARRAY(), JSON_ARRAY(),
+		JSON_ARRAY(), JSON_ARRAY(), JSON_ARRAY(), '', '', 'cat',
+		'public', '', NOW(), NOW(), NULL)`
+	if _, err := database.Exec(mcpInsert, "mcp-golang", "golang"); err != nil {
+		t.Fatalf("seed mcp_servers row 1: %v", err)
+	}
+	if _, err := database.Exec(mcpInsert, "mcp-shy", softHyphen); err != nil {
+		t.Fatalf("seed UCA collision in mcp_servers: %v", err)
+	}
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM mcp_servers WHERE id IN ('mcp-golang','mcp-shy')`) })
 
 	if _, err := migrate.Exec(database, "mysql", fullSource, migrate.Up); err == nil {
 		t.Fatal("unify-collation migration unexpectedly accepted UCA-weight collision")
