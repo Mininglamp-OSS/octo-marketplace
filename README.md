@@ -1,6 +1,7 @@
 # OCTO Marketplace
 
 [![CI](https://github.com/Mininglamp-OSS/octo-marketplace/actions/workflows/ci.yml/badge.svg)](https://github.com/Mininglamp-OSS/octo-marketplace/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 OCTO Marketplace is the catalog and publishing service for Skills and MCP
 servers in OCTO. It provides Space-aware discovery, owner-managed publishing,
@@ -224,3 +225,7 @@ make openapi-check
 - [Configuration reference](CONFIGURATION.md)
 - [MCP API contract](docs/api/mcp-v1.md)
 - [Generated OpenAPI contract](docs/openapi/swagger.yaml)
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) for the full text.
