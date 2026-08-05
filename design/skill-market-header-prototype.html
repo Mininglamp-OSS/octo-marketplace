@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Skill Market Header Prototype</title>
+  <title>技能市场头部原型</title>
   <style>
     :root {
       --purple: #7444f5;
@@ -549,8 +549,8 @@
 <body>
   <main class="shell">
     <header class="topbar">
-      <nav class="tabs" aria-label="Skill scope">
-        <button class="tab" type="button" aria-selected="true">Skills</button>
+      <nav class="tabs" aria-label="技能范围">
+        <button class="tab" type="button" aria-selected="true">技能</button>
         <button class="tab" type="button" aria-selected="false">我的</button>
       </nav>
 
@@ -628,7 +628,7 @@
       { name: "免费", count: 76 },
       { name: "团队推荐", count: 45 },
       { name: "CLI", count: 41 },
-      { name: "MCP", count: 38 },
+      { name: "连接器（MCP）", count: 38 },
       { name: "自动化", count: 36 },
       { name: "代码审查", count: 29 },
       { name: "知识库", count: 24 },
@@ -724,7 +724,7 @@
 
       summary.innerHTML = chips.length
         ? `<strong>当前筛选</strong>${chips.join("")}<button class="clear" type="button">清空</button>`
-        : `<span>当前显示全部 Skills，可按分类、标签选择器和关键词组合过滤。</span>`;
+        : `<span>当前显示全部技能，可按分类、标签选择器和关键词组合过滤。</span>`;
 
       const clear = summary.querySelector(".clear");
       if (clear) {
