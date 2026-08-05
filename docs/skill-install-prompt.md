@@ -18,10 +18,12 @@ API 地址：`<api-base-url>`
 
 4. 运行 `octo-cli auth list` 选择身份：
    - `space_id` 等于 `<space-id>` 且只有一个时，使用该 Profile；
-   - 没有或存在多个时，从当前 Octo Channel 的环境或配置中读取 Bot Token，通过
-     stdin 登录或更新固定 Profile `space-<space-id>`，等价命令为：
+   - 没有或存在多个时，自行查找当前 Agent Runtime 中配置的 Octo Bot Token。可使用
+     Runtime 已安装的 Skills、工具和本地文档；不了解获取方式时，可搜索网络或查阅 Runtime 官方文档。
+     找到后，通过 stdin 登录或更新固定 Profile `space-<space-id>`：
      `<read-token> | octo-cli auth login --with-token --profile space-<space-id> --space <space-id> --api-base-url <api-base-url>`。
-     不得打印、回显或把 Token 放入命令参数。
+     不得打印、回显或把 Token 放入命令参数；仍找不到时，提示用户为当前 Runtime 配置
+     Bot Token。
 
 5. 判断当前 Agent runtime 及其 Skills 根目录，并使用上一步确定的 Profile 运行：
    `octo-cli marketplace skills <skill-id> --profile <profile> --install <skills-root>`
