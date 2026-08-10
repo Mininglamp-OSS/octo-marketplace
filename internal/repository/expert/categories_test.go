@@ -8,30 +8,6 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestCategoryExists(t *testing.T) {
-	repo, mock, done := newMockRepo(t)
-	defer done()
-
-	mock.ExpectQuery("SELECT 1 FROM expert_categories WHERE id = \\? AND deleted_at IS NULL").
-		WithArgs("dev-tools").
-		WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
-	ok, err := repo.CategoryExists(context.Background(), "dev-tools")
-	if err != nil || !ok {
-		t.Fatalf("exists = %v, err = %v; want true, nil", ok, err)
-	}
-
-	mock.ExpectQuery("SELECT 1 FROM expert_categories WHERE id = \\? AND deleted_at IS NULL").
-		WithArgs("ghost").
-		WillReturnError(sqlNoRows())
-	ok, err = repo.CategoryExists(context.Background(), "ghost")
-	if err != nil || ok {
-		t.Fatalf("exists = %v, err = %v; want false, nil", ok, err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestCategoryIDByName(t *testing.T) {
 	repo, mock, done := newMockRepo(t)
 	defer done()

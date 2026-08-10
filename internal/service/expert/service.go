@@ -78,13 +78,13 @@ type Store interface {
 	GetExpertByID(ctx context.Context, id string) (*model.Expert, error)
 	ListExperts(ctx context.Context, f expertrepo.ListFilter) ([]model.Expert, int, error)
 	UpdateExpert(ctx context.Context, m *model.Expert) error
-	DeleteExpert(ctx context.Context, id string, now time.Time) error
+	DeleteExpert(ctx context.Context, id, ownerUID string, now time.Time) error
 
 	CreateSquad(ctx context.Context, m *model.Squad) error
 	GetSquadByID(ctx context.Context, id string) (*model.Squad, error)
 	ListSquads(ctx context.Context, f expertrepo.ListFilter) ([]model.Squad, int, error)
 	UpdateSquad(ctx context.Context, m *model.Squad) error
-	DeleteSquad(ctx context.Context, id string, now time.Time) error
+	DeleteSquad(ctx context.Context, id, ownerUID string, now time.Time) error
 
 	ListTags(ctx context.Context, f expertrepo.TagListFilter) ([]model.TagFilter, error)
 	ResolveFilterTagIDs(ctx context.Context, spaceID string, tags []string) ([][]int64, error)
@@ -289,7 +289,7 @@ func (s *Service) DeleteExpert(ctx context.Context, caller Caller, id string) er
 	if forbidsPublicMutation(m.Visibility, m.OwnerUID, caller) {
 		return ErrForbidden
 	}
-	if err := s.repo.DeleteExpert(ctx, id, s.now()); err != nil {
+	if err := s.repo.DeleteExpert(ctx, id, caller.UID, s.now()); err != nil {
 		return mapRepoError(err)
 	}
 	return nil

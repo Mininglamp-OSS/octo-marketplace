@@ -86,7 +86,7 @@ func (s *fakeStore) UpdateExpert(_ context.Context, m *model.Expert) error {
 	return nil
 }
 
-func (s *fakeStore) DeleteExpert(_ context.Context, id string, _ time.Time) error {
+func (s *fakeStore) DeleteExpert(_ context.Context, id, _ string, _ time.Time) error {
 	if _, ok := s.experts[id]; !ok {
 		return expertrepo.ErrNotFound
 	}
@@ -126,7 +126,7 @@ func (s *fakeStore) UpdateSquad(_ context.Context, m *model.Squad) error {
 	return nil
 }
 
-func (s *fakeStore) DeleteSquad(_ context.Context, id string, _ time.Time) error {
+func (s *fakeStore) DeleteSquad(_ context.Context, id, _ string, _ time.Time) error {
 	if _, ok := s.squads[id]; !ok {
 		return expertrepo.ErrNotFound
 	}

@@ -155,7 +155,7 @@ func (s *Service) DeleteSquad(ctx context.Context, caller Caller, id string) err
 	if forbidsPublicMutation(m.Visibility, m.OwnerUID, caller) {
 		return ErrForbidden
 	}
-	if err := s.repo.DeleteSquad(ctx, id, s.now()); err != nil {
+	if err := s.repo.DeleteSquad(ctx, id, caller.UID, s.now()); err != nil {
 		return mapRepoError(err)
 	}
 	return nil
@@ -272,6 +272,7 @@ func (s *Service) buildMembers(ctx context.Context, squadID string, in []model.S
 		existingByKey[existing[i].MemberKey] = existing[i].Skills
 	}
 	members := make([]model.SquadMember, 0, len(in))
+	seenKeys := make(map[string]struct{}, len(in))
 	leaderIdx := -1
 	for i := range in {
 		mw := in[i]
@@ -295,7 +296,17 @@ func (s *Service) buildMembers(ctx context.Context, squadID string, in []model.S
 		memberKey := strings.TrimSpace(mw.MemberKey)
 		if memberKey == "" {
 			memberKey = fmt.Sprintf("member_%02d", i+1)
+		} else if !validMemberKey(memberKey) {
+			// A caller-supplied key flows into a storage object prefix, so bound
+			// its length and charset (reject "..", spaces, slashes, …).
+			return nil, 0, ErrInvalidMembers
 		}
+		if _, dup := seenKeys[memberKey]; dup {
+			// Duplicate keys silently collapse in the skill-preservation map and
+			// make skill_md / skill_download ambiguous — reject them.
+			return nil, 0, ErrInvalidMembers
+		}
+		seenKeys[memberKey] = struct{}{}
 		templateID := strings.TrimSpace(mw.TemplateID)
 		if templateID == "" {
 			templateID = fmt.Sprintf("expert-%s-%02d", squadID, i+1)
@@ -333,6 +344,24 @@ func (s *Service) buildMembers(ctx context.Context, squadID string, in []model.S
 		members[i].IsLeader = i == leaderIdx
 	}
 	return members, leaderIdx, nil
+}
+
+// validMemberKey reports whether a caller-supplied member_key is safe to
+// interpolate into a storage object prefix: bounded length, and limited to
+// letters, digits, and [._-] (no path separators, "..", or spaces).
+func validMemberKey(k string) bool {
+	if len(k) == 0 || len(k) > model.MaxMemberKeyLen {
+		return false
+	}
+	for _, r := range k {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // resolveLeaderName returns the explicit leader when supplied, else the leader

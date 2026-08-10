@@ -22,6 +22,10 @@ const (
 	// over-long name would otherwise surface as a 500 on insert).
 	MaxExpertTags       = 20
 	MaxExpertTagNameLen = 64
+	// MaxMemberKeyLen bounds a squad member_key. The key is interpolated into a
+	// storage object prefix, so it is also charset-restricted (see the service);
+	// a long or exotic key would otherwise yield 500s or backend key-limit errors.
+	MaxMemberKeyLen = 64
 	// MaxMCPConfigBytes caps the raw mcp_config document (doc §6, v1: 64 KiB).
 	// Measured in bytes because the config is stored verbatim as text.
 	MaxMCPConfigBytes = 64 << 10

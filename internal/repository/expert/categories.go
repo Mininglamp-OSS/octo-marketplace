@@ -15,22 +15,6 @@ type CategoryCount struct {
 	Count int
 }
 
-// CategoryExists reports whether a live expert_categories row with the given id
-// exists.
-func (r *Repo) CategoryExists(ctx context.Context, id string) (bool, error) {
-	var one int
-	err := r.db.QueryRowContext(ctx,
-		`SELECT 1 FROM expert_categories WHERE id = ? AND deleted_at IS NULL LIMIT 1`, id).
-		Scan(&one)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // CategoryIDByName resolves a category NAME to its id, returning "" when no live
 // category carries that name. The wire carries names; the service uses this to
 // map an incoming name to the stored category_id on write.

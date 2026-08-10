@@ -124,6 +124,14 @@ func validateZipEntry(f *zip.File) (string, string) {
 		return "ZIP_SLIP_DETECTED", "absolute path detected: " + f.Name
 	}
 
+	// Reject Windows-rooted names too. The server runs on Linux so
+	// filepath.IsAbs misses `C:\...`, `\\server\share` and `\rooted`, but the
+	// package is distributed for client-side install — a Windows client must
+	// never receive a rooted entry.
+	if isWindowsRooted(f.Name) {
+		return "ZIP_SLIP_DETECTED", "rooted path detected: " + f.Name
+	}
+
 	// Reject paths with ..
 	cleaned := filepath.Clean(f.Name)
 	if strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, string(filepath.Separator)+"..") {
@@ -141,6 +149,22 @@ func validateZipEntry(f *zip.File) (string, string) {
 	}
 
 	return "", ""
+}
+
+// isWindowsRooted reports whether name is a Windows absolute/rooted path
+// (drive-letter `X:\`/`X:/`, UNC `\\host\share`, or a leading `\`), which
+// host-native filepath.IsAbs does not catch on a Linux server.
+func isWindowsRooted(name string) bool {
+	if strings.HasPrefix(name, `\`) {
+		return true
+	}
+	if len(name) >= 2 && name[1] == ':' {
+		c := name[0]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			return true
+		}
+	}
+	return false
 }
 
 // readZipFile reads the contents of a single zip entry.
