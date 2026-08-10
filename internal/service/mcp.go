@@ -186,17 +186,24 @@ func (s *Service) Patch(ctx context.Context, caller Caller, mcpID string, req mo
 		return model.Detail{}, apierr.Forbidden()
 	}
 
+	prevName, prevSlug := m.Name, m.Slug
 	if apiErr := s.applyPatch(ctx, m, req); apiErr != nil {
 		return model.Detail{}, apiErr
 	}
-	// Re-check the official (system) namespace ONLY when the patch actually
-	// changes name or slug. A patch that touches neither cannot introduce a
-	// collision, and running the check unconditionally would make any row that
-	// already shares an official name/slug unpatchable on unrelated fields —
-	// e.g. an owner could not even edit its slogan (issue #48; review P1-2).
-	// exceptID=m.ID so an owned system row never self-collides.
-	if req.Name != nil || req.Slug != nil {
-		if apiErr := s.checkSystemDupes(ctx, m.Name, m.Slug, m.ID); apiErr != nil {
+	// Official-namespace check per field, and ONLY when that field actually
+	// changed (issue #48; review P1-A). Keying on change rather than mere
+	// presence keeps a row that already shares an official name/slug editable —
+	// including by full-object PATCH clients that re-send the unchanged fields —
+	// and checking name and slug independently means editing the non-colliding
+	// field is not refused because of the other. exceptID=m.ID so an owned
+	// system row never self-collides.
+	if m.Name != prevName {
+		if apiErr := s.checkSystemName(ctx, m.Name, m.ID); apiErr != nil {
+			return model.Detail{}, apiErr
+		}
+	}
+	if m.Slug != prevSlug {
+		if apiErr := s.checkSystemSlug(ctx, m.Slug, m.ID); apiErr != nil {
 			return model.Detail{}, apiErr
 		}
 	}
@@ -458,6 +465,17 @@ func (s *Service) DeleteSystem(ctx context.Context, mcpID string) *apierr.Error 
 // or the record id for Update so a same-record no-op rename does not
 // self-collide.
 func (s *Service) checkSystemDupes(ctx context.Context, name, slug, exceptID string) *apierr.Error {
+	if apiErr := s.checkSystemName(ctx, name, exceptID); apiErr != nil {
+		return apiErr
+	}
+	return s.checkSystemSlug(ctx, slug, exceptID)
+}
+
+// checkSystemName / checkSystemSlug are the single-field halves of
+// checkSystemDupes. Patch calls them independently so editing a non-colliding
+// field is never blocked by the other (review P1-A); Create and the admin
+// system twins call the combined form.
+func (s *Service) checkSystemName(ctx context.Context, name, exceptID string) *apierr.Error {
 	exists, err := s.store.SystemNameExists(ctx, name, exceptID)
 	if err != nil {
 		return mapStoreError(err)
@@ -465,7 +483,11 @@ func (s *Service) checkSystemDupes(ctx context.Context, name, slug, exceptID str
 	if exists {
 		return apierr.OfficialNameTaken()
 	}
-	exists, err = s.store.SystemSlugExists(ctx, slug, exceptID)
+	return nil
+}
+
+func (s *Service) checkSystemSlug(ctx context.Context, slug, exceptID string) *apierr.Error {
+	exists, err := s.store.SystemSlugExists(ctx, slug, exceptID)
 	if err != nil {
 		return mapStoreError(err)
 	}

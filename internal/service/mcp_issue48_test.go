@@ -372,8 +372,72 @@ func TestPatchCollidingUserRowUnrelatedFieldSucceeds(t *testing.T) {
 	}
 }
 
-// The official-namespace rejection carries a dedicated reason so the client can
-// tell it apart from an ordinary same-Space duplicate (review P2-10).
+// Regression (review P1-A): the namespace check keys on the field that changed,
+// independently. A row colliding with a system NAME must still be able to change
+// its SLUG (a field with no collision), and vice versa.
+func TestPatchChangingNonCollidingFieldSucceeds(t *testing.T) {
+	newSlug := "my-eewe-2"
+	newName := "My eewe v2"
+	cases := []struct {
+		name     string
+		userName string
+		userSlug string
+		patch    model.PatchRequest
+	}{
+		// Collides on name only → changing slug must pass.
+		{"name-collides/change-slug", "eewe", "user-slug", model.PatchRequest{Slug: &newSlug}},
+		// Collides on slug only → changing name must pass.
+		{"slug-collides/change-name", "My MCP", "eewe", model.PatchRequest{Name: &newName}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store := newFakeStore()
+			svc := New(store)
+			svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")}
+			seed(store, model.MCP{
+				ID: "sys", Name: "eewe", Slug: "eewe", Visibility: model.VisibilitySystem,
+			})
+			seed(store, model.MCP{
+				ID: "own", Name: c.userName, Slug: c.userSlug,
+				Visibility: model.VisibilityPublic, OwnerUID: "u1", SpaceID: "space-a",
+				Transport:  model.TransportStreamableHTTP,
+				Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+			})
+			if _, apiErr := svc.Patch(context.Background(), caller, "own", c.patch); apiErr != nil {
+				t.Fatalf("editing the non-colliding field was wrongly refused: %v", apiErr)
+			}
+		})
+	}
+}
+
+// Regression (review P1-A, full-object client): a PATCH that re-sends the
+// unchanged name/slug of a grandfathered colliding row must not 409 — the check
+// keys on change, not presence.
+func TestPatchFullObjectUnchangedNameOnCollidingRowSucceeds(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID: "sys", Name: "eewe", Slug: "eewe", Visibility: model.VisibilitySystem,
+	})
+	seed(store, model.MCP{
+		ID: "own", Name: "eewe", Slug: "eewe",
+		Visibility: model.VisibilityPublic, OwnerUID: "u1", SpaceID: "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	// Full-object PATCH: name/slug re-sent identical to stored, plus a real edit.
+	sameName, sameSlug, newSlogan := "eewe", "eewe", "edited"
+	_, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{
+		Name: &sameName, Slug: &sameSlug, Slogan: &newSlogan,
+	})
+	if apiErr != nil {
+		t.Fatalf("full-object patch re-sending unchanged name/slug was refused: %v", apiErr)
+	}
+	if store.updated == nil || store.updated.Slogan != "edited" {
+		t.Fatalf("row was not updated: %+v", store.updated)
+	}
+}
 func TestCreateSystemCollisionCarriesOfficialReason(t *testing.T) {
 	store := newFakeStore()
 	svc := New(store)

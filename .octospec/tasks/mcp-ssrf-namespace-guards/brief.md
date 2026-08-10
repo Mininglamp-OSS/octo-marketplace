@@ -45,25 +45,31 @@ Reuse the Probe subsystem's existing SSRF primitives (`validateProbeURL`,
   that collides with a live `visibility=system` row, reusing `checkSystemDupes`.
   The rejection is `DUPLICATE` (409) with `reason=official_namespace` and a
   message that names the official catalog (not "in this Space", which would
-  misdirect since system rows are spaceless). On `Patch` the check runs ONLY
-  when the patch changes `name` or `slug`, and passes `exceptID=m.ID`: a patch
-  that touches neither cannot introduce a collision, so a row that already
-  shares an official name/slug stays editable on unrelated fields, and an owned
-  system row never self-collides.
+  misdirect since system rows are spaceless). On `Patch` name and slug are
+  checked **independently**, and each only when that field's merged value
+  actually changed (not merely when supplied), passing `exceptID=m.ID`: a patch
+  that changes neither cannot introduce a collision, so a row that already
+  shares an official name/slug stays editable — including by full-object PATCH
+  clients that re-send unchanged fields — and editing the non-colliding field is
+  never refused because of the other. An owned system row never self-collides.
 - **Probe whole-request rejection**: the dialer resolves the host and rejects the
   entire request if ANY resolved address is unsafe (no cherry-picking a safe IP
   out of a mixed answer). DNS failure / empty answer is rejected. The unsafe-IP
-  predicate derives the embedded IPv4 from IPv4-mapped, IPv4-translated
-  (`::ffff:0:0:0/96`) and NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) forms and
+  predicate derives the embedded IPv4 from the IPv4-mapped and IPv4-translated
+  (`::ffff:0:0:0/96`) forms and the NAT64 well-known prefix (`64:ff9b::/96`) and
   re-checks it, so a translated loopback/RFC-1918 address cannot pass as public
-  IPv6.
+  IPv6. Open: the RFC 8215 local-use `/48` prefix is only checked on its trailing
+  32 bits, not decoded per RFC 6052, so a `/48` encoding at another offset can
+  still slip; `fec0::/10` and `240.0.0.0/4` are also not yet covered (review
+  P2-A, tracked separately).
 - **Probe error redaction**: SSRF-policy rejections and any socket-level failure
   (`*net.OpError`, including one wrapped in `*url.Error`) collapse to a single
   opaque client message (`probe target is not reachable`); the concrete cause is
-  logged server-side only. Only application-level causes (non-2xx status,
-  JSON-RPC error, malformed payload) keep a concrete hint. Redirect hops keep
-  re-running the per-hop literal check, and the redirected host is re-validated
-  at dial time.
+  logged server-side only. Application-level causes (non-2xx status, JSON-RPC
+  error, malformed payload) keep a concrete hint. Open: non-`OpError` transport
+  failures such as TLS/certificate errors also still surface a concrete message
+  (review P2-B, tracked separately). Redirect hops keep re-running the per-hop
+  literal check, and the redirected host is re-validated at dial time.
 
 ## Out of scope (deliberately not touched)
 
