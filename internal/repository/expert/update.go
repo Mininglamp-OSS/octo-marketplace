@@ -34,11 +34,11 @@ func (r *Repo) UpdateExpert(ctx context.Context, m *model.Expert) error {
 	const q = `UPDATE experts SET
 		short_name = ?, name = ?, summary = ?, category_id = ?, tags = ?, publisher = ?,
 		visibility = ?, instruction = ?, mcp_config = ?, skills_json = ?, updated_at = ?
-		WHERE id = ? AND owner_uid = ? AND deleted_at IS NULL`
+		WHERE id = ? AND owner_uid = ? AND space_id = ? AND visibility <> 'system' AND deleted_at IS NULL`
 	res, err := tx.ExecContext(ctx, q,
 		m.ShortName, m.Name, m.Summary, m.Category, string(tagsRaw), m.Publisher,
 		string(m.Visibility), m.Instruction, m.MCPConfig, string(skills), m.UpdatedAt,
-		m.ID, m.OwnerUID,
+		m.ID, m.OwnerUID, m.SpaceID,
 	)
 	if err != nil {
 		return mapDuplicateName(err)
@@ -79,12 +79,12 @@ func (r *Repo) UpdateSquad(ctx context.Context, m *model.Squad) error {
 		short_name = ?, name = ?, summary = ?, category_id = ?, tags = ?, publisher = ?,
 		visibility = ?, leader = ?, strategies_json = ?, dependencies_json = ?, permission = ?,
 		members_json = ?, updated_at = ?
-		WHERE id = ? AND owner_uid = ? AND deleted_at IS NULL`
+		WHERE id = ? AND owner_uid = ? AND space_id = ? AND visibility <> 'system' AND deleted_at IS NULL`
 	res, err := tx.ExecContext(ctx, q,
 		m.ShortName, m.Name, m.Summary, m.Category, string(tagsRaw), m.Publisher,
 		string(m.Visibility), m.Leader, string(strategies), string(dependencies), m.Permission,
 		string(members), m.UpdatedAt,
-		m.ID, m.OwnerUID,
+		m.ID, m.OwnerUID, m.SpaceID,
 	)
 	if err != nil {
 		return mapDuplicateName(err)

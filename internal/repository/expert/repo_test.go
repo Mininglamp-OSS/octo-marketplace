@@ -234,11 +234,11 @@ func TestDeleteExpertSoftDeletes(t *testing.T) {
 	repo, mock, done := newMockRepo(t)
 	defer done()
 
-	mock.ExpectExec("UPDATE experts SET deleted_at = \\?, updated_at = \\? WHERE id = \\? AND owner_uid = \\? AND deleted_at IS NULL").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "e1", "u1").
+	mock.ExpectExec("UPDATE experts SET deleted_at = \\?, updated_at = \\? WHERE id = \\? AND owner_uid = \\? AND space_id = \\? AND visibility <> .system. AND deleted_at IS NULL").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "e1", "u1", "space-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := repo.DeleteExpert(context.Background(), "e1", "u1", time.Now()); err != nil {
+	if err := repo.DeleteExpert(context.Background(), "e1", "u1", "space-a", time.Now()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -253,7 +253,7 @@ func TestDeleteExpertAlreadyGone(t *testing.T) {
 	mock.ExpectExec("UPDATE experts SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	if err := repo.DeleteExpert(context.Background(), "e1", "u1", time.Now()); !errors.Is(err, ErrNotFound) {
+	if err := repo.DeleteExpert(context.Background(), "e1", "u1", "space-a", time.Now()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

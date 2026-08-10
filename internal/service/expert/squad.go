@@ -158,7 +158,7 @@ func (s *Service) DeleteSquad(ctx context.Context, caller Caller, id string) err
 	if forbidsPublicMutation(m.Visibility, m.OwnerUID, caller) {
 		return ErrForbidden
 	}
-	if err := s.repo.DeleteSquad(ctx, id, caller.UID, s.now()); err != nil {
+	if err := s.repo.DeleteSquad(ctx, id, caller.UID, caller.SpaceID, s.now()); err != nil {
 		return mapRepoError(err)
 	}
 	return nil
