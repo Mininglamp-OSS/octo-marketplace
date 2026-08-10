@@ -42,9 +42,13 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 	defer r.Close()
 
 	var totalSize int64
-	var skillMDContent []byte
-	var skillMDFound bool
-	files := make([]string, 0, len(r.File))
+	var skillMD *zip.File
+	skillMDCount := 0
+	capFiles := len(r.File)
+	if capFiles > maxManifestFiles {
+		capFiles = maxManifestFiles
+	}
+	files := make([]string, 0, capFiles)
 
 	for _, f := range r.File {
 		// Security: check for zip slip
@@ -67,29 +71,29 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 			return nil, "FILE_TOO_LARGE", fmt.Sprintf("extracted content exceeds %dMB limit", maxExtractedSize/(1024*1024))
 		}
 
-		// Look for SKILL.md (case-insensitive) at root level OR one level deep.
-		// Supports both:
-		//   SKILL.md          (root level)
-		//   some-dir/SKILL.md (single top-level subdirectory)
-		name := filepath.Base(f.Name)
-		dir := filepath.Dir(f.Name)
-		isRoot := dir == "." || dir == ""
-		isOneLevel := !isRoot && !strings.Contains(dir, "/")
-		if strings.EqualFold(name, "SKILL.md") && (isRoot || isOneLevel) {
-			if f.UncompressedSize64 > maxSkillMDSize {
-				return nil, "SKILL_MD_TOO_LARGE", fmt.Sprintf("SKILL.md exceeds %dMB limit", maxSkillMDSize/(1024*1024))
-			}
-			content, err := readZipFile(f)
-			if err != nil {
-				return nil, "INVALID_ZIP", "cannot read SKILL.md: " + err.Error()
-			}
-			skillMDContent = content
-			skillMDFound = true
+		// SKILL.md (case-insensitive) at root level OR one level deep. A package
+		// with more than one such candidate is ambiguous: a "shallowest-wins" vs
+		// "last-wins" split lets the archive author serve one file while a client
+		// runs another, so it is rejected outright rather than resolved by a
+		// heuristic (the count is checked after the loop).
+		if isSkillMDCandidate(f.Name) {
+			skillMDCount++
+			skillMD = f
 		}
 	}
 
-	if !skillMDFound {
+	if skillMDCount == 0 {
 		return nil, "SKILL_MD_NOT_FOUND", "zip 包中未找到 SKILL.md 文件"
+	}
+	if skillMDCount > 1 {
+		return nil, "MULTIPLE_SKILL_MD", "zip 包中包含多个 SKILL.md 文件，请只保留一个"
+	}
+	if skillMD.UncompressedSize64 > maxSkillMDSize {
+		return nil, "SKILL_MD_TOO_LARGE", fmt.Sprintf("SKILL.md exceeds %dMB limit", maxSkillMDSize/(1024*1024))
+	}
+	skillMDContent, err := readZipFile(skillMD)
+	if err != nil {
+		return nil, "INVALID_ZIP", "cannot read SKILL.md: " + err.Error()
 	}
 
 	return &ExtractResult{
@@ -97,6 +101,20 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 		TotalSize:      totalSize,
 		Files:          files,
 	}, "", ""
+}
+
+// isSkillMDCandidate reports whether name is a SKILL.md (case-insensitive) at
+// the root or exactly one directory deep — the only two locations the catalog
+// recognises.
+func isSkillMDCandidate(name string) bool {
+	if !strings.EqualFold(filepath.Base(name), "SKILL.md") {
+		return false
+	}
+	dir := filepath.Dir(name)
+	if dir == "." || dir == "" {
+		return true
+	}
+	return !strings.Contains(dir, "/")
 }
 
 // validateZipEntry checks a zip entry for path traversal and symlinks.

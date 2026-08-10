@@ -64,6 +64,21 @@ func TestExtractZip_CaseInsensitiveSkillMD(t *testing.T) {
 	}
 }
 
+func TestExtractZip_MultipleSkillMDRejected(t *testing.T) {
+	// Root + one-level SKILL.md is ambiguous — the archive author could serve
+	// one file while the client runs another — so extraction must reject it
+	// rather than silently pick one.
+	zipPath := createTestZip(t, map[string][]byte{
+		"SKILL.md":     []byte("# root"),
+		"sub/SKILL.md": []byte("# nested"),
+	})
+
+	_, errCode, _ := ExtractZip(zipPath, 20*1024*1024)
+	if errCode != "MULTIPLE_SKILL_MD" {
+		t.Fatalf("errCode = %q, want MULTIPLE_SKILL_MD", errCode)
+	}
+}
+
 func TestExtractZip_MissingSkillMD(t *testing.T) {
 	zipPath := createTestZip(t, map[string][]byte{
 		"README.md": []byte("hello"),
