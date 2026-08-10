@@ -855,7 +855,7 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 	case errors.Is(err, expertsvc.ErrForbidden):
 		apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "only the owner may modify this record", nil, "")
 	case errors.Is(err, expertsvc.ErrNameTaken):
-		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a record with this name already exists", nil, "")
+		apiresponse.Fail(c, http.StatusConflict, errcode.Duplicate, "a record with this name already exists", nil, "")
 	case errors.Is(err, expertsvc.ErrCategoryNotFound):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "category not found", nil, "")
 	case errors.Is(err, expertsvc.ErrInvalidVisibility):
