@@ -26,6 +26,15 @@ const (
 	// storage object prefix, so it is also charset-restricted (see the service);
 	// a long or exotic key would otherwise yield 500s or backend key-limit errors.
 	MaxMemberKeyLen = 64
+	// Collection caps bound every client-supplied array on the write path so a
+	// single (≤8 MiB) request can't fan out to an unbounded number of object-store
+	// writes or an oversized JSON column. MaxExpertSkills applies per expert AND
+	// per squad member; MaxSquadMembers per squad; the strategy/dependency caps
+	// bound the squad dispatch lists.
+	MaxExpertSkills      = 20
+	MaxSquadMembers      = 30
+	MaxSquadStrategies   = 30
+	MaxSquadDependencies = 50
 	// MaxMCPConfigBytes caps the raw mcp_config document (doc §6, v1: 64 KiB).
 	// Measured in bytes because the config is stored verbatim as text.
 	MaxMCPConfigBytes = 64 << 10

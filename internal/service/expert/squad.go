@@ -35,6 +35,9 @@ func (s *Service) CreateSquad(ctx context.Context, caller Caller, req model.Squa
 	if err := validateTags(tags); err != nil {
 		return nil, err
 	}
+	if err := validateSquadLists(req.Strategies, req.Dependencies); err != nil {
+		return nil, err
+	}
 
 	id := s.idGen()
 	members, leaderIdx, err := s.buildMembers(ctx, id, req.Members, nil)
@@ -198,9 +201,15 @@ func (s *Service) applySquadPatch(ctx context.Context, m *model.Squad, req model
 		m.Tags = tags
 	}
 	if req.Strategies != nil {
+		if err := validateSquadLists(*req.Strategies, model.SquadDependencies{}); err != nil {
+			return err
+		}
 		m.Strategies = *req.Strategies
 	}
 	if req.Dependencies != nil {
+		if err := validateSquadLists(nil, *req.Dependencies); err != nil {
+			return err
+		}
 		m.Dependencies = *req.Dependencies
 	}
 	if req.Permission != nil {
@@ -263,6 +272,9 @@ func validateSquadFields(leader, permission string) error {
 // Returns the built members (order preserved) and the leader index.
 func (s *Service) buildMembers(ctx context.Context, squadID string, in []model.SquadMemberInput, existing []model.SquadMember) ([]model.SquadMember, int, error) {
 	if len(in) == 0 {
+		return nil, 0, ErrInvalidMembers
+	}
+	if len(in) > model.MaxSquadMembers {
 		return nil, 0, ErrInvalidMembers
 	}
 	// Index existing members by member_key so a name-only skill on a PATCH can
@@ -348,9 +360,13 @@ func (s *Service) buildMembers(ctx context.Context, squadID string, in []model.S
 
 // validMemberKey reports whether a caller-supplied member_key is safe to
 // interpolate into a storage object prefix: bounded length, and limited to
-// letters, digits, and [._-] (no path separators, "..", or spaces).
+// letters, digits, and [._-] (no path separators or spaces), and never a
+// traversal segment containing "..".
 func validMemberKey(k string) bool {
-	if len(k) == 0 || len(k) > model.MaxMemberKeyLen {
+	if k == "" || len(k) > model.MaxMemberKeyLen {
+		return false
+	}
+	if strings.Contains(k, "..") {
 		return false
 	}
 	for _, r := range k {
@@ -362,6 +378,26 @@ func validMemberKey(k string) bool {
 		}
 	}
 	return true
+}
+
+// validateSquadLists bounds the dispatch strategy list and the two dependency
+// lists (count + per-entry length) so strategies_json / dependencies_json can't
+// grow unbounded from a single write.
+func validateSquadLists(strategies []string, deps model.SquadDependencies) error {
+	if len(strategies) > model.MaxSquadStrategies {
+		return ErrInvalidRequest
+	}
+	if len(deps.Blocking) > model.MaxSquadDependencies || len(deps.Recommended) > model.MaxSquadDependencies {
+		return ErrInvalidRequest
+	}
+	for _, list := range [][]string{strategies, deps.Blocking, deps.Recommended} {
+		for _, item := range list {
+			if utf8.RuneCountInString(item) > model.MaxExpertTextLen {
+				return ErrInvalidRequest
+			}
+		}
+	}
+	return nil
 }
 
 // resolveLeaderName returns the explicit leader when supplied, else the leader

@@ -79,6 +79,20 @@ func TestExtractZip_MultipleSkillMDRejected(t *testing.T) {
 	}
 }
 
+func TestExtractZip_BackslashSkillMDCounted(t *testing.T) {
+	// A Windows-style backslash path must not smuggle a second SKILL.md past the
+	// multi-candidate guard (filepath treats "\\" as one segment on Linux).
+	zipPath := createTestZip(t, map[string][]byte{
+		"SKILL.md":      []byte("# root"),
+		"sub\\SKILL.md": []byte("# nested"),
+	})
+
+	_, errCode, _ := ExtractZip(zipPath, 20*1024*1024)
+	if errCode != "MULTIPLE_SKILL_MD" {
+		t.Fatalf("errCode = %q, want MULTIPLE_SKILL_MD", errCode)
+	}
+}
+
 func TestExtractZip_MissingSkillMD(t *testing.T) {
 	zipPath := createTestZip(t, map[string][]byte{
 		"README.md": []byte("hello"),

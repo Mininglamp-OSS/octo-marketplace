@@ -623,3 +623,44 @@ func TestCreateExpertTagLengthLimit(t *testing.T) {
 		t.Fatalf("tag length over limit err = %v, want ErrInvalidRequest", err)
 	}
 }
+
+func TestCreateExpertSkillCountLimit(t *testing.T) {
+	svc, _ := newService()
+	skills := make([]model.SkillWrite, model.MaxExpertSkills+1)
+	for i := range skills {
+		skills[i] = model.SkillWrite{Name: "s"}
+	}
+	_, err := svc.CreateExpert(context.Background(), callerA, model.ExpertCreateRequest{
+		Name: "n", Summary: "s", Category: "研发工具", Instruction: "i", Skills: skills,
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("skill count over limit err = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestCreateSquadMemberCountLimit(t *testing.T) {
+	svc, _ := newService()
+	members := make([]model.SquadMemberInput, model.MaxSquadMembers+1)
+	for i := range members {
+		members[i] = model.SquadMemberInput{Name: "m", Role: "r", Instruction: "i"}
+	}
+	_, err := svc.CreateSquad(context.Background(), callerA, model.SquadCreateRequest{
+		Name: "n", Summary: "s", Category: "研发工具", Members: members,
+	})
+	if !errors.Is(err, ErrInvalidMembers) {
+		t.Fatalf("member count over limit err = %v, want ErrInvalidMembers", err)
+	}
+}
+
+func TestCreateSquadRejectsTraversalMemberKey(t *testing.T) {
+	svc, _ := newService()
+	_, err := svc.CreateSquad(context.Background(), callerA, model.SquadCreateRequest{
+		Name: "n", Summary: "s", Category: "研发工具",
+		Members: []model.SquadMemberInput{
+			{MemberKey: "..", Name: "m", Role: "r", Instruction: "i"},
+		},
+	})
+	if !errors.Is(err, ErrInvalidMembers) {
+		t.Fatalf("traversal member_key err = %v, want ErrInvalidMembers", err)
+	}
+}

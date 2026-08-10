@@ -374,6 +374,11 @@ func (s *Service) loadVisibleExpert(ctx context.Context, caller Caller, id strin
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
 func (s *Service) buildListFilter(ctx context.Context, caller Caller, p ListParams, mineOnly bool) (expertrepo.ListFilter, error) {
+	// Bound the tag filter: ResolveFilterTagIDs runs one query per name, so an
+	// uncapped ?tag= list becomes an unbounded sequence of round-trips.
+	if len(p.Tags) > model.MaxExpertTags {
+		return expertrepo.ListFilter{}, ErrInvalidRequest
+	}
 	tagGroups, err := s.repo.ResolveFilterTagIDs(ctx, caller.SpaceID, p.Tags)
 	if err != nil {
 		return expertrepo.ListFilter{}, mapRepoError(err)
@@ -640,6 +645,11 @@ func normalizeTagNames(tags []string) []string {
 // experts, ErrInvalidMembers for squad members). When s.store is nil
 // (storage-less tests) content/packages are ignored and skills are name-only.
 func (s *Service) buildSkillRefs(ctx context.Context, skills []model.SkillWrite, keyPrefix string, existing []model.SkillRef, invalid error) ([]model.SkillRef, error) {
+	// Bound the array: each package/content skill triggers an object-store write,
+	// so an uncapped list on a single request fans out unboundedly.
+	if len(skills) > model.MaxExpertSkills {
+		return nil, invalid
+	}
 	// Index the preservable existing skills by name (those that actually carry
 	// stored objects), consuming each at most once.
 	preservable := make(map[string][]model.SkillRef)

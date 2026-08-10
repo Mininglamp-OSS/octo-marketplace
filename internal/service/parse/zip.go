@@ -41,7 +41,7 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 	}
 	defer r.Close()
 
-	var totalSize int64
+	var totalSize uint64
 	var skillMD *zip.File
 	skillMDCount := 0
 	capFiles := len(r.File)
@@ -66,8 +66,12 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 			files = append(files, f.Name)
 		}
 
-		totalSize += int64(f.UncompressedSize64)
-		if totalSize > maxExtractedSize {
+		// UncompressedSize64 is an attacker-controlled uint64 from the archive
+		// header. Accumulate in uint64 (an int64 cast could flip negative and
+		// defeat the guard) and reject as soon as the declared total exceeds the
+		// cap — a single over-large entry trips it before any wrap is possible.
+		totalSize += f.UncompressedSize64
+		if totalSize > uint64(maxExtractedSize) {
 			return nil, "FILE_TOO_LARGE", fmt.Sprintf("extracted content exceeds %dMB limit", maxExtractedSize/(1024*1024))
 		}
 
@@ -98,15 +102,18 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 
 	return &ExtractResult{
 		SkillMDContent: skillMDContent,
-		TotalSize:      totalSize,
+		TotalSize:      int64(totalSize),
 		Files:          files,
 	}, "", ""
 }
 
 // isSkillMDCandidate reports whether name is a SKILL.md (case-insensitive) at
 // the root or exactly one directory deep — the only two locations the catalog
-// recognises.
+// recognises. Backslashes are normalised to "/" first so a Windows-style path
+// (which the Linux server's filepath would treat as a single segment) cannot
+// smuggle a second SKILL.md past the multi-candidate guard.
 func isSkillMDCandidate(name string) bool {
+	name = strings.ReplaceAll(name, `\`, "/")
 	if !strings.EqualFold(filepath.Base(name), "SKILL.md") {
 		return false
 	}
