@@ -48,10 +48,16 @@ in octo-web); the backend ships no prompt endpoint.
   at the row's top level; each squad member carries it inside its
   `members_json` entry (plus `member_key` / `template_id` / `role` /
   `is_leader`). Both sides implement one shape.
-- **Categories reuse the shared `categories` table** (the same table Skill and
-  future resources use; migration `20260714-01-skill-marketplace.sql`). Experts
-  do NOT get their own category table. The octo-web prototype's hardcoded 6
-  categories are remapped onto the canonical taxonomy; see Dependencies.
+- **Categories use a dedicated `expert_categories` taxonomy** (migration
+  `20260806-01-expert-categories.sql`), seeded with the octo-web prototype's 6
+  categories, exposed via `GET /expert_categories` with a visible-record count
+  per category. This **supersedes** the earlier "reuse the shared `categories`
+  table" plan: the expert catalog needs per-category counts scoped to the
+  caller's visibility and a stable, expert-owned category set the prototype's 6
+  fixed chips map onto. Trade-off (accepted): expert category ids are a separate
+  namespace from skill/MCP category ids and do not line up across catalogs.
+  `category` is carried as the NAME on the wire and resolved to/from the stored
+  id (doc §5).
 - **Tags follow the Skill pattern, not the MCP pattern.** A per-Space
   `expert_tags` dictionary table (shared by agents and squads) plus a
   `tags_json` array of tag ids on each row. This is the `skill_tags` +
@@ -75,8 +81,9 @@ in octo-web); the backend ships no prompt endpoint.
     `GET /squads/{id}` · `PATCH /squads/{id}` · `DELETE /squads/{id}`
   - `GET /expert_tags` — tag suggestions; `kind=agent|squad` selects which
     entity's visible rows to aggregate (mirrors `GET /mcp_tags`).
-  - Categories are served by the existing shared category endpoint; this task
-    adds no category endpoint.
+  - `GET /expert_categories` — the dedicated expert taxonomy with a
+    visible-record count per category; `kind=agent|squad` selects which entity
+    to count (see the taxonomy decision above).
 - Visibility model identical to MCP (§4 of `docs/api/expert-v1.md`):
   `public` / `private` / `system`. New records are always `public`;
   `system` is admin-only and not settable through the public API.
@@ -112,10 +119,12 @@ in octo-web); the backend ships no prompt endpoint.
   is a registry only; the install prompt is generated client-side.
 - Versioning, publish/draft state, immutable release artifacts. (The octo-web
   prototype has already removed the version concept entirely.)
-- Real Skill file upload / parse pipeline for `skills_json`. v1 stores
-  `{name, file_key?}`; wiring experts into the existing skill upload/parse
-  flow (`initUpload` / `triggerParse` / …) is a follow-up. `file_key` is
-  reserved and may be empty in v1.
+- ~~Real Skill file upload / parse pipeline for `skills_json`.~~ **Now in
+  scope.** v1 ships whole-package skill upload (presigned
+  `POST /expert_skill_uploads`), synchronous server-side `SKILL.md` extraction
+  (`internal/service/parse`), and presigned download — see doc §3.1/§3.1.1,
+  superseding the original plan to defer this and store only `{name, file_key?}`.
+  An async parse queue remains out of scope; extraction runs inline on write.
 - Secret redaction inside `mcp_config`. v1 validates JSON well-formedness and
   size only; a later slice can add env-value blanking mirroring MCP §5 once a
   real install flow needs it.
@@ -145,7 +154,9 @@ in octo-web); the backend ships no prompt endpoint.
   these endpoints. Field names in `docs/api/expert-v1.md` must match the
   `ExpertAgent` / `ExpertSquad` shapes so the frontend flips `USE_MOCK=false`
   without renames.
-- **Base path.** Canonical prefix `/market/api/v1`, matching MCP and Skill.
+- **Base path.** External/canonical prefix `/market/api/v1` (matching MCP and
+  Skill); the `/market` segment is stripped by the dev proxy / prod gateway, so
+  the gin router mounts these routes under `/api/v1` (see `internal/api/router`).
 
 ## Acceptance
 

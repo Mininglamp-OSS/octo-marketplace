@@ -104,16 +104,15 @@ top level of an `ExpertAgentDetail` (§3.2), and inside every squad member
 {
   "instruction": "你是资深后端架构师……",
   "mcp_config": "{\n  \"mcpServers\": {\n    \"git\": { \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-git\"] }\n  }\n}",
-  "skills": ["架构评审清单", "容量估算模板"]
+  "skills": [{"name": "架构评审清单"}, {"name": "容量估算模板"}]
 }
 ```
 
-- `instruction`: system prompt / role definition. Optional; empty string
-  collapses to omitted on read.
+- `instruction`: system prompt / role definition. Required (non-empty) — a
+  blank value is rejected with `400 VALIDATION_ERROR`.
 - `mcp_config`: the raw `mcpServers` config as a **JSON string** (exactly what
   the user typed in the config editor — see §6). Optional. Validated as
   well-formed JSON and size-capped on write; stored and returned verbatim.
-- `skills`: string array of skill names. v1 carries names only; server storage
 - `skills`: on **read**, an array of skill objects
   `{name, has_content, can_download, file_name, file_size, files}` (the write
   shape differs — see below). A skill is a whole Agent-Skill package (a
@@ -143,16 +142,24 @@ top level of an `ExpertAgentDetail` (§3.2), and inside every squad member
   ≤ 20 MiB). Returns `{upload_object_key, presigned_url, method, headers, expires_in}`.
   `PUT` the raw bytes to `presigned_url` with `headers`, then reference
   `upload_object_key` in a create/update skill (§4.1/§4.5).
+- `GET /experts/{expert_id}/skill_md?i={index}` — returns `{content}`, the
+  stored `SKILL.md` text for the skill at `index`. `404` when the skill has no
+  stored content (`has_content=false`) or the index is out of range.
+- `GET /squads/{squad_id}/skill_md?member={member_key}&i={index}` — the
+  squad-member twin.
 - `GET /experts/{expert_id}/skill_download?i={index}` — returns
   `{download_url}`, a short-lived presigned GET URL for the skill package at
   `index`. `404` when the skill has no stored package.
 - `GET /squads/{squad_id}/skill_download?member={member_key}&i={index}` — the
   squad-member twin.
 
-Object-key scheme (per record, overwritten by index on PATCH): the SKILL.md at
-`experts/{id}/skills/{i}/SKILL.md` (member: `squads/{id}/members/{mk}/skills/{i}/SKILL.md`)
-and the package at the sibling `.../skill.zip`. Uploaded-but-not-committed
-packages live under `expert-uploads/{upload_id}/…` and are deleted on commit.
+Object-key scheme (each stored skill gets a unique per-record folder, so a
+PATCH never overwrites another skill's objects): the SKILL.md at
+`experts/{id}/skills/{uuid}/SKILL.md` (member:
+`squads/{id}/members/{mk}/skills/{uuid}/SKILL.md`) and the package at the
+sibling `.../skill.zip`. Uploaded-but-not-committed packages live under
+`expert-uploads/{upload_id}/…` and are deleted on commit; objects orphaned by a
+PATCH are left for deferred GC (none in v1).
 
 ### 3.2 `ExpertAgentDetail`
 
@@ -165,7 +172,7 @@ Full record for `GET /experts/{expert_id}`, `POST /experts`,
   "short_name": "架构",
   "name": "后端架构师",
   "summary": "评审服务边界、数据模型和可靠性方案。",
-  "category": "dev-programming",
+  "category": "研发工具",
   "tags": ["架构评审", "可靠性"],
   "publisher": "Octo Community",
   "visibility": "public",
@@ -173,7 +180,7 @@ Full record for `GET /experts/{expert_id}`, `POST /experts`,
   "created_by_type": "human",
   "instruction": "你是资深后端架构师……",
   "mcp_config": "{ \"mcpServers\": { \"git\": { … } } }",
-  "skills": ["架构评审清单", "容量估算模板"],
+  "skills": [{"name": "架构评审清单"}, {"name": "容量估算模板"}],
   "created_at": "2026-08-06T10:15:00.000+08:00",
   "updated_at": "2026-08-06T10:15:00.000+08:00"
 }
@@ -221,7 +228,7 @@ detail.
   "short_name": "架构",
   "name": "后端架构师",
   "summary": "评审服务边界、数据模型和可靠性方案。",
-  "category": "dev-programming",
+  "category": "研发工具",
   "tags": ["架构评审", "可靠性"],
   "publisher": "Octo Community",
   "visibility": "public",
@@ -246,7 +253,7 @@ prompt.
   "is_leader": true,
   "instruction": "你是……",
   "mcp_config": "{ \"mcpServers\": {} }",
-  "skills": ["架构评审清单"]
+  "skills": [{"name": "架构评审清单"}]
 }
 ```
 
@@ -270,7 +277,7 @@ Full record for `GET /squads/{squad_id}`, `POST /squads`,
   "short_name": "研发",
   "name": "软件研发交付团",
   "summary": "从需求澄清到开发测试的一条软件研发协作链路。",
-  "category": "dev-programming",
+  "category": "研发工具",
   "tags": ["需求分析", "前后端开发", "自动化测试"],
   "publisher": "Mininglamp-OSS",
   "visibility": "public",
@@ -317,7 +324,7 @@ Projection for `GET /squads` and `GET /squads/mine`. Drops `strategies` /
   "short_name": "研发",
   "name": "软件研发交付团",
   "summary": "…",
-  "category": "dev-programming",
+  "category": "研发工具",
   "tags": ["需求分析", "前后端开发"],
   "publisher": "Mininglamp-OSS",
   "visibility": "public",
@@ -353,11 +360,11 @@ Publish a new standalone expert owned by the caller.
 {
   "name": "后端架构师",
   "summary": "评审服务边界、数据模型和可靠性方案。",
-  "category": "dev-programming",
+  "category": "研发工具",
   "tags": ["架构评审", "可靠性"],
   "instruction": "你是资深后端架构师……",
   "mcp_config": "{ \"mcpServers\": { \"git\": { … } } }",
-  "skills": ["架构评审清单", "容量估算模板"]
+  "skills": [{"name": "架构评审清单"}, {"name": "容量估算模板"}]
 }
 ```
 
@@ -443,7 +450,7 @@ collision).
 ### 4.6 `DELETE /experts/{expert_id}` — soft delete
 
 Owner only. Row soft-deleted (`deleted_at = now()`); list + detail treat it as
-gone; the name frees up for reuse. **Response (204):** empty. **Errors:**
+gone; the name frees up for reuse. **Response (200):** `{"data":{}}`. **Errors:**
 401 / 403 / 404.
 
 ### 4.7–4.12 `/squads` family
@@ -465,7 +472,7 @@ and `squad_id`:
   `members`. Sending `members` **replaces** the whole array (full-replace, not
   merge) — the client always submits the complete member list, mirroring the
   octo-web squad editor. Immutable fields as §4.5.
-- `DELETE /squads/{squad_id}` — soft delete; 204.
+- `DELETE /squads/{squad_id}` — soft delete; 200 `{"data":{}}`.
 
 **Errors:** same catalog as the experts family, with
 `err.marketplace.expert.invalid_members` added on create/update.
