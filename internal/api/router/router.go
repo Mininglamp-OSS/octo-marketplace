@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler"
 	categoryhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/category"
+	experthandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/expert"
 	metricshandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/metrics"
 	skillhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/skill"
 	uploadhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/upload"
@@ -19,8 +20,10 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	metricsredis "github.com/Mininglamp-OSS/octo-marketplace/internal/redis"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
+	expertrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/expert"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
 	categorysvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/category"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	metricssvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/metrics"
 	parsesvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
 	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
@@ -145,6 +148,11 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		skHandler := skillhandler.New(skSvc)
 		skHandler.Register(v1)
 		skHandler.RegisterAdmin(r, adminAuth)
+
+		// Expert Marketplace (docs/api/expert-v1.md): experts + squads + tags +
+		// the dedicated expert_categories taxonomy. Reuses the shared id generator.
+		expertSvc := expertsvc.New(expertrepo.New(db), store, generateID)
+		experthandler.New(expertSvc).Register(v1)
 
 		// Wire up metrics service and handler.
 		var mSvc *metricssvc.Service

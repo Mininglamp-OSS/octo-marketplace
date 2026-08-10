@@ -49,6 +49,10 @@ import (
 // @tag.description Current authenticated user context
 // @tag.name metrics
 // @tag.description Marketplace interaction metrics
+// @tag.name expert
+// @tag.description Expert catalog — single experts (专家) and tag suggestions
+// @tag.name expert_squad
+// @tag.description Expert squad catalog — expert teams (专家团)
 // @securityDefinitions.bearerauth Bearer
 
 // @securityDefinitions.apikey AdminToken

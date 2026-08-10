@@ -12,12 +12,16 @@ import (
 const (
 	maxExtractedSize = 50 * 1024 * 1024 // 50MB total extracted size limit
 	maxSkillMDSize   = 1 * 1024 * 1024  // 1MB SKILL.md size limit
+	maxManifestFiles = 500              // cap on the number of paths recorded in Files
 )
 
 // ExtractResult holds the results of zip extraction.
 type ExtractResult struct {
 	SkillMDContent []byte
 	TotalSize      int64
+	// Files is the manifest of regular-file paths inside the package (dirs
+	// excluded), in archive order. Used to show a bundled-file list in the UI.
+	Files []string
 }
 
 // ExtractZip safely extracts a zip file and returns the SKILL.md content.
@@ -40,6 +44,7 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 	var totalSize int64
 	var skillMDContent []byte
 	var skillMDFound bool
+	files := make([]string, 0, len(r.File))
 
 	for _, f := range r.File {
 		// Security: check for zip slip
@@ -49,6 +54,12 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 
 		if f.FileInfo().IsDir() {
 			continue
+		}
+
+		// Cap the recorded manifest so a package with pathologically many entries
+		// can't bloat the stored row / detail responses (SKILL.md scan continues).
+		if len(files) < maxManifestFiles {
+			files = append(files, f.Name)
 		}
 
 		totalSize += int64(f.UncompressedSize64)
@@ -84,6 +95,7 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 	return &ExtractResult{
 		SkillMDContent: skillMDContent,
 		TotalSize:      totalSize,
+		Files:          files,
 	}, "", ""
 }
 
