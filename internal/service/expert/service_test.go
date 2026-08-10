@@ -551,3 +551,75 @@ func TestListMineFilterScoping(t *testing.T) {
 		t.Fatalf("mine filter not scoped: %+v", store.lastFilter)
 	}
 }
+
+// A system row is globally visible AND may carry an owner_uid equal to a real
+// caller; the public mutation paths must still refuse to touch it (system rows
+// are admin-managed). These four assert the system exclusion on top of the
+// ownership check.
+
+func TestPatchExpertSystemRowForbiddenEvenForOwner(t *testing.T) {
+	svc, store := newService()
+	store.experts["e1"] = &model.Expert{
+		ID: "e1", Name: "x", Summary: "y", OwnerUID: "u1", SpaceID: "", Visibility: model.VisibilitySystem,
+	}
+	newName := "renamed"
+	if _, err := svc.PatchExpert(context.Background(), callerA, "e1", model.ExpertPatchRequest{Name: &newName}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("patch system expert err = %v, want ErrForbidden", err)
+	}
+}
+
+func TestDeleteExpertSystemRowForbiddenEvenForOwner(t *testing.T) {
+	svc, store := newService()
+	store.experts["e1"] = &model.Expert{
+		ID: "e1", Name: "x", OwnerUID: "u1", SpaceID: "", Visibility: model.VisibilitySystem,
+	}
+	if err := svc.DeleteExpert(context.Background(), callerA, "e1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("delete system expert err = %v, want ErrForbidden", err)
+	}
+}
+
+func TestPatchSquadSystemRowForbiddenEvenForOwner(t *testing.T) {
+	svc, store := newService()
+	store.squads["s1"] = &model.Squad{
+		ID: "s1", Name: "x", Summary: "y", OwnerUID: "u1", SpaceID: "", Visibility: model.VisibilitySystem,
+	}
+	newName := "renamed"
+	if _, err := svc.PatchSquad(context.Background(), callerA, "s1", model.SquadPatchRequest{Name: &newName}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("patch system squad err = %v, want ErrForbidden", err)
+	}
+}
+
+func TestDeleteSquadSystemRowForbiddenEvenForOwner(t *testing.T) {
+	svc, store := newService()
+	store.squads["s1"] = &model.Squad{
+		ID: "s1", OwnerUID: "u1", SpaceID: "", Visibility: model.VisibilitySystem,
+	}
+	if err := svc.DeleteSquad(context.Background(), callerA, "s1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("delete system squad err = %v, want ErrForbidden", err)
+	}
+}
+
+func TestCreateExpertTagCountLimit(t *testing.T) {
+	svc, _ := newService()
+	tags := make([]string, 0, model.MaxExpertTags+1)
+	for i := 0; i <= model.MaxExpertTags; i++ {
+		tags = append(tags, string(rune('a'+i)))
+	}
+	_, err := svc.CreateExpert(context.Background(), callerA, model.ExpertCreateRequest{
+		Name: "n", Summary: "s", Category: "研发工具", Instruction: "i", Tags: tags,
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("tag count over limit err = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestCreateExpertTagLengthLimit(t *testing.T) {
+	svc, _ := newService()
+	long := strings.Repeat("a", model.MaxExpertTagNameLen+1)
+	_, err := svc.CreateExpert(context.Background(), callerA, model.ExpertCreateRequest{
+		Name: "n", Summary: "s", Category: "研发工具", Instruction: "i", Tags: []string{long},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("tag length over limit err = %v, want ErrInvalidRequest", err)
+	}
+}

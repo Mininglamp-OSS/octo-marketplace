@@ -165,6 +165,10 @@ func (s *Service) CreateExpert(ctx context.Context, caller Caller, req model.Exp
 	if strings.TrimSpace(req.Instruction) == "" {
 		return nil, ErrInvalidRequest
 	}
+	tags := normalizeTagNames(req.Tags)
+	if err := validateTags(tags); err != nil {
+		return nil, err
+	}
 
 	id := s.idGen()
 	skills, err := s.buildSkillRefs(ctx, req.Skills, expertSkillsPrefix(id), nil, ErrInvalidRequest)
@@ -179,7 +183,7 @@ func (s *Service) CreateExpert(ctx context.Context, caller Caller, req model.Exp
 		Name:             name,
 		Summary:          summary,
 		Category:         categoryID,
-		Tags:             normalizeTagNames(req.Tags),
+		Tags:             tags,
 		Publisher:        strings.TrimSpace(req.Publisher),
 		OwnerUID:         caller.UID,
 		SpaceID:          caller.SpaceID,
@@ -259,7 +263,7 @@ func (s *Service) PatchExpert(ctx context.Context, caller Caller, id string, req
 	if err != nil {
 		return nil, err
 	}
-	if m.OwnerUID != caller.UID {
+	if forbidsPublicMutation(m.Visibility, m.OwnerUID, caller) {
 		return nil, ErrForbidden
 	}
 	if err := s.applyExpertPatch(ctx, m, req); err != nil {
@@ -282,7 +286,7 @@ func (s *Service) DeleteExpert(ctx context.Context, caller Caller, id string) er
 	if err != nil {
 		return err
 	}
-	if m.OwnerUID != caller.UID {
+	if forbidsPublicMutation(m.Visibility, m.OwnerUID, caller) {
 		return ErrForbidden
 	}
 	if err := s.repo.DeleteExpert(ctx, id, s.now()); err != nil {
@@ -324,7 +328,11 @@ func (s *Service) applyExpertPatch(ctx context.Context, m *model.Expert, req mod
 		m.Category = categoryID
 	}
 	if req.Tags != nil {
-		m.Tags = normalizeTagNames(*req.Tags)
+		tags := normalizeTagNames(*req.Tags)
+		if err := validateTags(tags); err != nil {
+			return err
+		}
+		m.Tags = tags
 	}
 	if req.Instruction != nil {
 		if strings.TrimSpace(*req.Instruction) == "" {
@@ -401,6 +409,17 @@ func isVisible(v model.Visibility, spaceID, ownerUID string, caller Caller) bool
 		return false
 	}
 	return v == model.VisibilityPublic || ownerUID == caller.UID
+}
+
+// forbidsPublicMutation reports whether a public patch/delete must be rejected.
+// system rows are platform/admin-managed and are never mutable through the
+// public surface — regardless of owner_uid — while a public/private row is
+// mutable only by its owner. `isVisible` deliberately exposes every system row
+// for reads, so the mutating verbs need this extra system exclusion on top of
+// the ownership check (otherwise a system row whose owner_uid matches the
+// caller would be patch/delete-able here).
+func forbidsPublicMutation(v model.Visibility, ownerUID string, caller Caller) bool {
+	return v == model.VisibilitySystem || ownerUID != caller.UID
 }
 
 // resolveCreatedByType stamps provenance: bot iff the request rode in on a Bot
@@ -487,6 +506,22 @@ func (s *Service) ListCategories(ctx context.Context, caller Caller, kind expert
 		})
 	}
 	return items, nil
+}
+
+// validateTags bounds an already-normalized tag set: the number of tags and
+// each tag's length. Without this a write can (a) 500 on the VARCHAR(128)
+// expert_tags column with an over-long name and (b) flood the shared per-Space
+// tag dictionary with unbounded rows. Mirrors the skill catalog's tag guard.
+func validateTags(tags []string) error {
+	if len(tags) > model.MaxExpertTags {
+		return ErrInvalidRequest
+	}
+	for _, t := range tags {
+		if utf8.RuneCountInString(t) > model.MaxExpertTagNameLen {
+			return ErrInvalidRequest
+		}
+	}
+	return nil
 }
 
 // validateGeneric enforces the shared name/summary/publisher rules.
@@ -700,7 +735,17 @@ func (s *Service) storeSkillPackage(ctx context.Context, sk model.SkillWrite, ba
 	if err := s.store.PutObject(ctx, mdKey, bytes.NewReader(md), int64(len(md)), "text/markdown; charset=utf-8"); err != nil {
 		return nil, err
 	}
-	if err := s.store.CopyObject(ctx, uploadKey, zipKey); err != nil {
+	// Persist the exact bytes we just validated — NOT a CopyObject of uploadKey.
+	// The presigned PUT stays replayable for presignTTL, so the uploader could
+	// swap in different bytes between ExtractZip (above) and here; copying the
+	// mutable source would then store a package that never passed the
+	// zip-slip/symlink/size checks. Re-upload the validated temp file instead.
+	zf, err := os.Open(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+	defer zf.Close()
+	if err := s.store.PutObject(ctx, zipKey, zf, size, "application/zip"); err != nil {
 		// A stray SKILL.md was written; leave it for the deferred GC.
 		return nil, err
 	}

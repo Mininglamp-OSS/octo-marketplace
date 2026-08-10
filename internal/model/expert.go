@@ -16,6 +16,12 @@ const (
 	// MaxExpertTextLen bounds member role / free-text list entries so a member
 	// role or dependency string cannot bloat members_json unbounded.
 	MaxExpertTextLen = 500
+	// MaxExpertTags caps the number of tags per record and MaxExpertTagNameLen
+	// each tag's length. Bounds the shared per-Space expert_tags dictionary a
+	// single write can grow and keeps a tag inside the VARCHAR(128) column (an
+	// over-long name would otherwise surface as a 500 on insert).
+	MaxExpertTags       = 20
+	MaxExpertTagNameLen = 64
 	// MaxMCPConfigBytes caps the raw mcp_config document (doc §6, v1: 64 KiB).
 	// Measured in bytes because the config is stored verbatim as text.
 	MaxMCPConfigBytes = 64 << 10

@@ -31,6 +31,10 @@ func (s *Service) CreateSquad(ctx context.Context, caller Caller, req model.Squa
 	if err != nil {
 		return nil, err
 	}
+	tags := normalizeTagNames(req.Tags)
+	if err := validateTags(tags); err != nil {
+		return nil, err
+	}
 
 	id := s.idGen()
 	members, leaderIdx, err := s.buildMembers(ctx, id, req.Members, nil)
@@ -46,7 +50,7 @@ func (s *Service) CreateSquad(ctx context.Context, caller Caller, req model.Squa
 		Name:             name,
 		Summary:          summary,
 		Category:         categoryID,
-		Tags:             normalizeTagNames(req.Tags),
+		Tags:             tags,
 		Publisher:        strings.TrimSpace(req.Publisher),
 		OwnerUID:         caller.UID,
 		SpaceID:          caller.SpaceID,
@@ -125,7 +129,7 @@ func (s *Service) PatchSquad(ctx context.Context, caller Caller, id string, req 
 	if err != nil {
 		return nil, err
 	}
-	if m.OwnerUID != caller.UID {
+	if forbidsPublicMutation(m.Visibility, m.OwnerUID, caller) {
 		return nil, ErrForbidden
 	}
 	if err := s.applySquadPatch(ctx, m, req); err != nil {
@@ -148,7 +152,7 @@ func (s *Service) DeleteSquad(ctx context.Context, caller Caller, id string) err
 	if err != nil {
 		return err
 	}
-	if m.OwnerUID != caller.UID {
+	if forbidsPublicMutation(m.Visibility, m.OwnerUID, caller) {
 		return ErrForbidden
 	}
 	if err := s.repo.DeleteSquad(ctx, id, s.now()); err != nil {
@@ -187,7 +191,11 @@ func (s *Service) applySquadPatch(ctx context.Context, m *model.Squad, req model
 		m.Category = categoryID
 	}
 	if req.Tags != nil {
-		m.Tags = normalizeTagNames(*req.Tags)
+		tags := normalizeTagNames(*req.Tags)
+		if err := validateTags(tags); err != nil {
+			return err
+		}
+		m.Tags = tags
 	}
 	if req.Strategies != nil {
 		m.Strategies = *req.Strategies
