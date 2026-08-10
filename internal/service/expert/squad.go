@@ -316,7 +316,13 @@ func (s *Service) buildMembers(ctx context.Context, squadID string, in []model.S
 	}
 	if leaderIdx == -1 {
 		leaderIdx = 0
-		members[0].IsLeader = true
+	}
+	// Persist exactly one leader (doc §3.4): a body that flags zero or several
+	// members is_leader still resolves to a single leader index, so normalize
+	// every member's IsLeader to that index. Otherwise multiple stored leaders
+	// would render several "Leader" badges on read.
+	for i := range members {
+		members[i].IsLeader = i == leaderIdx
 	}
 	return members, leaderIdx, nil
 }
