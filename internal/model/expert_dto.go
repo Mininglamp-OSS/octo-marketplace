@@ -17,6 +17,7 @@ package model
 //     advisory (the server derives the authoritative name from SKILL.md).
 //   - Inline content (legacy / name-only): content carries the SKILL.md text
 //     directly. Empty content + empty upload_object_key yields a name-only skill.
+//
 // The server never echoes content or the package back on read.
 type SkillWrite struct {
 	Name            string `json:"name"`
@@ -49,14 +50,14 @@ type SkillRead struct {
 // compatibility but ignored (new records are always public); `system` is
 // rejected. `publisher` is descriptive and accepted.
 type ExpertCreateRequest struct {
-	Name        string     `json:"name"`
-	Summary     string     `json:"summary"`
-	Category    string     `json:"category"`
-	Tags        []string   `json:"tags"`
-	Publisher   string     `json:"publisher"`
-	Visibility  Visibility `json:"visibility"`
-	Instruction string     `json:"instruction"`
-	MCPConfig   string     `json:"mcp_config"`
+	Name        string       `json:"name"`
+	Summary     string       `json:"summary"`
+	Category    string       `json:"category"`
+	Tags        []string     `json:"tags"`
+	Publisher   string       `json:"publisher"`
+	Visibility  Visibility   `json:"visibility"`
+	Instruction string       `json:"instruction"`
+	MCPConfig   string       `json:"mcp_config"`
 	Skills      []SkillWrite `json:"skills"`
 }
 
@@ -65,14 +66,14 @@ type ExpertCreateRequest struct {
 // distinguishable from a zero value. Immutable/identity fields are absent and
 // thus rejected as unknown by the strict decoder.
 type ExpertPatchRequest struct {
-	Name        *string     `json:"name"`
-	Summary     *string     `json:"summary"`
-	Category    *string     `json:"category"`
-	Tags        *[]string   `json:"tags"`
-	Publisher   *string     `json:"publisher"`
-	Visibility  *Visibility `json:"visibility"`
-	Instruction *string     `json:"instruction"`
-	MCPConfig   *string     `json:"mcp_config"`
+	Name        *string       `json:"name"`
+	Summary     *string       `json:"summary"`
+	Category    *string       `json:"category"`
+	Tags        *[]string     `json:"tags"`
+	Publisher   *string       `json:"publisher"`
+	Visibility  *Visibility   `json:"visibility"`
+	Instruction *string       `json:"instruction"`
+	MCPConfig   *string       `json:"mcp_config"`
 	Skills      *[]SkillWrite `json:"skills"`
 }
 
@@ -188,32 +189,32 @@ type SquadMemberIO struct {
 
 // SquadCreateRequest is the FLAT create body for POST /squads (doc §4.7).
 type SquadCreateRequest struct {
-	Name         string            `json:"name"`
-	Summary      string            `json:"summary"`
-	Category     string            `json:"category"`
-	Tags         []string          `json:"tags"`
-	Publisher    string            `json:"publisher"`
-	Visibility   Visibility        `json:"visibility"`
-	Leader       string            `json:"leader"`
-	Strategies   []string          `json:"strategies"`
-	Dependencies SquadDependencies `json:"dependencies"`
-	Permission   string            `json:"permission"`
+	Name         string             `json:"name"`
+	Summary      string             `json:"summary"`
+	Category     string             `json:"category"`
+	Tags         []string           `json:"tags"`
+	Publisher    string             `json:"publisher"`
+	Visibility   Visibility         `json:"visibility"`
+	Leader       string             `json:"leader"`
+	Strategies   []string           `json:"strategies"`
+	Dependencies SquadDependencies  `json:"dependencies"`
+	Permission   string             `json:"permission"`
 	Members      []SquadMemberInput `json:"members"`
 }
 
 // SquadPatchRequest is the FLAT partial-update body for PATCH /squads/{id}.
 // Sending members replaces the whole array (full-replace, not merge).
 type SquadPatchRequest struct {
-	Name         *string            `json:"name"`
-	Summary      *string            `json:"summary"`
-	Category     *string            `json:"category"`
-	Tags         *[]string          `json:"tags"`
-	Publisher    *string            `json:"publisher"`
-	Visibility   *Visibility        `json:"visibility"`
-	Leader       *string            `json:"leader"`
-	Strategies   *[]string          `json:"strategies"`
-	Dependencies *SquadDependencies `json:"dependencies"`
-	Permission   *string            `json:"permission"`
+	Name         *string             `json:"name"`
+	Summary      *string             `json:"summary"`
+	Category     *string             `json:"category"`
+	Tags         *[]string           `json:"tags"`
+	Publisher    *string             `json:"publisher"`
+	Visibility   *Visibility         `json:"visibility"`
+	Leader       *string             `json:"leader"`
+	Strategies   *[]string           `json:"strategies"`
+	Dependencies *SquadDependencies  `json:"dependencies"`
+	Permission   *string             `json:"permission"`
 	Members      *[]SquadMemberInput `json:"members"`
 }
 
