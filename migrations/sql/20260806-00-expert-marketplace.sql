@@ -12,9 +12,10 @@
 --     `expert_squads` (专家团 / teams) share only generic marketplace metadata;
 --     their payloads do not overlap, and the octo-web UI shows them in separate
 --     tabs, so a `kind`-discriminator single table (half-NULL rows) is avoided.
---   * Categories reuse the shared `categories` table (20260714-01) via a
---     `category_id` string — no FK constraint, validated in the service, exactly
---     like `skills.category_id`.
+--   * Categories use the dedicated `expert_categories` taxonomy (added in
+--     20260806-01, which supersedes the earlier "reuse the shared `categories`
+--     table" plan) via a `category_id` string — no FK constraint, validated in
+--     the service.
 --   * Tags follow the Skill design: a per-Space `expert_tags` dictionary
 --     (shared by both entities) + a `tags` JSON array of tag ids on each row
 --     (mirrors `skill_tags` + `skills.tags` after 20260721-00). The wire always

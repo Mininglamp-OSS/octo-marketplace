@@ -262,8 +262,16 @@ prompt.
 - `template_id`: template identifier for the install prompt; free string,
   server fills `expert-{squad_id}-NN` when omitted. Never an FK.
 - `name` / `role`: required. `is_leader`: exactly one member SHOULD be leader;
-  if none is flagged the server marks the first member leader.
+  the server normalizes `is_leader` to a single member — the first one flagged,
+  or the first member when none is flagged.
 - `instruction` / `mcp_config` / `skills`: the member's `ExpertSpec`.
+
+> Precedence of `leader` vs `is_leader`: the boolean `is_leader` is the
+> authoritative flag (normalized to exactly one member above); the top-level
+> `leader` **string** is only the display name. When a write supplies both, the
+> `leader` string is stored verbatim for display and may name a member other
+> than the flagged one — clients that need the leader identity should read
+> `is_leader`, not match the `leader` string.
 
 ### 3.5 `ExpertSquadDetail`
 
@@ -401,6 +409,12 @@ records, plus all `public` records in `X-Space-Id`, plus the caller's own
 | `sort` | string | — | `updated` → `updated_at DESC, id DESC`; `relevance` (with non-empty `keyword`) → weighted match; else default (creation-time DESC). |
 | `page` | int | `1` | One-based page number. |
 | `page_size` | int | `20` | Max `100`. |
+
+> Note: `category` here is the category **id** (as returned by
+> `GET /expert_categories` in `expert_category_id`), whereas in create/update/read
+> **bodies** `category` is the category **NAME** (§5). Same field name, two
+> representations — the list filter takes the id, the resource shape takes the name.
+> `keyword` matching against `category` resolves the name through the taxonomy.
 
 **Response (200):**
 
