@@ -166,8 +166,12 @@ func (f ListFilter) buildWhere() (string, []any) {
 	clauses = append(clauses, "deleted_at IS NULL")
 
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {
+		// `category` in the keyword contract (doc §4.2) is the display NAME, but
+		// rows store category_id (an opaque slug). Match the name through the
+		// taxonomy so a keyword like "研发工具" hits, instead of comparing the raw id.
 		clauses = append(clauses,
-			"(name LIKE ? OR summary LIKE ? OR category_id LIKE ? OR creator_name LIKE ?)")
+			"(name LIKE ? OR summary LIKE ? OR creator_name LIKE ? "+
+				"OR category_id IN (SELECT id FROM expert_categories WHERE name LIKE ? AND deleted_at IS NULL))")
 		like := "%" + escapeLike(kw) + "%"
 		args = append(args, like, like, like, like)
 	}
