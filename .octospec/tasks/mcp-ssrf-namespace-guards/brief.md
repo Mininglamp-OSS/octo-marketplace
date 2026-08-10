@@ -58,18 +58,19 @@ Reuse the Probe subsystem's existing SSRF primitives (`validateProbeURL`,
   predicate derives the embedded IPv4 from the IPv4-mapped and IPv4-translated
   (`::ffff:0:0:0/96`) forms and the NAT64 well-known prefix (`64:ff9b::/96`) and
   re-checks it, so a translated loopback/RFC-1918 address cannot pass as public
-  IPv6. Open: the RFC 8215 local-use `/48` prefix is only checked on its trailing
-  32 bits, not decoded per RFC 6052, so a `/48` encoding at another offset can
-  still slip; `fec0::/10` and `240.0.0.0/4` are also not yet covered (review
-  P2-A, tracked separately).
-- **Probe error redaction**: SSRF-policy rejections and any socket-level failure
-  (`*net.OpError`, including one wrapped in `*url.Error`) collapse to a single
-  opaque client message (`probe target is not reachable`); the concrete cause is
-  logged server-side only. Application-level causes (non-2xx status, JSON-RPC
-  error, malformed payload) keep a concrete hint. Open: non-`OpError` transport
-  failures such as TLS/certificate errors also still surface a concrete message
-  (review P2-B, tracked separately). Redirect hops keep re-running the per-hop
-  literal check, and the redirected host is re-validated at dial time.
+  IPv6. The RFC 8215 local-use NAT64 `/48` prefix (`64:ff9b:1::/48`) is rejected
+  wholesale rather than decoded, since its embedded-IPv4 offset differs from the
+  `/96` forms (RFC 6052 §2.2) and a trailing-32-bit read could be fooled by a
+  decoy tail (review P2-A). Still open: `fec0::/10` and `240.0.0.0/4`.
+- **Probe error redaction**: transport failures — SSRF-policy rejections
+  (`errProbeTargetBlocked`) and any error from the HTTP round-trip (dial, socket,
+  TLS/x509), which is wrapped in `probeTransportError` (or arrives as a bare
+  `*net.OpError`) — collapse to a single opaque client message (`probe target is
+  not reachable`); the concrete cause is logged server-side only. This is an
+  allow-list: only application-level causes raised AFTER a successful round-trip
+  (non-2xx status, JSON-RPC error, malformed payload, origin mismatch) keep a
+  concrete hint (review P2-B). Redirect hops keep re-running the per-hop literal
+  check, and the redirected host is re-validated at dial time.
 
 ## Out of scope (deliberately not touched)
 

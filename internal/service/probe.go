@@ -48,6 +48,18 @@ type ipResolver interface {
 // oracle (issue #49).
 var errProbeTargetBlocked = errors.New("probe target is not permitted")
 
+// probeTransportError wraps any error returned by the HTTP client's round-trip
+// (dial, socket, TLS/x509 handshake — every non-application-layer failure). It
+// is the allow-list boundary probeFail uses: a transport error is opaque to the
+// client (its text can embed the service's own local address, cert-chain
+// detail, or the target's internal hostname — review P1-1/P2-B), while errors
+// raised AFTER a successful round-trip (bad HTTP status, JSON-RPC error,
+// malformed payload, origin mismatch) keep their concrete message as a hint.
+type probeTransportError struct{ err error }
+
+func (e *probeTransportError) Error() string { return e.err.Error() }
+func (e *probeTransportError) Unwrap() error { return e.err }
+
 // Probe subsystem — runs an MCP initialize + tools/list handshake against a
 // remote server so the create wizard can auto-populate the tool list. See
 // docs/api/mcp-v1.md §4.7 for the wire contract.
@@ -291,10 +303,16 @@ func isUnsafeProbeIP(ip net.IP) bool {
 	if ip4 := ip.To4(); ip4 != nil {
 		return isUnsafeProbeIPv4(ip4)
 	}
-	// An IPv6 address that embeds an IPv4 (translated / NAT64) is unsafe if the
-	// embedded v4 is unsafe — a stack that translates it reaches loopback /
-	// RFC 1918. Only block on that; a public embedded v4 falls through to the
-	// generic IPv6 checks below.
+	// RFC 8215 local-use NAT64 (64:ff9b:1::/48): the embedded IPv4 offset depends
+	// on the prefix length (RFC 6052 §2.2) and is NOT the trailing 32 bits, so a
+	// crafted /48 address could hide an internal v4 at the real offset while its
+	// tail decodes to a public decoy. Rather than decode it, reject the whole
+	// local-use block — it is a translation prefix with no legitimate public
+	// target (review: /48 embedded-IPv4 bypass).
+	if nat64LocalPrefix.Contains(ip) {
+		return true
+	}
+	// The /96 forms embed the IPv4 in the trailing 32 bits; derive and re-check.
 	if embedded, ok := embeddedProbeIPv4(ip); ok && isUnsafeProbeIPv4(embedded) {
 		return true
 	}
@@ -309,17 +327,16 @@ func isUnsafeProbeIPv4(ip net.IP) bool {
 }
 
 // embeddedProbeIPv4 returns the IPv4 embedded in the trailing 32 bits of an
-// IPv6 address that belongs to a known IPv4-translation / NAT64 prefix, so the
-// caller can re-check it as v4. Covers the RFC 2765 translated block, the
-// RFC 6052 well-known NAT64 prefix, and the RFC 8215 local-use NAT64 prefix.
+// IPv6 address for the prefixes that place it there: the RFC 2765 IPv4-
+// translated block and the RFC 6052 well-known NAT64 prefix, both /96. The
+// RFC 8215 /48 prefix is handled separately (rejected wholesale) because its
+// embedding offset differs.
 func embeddedProbeIPv4(ip net.IP) (net.IP, bool) {
 	ip16 := ip.To16()
 	if ip16 == nil {
 		return nil, false
 	}
-	if v4TranslatedPrefix.Contains(ip16) ||
-		nat64WKPrefix.Contains(ip16) ||
-		nat64LocalPrefix.Contains(ip16) {
+	if v4TranslatedPrefix.Contains(ip16) || nat64WKPrefix.Contains(ip16) {
 		return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15]).To4(), true
 	}
 	return nil, false
@@ -366,12 +383,14 @@ func hasToolsCapability(res *initializeResult) bool {
 }
 
 // probeFail translates a transport-layer error into the in-body ProbeResponse
-// shape. Deadline exceeded → timeout. Any socket-level failure (*net.OpError,
-// including one wrapped in *url.Error) is treated as opaque: its Error() text
-// embeds socket addresses — for a failure on an established connection, the
-// service's OWN local address — so it must never reach the client (#49). Only
-// application-level causes (non-2xx status, JSON-RPC error, malformed payload)
-// keep their concrete message as a UI hint.
+// shape. Deadline exceeded → timeout. Any transport failure — an SSRF-policy
+// rejection, or an error from the HTTP round-trip (dial / socket / TLS / x509),
+// which arrives wrapped in probeTransportError or as a bare *net.OpError — is
+// opaque, because its text can embed the service's own local address,
+// cert-chain detail, or the target's internal hostname (#49; review P1-1/P2-B).
+// Only application-level causes raised AFTER a successful round-trip (non-2xx
+// status, JSON-RPC error, malformed payload, origin mismatch) keep their
+// concrete message as a UI hint.
 func probeFail(err error) ProbeResponse {
 	if err == nil {
 		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
@@ -385,12 +404,9 @@ func probeFail(err error) ProbeResponse {
 			Message: "probe timed out",
 		}}
 	}
-	// SSRF-policy rejections (unsafe / mixed resolution, DNS failure) and any
-	// socket-level failure collapse to a fixed message — the concrete cause is
-	// logged server-side in the dialer, and must not leak resolved addresses or
-	// the service's own local address to the client (#49).
+	var transportErr *probeTransportError
 	var opErr *net.OpError
-	if errors.Is(err, errProbeTargetBlocked) || errors.As(err, &opErr) {
+	if errors.Is(err, errProbeTargetBlocked) || errors.As(err, &transportErr) || errors.As(err, &opErr) {
 		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
 			Code:    ProbeErrInitFailed,
 			Message: "probe target is not reachable",
@@ -528,7 +544,7 @@ func (s *probeSession) openSSE(ctx context.Context) error {
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return err
+		return &probeTransportError{err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
@@ -768,7 +784,7 @@ func (s *probeSession) rpc(ctx context.Context, id any, method string, params an
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &probeTransportError{err}
 	}
 	defer resp.Body.Close()
 
@@ -827,7 +843,7 @@ func (s *probeSession) rpcSSE(ctx context.Context, id any, method string, params
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &probeTransportError{err}
 	}
 	// Legacy SSE uses the POST purely for delivery; drain and close.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -222,6 +223,27 @@ func TestProbeFailKeepsApplicationError(t *testing.T) {
 	}
 }
 
+// A TLS/x509 handshake failure is not a *net.OpError, but it arrives wrapped in
+// probeTransportError, so it must still be opaque — its text can leak the
+// target's internal hostname / cert chain (review P2-B).
+func TestProbeFailRedactsTLSError(t *testing.T) {
+	inner := &url.Error{
+		Op:  "Get",
+		URL: "http://probe-target.test/mcp",
+		Err: x509.HostnameError{Host: "internal.svc.cluster.local"},
+	}
+	resp := probeFail(&probeTransportError{err: inner})
+	if resp.OK || resp.Error == nil {
+		t.Fatalf("expected failure, got %+v", resp)
+	}
+	if resp.Error.Message != "probe target is not reachable" {
+		t.Fatalf("TLS/x509 error not redacted: %q", resp.Error.Message)
+	}
+	if strings.Contains(resp.Error.Message, "internal.svc.cluster.local") {
+		t.Fatalf("internal hostname leaked: %q", resp.Error.Message)
+	}
+}
+
 // ── P2-8: embedded-IPv4 (translated / NAT64) unsafe detection ────────────────
 
 func TestIsUnsafeProbeIP_EmbeddedIPv4(t *testing.T) {
@@ -233,9 +255,13 @@ func TestIsUnsafeProbeIP_EmbeddedIPv4(t *testing.T) {
 		{"::ffff:0:7f00:1", true},       // IPv4-translated 127.0.0.1
 		{"::ffff:0:a00:5", true},        // IPv4-translated 10.0.0.5
 		{"64:ff9b::7f00:1", true},       // NAT64 well-known 127.0.0.1
-		{"64:ff9b:1:2:3:4:a00:5", true}, // RFC 8215 local-use 10.0.0.5
-		{"::ffff:0:808:808", false},     // IPv4-translated 8.8.8.8 (public) → allowed
-		{"2001:db8::a00:5", false},      // global IPv6 whose tail looks like 10.0.0.5 → NOT over-blocked
+		{"64:ff9b:1:2:3:4:a00:5", true}, // RFC 8215 local-use /48 → rejected wholesale
+		// Decoy: 10.0.0.5 at the real RFC 6052 /48 offset, tail decodes to a
+		// public 8.8.8.8. Trailing-32-bit extraction would read the decoy and
+		// allow it; the wholesale /48 reject blocks it (review /48 bypass).
+		{"64:ff9b:1:a00:0:500:808:808", true},
+		{"::ffff:0:808:808", false}, // IPv4-translated 8.8.8.8 (public) → allowed
+		{"2001:db8::a00:5", false},  // global IPv6 whose tail looks like 10.0.0.5 → NOT over-blocked
 	}
 	for _, c := range cases {
 		ip := net.ParseIP(c.raw)
