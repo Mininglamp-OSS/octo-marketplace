@@ -15,13 +15,29 @@ import (
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/apierr"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	"go.uber.org/zap"
 )
 
 var (
 	cgnatPrefix = mustParseCIDR("100.64.0.0/10")
 	nat64Prefix = mustParseCIDR("64:ff9b::/96")
 )
+
+// ipResolver is the DNS surface newProbeHTTPClient needs before dialing.
+// *net.Resolver satisfies it; probe tests inject a fake so mixed / IPv6 /
+// DNS-rebinding resolutions are exercisable without real DNS (issue #49).
+type ipResolver interface {
+	LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
+}
+
+// errProbeTargetBlocked is the single opaque error the dialer returns for any
+// SSRF-policy rejection — an unsafe or mixed resolution, or a DNS failure. The
+// concrete cause is logged server-side; the client only ever sees a generic
+// message so the probe cannot be turned into an internal DNS / network state
+// oracle (issue #49).
+var errProbeTargetBlocked = errors.New("probe target is not permitted")
 
 // Probe subsystem — runs an MCP initialize + tools/list handshake against a
 // remote server so the create wizard can auto-populate the tool list. See
@@ -109,7 +125,7 @@ func (s *Service) Probe(ctx context.Context, req ProbeRequest) (ProbeResponse, *
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	client := newProbeHTTPClient(s.probeAllowPrivate)
+	client := newProbeHTTPClient(s.probeAllowPrivate, s.resolver)
 	sess := &probeSession{
 		client:    client,
 		url:       endpoint,
@@ -189,33 +205,59 @@ func validateProbeURL(raw string, allowPrivate bool) (string, *apierr.Error) {
 	return u.String(), nil
 }
 
-func newProbeHTTPClient(allowPrivate bool) *http.Client {
+func newProbeHTTPClient(allowPrivate bool, resolver ipResolver) *http.Client {
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
 	dialer := &net.Dialer{Timeout: probeTimeout, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
 			if err != nil {
-				return nil, fmt.Errorf("invalid probe address: %w", err)
+				return nil, errProbeTargetBlocked
 			}
-			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			ips, err := resolver.LookupIP(ctx, "ip", host)
 			if err != nil {
-				return nil, fmt.Errorf("resolve probe host: %w", err)
+				logging.Warn("probe dns lookup failed",
+					zap.String("host", host), zap.Error(err))
+				return nil, errProbeTargetBlocked
 			}
-			for _, ip := range ips {
-				if !allowPrivate && isUnsafeProbeIP(ip) {
-					continue
+			if len(ips) == 0 {
+				logging.Warn("probe dns lookup returned no addresses",
+					zap.String("host", host))
+				return nil, errProbeTargetBlocked
+			}
+			// Whole-request rejection (issue #49): a single unsafe address in
+			// the resolution set fails the entire request. A mixed public /
+			// private answer is a DNS-rebinding signal, so we deliberately do
+			// NOT cherry-pick the safe IP and connect anyway.
+			if !allowPrivate {
+				for _, ip := range ips {
+					if isUnsafeProbeIP(ip) {
+						logging.Warn("probe target resolved to an unsafe address",
+							zap.String("host", host))
+						return nil, errProbeTargetBlocked
+					}
 				}
+			}
+			var lastErr error
+			for _, ip := range ips {
 				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 				if dialErr == nil {
 					return conn, nil
 				}
-				err = dialErr
+				lastErr = dialErr
 			}
-			if !allowPrivate {
-				return nil, errors.New("probe target resolves only to private or local network addresses")
+			// Preserve the transport error (keeps timeout classification in
+			// probeFail) — the target here is the caller-supplied public host,
+			// so the failure carries no internal-network detail to redact.
+			if lastErr == nil {
+				lastErr = errProbeTargetBlocked
 			}
-			return nil, fmt.Errorf("connect to probe target: %w", err)
+			logging.Warn("probe dial failed",
+				zap.String("host", host), zap.Error(lastErr))
+			return nil, lastErr
 		},
 	}
 	return &http.Client{
@@ -225,9 +267,11 @@ func newProbeHTTPClient(allowPrivate bool) *http.Client {
 			if len(via) >= 10 {
 				return errors.New("too many redirects")
 			}
-			_, apiErr := validateProbeURL(req.URL.String(), allowPrivate)
-			if apiErr != nil {
-				return errors.New("redirect target is not permitted")
+			// Every redirect hop re-runs the same literal-IP/scheme/credential
+			// gate; the resolve-time gate above then fires on the new host when
+			// the redirected request dials.
+			if _, apiErr := validateProbeURL(req.URL.String(), allowPrivate); apiErr != nil {
+				return errProbeTargetBlocked
 			}
 			return nil
 		},
@@ -315,6 +359,15 @@ func probeFail(err error) ProbeResponse {
 		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
 			Code:    ProbeErrTimeout,
 			Message: "probe timed out",
+		}}
+	}
+	// SSRF-policy rejections (unsafe / mixed resolution, DNS failure) collapse
+	// to a fixed message — the concrete cause was already logged server-side in
+	// the dialer, and must not leak resolved addresses to the client (#49).
+	if errors.Is(err, errProbeTargetBlocked) {
+		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
+			Code:    ProbeErrInitFailed,
+			Message: "probe target is not reachable",
 		}}
 	}
 	return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
