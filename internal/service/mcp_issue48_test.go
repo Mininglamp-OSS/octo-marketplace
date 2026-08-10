@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -56,6 +57,70 @@ func TestCreateAllowsPublicTargetURL(t *testing.T) {
 
 	if _, apiErr := svc.Create(context.Background(), caller, req); apiErr != nil {
 		t.Fatalf("public url rejected: %v", apiErr)
+	}
+}
+
+// Review P1-1 + rec #3: non-canonical IPv4 literal spellings (inet_aton) that
+// resolve to an unsafe address must be rejected at the literal-IP gate, WITHOUT
+// a DNS lookup. The injected resolver errors if consulted, proving layer 1
+// catches them rather than the write slipping through fail-open. Public
+// spellings still pass; a real domain is deferred to the resolve-time gate.
+func TestValidateConnectionURL_NonCanonicalLiteralCorpus(t *testing.T) {
+	unsafe := []struct{ name, host string }{
+		{"decimal_loopback", "2130706433"}, // 127.0.0.1
+		{"decimal_metadata", "2852039166"}, // 169.254.169.254
+		{"shorthand_2part", "127.1"},       // 127.0.0.1
+		{"octal_octet", "0177.0.0.1"},      // 127.0.0.1
+		{"hex_packed", "0x7f000001"},       // 127.0.0.1
+		{"zero", "0"},                      // 0.0.0.0
+		{"canonical", "127.0.0.1"},         // control
+	}
+	for _, tc := range unsafe {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			svc := New(newFakeStore())
+			svc.resolver = &fakeResolver{err: errors.New("resolver must not be consulted for a literal")}
+			apiErr := svc.validateConnectionURL(context.Background(),
+				model.TransportStreamableHTTP, "http://"+tc.host+"/mcp")
+			if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
+				t.Fatalf("expected private_address rejection for %q, got %v", tc.host, apiErr)
+			}
+			if svc.resolver.(*fakeResolver).called {
+				t.Fatalf("resolver was consulted for literal %q — layer-1 gate missed it", tc.host)
+			}
+		})
+	}
+
+	// Public non-canonical spellings must NOT be over-blocked.
+	for _, host := range []string{"134744072" /* 8.8.8.8 */, "8.8.8.8"} {
+		svc := New(newFakeStore())
+		svc.resolver = &fakeResolver{err: errors.New("resolver must not be consulted for a literal")}
+		if apiErr := svc.validateConnectionURL(context.Background(),
+			model.TransportStreamableHTTP, "http://"+host+"/mcp"); apiErr != nil {
+			t.Fatalf("public literal %q wrongly blocked: %v", host, apiErr)
+		}
+	}
+}
+
+// A host that is neither an IP literal nor a syntactically valid DNS name must
+// fail CLOSED at the resolve-time gate rather than fail-open and persist
+// (review P1-1, option 2). A real domain that NXDOMAINs still fails open.
+func TestValidateConnectionURL_FailsClosedOnNonDNSHost(t *testing.T) {
+	svc := New(newFakeStore())
+	svc.resolver = &fakeResolver{err: &net.DNSError{Err: "no such host"}}
+	// "999999999999" overflows parseHostIP (not an IP) and its all-digit sole
+	// label is not a valid DNS name → must be rejected, not persisted.
+	apiErr := svc.validateConnectionURL(context.Background(),
+		model.TransportStreamableHTTP, "http://999999999999/mcp")
+	if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
+		t.Fatalf("non-DNS host must fail closed, got %v", apiErr)
+	}
+
+	// A genuine domain that fails to resolve still fails OPEN (transient flake).
+	svc2 := New(newFakeStore())
+	svc2.resolver = &fakeResolver{err: &net.DNSError{Err: "no such host", Name: "mcp.example.com"}}
+	if apiErr := svc2.validateConnectionURL(context.Background(),
+		model.TransportStreamableHTTP, "https://mcp.example.com/x"); apiErr != nil {
+		t.Fatalf("real domain DNS flake must fail open, got %v", apiErr)
 	}
 }
 

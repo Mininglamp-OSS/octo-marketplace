@@ -1062,8 +1062,8 @@ func (s *Service) validateConnectionURL(ctx context.Context, transport model.Tra
 		return nil // already validated by validateProbeURL; unreachable in practice
 	}
 	host := u.Hostname()
-	if net.ParseIP(host) != nil {
-		return nil // literal IP already covered by validateProbeURL
+	if parseHostIP(host) != nil {
+		return nil // literal IP (incl. inet_aton forms) already covered by validateProbeURL
 	}
 	resolver := s.resolver
 	if resolver == nil {
@@ -1073,7 +1073,17 @@ func (s *Service) validateConnectionURL(ctx context.Context, transport model.Tra
 	defer cancel()
 	ips, err := resolver.LookupIP(rctx, "ip", host)
 	if err != nil || len(ips) == 0 {
-		return nil // fail-open: transient DNS issues must not block a write
+		// Fail-open only for a real domain: a lookup miss there is a transient
+		// resolver flake, and the runtime that actually dials owns the
+		// authoritative gate. But a host that is not a valid DNS name and did not
+		// parse as an IP literal is neither — it is a malformed / obfuscated
+		// target (e.g. an inet_aton form outside parseHostIP's coverage), and
+		// failing open on it is what let the P1-1 payloads persist. Fail closed.
+		if !isValidDNSName(host) {
+			return apierr.InvalidRequest("url host is not a valid domain or address",
+				apierr.Detail{Field: "url", Reason: "private_address"})
+		}
+		return nil
 	}
 	for _, ip := range ips {
 		if isUnsafeProbeIP(ip) {

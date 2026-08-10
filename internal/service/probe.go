@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,16 @@ var (
 	v4TranslatedPrefix = mustParseCIDR("::ffff:0:0:0/96") // RFC 2765 IPv4-translated
 	nat64WKPrefix      = mustParseCIDR("64:ff9b::/96")    // RFC 6052 well-known NAT64
 	nat64LocalPrefix   = mustParseCIDR("64:ff9b:1::/48")  // RFC 8215 local-use NAT64
+	v4CompatPrefix     = mustParseCIDR("::/96")           // RFC 4291 IPv4-compatible (deprecated) — ::a.b.c.d
+
+	// Additional reserved / non-routable ranges the generic net.IP predicates do
+	// NOT flag (review P2-1 / P2-2). Folded in alongside the address-form
+	// normalization so the whole class is closed in one pass rather than one
+	// prefix per round.
+	siteLocalV6Prefix = mustParseCIDR("fec0::/10")     // RFC 3879 deprecated IPv6 site-local
+	reservedV4Prefix  = mustParseCIDR("240.0.0.0/4")   // RFC 1112 reserved (class E)
+	ietfProtoV4Prefix = mustParseCIDR("192.0.0.0/24")  // RFC 6890 IETF protocol assignments
+	benchmarkV4Prefix = mustParseCIDR("198.18.0.0/15") // RFC 2544 benchmarking
 )
 
 // ipResolver is the DNS surface newProbeHTTPClient needs before dialing.
@@ -219,7 +230,7 @@ func validateProbeURL(raw string, allowPrivate bool) (string, *apierr.Error) {
 		return "", apierr.InvalidRequest("url must not include credentials",
 			apierr.Detail{Field: "url", Reason: "credentials"})
 	}
-	if ip := net.ParseIP(u.Hostname()); ip != nil && !allowPrivate && isUnsafeProbeIP(ip) {
+	if ip := parseHostIP(u.Hostname()); ip != nil && !allowPrivate && isUnsafeProbeIP(ip) {
 		return "", apierr.InvalidRequest("url targets a private or local network address",
 			apierr.Detail{Field: "url", Reason: "private_address"})
 	}
@@ -317,26 +328,31 @@ func isUnsafeProbeIP(ip net.IP) bool {
 		return true
 	}
 	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
+		siteLocalV6Prefix.Contains(ip)
 }
 
 func isUnsafeProbeIPv4(ip net.IP) bool {
 	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
-		cgnatPrefix.Contains(ip)
+		cgnatPrefix.Contains(ip) || reservedV4Prefix.Contains(ip) ||
+		ietfProtoV4Prefix.Contains(ip) || benchmarkV4Prefix.Contains(ip)
 }
 
 // embeddedProbeIPv4 returns the IPv4 embedded in the trailing 32 bits of an
 // IPv6 address for the prefixes that place it there: the RFC 2765 IPv4-
-// translated block and the RFC 6052 well-known NAT64 prefix, both /96. The
-// RFC 8215 /48 prefix is handled separately (rejected wholesale) because its
-// embedding offset differs.
+// translated block, the RFC 6052 well-known NAT64 prefix, and the deprecated
+// RFC 4291 IPv4-compatible block (::a.b.c.d), all /96. The RFC 8215 /48 prefix
+// is handled separately (rejected wholesale) because its embedding offset
+// differs. ::/96's only non-embedding occupants (:: and ::1) still resolve to
+// unsafe (0.0.0.0 / caught by IsLoopback), so folding it in over-blocks nothing.
 func embeddedProbeIPv4(ip net.IP) (net.IP, bool) {
 	ip16 := ip.To16()
 	if ip16 == nil {
 		return nil, false
 	}
-	if v4TranslatedPrefix.Contains(ip16) || nat64WKPrefix.Contains(ip16) {
+	if v4TranslatedPrefix.Contains(ip16) || nat64WKPrefix.Contains(ip16) ||
+		v4CompatPrefix.Contains(ip16) {
 		return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15]).To4(), true
 	}
 	return nil, false
@@ -348,6 +364,128 @@ func mustParseCIDR(raw string) *net.IPNet {
 		panic("invalid cidr: " + raw)
 	}
 	return network
+}
+
+// parseHostIP parses a URL host as an IP literal, accepting the non-canonical
+// IPv4 spellings that net.ParseIP rejects but that libc getaddrinfo / curl /
+// Node's http all resolve identically (inet_aton semantics): a bare integer
+// (decimal / octal / hex) and 1-to-4-part dotted forms with each part in any of
+// those bases. Without this, http://2130706433/, http://127.1/, http://0x7f000001/
+// etc. slip past the literal-IP gate — net.ParseIP returns nil, the caller
+// treats them as a domain, DNS NXDOMAINs (they are not domains), and the write
+// is accepted — reaching loopback / cloud-metadata on whoever later dials the
+// stored URL (review P1-1, pentest 4.7 / #48). Returns nil for real DNS names
+// and IPv6 literals (net.ParseIP already covers canonical IPv6).
+func parseHostIP(host string) net.IP {
+	if host == "" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip
+	}
+	if strings.Contains(host, ":") {
+		return nil // IPv6 is only ever the canonical form net.ParseIP handles
+	}
+	return parseInetAtonIPv4(host)
+}
+
+// parseInetAtonIPv4 implements the dotted / packed integer forms of inet_aton.
+// The final part absorbs all remaining low-order bytes (so 127.1 == 127.0.0.1
+// and 2130706433 == 127.0.0.1). Returns nil if any part is not a valid
+// decimal/octal/hex integer or overflows its field.
+func parseInetAtonIPv4(host string) net.IP {
+	parts := strings.Split(host, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return nil
+	}
+	vals := make([]uint64, len(parts))
+	for i, p := range parts {
+		v, ok := parseInetPart(p)
+		if !ok {
+			return nil
+		}
+		vals[i] = v
+	}
+	var addr uint32
+	switch len(parts) {
+	case 1:
+		if vals[0] > 0xffffffff {
+			return nil
+		}
+		addr = uint32(vals[0])
+	case 2:
+		if vals[0] > 0xff || vals[1] > 0xffffff {
+			return nil
+		}
+		addr = uint32(vals[0])<<24 | uint32(vals[1])
+	case 3:
+		if vals[0] > 0xff || vals[1] > 0xff || vals[2] > 0xffff {
+			return nil
+		}
+		addr = uint32(vals[0])<<24 | uint32(vals[1])<<16 | uint32(vals[2])
+	case 4:
+		if vals[0] > 0xff || vals[1] > 0xff || vals[2] > 0xff || vals[3] > 0xff {
+			return nil
+		}
+		addr = uint32(vals[0])<<24 | uint32(vals[1])<<16 | uint32(vals[2])<<8 | uint32(vals[3])
+	}
+	return net.IPv4(byte(addr>>24), byte(addr>>16), byte(addr>>8), byte(addr)).To4()
+}
+
+// parseInetPart parses one inet_aton component: 0x-prefixed hex, a leading-0
+// octal, or plain decimal — matching strtoul(…, 0) as inet_aton uses.
+func parseInetPart(p string) (uint64, bool) {
+	if p == "" {
+		return 0, false
+	}
+	base := 10
+	s := p
+	switch {
+	case len(s) >= 2 && (s[0:2] == "0x" || s[0:2] == "0X"):
+		base, s = 16, s[2:]
+		if s == "" {
+			return 0, false
+		}
+	case len(s) > 1 && s[0] == '0':
+		base, s = 8, s[1:]
+	}
+	v, err := strconv.ParseUint(s, base, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// isValidDNSName reports whether host is a syntactically plausible DNS name
+// (RFC 1123 labels) whose final label is not all-digits. It is the fail-open
+// gate for the resolve-time check: a lookup miss on a real domain is a transient
+// flake we tolerate, but a lookup miss on something that is not a hostname at
+// all (a bare integer, an inet_aton form parseHostIP somehow did not catch) must
+// NOT fail open — that is what let the P1-1 payloads persist.
+func isValidDNSName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			c := l[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+				c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	last := labels[len(labels)-1]
+	for i := 0; i < len(last); i++ {
+		if last[i] < '0' || last[i] > '9' {
+			return true // final label has a non-digit → a real TLD, not a literal
+		}
+	}
+	return false
 }
 
 // sanitizedHeaders drops the reserved secret placeholder (frontend sends it

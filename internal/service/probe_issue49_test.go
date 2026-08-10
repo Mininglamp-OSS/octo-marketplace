@@ -262,6 +262,11 @@ func TestIsUnsafeProbeIP_EmbeddedIPv4(t *testing.T) {
 		{"64:ff9b:1:a00:0:500:808:808", true},
 		{"::ffff:0:808:808", false}, // IPv4-translated 8.8.8.8 (public) → allowed
 		{"2001:db8::a00:5", false},  // global IPv6 whose tail looks like 10.0.0.5 → NOT over-blocked
+		// Review P2-1: IPv4-compatible ::a.b.c.d (To4()==nil, not in the /96
+		// translated / NAT64 sets) — must derive the embedded v4 and re-check.
+		{"::7f00:1", true},   // ::127.0.0.1 loopback
+		{"::a00:5", true},    // ::10.0.0.5 private
+		{"::808:808", false}, // ::8.8.8.8 public → allowed
 	}
 	for _, c := range cases {
 		ip := net.ParseIP(c.raw)
@@ -270,6 +275,78 @@ func TestIsUnsafeProbeIP_EmbeddedIPv4(t *testing.T) {
 		}
 		if got := isUnsafeProbeIP(ip); got != c.want {
 			t.Fatalf("isUnsafeProbeIP(%s) = %v, want %v", c.raw, got, c.want)
+		}
+	}
+}
+
+// ── Review P2-2: additional reserved / non-routable ranges ───────────────────
+
+func TestIsUnsafeProbeIP_ReservedRanges(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"fec0::1", true},   // RFC 3879 deprecated IPv6 site-local
+		{"240.0.0.1", true}, // RFC 1112 reserved (class E)
+		{"255.255.255.255", true},
+		{"192.0.0.1", true},    // RFC 6890 IETF protocol assignments
+		{"198.18.0.1", true},   // RFC 2544 benchmarking
+		{"198.19.255.1", true}, // upper half of 198.18.0.0/15
+		{"8.8.8.8", false},     // public control
+		{"192.0.1.1", false},   // just outside 192.0.0.0/24 → public
+		{"198.20.0.1", false},  // just outside 198.18.0.0/15 → public
+	}
+	for _, c := range cases {
+		ip := net.ParseIP(c.raw)
+		if ip == nil {
+			t.Fatalf("bad test IP %q", c.raw)
+		}
+		if got := isUnsafeProbeIP(ip); got != c.want {
+			t.Fatalf("isUnsafeProbeIP(%s) = %v, want %v", c.raw, got, c.want)
+		}
+	}
+}
+
+// ── Review P1-1 + rec #3: non-canonical IPv4 literal normalization corpus ────
+
+// parseHostIP must resolve every inet_aton spelling to the same address libc /
+// curl / Node would, so the literal-IP gate cannot be bypassed by re-spelling an
+// unsafe target. Real DNS names and IPv6 literals must return nil (deferred to
+// the resolve-time gate / net.ParseIP).
+func TestParseHostIP_Corpus(t *testing.T) {
+	cases := []struct {
+		host string
+		want string // "" means parseHostIP must return nil (not an IP literal)
+	}{
+		{"127.0.0.1", "127.0.0.1"},    // canonical
+		{"2130706433", "127.0.0.1"},   // decimal packed
+		{"0x7f000001", "127.0.0.1"},   // hex packed
+		{"017700000001", "127.0.0.1"}, // octal packed
+		{"127.1", "127.0.0.1"},        // 2-part shorthand
+		{"127.0.1", "127.0.0.1"},      // 3-part shorthand
+		{"0177.0.0.1", "127.0.0.1"},   // octal first octet
+		{"0x7f.0.0.1", "127.0.0.1"},   // hex first octet
+		{"2852039166", "169.254.169.254"},
+		{"0", "0.0.0.0"},
+		{"8.8.8.8", "8.8.8.8"},   // public literal still parses
+		{"134744072", "8.8.8.8"}, // public decimal packed
+		{"example.com", ""},      // real domain → not a literal
+		{"foo.internal", ""},     // real-looking name → not a literal
+		{"256.0.0.1", ""},        // octet overflow → not a valid literal
+		{"1.2.3.4.5", ""},        // 5 parts → not a literal
+		{"08.0.0.1", ""},         // invalid octal digit → not a literal
+		{"::1", "::1"},           // bare IPv6 (u.Hostname strips brackets) → ParseIP handles
+	}
+	for _, c := range cases {
+		got := parseHostIP(c.host)
+		if c.want == "" {
+			if got != nil {
+				t.Fatalf("parseHostIP(%q) = %v, want nil", c.host, got)
+			}
+			continue
+		}
+		if got == nil || !got.Equal(net.ParseIP(c.want)) {
+			t.Fatalf("parseHostIP(%q) = %v, want %s", c.host, got, c.want)
 		}
 	}
 }

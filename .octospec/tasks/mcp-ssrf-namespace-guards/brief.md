@@ -32,11 +32,21 @@ Reuse the Probe subsystem's existing SSRF primitives (`validateProbeURL`,
   `PATCH /market/api/v1/mcps/{id}`, and the admin `system` twins): for remote
   transports (`streamable-http` / `sse`) the connection URL is validated with
   the same policy Probe uses —
-  1. literal-IP / scheme / credential check via `validateProbeURL`, and
+  1. literal-IP / scheme / credential check via `validateProbeURL`. The host is
+     first run through `parseHostIP`, which normalizes the non-canonical IPv4
+     spellings `net.ParseIP` rejects but libc / curl / Node accept (inet_aton:
+     decimal / octal / hex packed integers and 1-to-4-part shorthand), so
+     `http://2130706433/`, `http://127.1/`, `http://0x7f000001/`, `http://0/`
+     cannot slip past the literal gate (review P1-1, pentest 4.7 / #48), and
   2. a best-effort DNS resolve-time check that rejects the write if any resolved
-     address is unsafe. The resolve step is **fail-open** (lookup error/timeout/
-     empty answer does not block the write) because the runtime that actually
-     dials owns the authoritative gate and DNS can rebind after the check.
+     address is unsafe. The resolve step is **fail-open** *for real domains only*
+     (lookup error/timeout/empty answer does not block the write) because the
+     runtime that actually dials owns the authoritative gate and DNS can rebind
+     after the check. A host that is neither an IP literal nor a syntactically
+     valid DNS name (`isValidDNSName`: RFC 1123 labels, final label not
+     all-digits) **fails closed** — a bare integer is not a domain, so the
+     "transient DNS flake" justification for failing open does not apply, and
+     failing open on it is exactly what let the P1-1 payloads persist.
   Rejection is `VALIDATION_ERROR` (400) with `field=url, reason=private_address`.
   The `PROBE_ALLOW_PRIVATE` escape hatch applies identically. On `Patch` the URL
   check runs only when the patch touches `transport`/`url`/`command` (matching
@@ -55,13 +65,16 @@ Reuse the Probe subsystem's existing SSRF primitives (`validateProbeURL`,
 - **Probe whole-request rejection**: the dialer resolves the host and rejects the
   entire request if ANY resolved address is unsafe (no cherry-picking a safe IP
   out of a mixed answer). DNS failure / empty answer is rejected. The unsafe-IP
-  predicate derives the embedded IPv4 from the IPv4-mapped and IPv4-translated
-  (`::ffff:0:0:0/96`) forms and the NAT64 well-known prefix (`64:ff9b::/96`) and
-  re-checks it, so a translated loopback/RFC-1918 address cannot pass as public
-  IPv6. The RFC 8215 local-use NAT64 `/48` prefix (`64:ff9b:1::/48`) is rejected
-  wholesale rather than decoded, since its embedded-IPv4 offset differs from the
-  `/96` forms (RFC 6052 §2.2) and a trailing-32-bit read could be fooled by a
-  decoy tail (review P2-A). Still open: `fec0::/10` and `240.0.0.0/4`.
+  predicate derives the embedded IPv4 from the IPv4-mapped, IPv4-translated
+  (`::ffff:0:0:0/96`), IPv4-compatible (`::/96`, RFC 4291 — review P2-1) and
+  NAT64 well-known (`64:ff9b::/96`) forms and re-checks it, so a translated /
+  compatible loopback/RFC-1918 address cannot pass as public IPv6. The RFC 8215
+  local-use NAT64 `/48` prefix (`64:ff9b:1::/48`) is rejected wholesale rather
+  than decoded, since its embedded-IPv4 offset differs from the `/96` forms
+  (RFC 6052 §2.2) and a trailing-32-bit read could be fooled by a decoy tail
+  (review P2-A). The IPv4 predicate also rejects `240.0.0.0/4` (reserved),
+  `192.0.0.0/24` (IETF protocol) and `198.18.0.0/15` (benchmarking); the IPv6
+  predicate also rejects `fec0::/10` (deprecated site-local) — review P2-2.
 - **Probe error redaction**: transport failures — SSRF-policy rejections
   (`errProbeTargetBlocked`) and any error from the HTTP round-trip (dial, socket,
   TLS/x509), which is wrapped in `probeTransportError` (or arrives as a bare
@@ -88,10 +101,14 @@ Reuse the Probe subsystem's existing SSRF primitives (`validateProbeURL`,
 ## Acceptance
 
 - Create/patch with a literal internal/loopback/metadata/link-local URL →
-  `VALIDATION_ERROR` `private_address`; a legitimate public URL succeeds; `stdio`
-  is unaffected; `PROBE_ALLOW_PRIVATE=true` permits private targets.
+  `VALIDATION_ERROR` `private_address`; the same holds for its non-canonical
+  spellings (decimal / octal / hex packed, 1-to-4-part shorthand), asserted as a
+  corpus at both the `isUnsafeProbeIP`/`parseHostIP` and `validateConnectionURL`
+  layers; a legitimate public URL (canonical or packed) succeeds; `stdio` is
+  unaffected; `PROBE_ALLOW_PRIVATE=true` permits private targets.
 - Create/patch where the host resolves to any unsafe address → rejected; a DNS
-  error fails open (write succeeds).
+  error on a real domain fails open (write succeeds); a non-DNS-name host that
+  does not parse as an IP literal fails closed.
 - Create/patch reusing a `system` name or slug → `DUPLICATE`; a no-op edit of an
   owned `system` row does not self-collide.
 - Probe rejects mixed public/private, all-private, IPv6-loopback, cloud-metadata,
