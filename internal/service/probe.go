@@ -22,7 +22,16 @@ import (
 
 var (
 	cgnatPrefix = mustParseCIDR("100.64.0.0/10")
-	nat64Prefix = mustParseCIDR("64:ff9b::/96")
+	// IPv6 prefixes that embed an IPv4 address in their trailing 32 bits. Any
+	// address inside one of these is only as safe as the embedded v4, so the
+	// predicate derives that v4 and re-checks it (issue #49 / P2-8). To4() only
+	// recognises the IPv4-*mapped* form (::ffff:a.b.c.d); the translated and
+	// NAT64 forms fall through to the generic IPv6 branch where IsPrivate/
+	// IsLoopback are false, so a translated 127.0.0.1 / 10.x would otherwise be
+	// treated as a public IPv6 and allowed.
+	v4TranslatedPrefix = mustParseCIDR("::ffff:0:0:0/96") // RFC 2765 IPv4-translated
+	nat64WKPrefix      = mustParseCIDR("64:ff9b::/96")    // RFC 6052 well-known NAT64
+	nat64LocalPrefix   = mustParseCIDR("64:ff9b:1::/48")  // RFC 8215 local-use NAT64
 )
 
 // ipResolver is the DNS surface newProbeHTTPClient needs before dialing.
@@ -282,10 +291,12 @@ func isUnsafeProbeIP(ip net.IP) bool {
 	if ip4 := ip.To4(); ip4 != nil {
 		return isUnsafeProbeIPv4(ip4)
 	}
-	if nat64Prefix.Contains(ip) {
-		if embedded, ok := embeddedNAT64IPv4(ip); ok {
-			return isUnsafeProbeIPv4(embedded)
-		}
+	// An IPv6 address that embeds an IPv4 (translated / NAT64) is unsafe if the
+	// embedded v4 is unsafe — a stack that translates it reaches loopback /
+	// RFC 1918. Only block on that; a public embedded v4 falls through to the
+	// generic IPv6 checks below.
+	if embedded, ok := embeddedProbeIPv4(ip); ok && isUnsafeProbeIPv4(embedded) {
+		return true
 	}
 	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
@@ -297,12 +308,21 @@ func isUnsafeProbeIPv4(ip net.IP) bool {
 		cgnatPrefix.Contains(ip)
 }
 
-func embeddedNAT64IPv4(ip net.IP) (net.IP, bool) {
-	ip = ip.To16()
-	if ip == nil || !nat64Prefix.Contains(ip) {
+// embeddedProbeIPv4 returns the IPv4 embedded in the trailing 32 bits of an
+// IPv6 address that belongs to a known IPv4-translation / NAT64 prefix, so the
+// caller can re-check it as v4. Covers the RFC 2765 translated block, the
+// RFC 6052 well-known NAT64 prefix, and the RFC 8215 local-use NAT64 prefix.
+func embeddedProbeIPv4(ip net.IP) (net.IP, bool) {
+	ip16 := ip.To16()
+	if ip16 == nil {
 		return nil, false
 	}
-	return net.IPv4(ip[12], ip[13], ip[14], ip[15]).To4(), true
+	if v4TranslatedPrefix.Contains(ip16) ||
+		nat64WKPrefix.Contains(ip16) ||
+		nat64LocalPrefix.Contains(ip16) {
+		return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15]).To4(), true
+	}
+	return nil, false
 }
 
 func mustParseCIDR(raw string) *net.IPNet {
@@ -346,8 +366,12 @@ func hasToolsCapability(res *initializeResult) bool {
 }
 
 // probeFail translates a transport-layer error into the in-body ProbeResponse
-// shape. Deadline exceeded → timeout; anything else → init_failed (with the
-// concrete message so the UI can surface a hint).
+// shape. Deadline exceeded → timeout. Any socket-level failure (*net.OpError,
+// including one wrapped in *url.Error) is treated as opaque: its Error() text
+// embeds socket addresses — for a failure on an established connection, the
+// service's OWN local address — so it must never reach the client (#49). Only
+// application-level causes (non-2xx status, JSON-RPC error, malformed payload)
+// keep their concrete message as a UI hint.
 func probeFail(err error) ProbeResponse {
 	if err == nil {
 		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
@@ -361,10 +385,12 @@ func probeFail(err error) ProbeResponse {
 			Message: "probe timed out",
 		}}
 	}
-	// SSRF-policy rejections (unsafe / mixed resolution, DNS failure) collapse
-	// to a fixed message — the concrete cause was already logged server-side in
-	// the dialer, and must not leak resolved addresses to the client (#49).
-	if errors.Is(err, errProbeTargetBlocked) {
+	// SSRF-policy rejections (unsafe / mixed resolution, DNS failure) and any
+	// socket-level failure collapse to a fixed message — the concrete cause is
+	// logged server-side in the dialer, and must not leak resolved addresses or
+	// the service's own local address to the client (#49).
+	var opErr *net.OpError
+	if errors.Is(err, errProbeTargetBlocked) || errors.As(err, &opErr) {
 		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
 			Code:    ProbeErrInitFailed,
 			Message: "probe target is not reachable",

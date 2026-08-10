@@ -188,6 +188,7 @@ func TestPatchRejectsChangingURLToUnsafeTarget(t *testing.T) {
 func TestCreateRejectsSystemNameCollision(t *testing.T) {
 	store := newFakeStore()
 	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")} // hermetic: no real DNS
 	seed(store, model.MCP{
 		ID:         "sys",
 		Name:       "GitHub Official",
@@ -211,6 +212,7 @@ func TestCreateRejectsSystemNameCollision(t *testing.T) {
 func TestCreateRejectsSystemSlugCollision(t *testing.T) {
 	store := newFakeStore()
 	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")} // hermetic: no real DNS
 	seed(store, model.MCP{
 		ID:         "sys",
 		Name:       "GitHub Official",
@@ -234,6 +236,7 @@ func TestCreateRejectsSystemSlugCollision(t *testing.T) {
 func TestCreateAllowsNameMatchingNonSystemRow(t *testing.T) {
 	store := newFakeStore()
 	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")} // hermetic: no real DNS
 	seed(store, model.MCP{
 		ID:         "peer",
 		Name:       "GitHub Official",
@@ -333,5 +336,63 @@ func TestPatchOwnedSystemRowDoesNotSelfCollide(t *testing.T) {
 	}
 	if store.updated == nil || store.updated.Slogan != "updated tagline" {
 		t.Fatalf("system row was not updated: %+v", store.updated)
+	}
+}
+
+// Regression (review P1-2): a user row that already shares a system MCP's name
+// must stay patchable on fields other than name/slug. The namespace check only
+// runs when the patch actually changes name or slug, so editing the slogan of a
+// grandfathered colliding row must succeed rather than 409.
+func TestPatchCollidingUserRowUnrelatedFieldSucceeds(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "eewe",
+		Slug:       "eewe",
+		Visibility: model.VisibilitySystem,
+	})
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "eewe", // same name as the official row (grandfathered)
+		Slug:       "eewe",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	newSlogan := "just a description change"
+	if _, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{Slogan: &newSlogan}); apiErr != nil {
+		t.Fatalf("unrelated-field patch on a name-colliding row wrongly rejected: %v", apiErr)
+	}
+	if store.updated == nil || store.updated.Slogan != "just a description change" {
+		t.Fatalf("row was not updated: %+v", store.updated)
+	}
+}
+
+// The official-namespace rejection carries a dedicated reason so the client can
+// tell it apart from an ordinary same-Space duplicate (review P2-10).
+func TestCreateSystemCollisionCarriesOfficialReason(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")}
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "eewe",
+		Slug:       "eewe",
+		Visibility: model.VisibilitySystem,
+	})
+
+	req := baseCreate()
+	req.Name = "eewe"
+	req.Slug = "user-slug"
+	_, apiErr := svc.Create(context.Background(), caller, req)
+	if apiErr == nil || apiErr.Code != apierr.CodeNameTaken {
+		t.Fatalf("apiErr = %v, want DUPLICATE", apiErr)
+	}
+	if len(apiErr.Details) == 0 || apiErr.Details[0].Reason != "official_namespace" {
+		t.Fatalf("expected official_namespace reason, got %+v", apiErr.Details)
 	}
 }

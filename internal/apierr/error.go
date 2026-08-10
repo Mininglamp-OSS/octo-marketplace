@@ -95,6 +95,22 @@ func SlugTaken() *Error {
 	return New(http.StatusConflict, CodeSlugTaken, "An MCP with this slug already exists in this Space")
 }
 
+// OfficialNameTaken / OfficialSlugTaken signal that a create/update would
+// collide with an official (visibility=system) MCP's name/slug. Same DUPLICATE
+// wire code as NameTaken/SlugTaken so the API contract is unchanged, but the
+// message + reason point at the official catalog rather than the caller's
+// Space — a system row is spaceless, so "in this Space" would misdirect the
+// user (issue #48; review P1-2/P2-10).
+func OfficialNameTaken() *Error {
+	return New(http.StatusConflict, CodeNameTaken, "This name is reserved by an official MCP").
+		WithDetails(Detail{Field: "name", Reason: "official_namespace"})
+}
+
+func OfficialSlugTaken() *Error {
+	return New(http.StatusConflict, CodeSlugTaken, "This slug is reserved by an official MCP").
+		WithDetails(Detail{Field: "slug", Reason: "official_namespace"})
+}
+
 // SlugInvalid signals that a supplied slug (or one auto-derived from the
 // name) fails ^[a-z0-9-]{1,64}$ or reduces to the empty string. Fill Details
 // with the offending field so the client can pinpoint it.

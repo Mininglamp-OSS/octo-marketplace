@@ -189,15 +189,16 @@ func (s *Service) Patch(ctx context.Context, caller Caller, mcpID string, req mo
 	if apiErr := s.applyPatch(ctx, m, req); apiErr != nil {
 		return model.Detail{}, apiErr
 	}
-	// Re-check against the official system namespace on the merged values so a
-	// rename cannot be used to shadow an official MCP after creation (issue
-	// #48). Pass m.ID as exceptID so a row can never collide with itself: this
-	// matters when the caller owns a system row (public Patch's ownership gate
-	// passes when m.OwnerUID == caller.UID), where a no-op edit would otherwise
-	// self-match. For an ordinary user row m.ID is not in the system set, so
-	// excluding it is a harmless no-op.
-	if apiErr := s.checkSystemDupes(ctx, m.Name, m.Slug, m.ID); apiErr != nil {
-		return model.Detail{}, apiErr
+	// Re-check the official (system) namespace ONLY when the patch actually
+	// changes name or slug. A patch that touches neither cannot introduce a
+	// collision, and running the check unconditionally would make any row that
+	// already shares an official name/slug unpatchable on unrelated fields —
+	// e.g. an owner could not even edit its slogan (issue #48; review P1-2).
+	// exceptID=m.ID so an owned system row never self-collides.
+	if req.Name != nil || req.Slug != nil {
+		if apiErr := s.checkSystemDupes(ctx, m.Name, m.Slug, m.ID); apiErr != nil {
+			return model.Detail{}, apiErr
+		}
 	}
 	m.UpdatedAt = s.now()
 
@@ -462,14 +463,14 @@ func (s *Service) checkSystemDupes(ctx context.Context, name, slug, exceptID str
 		return mapStoreError(err)
 	}
 	if exists {
-		return apierr.NameTaken()
+		return apierr.OfficialNameTaken()
 	}
 	exists, err = s.store.SystemSlugExists(ctx, slug, exceptID)
 	if err != nil {
 		return mapStoreError(err)
 	}
 	if exists {
-		return apierr.SlugTaken()
+		return apierr.OfficialSlugTaken()
 	}
 	return nil
 }

@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +181,69 @@ func TestProbe_BlocksIPv6LoopbackLiteral(t *testing.T) {
 	})
 	if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
 		t.Fatalf("expected IPv6 loopback literal rejection, got %v", apiErr)
+	}
+}
+
+// ── P1-1: probe error redaction ─────────────────────────────────────────────
+
+// A socket-level failure (*net.OpError, incl. one wrapped in *url.Error) must
+// collapse to the opaque message: its text embeds the service's own local
+// address, which must never reach the client.
+func TestProbeFailRedactsNetOpError(t *testing.T) {
+	opErr := &net.OpError{
+		Op:     "read",
+		Net:    "tcp",
+		Source: &net.TCPAddr{IP: net.ParseIP("10.1.2.3"), Port: 43450}, // pod-local
+		Addr:   &net.TCPAddr{IP: net.ParseIP("93.184.216.34"), Port: 80},
+		Err:    errors.New("connection reset by peer"),
+	}
+	wrapped := &url.Error{Op: "Get", URL: "http://probe-target.test/mcp", Err: opErr}
+
+	resp := probeFail(wrapped)
+	if resp.OK || resp.Error == nil {
+		t.Fatalf("expected failure, got %+v", resp)
+	}
+	if resp.Error.Message != "probe target is not reachable" {
+		t.Fatalf("net.OpError not redacted: %q", resp.Error.Message)
+	}
+	for _, leak := range []string{"10.1.2.3", "43450", "connection reset"} {
+		if strings.Contains(resp.Error.Message, leak) {
+			t.Fatalf("message leaked %q: %q", leak, resp.Error.Message)
+		}
+	}
+}
+
+// An application-level cause (non-2xx status, JSON-RPC error, malformed payload)
+// keeps its concrete message as a UI hint — it carries no network detail.
+func TestProbeFailKeepsApplicationError(t *testing.T) {
+	resp := probeFail(fmt.Errorf("probe target returned http 405"))
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "405") {
+		t.Fatalf("application error hint lost: %+v", resp.Error)
+	}
+}
+
+// ── P2-8: embedded-IPv4 (translated / NAT64) unsafe detection ────────────────
+
+func TestIsUnsafeProbeIP_EmbeddedIPv4(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"::ffff:127.0.0.1", true},      // IPv4-mapped loopback (To4 handles)
+		{"::ffff:0:7f00:1", true},       // IPv4-translated 127.0.0.1
+		{"::ffff:0:a00:5", true},        // IPv4-translated 10.0.0.5
+		{"64:ff9b::7f00:1", true},       // NAT64 well-known 127.0.0.1
+		{"64:ff9b:1:2:3:4:a00:5", true}, // RFC 8215 local-use 10.0.0.5
+		{"::ffff:0:808:808", false},     // IPv4-translated 8.8.8.8 (public) → allowed
+		{"2001:db8::a00:5", false},      // global IPv6 whose tail looks like 10.0.0.5 → NOT over-blocked
+	}
+	for _, c := range cases {
+		ip := net.ParseIP(c.raw)
+		if ip == nil {
+			t.Fatalf("bad test IP %q", c.raw)
+		}
+		if got := isUnsafeProbeIP(ip); got != c.want {
+			t.Fatalf("isUnsafeProbeIP(%s) = %v, want %v", c.raw, got, c.want)
+		}
 	}
 }

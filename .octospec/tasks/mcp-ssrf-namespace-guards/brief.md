@@ -38,18 +38,32 @@ Reuse the Probe subsystem's existing SSRF primitives (`validateProbeURL`,
      empty answer does not block the write) because the runtime that actually
      dials owns the authoritative gate and DNS can rebind after the check.
   Rejection is `VALIDATION_ERROR` (400) with `field=url, reason=private_address`.
-  The `PROBE_ALLOW_PRIVATE` escape hatch applies identically.
+  The `PROBE_ALLOW_PRIVATE` escape hatch applies identically. On `Patch` the URL
+  check runs only when the patch touches `transport`/`url`/`command` (matching
+  the existing required-field gating); it does not retro-scan untouched rows.
 - **Official-namespace protection**: `Create` and `Patch` reject a name or slug
-  that collides with a live `visibility=system` row (`DUPLICATE`, 409), reusing
-  `checkSystemDupes`. `Patch` passes `exceptID=m.ID` so a row cannot self-collide
-  when the caller owns the system row.
+  that collides with a live `visibility=system` row, reusing `checkSystemDupes`.
+  The rejection is `DUPLICATE` (409) with `reason=official_namespace` and a
+  message that names the official catalog (not "in this Space", which would
+  misdirect since system rows are spaceless). On `Patch` the check runs ONLY
+  when the patch changes `name` or `slug`, and passes `exceptID=m.ID`: a patch
+  that touches neither cannot introduce a collision, so a row that already
+  shares an official name/slug stays editable on unrelated fields, and an owned
+  system row never self-collides.
 - **Probe whole-request rejection**: the dialer resolves the host and rejects the
   entire request if ANY resolved address is unsafe (no cherry-picking a safe IP
-  out of a mixed answer). DNS failure / empty answer is rejected.
-- **Probe error redaction**: all SSRF-policy and DNS/dial failures collapse to a
-  single opaque client message (`probe target is not reachable`); the concrete
-  cause is logged server-side only. Redirect hops keep re-running the per-hop
-  literal check, and the redirected host is re-validated at dial time.
+  out of a mixed answer). DNS failure / empty answer is rejected. The unsafe-IP
+  predicate derives the embedded IPv4 from IPv4-mapped, IPv4-translated
+  (`::ffff:0:0:0/96`) and NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) forms and
+  re-checks it, so a translated loopback/RFC-1918 address cannot pass as public
+  IPv6.
+- **Probe error redaction**: SSRF-policy rejections and any socket-level failure
+  (`*net.OpError`, including one wrapped in `*url.Error`) collapse to a single
+  opaque client message (`probe target is not reachable`); the concrete cause is
+  logged server-side only. Only application-level causes (non-2xx status,
+  JSON-RPC error, malformed payload) keep a concrete hint. Redirect hops keep
+  re-running the per-hop literal check, and the redirected host is re-validated
+  at dial time.
 
 ## Out of scope (deliberately not touched)
 
