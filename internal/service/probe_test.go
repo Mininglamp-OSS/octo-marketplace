@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -379,19 +380,19 @@ func TestIsUnsafeProbeIP_NAT64EmbeddedIPv4(t *testing.T) {
 }
 
 func TestProbeTransport_BlocksDNSResolvedLoopback(t *testing.T) {
-	client := newProbeHTTPClient(false)
+	client := newProbeHTTPClient(false, nil)
 	req, err := http.NewRequest(http.MethodGet, "http://localhost:8080/mcp", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = client.Do(req)
-	if err == nil || !strings.Contains(err.Error(), "private or local") {
+	if err == nil || !errors.Is(err, errProbeTargetBlocked) {
 		t.Fatalf("expected DNS-resolved loopback rejection, got %v", err)
 	}
 }
 
 func TestProbeTransport_BlocksPrivateRedirect(t *testing.T) {
-	client := newProbeHTTPClient(false)
+	client := newProbeHTTPClient(false, nil)
 	req, err := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest", nil)
 	if err != nil {
 		t.Fatal(err)

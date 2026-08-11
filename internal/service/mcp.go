@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -70,6 +72,10 @@ type Service struct {
 	icons             IconStore
 	iconCfg           IconConfig
 	probeAllowPrivate bool
+	// resolver is the DNS surface the Probe dialer uses to enforce the
+	// resolve-time SSRF policy (issue #49). Nil means net.DefaultResolver;
+	// tests inject a fake to exercise mixed / IPv6 / rebinding resolutions.
+	resolver ipResolver
 }
 
 // IconStore is the object-storage surface the icon upload needs. *blob.S3Client
@@ -140,8 +146,16 @@ type ListParams struct {
 // Create validates + normalizes a flat create body, redacts secrets, stamps
 // identity, and persists a new record. Returns the nested detail (doc §4.1).
 func (s *Service) Create(ctx context.Context, caller Caller, req model.CreateRequest) (model.Detail, *apierr.Error) {
-	m, apiErr := s.buildFromCreate(caller, req)
+	m, apiErr := s.buildFromCreate(ctx, caller, req)
 	if apiErr != nil {
+		return model.Detail{}, apiErr
+	}
+	// A public/private user MCP must not shadow an official system MCP by name
+	// or slug (issue #48): the DB UNIQUE cannot catch this because system rows
+	// carry space_id=NULL and a user row carries the caller's space, so the
+	// (space_id, slug) / (owner_uid, space_id, name) indexes never collide
+	// across the two. exceptID="" — a brand-new row has no id to exclude.
+	if apiErr := s.checkSystemDupes(ctx, m.Name, m.Slug, ""); apiErr != nil {
 		return model.Detail{}, apiErr
 	}
 	if err := s.store.Create(ctx, m); err != nil {
@@ -172,8 +186,26 @@ func (s *Service) Patch(ctx context.Context, caller Caller, mcpID string, req mo
 		return model.Detail{}, apierr.Forbidden()
 	}
 
-	if apiErr := s.applyPatch(m, req); apiErr != nil {
+	prevName, prevSlug := m.Name, m.Slug
+	if apiErr := s.applyPatch(ctx, m, req); apiErr != nil {
 		return model.Detail{}, apiErr
+	}
+	// Official-namespace check per field, and ONLY when that field actually
+	// changed (issue #48; review P1-A). Keying on change rather than mere
+	// presence keeps a row that already shares an official name/slug editable —
+	// including by full-object PATCH clients that re-send the unchanged fields —
+	// and checking name and slug independently means editing the non-colliding
+	// field is not refused because of the other. exceptID=m.ID so an owned
+	// system row never self-collides.
+	if m.Name != prevName {
+		if apiErr := s.checkSystemName(ctx, m.Name, m.ID); apiErr != nil {
+			return model.Detail{}, apiErr
+		}
+	}
+	if m.Slug != prevSlug {
+		if apiErr := s.checkSystemSlug(ctx, m.Slug, m.ID); apiErr != nil {
+			return model.Detail{}, apiErr
+		}
 	}
 	m.UpdatedAt = s.now()
 
@@ -324,7 +356,7 @@ func (s *Service) CreateSystem(ctx context.Context, caller Caller, req model.Cre
 	// System rows carry NULL space_id (docs/api/mcp-v1.md §3.1 visibility
 	// notes). The buildSystemFromCreate path forces the record's SpaceID to
 	// "" regardless of what the middleware handed us.
-	m, apiErr := s.buildSystemFromCreate(sysCaller, req)
+	m, apiErr := s.buildSystemFromCreate(ctx, sysCaller, req)
 	if apiErr != nil {
 		return model.Detail{}, apiErr
 	}
@@ -397,7 +429,7 @@ func (s *Service) UpdateSystem(ctx context.Context, mcpID string, req model.Patc
 		return model.Detail{}, apierr.InvalidVisibility()
 	}
 	req.Visibility = nil // never let applyPatch mutate visibility on a system row.
-	if apiErr := s.applyPatch(m, req); apiErr != nil {
+	if apiErr := s.applyPatch(ctx, m, req); apiErr != nil {
 		return model.Detail{}, apiErr
 	}
 	// Same pre-check as CreateSystem — the DB UNIQUE cannot detect
@@ -433,19 +465,34 @@ func (s *Service) DeleteSystem(ctx context.Context, mcpID string) *apierr.Error 
 // or the record id for Update so a same-record no-op rename does not
 // self-collide.
 func (s *Service) checkSystemDupes(ctx context.Context, name, slug, exceptID string) *apierr.Error {
+	if apiErr := s.checkSystemName(ctx, name, exceptID); apiErr != nil {
+		return apiErr
+	}
+	return s.checkSystemSlug(ctx, slug, exceptID)
+}
+
+// checkSystemName / checkSystemSlug are the single-field halves of
+// checkSystemDupes. Patch calls them independently so editing a non-colliding
+// field is never blocked by the other (review P1-A); Create and the admin
+// system twins call the combined form.
+func (s *Service) checkSystemName(ctx context.Context, name, exceptID string) *apierr.Error {
 	exists, err := s.store.SystemNameExists(ctx, name, exceptID)
 	if err != nil {
 		return mapStoreError(err)
 	}
 	if exists {
-		return apierr.NameTaken()
+		return apierr.OfficialNameTaken()
 	}
-	exists, err = s.store.SystemSlugExists(ctx, slug, exceptID)
+	return nil
+}
+
+func (s *Service) checkSystemSlug(ctx context.Context, slug, exceptID string) *apierr.Error {
+	exists, err := s.store.SystemSlugExists(ctx, slug, exceptID)
 	if err != nil {
 		return mapStoreError(err)
 	}
 	if exists {
-		return apierr.SlugTaken()
+		return apierr.OfficialSlugTaken()
 	}
 	return nil
 }
@@ -467,7 +514,7 @@ func (s *Service) loadSystem(ctx context.Context, mcpID string) (*model.MCP, *ap
 // validation and secret redaction, but skips the public visibility gate,
 // stamps SpaceID="" so the row lands with space_id=NULL, and hard-codes
 // Visibility=system regardless of the input.
-func (s *Service) buildSystemFromCreate(caller Caller, req model.CreateRequest) (*model.MCP, *apierr.Error) {
+func (s *Service) buildSystemFromCreate(ctx context.Context, caller Caller, req model.CreateRequest) (*model.MCP, *apierr.Error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return nil, apierr.InvalidRequest("name is required",
@@ -481,6 +528,9 @@ func (s *Service) buildSystemFromCreate(caller Caller, req model.CreateRequest) 
 		return nil, apiErr
 	}
 	if apiErr := validateContent(name, req); apiErr != nil {
+		return nil, apiErr
+	}
+	if apiErr := s.validateConnectionURL(ctx, req.Transport, req.URL); apiErr != nil {
 		return nil, apiErr
 	}
 	// System rows are cross-Space and never surfaced in the public listing;
@@ -669,7 +719,7 @@ func resolveSlug(slugIn, name string) (string, *apierr.Error) {
 
 // buildFromCreate validates the flat request and produces a persist-ready
 // domain record with identity stamped and secrets redacted.
-func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*model.MCP, *apierr.Error) {
+func (s *Service) buildFromCreate(ctx context.Context, caller Caller, req model.CreateRequest) (*model.MCP, *apierr.Error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return nil, apierr.InvalidRequest("name is required",
@@ -689,6 +739,10 @@ func (s *Service) buildFromCreate(caller Caller, req model.CreateRequest) (*mode
 	}
 
 	if apiErr := validateContent(name, req); apiErr != nil {
+		return nil, apiErr
+	}
+
+	if apiErr := s.validateConnectionURL(ctx, req.Transport, req.URL); apiErr != nil {
 		return nil, apiErr
 	}
 
@@ -751,7 +805,7 @@ func resolveCreatedByType(caller Caller) model.CreatedByType {
 // applyPatch mutates m in place from the partial request, re-running
 // validation and redaction for any touched field. Immutable fields are absent
 // from PatchRequest and therefore untouched.
-func (s *Service) applyPatch(m *model.MCP, req model.PatchRequest) *apierr.Error {
+func (s *Service) applyPatch(ctx context.Context, m *model.MCP, req model.PatchRequest) *apierr.Error {
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if name == "" {
@@ -857,6 +911,9 @@ func (s *Service) applyPatch(m *model.MCP, req model.PatchRequest) *apierr.Error
 		if apiErr := validateTransportFields(m.Transport, m.Connection.URL, m.Connection.Command); apiErr != nil {
 			return apiErr
 		}
+		if apiErr := s.validateConnectionURL(ctx, m.Transport, m.Connection.URL); apiErr != nil {
+			return apiErr
+		}
 	}
 	return nil
 }
@@ -960,6 +1017,78 @@ func validateHeaderLengths(headers map[string]string) *apierr.Error {
 			return apierr.InvalidRequest(
 				fmt.Sprintf("header value must be at most %d characters", model.MaxHeaderValueLen),
 				apierr.Detail{Field: "headers." + k, Reason: "too_long"})
+		}
+	}
+	return nil
+}
+
+// connectionResolveTimeout bounds the best-effort DNS lookup that
+// validateConnectionURL runs at create/update time. Kept short so a slow
+// resolver cannot stall a write; on timeout the check fails open.
+const connectionResolveTimeout = 5 * time.Second
+
+// validateConnectionURL enforces the SSRF/URL safety policy on a stored MCP
+// connection (issue #48). Remote transports (streamable-http / sse) must point
+// at a safe absolute http(s) URL, applying the exact policy the Probe
+// subsystem uses (validateProbeURL): no credentials, no loopback / private /
+// link-local / CGNAT / NAT64 / cloud-metadata targets. stdio has no URL and is
+// skipped — the required-command rule is enforced by validateTransportFields.
+// The probeAllowPrivate escape hatch (trusted self-hosted deployments) applies
+// identically so create/update and Probe agree on what is reachable.
+//
+// Two layers run here:
+//  1. Literal-IP check via validateProbeURL — always, cheap, deterministic.
+//  2. Resolve-time check — when the host is a domain, a best-effort DNS lookup
+//     rejects the write if ANY resolved address is unsafe (defence in depth vs.
+//     "domain → internal IP"). This is fail-open: a lookup error / timeout / no
+//     answer does NOT block the write, because the runtime that actually dials
+//     (octo-cli / agent) owns the authoritative resolve-time gate and DNS can
+//     rebind after we check anyway (TOCTOU). It only closes the easy case.
+func (s *Service) validateConnectionURL(ctx context.Context, transport model.Transport, rawURL string) *apierr.Error {
+	switch transport {
+	case model.TransportStreamableHTTP, model.TransportSSE:
+	default:
+		return nil
+	}
+	normalized, apiErr := validateProbeURL(rawURL, s.probeAllowPrivate)
+	if apiErr != nil {
+		return apiErr
+	}
+	if s.probeAllowPrivate {
+		return nil
+	}
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return nil // already validated by validateProbeURL; unreachable in practice
+	}
+	host := u.Hostname()
+	if parseHostIP(host) != nil {
+		return nil // literal IP (incl. inet_aton forms) already covered by validateProbeURL
+	}
+	resolver := s.resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	rctx, cancel := context.WithTimeout(ctx, connectionResolveTimeout)
+	defer cancel()
+	ips, err := resolver.LookupIP(rctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		// Fail-open only for a real domain: a lookup miss there is a transient
+		// resolver flake, and the runtime that actually dials owns the
+		// authoritative gate. But a host that is not a valid DNS name and did not
+		// parse as an IP literal is neither — it is a malformed / obfuscated
+		// target (e.g. an inet_aton form outside parseHostIP's coverage), and
+		// failing open on it is what let the P1-1 payloads persist. Fail closed.
+		if !isValidDNSName(host) {
+			return apierr.InvalidRequest("url host is not a valid domain or address",
+				apierr.Detail{Field: "url", Reason: "private_address"})
+		}
+		return nil
+	}
+	for _, ip := range ips {
+		if isUnsafeProbeIP(ip) {
+			return apierr.InvalidRequest("url resolves to a private or local network address",
+				apierr.Detail{Field: "url", Reason: "private_address"})
 		}
 	}
 	return nil

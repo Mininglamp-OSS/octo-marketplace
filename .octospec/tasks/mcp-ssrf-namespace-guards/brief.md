@@ -1,0 +1,119 @@
+---
+type: Task
+title: "Task: mcp-ssrf-namespace-guards"
+description: Harden the MCP create/update and probe surfaces against SSRF and official-namespace hijacking (pentest 4.6/4.7, issues #48/#49).
+tags: ["security", "api", "ssrf"]
+timestamp: 2026-08-10T00:00:00+08:00
+slug: mcp-ssrf-namespace-guards
+source: self
+---
+
+# Task: mcp-ssrf-namespace-guards
+
+## Goal
+
+Close two findings from the Octo-web penetration report (2026-07-31) on the MCP
+catalog surface, without changing the API contract, DB schema, or the existing
+permission model:
+
+- **4.7 / #48** — a normal user could register a `public` MCP whose remote URL
+  pointed at internal/loopback/metadata addresses (SSRF), and could reuse the
+  exact name or slug of an official `system` MCP (impersonation).
+- **4.6 / #49** — the `_probe` SSRF defence was sound but had residual gaps:
+  mixed public/private DNS resolutions were not rejected wholesale, and internal
+  DNS/connection error text was echoed to the client.
+
+Reuse the Probe subsystem's existing SSRF primitives (`validateProbeURL`,
+`isUnsafeProbeIP`) rather than inventing a parallel policy.
+
+## Load-bearing behavior
+
+- **Create/update URL validation** (`POST /market/api/v1/mcps`,
+  `PATCH /market/api/v1/mcps/{id}`, and the admin `system` twins): for remote
+  transports (`streamable-http` / `sse`) the connection URL is validated with
+  the same policy Probe uses —
+  1. literal-IP / scheme / credential check via `validateProbeURL`. The host is
+     first run through `parseHostIP`, which normalizes the non-canonical IPv4
+     spellings `net.ParseIP` rejects but libc / curl / Node accept (inet_aton:
+     decimal / octal / hex packed integers and 1-to-4-part shorthand), so
+     `http://2130706433/`, `http://127.1/`, `http://0x7f000001/`, `http://0/`
+     cannot slip past the literal gate (review P1-1, pentest 4.7 / #48), and
+  2. a best-effort DNS resolve-time check that rejects the write if any resolved
+     address is unsafe. The resolve step is **fail-open** *for real domains only*
+     (lookup error/timeout/empty answer does not block the write) because the
+     runtime that actually dials owns the authoritative gate and DNS can rebind
+     after the check. A host that is neither an IP literal nor a syntactically
+     valid DNS name (`isValidDNSName`: RFC 1123 labels, final label not
+     all-digits) **fails closed** — a bare integer is not a domain, so the
+     "transient DNS flake" justification for failing open does not apply, and
+     failing open on it is exactly what let the P1-1 payloads persist.
+  Rejection is `VALIDATION_ERROR` (400) with `field=url, reason=private_address`.
+  The `PROBE_ALLOW_PRIVATE` escape hatch applies identically. On `Patch` the URL
+  check runs only when the patch touches `transport`/`url`/`command` (matching
+  the existing required-field gating); it does not retro-scan untouched rows.
+- **Official-namespace protection**: `Create` and `Patch` reject a name or slug
+  that collides with a live `visibility=system` row, reusing `checkSystemDupes`.
+  The rejection is `DUPLICATE` (409) with `reason=official_namespace` and a
+  message that names the official catalog (not "in this Space", which would
+  misdirect since system rows are spaceless). On `Patch` name and slug are
+  checked **independently**, and each only when that field's merged value
+  actually changed (not merely when supplied), passing `exceptID=m.ID`: a patch
+  that changes neither cannot introduce a collision, so a row that already
+  shares an official name/slug stays editable — including by full-object PATCH
+  clients that re-send unchanged fields — and editing the non-colliding field is
+  never refused because of the other. An owned system row never self-collides.
+- **Probe whole-request rejection**: the dialer resolves the host and rejects the
+  entire request if ANY resolved address is unsafe (no cherry-picking a safe IP
+  out of a mixed answer). DNS failure / empty answer is rejected. The unsafe-IP
+  predicate derives the embedded IPv4 from the IPv4-mapped, IPv4-translated
+  (`::ffff:0:0:0/96`), IPv4-compatible (`::/96`, RFC 4291 — review P2-1) and
+  NAT64 well-known (`64:ff9b::/96`) forms and re-checks it, so a translated /
+  compatible loopback/RFC-1918 address cannot pass as public IPv6. The RFC 8215
+  local-use NAT64 `/48` prefix (`64:ff9b:1::/48`) is rejected wholesale rather
+  than decoded, since its embedded-IPv4 offset differs from the `/96` forms
+  (RFC 6052 §2.2) and a trailing-32-bit read could be fooled by a decoy tail
+  (review P2-A). The IPv4 predicate also rejects `240.0.0.0/4` (reserved),
+  `192.0.0.0/24` (IETF protocol) and `198.18.0.0/15` (benchmarking); the IPv6
+  predicate also rejects `fec0::/10` (deprecated site-local) — review P2-2.
+- **Probe error redaction**: transport failures — SSRF-policy rejections
+  (`errProbeTargetBlocked`) and any error from the HTTP round-trip (dial, socket,
+  TLS/x509), which is wrapped in `probeTransportError` (or arrives as a bare
+  `*net.OpError`) — collapse to a single opaque client message (`probe target is
+  not reachable`); the concrete cause is logged server-side only. This is an
+  allow-list: only application-level causes raised AFTER a successful round-trip
+  (non-2xx status, JSON-RPC error, malformed payload, origin mismatch) keep a
+  concrete hint (review P2-B). Redirect hops keep re-running the per-hop literal
+  check, and the redirected host is re-validated at dial time.
+
+## Out of scope (deliberately not touched)
+
+- **Visibility tightening (report 4.7 rec #1)**: normal users still create
+  `public`. Restricting them to `private` / admin-only public is a product
+  decision, deferred.
+- **Global slug uniqueness (report 4.7 rec #3)**: only official (`system`)
+  name/slug is protected; cross-Space/owner same-name `public` rows remain
+  allowed (normal multi-tenant semantics).
+- **Runtime-side SSRF gate**: the authoritative resolve-time check when
+  octo-cli / agent actually connects is owned by that runtime, not Marketplace.
+- **Probe rate limiting (report 4.6 rec #5)**: separate follow-up.
+- No API contract, DB schema, or permission-model changes.
+
+## Acceptance
+
+- Create/patch with a literal internal/loopback/metadata/link-local URL →
+  `VALIDATION_ERROR` `private_address`; the same holds for its non-canonical
+  spellings (decimal / octal / hex packed, 1-to-4-part shorthand), asserted as a
+  corpus at both the `isUnsafeProbeIP`/`parseHostIP` and `validateConnectionURL`
+  layers; a legitimate public URL (canonical or packed) succeeds; `stdio` is
+  unaffected; `PROBE_ALLOW_PRIVATE=true` permits private targets.
+- Create/patch where the host resolves to any unsafe address → rejected; a DNS
+  error on a real domain fails open (write succeeds); a non-DNS-name host that
+  does not parse as an IP literal fails closed.
+- Create/patch reusing a `system` name or slug → `DUPLICATE`; a no-op edit of an
+  owned `system` row does not self-collide.
+- Probe rejects mixed public/private, all-private, IPv6-loopback, cloud-metadata,
+  and DNS-failure resolutions, and never leaks resolved addresses / DNS detail.
+- Service-level tests cover the above (positive + negative); existing probe
+  tests updated for the new dialer signature and opaque error.
+- `go build ./...`, `go test ./...`, `go vet`, `gofmt`, and `make openapi-check`
+  (no drift) all pass.

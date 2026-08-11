@@ -1,0 +1,527 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"net"
+	"testing"
+
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/apierr"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+)
+
+// Tests for issue #48: a normal user must not (1) register an MCP whose remote
+// URL targets a private / local / cloud-metadata address (SSRF), nor (2) shadow
+// an official visibility=system MCP by reusing its name or slug.
+
+// ── SSRF / URL guard on create ──────────────────────────────────────────────
+
+func TestCreateRejectsUnsafeTargetURL(t *testing.T) {
+	unsafe := []struct {
+		name string
+		url  string
+	}{
+		{"loopback", "http://127.0.0.1/mcp"},
+		{"private_10", "http://10.0.0.5/mcp"},
+		{"private_192", "https://192.168.1.10/mcp"},
+		{"link_local_metadata", "http://169.254.169.254/latest/meta-data/"},
+		{"unspecified", "http://0.0.0.0/mcp"},
+	}
+	transports := []model.Transport{model.TransportStreamableHTTP, model.TransportSSE}
+
+	for _, tr := range transports {
+		for _, tc := range unsafe {
+			t.Run(string(tr)+"/"+tc.name, func(t *testing.T) {
+				svc := New(newFakeStore())
+				req := baseCreate()
+				req.Transport = tr
+				req.URL = tc.url
+
+				_, apiErr := svc.Create(context.Background(), caller, req)
+				if apiErr == nil {
+					t.Fatalf("expected create to reject unsafe url %q", tc.url)
+				}
+				if apiErr.Code != apierr.CodeInvalidRequest {
+					t.Fatalf("code = %q, want %q", apiErr.Code, apierr.CodeInvalidRequest)
+				}
+			})
+		}
+	}
+}
+
+func TestCreateAllowsPublicTargetURL(t *testing.T) {
+	svc := New(newFakeStore())
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")}
+	req := baseCreate()
+	req.URL = "https://mcp.example.com/github"
+
+	if _, apiErr := svc.Create(context.Background(), caller, req); apiErr != nil {
+		t.Fatalf("public url rejected: %v", apiErr)
+	}
+}
+
+// Review P1-1 + rec #3: non-canonical IPv4 literal spellings (inet_aton) that
+// resolve to an unsafe address must be rejected at the literal-IP gate, WITHOUT
+// a DNS lookup. The injected resolver errors if consulted, proving layer 1
+// catches them rather than the write slipping through fail-open. Public
+// spellings still pass; a real domain is deferred to the resolve-time gate.
+func TestValidateConnectionURL_NonCanonicalLiteralCorpus(t *testing.T) {
+	unsafe := []struct{ name, host string }{
+		{"decimal_loopback", "2130706433"}, // 127.0.0.1
+		{"decimal_metadata", "2852039166"}, // 169.254.169.254
+		{"shorthand_2part", "127.1"},       // 127.0.0.1
+		{"octal_octet", "0177.0.0.1"},      // 127.0.0.1
+		{"hex_packed", "0x7f000001"},       // 127.0.0.1
+		{"zero", "0"},                      // 0.0.0.0
+		{"canonical", "127.0.0.1"},         // control
+	}
+	for _, tc := range unsafe {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			svc := New(newFakeStore())
+			svc.resolver = &fakeResolver{err: errors.New("resolver must not be consulted for a literal")}
+			apiErr := svc.validateConnectionURL(context.Background(),
+				model.TransportStreamableHTTP, "http://"+tc.host+"/mcp")
+			if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
+				t.Fatalf("expected private_address rejection for %q, got %v", tc.host, apiErr)
+			}
+			if svc.resolver.(*fakeResolver).called {
+				t.Fatalf("resolver was consulted for literal %q — layer-1 gate missed it", tc.host)
+			}
+		})
+	}
+
+	// Public non-canonical spellings must NOT be over-blocked.
+	for _, host := range []string{"134744072" /* 8.8.8.8 */, "8.8.8.8"} {
+		svc := New(newFakeStore())
+		svc.resolver = &fakeResolver{err: errors.New("resolver must not be consulted for a literal")}
+		if apiErr := svc.validateConnectionURL(context.Background(),
+			model.TransportStreamableHTTP, "http://"+host+"/mcp"); apiErr != nil {
+			t.Fatalf("public literal %q wrongly blocked: %v", host, apiErr)
+		}
+	}
+}
+
+// A host that is neither an IP literal nor a syntactically valid DNS name must
+// fail CLOSED at the resolve-time gate rather than fail-open and persist
+// (review P1-1, option 2). A real domain that NXDOMAINs still fails open.
+func TestValidateConnectionURL_FailsClosedOnNonDNSHost(t *testing.T) {
+	svc := New(newFakeStore())
+	svc.resolver = &fakeResolver{err: &net.DNSError{Err: "no such host"}}
+	// "999999999999" overflows parseHostIP (not an IP) and its all-digit sole
+	// label is not a valid DNS name → must be rejected, not persisted.
+	apiErr := svc.validateConnectionURL(context.Background(),
+		model.TransportStreamableHTTP, "http://999999999999/mcp")
+	if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
+		t.Fatalf("non-DNS host must fail closed, got %v", apiErr)
+	}
+
+	// A genuine domain that fails to resolve still fails OPEN (transient flake).
+	svc2 := New(newFakeStore())
+	svc2.resolver = &fakeResolver{err: &net.DNSError{Err: "no such host", Name: "mcp.example.com"}}
+	if apiErr := svc2.validateConnectionURL(context.Background(),
+		model.TransportStreamableHTTP, "https://mcp.example.com/x"); apiErr != nil {
+		t.Fatalf("real domain DNS flake must fail open, got %v", apiErr)
+	}
+}
+
+// ── Resolve-time SSRF guard (issue #48 enhancement, fail-open) ──────────────
+
+// A domain that resolves to any unsafe address is rejected — even though the
+// URL string itself carries no literal IP.
+func TestCreateRejectsDomainResolvingToUnsafe(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34", "10.0.0.7")} // mixed public+private
+
+	_, apiErr := svc.Create(context.Background(), caller, baseCreate())
+	if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
+		t.Fatalf("expected private_address rejection, got %v", apiErr)
+	}
+	if store.created != nil {
+		t.Fatal("record must not be created when the host resolves to a private IP")
+	}
+}
+
+func TestCreateAllowsDomainResolvingToPublic(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")}
+
+	if _, apiErr := svc.Create(context.Background(), caller, baseCreate()); apiErr != nil {
+		t.Fatalf("public resolution wrongly blocked: %v", apiErr)
+	}
+}
+
+// Fail-open: a transient DNS error must NOT block the write — the runtime that
+// actually dials owns the authoritative resolve-time gate.
+func TestCreateFailsOpenOnDNSError(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{err: &net.DNSError{Err: "no such host", Name: "mcp.example.com"}}
+
+	if _, apiErr := svc.Create(context.Background(), caller, baseCreate()); apiErr != nil {
+		t.Fatalf("DNS error must fail open, got %v", apiErr)
+	}
+	if store.created == nil {
+		t.Fatal("record should be created on fail-open")
+	}
+}
+
+func TestPatchRejectsDomainResolvingToUnsafe(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "10.0.0.7")}
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "Mine",
+		Slug:       "mine",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	newURL := "https://evil.example.com/x"
+	_, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{URL: &newURL})
+	if apiErr == nil || apiErr.Code != apierr.CodeInvalidRequest {
+		t.Fatalf("expected private_address rejection, got %v", apiErr)
+	}
+	if store.updated != nil {
+		t.Fatal("record must not be updated when the host resolves to a private IP")
+	}
+}
+
+// stdio has no URL, so the SSRF guard must not fire and reject an otherwise
+// valid stdio create.
+func TestCreateStdioSkipsURLGuard(t *testing.T) {
+	svc := New(newFakeStore())
+	req := baseCreate()
+	req.Transport = model.TransportStdio
+	req.URL = ""
+	req.Command = "npx"
+	req.Args = []string{"-y", "@modelcontextprotocol/server-github"}
+
+	if _, apiErr := svc.Create(context.Background(), caller, req); apiErr != nil {
+		t.Fatalf("stdio create rejected: %v", apiErr)
+	}
+}
+
+// The trusted self-hosted escape hatch (WithProbeAllowPrivate) must apply to
+// create just as it does to Probe, so the two stay consistent.
+func TestCreateAllowsPrivateURLWhenProbeAllowPrivate(t *testing.T) {
+	svc := New(newFakeStore()).WithProbeAllowPrivate(true)
+	req := baseCreate()
+	req.URL = "http://10.0.0.5/mcp"
+
+	if _, apiErr := svc.Create(context.Background(), caller, req); apiErr != nil {
+		t.Fatalf("private url rejected under allow-private: %v", apiErr)
+	}
+}
+
+// ── SSRF / URL guard on patch ───────────────────────────────────────────────
+
+func TestPatchRejectsChangingURLToUnsafeTarget(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "Mine",
+		Slug:       "mine",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	bad := "http://169.254.169.254/latest/meta-data/"
+	_, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{URL: &bad})
+	if apiErr == nil {
+		t.Fatalf("expected patch to reject unsafe url")
+	}
+	if apiErr.Code != apierr.CodeInvalidRequest {
+		t.Fatalf("code = %q, want %q", apiErr.Code, apierr.CodeInvalidRequest)
+	}
+	if store.updated != nil {
+		t.Fatalf("record must not be updated when url is rejected")
+	}
+}
+
+// ── Official (system) namespace protection on create ────────────────────────
+
+func TestCreateRejectsSystemNameCollision(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")} // hermetic: no real DNS
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "GitHub Official",
+		Slug:       "github-official",
+		Visibility: model.VisibilitySystem,
+	})
+
+	req := baseCreate()
+	req.Name = "GitHub Official"
+	req.Slug = "user-picked-different-slug"
+
+	_, apiErr := svc.Create(context.Background(), caller, req)
+	if apiErr == nil || apiErr.Code != apierr.CodeNameTaken {
+		t.Fatalf("apiErr = %v, want DUPLICATE name_taken", apiErr)
+	}
+	if store.created != nil {
+		t.Fatalf("record must not be created on system name collision")
+	}
+}
+
+func TestCreateRejectsSystemSlugCollision(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")} // hermetic: no real DNS
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "GitHub Official",
+		Slug:       "github",
+		Visibility: model.VisibilitySystem,
+	})
+
+	req := baseCreate()
+	req.Name = "My Totally Different Name"
+	req.Slug = "github"
+
+	_, apiErr := svc.Create(context.Background(), caller, req)
+	if apiErr == nil || apiErr.Code != apierr.CodeSlugTaken {
+		t.Fatalf("apiErr = %v, want DUPLICATE slug_taken", apiErr)
+	}
+}
+
+// The guard is scoped to system rows only: colliding with a non-system row in
+// the fake store must NOT be blocked here (Space-scoped uniqueness is the DB's
+// job, not this service-level official-namespace check).
+func TestCreateAllowsNameMatchingNonSystemRow(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")} // hermetic: no real DNS
+	seed(store, model.MCP{
+		ID:         "peer",
+		Name:       "GitHub Official",
+		Slug:       "peer-slug",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "someone-else",
+		SpaceID:    "space-b",
+	})
+
+	req := baseCreate()
+	req.Name = "GitHub Official"
+	req.Slug = "my-own-slug"
+
+	if _, apiErr := svc.Create(context.Background(), caller, req); apiErr != nil {
+		t.Fatalf("collision with non-system row wrongly blocked: %v", apiErr)
+	}
+}
+
+// ── Official (system) namespace protection on patch ─────────────────────────
+
+func TestPatchRejectsRenameToSystemName(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "GitHub Official",
+		Slug:       "github-official",
+		Visibility: model.VisibilitySystem,
+	})
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "My MCP",
+		Slug:       "my-mcp",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	newName := "GitHub Official"
+	_, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{Name: &newName})
+	if apiErr == nil || apiErr.Code != apierr.CodeNameTaken {
+		t.Fatalf("apiErr = %v, want DUPLICATE name_taken", apiErr)
+	}
+	if store.updated != nil {
+		t.Fatalf("record must not be updated on system name collision")
+	}
+}
+
+func TestPatchRejectsRenameToSystemSlug(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "GitHub Official",
+		Slug:       "github",
+		Visibility: model.VisibilitySystem,
+	})
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "My MCP",
+		Slug:       "my-mcp",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	newSlug := "github"
+	_, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{Slug: &newSlug})
+	if apiErr == nil || apiErr.Code != apierr.CodeSlugTaken {
+		t.Fatalf("apiErr = %v, want DUPLICATE slug_taken", apiErr)
+	}
+}
+
+// Regression: when the caller owns a system row (public Patch's ownership gate
+// passes because m.OwnerUID == caller.UID), a no-op edit must NOT self-collide
+// against the official-namespace check. exceptID=m.ID guards this.
+func TestPatchOwnedSystemRowDoesNotSelfCollide(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "eewe",
+		Slug:       "eewe",
+		Visibility: model.VisibilitySystem,
+		OwnerUID:   "u1", // same identity as `caller`
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://official.example.com/"},
+	})
+
+	newSlogan := "updated tagline"
+	if _, apiErr := svc.Patch(context.Background(), caller, "sys", model.PatchRequest{Slogan: &newSlogan}); apiErr != nil {
+		t.Fatalf("no-op edit of owned system row wrongly rejected: %v", apiErr)
+	}
+	if store.updated == nil || store.updated.Slogan != "updated tagline" {
+		t.Fatalf("system row was not updated: %+v", store.updated)
+	}
+}
+
+// Regression (review P1-2): a user row that already shares a system MCP's name
+// must stay patchable on fields other than name/slug. The namespace check only
+// runs when the patch actually changes name or slug, so editing the slogan of a
+// grandfathered colliding row must succeed rather than 409.
+func TestPatchCollidingUserRowUnrelatedFieldSucceeds(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "eewe",
+		Slug:       "eewe",
+		Visibility: model.VisibilitySystem,
+	})
+	seed(store, model.MCP{
+		ID:         "own",
+		Name:       "eewe", // same name as the official row (grandfathered)
+		Slug:       "eewe",
+		Visibility: model.VisibilityPublic,
+		OwnerUID:   "u1",
+		SpaceID:    "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	newSlogan := "just a description change"
+	if _, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{Slogan: &newSlogan}); apiErr != nil {
+		t.Fatalf("unrelated-field patch on a name-colliding row wrongly rejected: %v", apiErr)
+	}
+	if store.updated == nil || store.updated.Slogan != "just a description change" {
+		t.Fatalf("row was not updated: %+v", store.updated)
+	}
+}
+
+// Regression (review P1-A): the namespace check keys on the field that changed,
+// independently. A row colliding with a system NAME must still be able to change
+// its SLUG (a field with no collision), and vice versa.
+func TestPatchChangingNonCollidingFieldSucceeds(t *testing.T) {
+	newSlug := "my-eewe-2"
+	newName := "My eewe v2"
+	cases := []struct {
+		name     string
+		userName string
+		userSlug string
+		patch    model.PatchRequest
+	}{
+		// Collides on name only → changing slug must pass.
+		{"name-collides/change-slug", "eewe", "user-slug", model.PatchRequest{Slug: &newSlug}},
+		// Collides on slug only → changing name must pass.
+		{"slug-collides/change-name", "My MCP", "eewe", model.PatchRequest{Name: &newName}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store := newFakeStore()
+			svc := New(store)
+			svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")}
+			seed(store, model.MCP{
+				ID: "sys", Name: "eewe", Slug: "eewe", Visibility: model.VisibilitySystem,
+			})
+			seed(store, model.MCP{
+				ID: "own", Name: c.userName, Slug: c.userSlug,
+				Visibility: model.VisibilityPublic, OwnerUID: "u1", SpaceID: "space-a",
+				Transport:  model.TransportStreamableHTTP,
+				Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+			})
+			if _, apiErr := svc.Patch(context.Background(), caller, "own", c.patch); apiErr != nil {
+				t.Fatalf("editing the non-colliding field was wrongly refused: %v", apiErr)
+			}
+		})
+	}
+}
+
+// Regression (review P1-A, full-object client): a PATCH that re-sends the
+// unchanged name/slug of a grandfathered colliding row must not 409 — the check
+// keys on change, not presence.
+func TestPatchFullObjectUnchangedNameOnCollidingRowSucceeds(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	seed(store, model.MCP{
+		ID: "sys", Name: "eewe", Slug: "eewe", Visibility: model.VisibilitySystem,
+	})
+	seed(store, model.MCP{
+		ID: "own", Name: "eewe", Slug: "eewe",
+		Visibility: model.VisibilityPublic, OwnerUID: "u1", SpaceID: "space-a",
+		Transport:  model.TransportStreamableHTTP,
+		Connection: model.Connection{URL: "https://mcp.example.com/ok"},
+	})
+
+	// Full-object PATCH: name/slug re-sent identical to stored, plus a real edit.
+	sameName, sameSlug, newSlogan := "eewe", "eewe", "edited"
+	_, apiErr := svc.Patch(context.Background(), caller, "own", model.PatchRequest{
+		Name: &sameName, Slug: &sameSlug, Slogan: &newSlogan,
+	})
+	if apiErr != nil {
+		t.Fatalf("full-object patch re-sending unchanged name/slug was refused: %v", apiErr)
+	}
+	if store.updated == nil || store.updated.Slogan != "edited" {
+		t.Fatalf("row was not updated: %+v", store.updated)
+	}
+}
+func TestCreateSystemCollisionCarriesOfficialReason(t *testing.T) {
+	store := newFakeStore()
+	svc := New(store)
+	svc.resolver = &fakeResolver{ips: ips(t, "93.184.216.34")}
+	seed(store, model.MCP{
+		ID:         "sys",
+		Name:       "eewe",
+		Slug:       "eewe",
+		Visibility: model.VisibilitySystem,
+	})
+
+	req := baseCreate()
+	req.Name = "eewe"
+	req.Slug = "user-slug"
+	_, apiErr := svc.Create(context.Background(), caller, req)
+	if apiErr == nil || apiErr.Code != apierr.CodeNameTaken {
+		t.Fatalf("apiErr = %v, want DUPLICATE", apiErr)
+	}
+	if len(apiErr.Details) == 0 || apiErr.Details[0].Reason != "official_namespace" {
+		t.Fatalf("expected official_namespace reason, got %+v", apiErr.Details)
+	}
+}

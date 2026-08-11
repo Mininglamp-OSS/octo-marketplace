@@ -11,17 +11,65 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/apierr"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	"go.uber.org/zap"
 )
 
 var (
 	cgnatPrefix = mustParseCIDR("100.64.0.0/10")
-	nat64Prefix = mustParseCIDR("64:ff9b::/96")
+	// IPv6 prefixes that embed an IPv4 address in their trailing 32 bits. Any
+	// address inside one of these is only as safe as the embedded v4, so the
+	// predicate derives that v4 and re-checks it (issue #49 / P2-8). To4() only
+	// recognises the IPv4-*mapped* form (::ffff:a.b.c.d); the translated and
+	// NAT64 forms fall through to the generic IPv6 branch where IsPrivate/
+	// IsLoopback are false, so a translated 127.0.0.1 / 10.x would otherwise be
+	// treated as a public IPv6 and allowed.
+	v4TranslatedPrefix = mustParseCIDR("::ffff:0:0:0/96") // RFC 2765 IPv4-translated
+	nat64WKPrefix      = mustParseCIDR("64:ff9b::/96")    // RFC 6052 well-known NAT64
+	nat64LocalPrefix   = mustParseCIDR("64:ff9b:1::/48")  // RFC 8215 local-use NAT64
+	v4CompatPrefix     = mustParseCIDR("::/96")           // RFC 4291 IPv4-compatible (deprecated) — ::a.b.c.d
+
+	// Additional reserved / non-routable ranges the generic net.IP predicates do
+	// NOT flag (review P2-1 / P2-2). Folded in alongside the address-form
+	// normalization so the whole class is closed in one pass rather than one
+	// prefix per round.
+	siteLocalV6Prefix = mustParseCIDR("fec0::/10")     // RFC 3879 deprecated IPv6 site-local
+	reservedV4Prefix  = mustParseCIDR("240.0.0.0/4")   // RFC 1112 reserved (class E)
+	ietfProtoV4Prefix = mustParseCIDR("192.0.0.0/24")  // RFC 6890 IETF protocol assignments
+	benchmarkV4Prefix = mustParseCIDR("198.18.0.0/15") // RFC 2544 benchmarking
 )
+
+// ipResolver is the DNS surface newProbeHTTPClient needs before dialing.
+// *net.Resolver satisfies it; probe tests inject a fake so mixed / IPv6 /
+// DNS-rebinding resolutions are exercisable without real DNS (issue #49).
+type ipResolver interface {
+	LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
+}
+
+// errProbeTargetBlocked is the single opaque error the dialer returns for any
+// SSRF-policy rejection — an unsafe or mixed resolution, or a DNS failure. The
+// concrete cause is logged server-side; the client only ever sees a generic
+// message so the probe cannot be turned into an internal DNS / network state
+// oracle (issue #49).
+var errProbeTargetBlocked = errors.New("probe target is not permitted")
+
+// probeTransportError wraps any error returned by the HTTP client's round-trip
+// (dial, socket, TLS/x509 handshake — every non-application-layer failure). It
+// is the allow-list boundary probeFail uses: a transport error is opaque to the
+// client (its text can embed the service's own local address, cert-chain
+// detail, or the target's internal hostname — review P1-1/P2-B), while errors
+// raised AFTER a successful round-trip (bad HTTP status, JSON-RPC error,
+// malformed payload, origin mismatch) keep their concrete message as a hint.
+type probeTransportError struct{ err error }
+
+func (e *probeTransportError) Error() string { return e.err.Error() }
+func (e *probeTransportError) Unwrap() error { return e.err }
 
 // Probe subsystem — runs an MCP initialize + tools/list handshake against a
 // remote server so the create wizard can auto-populate the tool list. See
@@ -109,7 +157,7 @@ func (s *Service) Probe(ctx context.Context, req ProbeRequest) (ProbeResponse, *
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	client := newProbeHTTPClient(s.probeAllowPrivate)
+	client := newProbeHTTPClient(s.probeAllowPrivate, s.resolver)
 	sess := &probeSession{
 		client:    client,
 		url:       endpoint,
@@ -182,40 +230,66 @@ func validateProbeURL(raw string, allowPrivate bool) (string, *apierr.Error) {
 		return "", apierr.InvalidRequest("url must not include credentials",
 			apierr.Detail{Field: "url", Reason: "credentials"})
 	}
-	if ip := net.ParseIP(u.Hostname()); ip != nil && !allowPrivate && isUnsafeProbeIP(ip) {
+	if ip := parseHostIP(u.Hostname()); ip != nil && !allowPrivate && isUnsafeProbeIP(ip) {
 		return "", apierr.InvalidRequest("url targets a private or local network address",
 			apierr.Detail{Field: "url", Reason: "private_address"})
 	}
 	return u.String(), nil
 }
 
-func newProbeHTTPClient(allowPrivate bool) *http.Client {
+func newProbeHTTPClient(allowPrivate bool, resolver ipResolver) *http.Client {
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
 	dialer := &net.Dialer{Timeout: probeTimeout, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
 			if err != nil {
-				return nil, fmt.Errorf("invalid probe address: %w", err)
+				return nil, errProbeTargetBlocked
 			}
-			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			ips, err := resolver.LookupIP(ctx, "ip", host)
 			if err != nil {
-				return nil, fmt.Errorf("resolve probe host: %w", err)
+				logging.Warn("probe dns lookup failed",
+					zap.String("host", host), zap.Error(err))
+				return nil, errProbeTargetBlocked
 			}
-			for _, ip := range ips {
-				if !allowPrivate && isUnsafeProbeIP(ip) {
-					continue
+			if len(ips) == 0 {
+				logging.Warn("probe dns lookup returned no addresses",
+					zap.String("host", host))
+				return nil, errProbeTargetBlocked
+			}
+			// Whole-request rejection (issue #49): a single unsafe address in
+			// the resolution set fails the entire request. A mixed public /
+			// private answer is a DNS-rebinding signal, so we deliberately do
+			// NOT cherry-pick the safe IP and connect anyway.
+			if !allowPrivate {
+				for _, ip := range ips {
+					if isUnsafeProbeIP(ip) {
+						logging.Warn("probe target resolved to an unsafe address",
+							zap.String("host", host))
+						return nil, errProbeTargetBlocked
+					}
 				}
+			}
+			var lastErr error
+			for _, ip := range ips {
 				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 				if dialErr == nil {
 					return conn, nil
 				}
-				err = dialErr
+				lastErr = dialErr
 			}
-			if !allowPrivate {
-				return nil, errors.New("probe target resolves only to private or local network addresses")
+			// Preserve the transport error (keeps timeout classification in
+			// probeFail) — the target here is the caller-supplied public host,
+			// so the failure carries no internal-network detail to redact.
+			if lastErr == nil {
+				lastErr = errProbeTargetBlocked
 			}
-			return nil, fmt.Errorf("connect to probe target: %w", err)
+			logging.Warn("probe dial failed",
+				zap.String("host", host), zap.Error(lastErr))
+			return nil, lastErr
 		},
 	}
 	return &http.Client{
@@ -225,9 +299,11 @@ func newProbeHTTPClient(allowPrivate bool) *http.Client {
 			if len(via) >= 10 {
 				return errors.New("too many redirects")
 			}
-			_, apiErr := validateProbeURL(req.URL.String(), allowPrivate)
-			if apiErr != nil {
-				return errors.New("redirect target is not permitted")
+			// Every redirect hop re-runs the same literal-IP/scheme/credential
+			// gate; the resolve-time gate above then fires on the new host when
+			// the redirected request dials.
+			if _, apiErr := validateProbeURL(req.URL.String(), allowPrivate); apiErr != nil {
+				return errProbeTargetBlocked
 			}
 			return nil
 		},
@@ -238,27 +314,48 @@ func isUnsafeProbeIP(ip net.IP) bool {
 	if ip4 := ip.To4(); ip4 != nil {
 		return isUnsafeProbeIPv4(ip4)
 	}
-	if nat64Prefix.Contains(ip) {
-		if embedded, ok := embeddedNAT64IPv4(ip); ok {
-			return isUnsafeProbeIPv4(embedded)
-		}
+	// RFC 8215 local-use NAT64 (64:ff9b:1::/48): the embedded IPv4 offset depends
+	// on the prefix length (RFC 6052 §2.2) and is NOT the trailing 32 bits, so a
+	// crafted /48 address could hide an internal v4 at the real offset while its
+	// tail decodes to a public decoy. Rather than decode it, reject the whole
+	// local-use block — it is a translation prefix with no legitimate public
+	// target (review: /48 embedded-IPv4 bypass).
+	if nat64LocalPrefix.Contains(ip) {
+		return true
+	}
+	// The /96 forms embed the IPv4 in the trailing 32 bits; derive and re-check.
+	if embedded, ok := embeddedProbeIPv4(ip); ok && isUnsafeProbeIPv4(embedded) {
+		return true
 	}
 	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
+		siteLocalV6Prefix.Contains(ip)
 }
 
 func isUnsafeProbeIPv4(ip net.IP) bool {
 	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
-		cgnatPrefix.Contains(ip)
+		cgnatPrefix.Contains(ip) || reservedV4Prefix.Contains(ip) ||
+		ietfProtoV4Prefix.Contains(ip) || benchmarkV4Prefix.Contains(ip)
 }
 
-func embeddedNAT64IPv4(ip net.IP) (net.IP, bool) {
-	ip = ip.To16()
-	if ip == nil || !nat64Prefix.Contains(ip) {
+// embeddedProbeIPv4 returns the IPv4 embedded in the trailing 32 bits of an
+// IPv6 address for the prefixes that place it there: the RFC 2765 IPv4-
+// translated block, the RFC 6052 well-known NAT64 prefix, and the deprecated
+// RFC 4291 IPv4-compatible block (::a.b.c.d), all /96. The RFC 8215 /48 prefix
+// is handled separately (rejected wholesale) because its embedding offset
+// differs. ::/96's only non-embedding occupants (:: and ::1) still resolve to
+// unsafe (0.0.0.0 / caught by IsLoopback), so folding it in over-blocks nothing.
+func embeddedProbeIPv4(ip net.IP) (net.IP, bool) {
+	ip16 := ip.To16()
+	if ip16 == nil {
 		return nil, false
 	}
-	return net.IPv4(ip[12], ip[13], ip[14], ip[15]).To4(), true
+	if v4TranslatedPrefix.Contains(ip16) || nat64WKPrefix.Contains(ip16) ||
+		v4CompatPrefix.Contains(ip16) {
+		return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15]).To4(), true
+	}
+	return nil, false
 }
 
 func mustParseCIDR(raw string) *net.IPNet {
@@ -267,6 +364,128 @@ func mustParseCIDR(raw string) *net.IPNet {
 		panic("invalid cidr: " + raw)
 	}
 	return network
+}
+
+// parseHostIP parses a URL host as an IP literal, accepting the non-canonical
+// IPv4 spellings that net.ParseIP rejects but that libc getaddrinfo / curl /
+// Node's http all resolve identically (inet_aton semantics): a bare integer
+// (decimal / octal / hex) and 1-to-4-part dotted forms with each part in any of
+// those bases. Without this, http://2130706433/, http://127.1/, http://0x7f000001/
+// etc. slip past the literal-IP gate — net.ParseIP returns nil, the caller
+// treats them as a domain, DNS NXDOMAINs (they are not domains), and the write
+// is accepted — reaching loopback / cloud-metadata on whoever later dials the
+// stored URL (review P1-1, pentest 4.7 / #48). Returns nil for real DNS names
+// and IPv6 literals (net.ParseIP already covers canonical IPv6).
+func parseHostIP(host string) net.IP {
+	if host == "" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip
+	}
+	if strings.Contains(host, ":") {
+		return nil // IPv6 is only ever the canonical form net.ParseIP handles
+	}
+	return parseInetAtonIPv4(host)
+}
+
+// parseInetAtonIPv4 implements the dotted / packed integer forms of inet_aton.
+// The final part absorbs all remaining low-order bytes (so 127.1 == 127.0.0.1
+// and 2130706433 == 127.0.0.1). Returns nil if any part is not a valid
+// decimal/octal/hex integer or overflows its field.
+func parseInetAtonIPv4(host string) net.IP {
+	parts := strings.Split(host, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return nil
+	}
+	vals := make([]uint64, len(parts))
+	for i, p := range parts {
+		v, ok := parseInetPart(p)
+		if !ok {
+			return nil
+		}
+		vals[i] = v
+	}
+	var addr uint32
+	switch len(parts) {
+	case 1:
+		if vals[0] > 0xffffffff {
+			return nil
+		}
+		addr = uint32(vals[0])
+	case 2:
+		if vals[0] > 0xff || vals[1] > 0xffffff {
+			return nil
+		}
+		addr = uint32(vals[0])<<24 | uint32(vals[1])
+	case 3:
+		if vals[0] > 0xff || vals[1] > 0xff || vals[2] > 0xffff {
+			return nil
+		}
+		addr = uint32(vals[0])<<24 | uint32(vals[1])<<16 | uint32(vals[2])
+	case 4:
+		if vals[0] > 0xff || vals[1] > 0xff || vals[2] > 0xff || vals[3] > 0xff {
+			return nil
+		}
+		addr = uint32(vals[0])<<24 | uint32(vals[1])<<16 | uint32(vals[2])<<8 | uint32(vals[3])
+	}
+	return net.IPv4(byte(addr>>24), byte(addr>>16), byte(addr>>8), byte(addr)).To4()
+}
+
+// parseInetPart parses one inet_aton component: 0x-prefixed hex, a leading-0
+// octal, or plain decimal — matching strtoul(…, 0) as inet_aton uses.
+func parseInetPart(p string) (uint64, bool) {
+	if p == "" {
+		return 0, false
+	}
+	base := 10
+	s := p
+	switch {
+	case len(s) >= 2 && (s[0:2] == "0x" || s[0:2] == "0X"):
+		base, s = 16, s[2:]
+		if s == "" {
+			return 0, false
+		}
+	case len(s) > 1 && s[0] == '0':
+		base, s = 8, s[1:]
+	}
+	v, err := strconv.ParseUint(s, base, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// isValidDNSName reports whether host is a syntactically plausible DNS name
+// (RFC 1123 labels) whose final label is not all-digits. It is the fail-open
+// gate for the resolve-time check: a lookup miss on a real domain is a transient
+// flake we tolerate, but a lookup miss on something that is not a hostname at
+// all (a bare integer, an inet_aton form parseHostIP somehow did not catch) must
+// NOT fail open — that is what let the P1-1 payloads persist.
+func isValidDNSName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			c := l[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+				c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	last := labels[len(labels)-1]
+	for i := 0; i < len(last); i++ {
+		if last[i] < '0' || last[i] > '9' {
+			return true // final label has a non-digit → a real TLD, not a literal
+		}
+	}
+	return false
 }
 
 // sanitizedHeaders drops the reserved secret placeholder (frontend sends it
@@ -302,8 +521,14 @@ func hasToolsCapability(res *initializeResult) bool {
 }
 
 // probeFail translates a transport-layer error into the in-body ProbeResponse
-// shape. Deadline exceeded → timeout; anything else → init_failed (with the
-// concrete message so the UI can surface a hint).
+// shape. Deadline exceeded → timeout. Any transport failure — an SSRF-policy
+// rejection, or an error from the HTTP round-trip (dial / socket / TLS / x509),
+// which arrives wrapped in probeTransportError or as a bare *net.OpError — is
+// opaque, because its text can embed the service's own local address,
+// cert-chain detail, or the target's internal hostname (#49; review P1-1/P2-B).
+// Only application-level causes raised AFTER a successful round-trip (non-2xx
+// status, JSON-RPC error, malformed payload, origin mismatch) keep their
+// concrete message as a UI hint.
 func probeFail(err error) ProbeResponse {
 	if err == nil {
 		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
@@ -315,6 +540,14 @@ func probeFail(err error) ProbeResponse {
 		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
 			Code:    ProbeErrTimeout,
 			Message: "probe timed out",
+		}}
+	}
+	var transportErr *probeTransportError
+	var opErr *net.OpError
+	if errors.Is(err, errProbeTargetBlocked) || errors.As(err, &transportErr) || errors.As(err, &opErr) {
+		return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
+			Code:    ProbeErrInitFailed,
+			Message: "probe target is not reachable",
 		}}
 	}
 	return ProbeResponse{OK: false, Tools: []model.Tool{}, Error: &ProbeError{
@@ -449,7 +682,7 @@ func (s *probeSession) openSSE(ctx context.Context) error {
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return err
+		return &probeTransportError{err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
@@ -689,7 +922,7 @@ func (s *probeSession) rpc(ctx context.Context, id any, method string, params an
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &probeTransportError{err}
 	}
 	defer resp.Body.Close()
 
@@ -748,7 +981,7 @@ func (s *probeSession) rpcSSE(ctx context.Context, id any, method string, params
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &probeTransportError{err}
 	}
 	// Legacy SSE uses the POST purely for delivery; drain and close.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
