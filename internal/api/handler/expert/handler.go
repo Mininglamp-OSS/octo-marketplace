@@ -15,6 +15,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	expertrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/expert"
@@ -63,6 +64,18 @@ type SkillDownloadResp struct {
 	DownloadURL string `json:"download_url"`
 }
 
+// InstallExpertReq is the body for POST /experts/{id}/install: the Loop
+// workspace + runtime (from the fleet pickers) to provision the agent in.
+type InstallExpertReq struct {
+	WorkspaceID string `json:"workspace_id"`
+	RuntimeID   string `json:"runtime_id"`
+}
+
+// InstallExpertResp is the created Loop agent's id.
+type InstallExpertResp struct {
+	AgentID string `json:"agent_id"`
+}
+
 // Handler serves the expert + squad HTTP surface.
 type Handler struct {
 	svc *expertsvc.Service
@@ -81,6 +94,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	rg.GET("/experts/:expert_id", h.GetExpert)
 	rg.PATCH("/experts/:expert_id", h.PatchExpert)
 	rg.DELETE("/experts/:expert_id", h.DeleteExpert)
+	rg.POST("/experts/:expert_id/install", h.InstallExpert)
 
 	rg.POST("/squads", h.CreateSquad)
 	rg.GET("/squads", h.ListSquads)
@@ -237,6 +251,48 @@ func (h *Handler) GetExpert(c *gin.Context) {
 		return
 	}
 	apiresponse.OK(c, detail)
+}
+
+// InstallExpert godoc
+// @Summary Install expert to a Loop workspace/runtime
+// @Description Provision the expert as a Loop agent (with its skills) in the chosen workspace/runtime. Aggregates octo-fleet calls on behalf of the caller and rolls back on partial failure.
+// @Tags expert
+// @ID expert.install
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param expert_id path string true "Expert ID"
+// @Param body body InstallExpertReq true "Target workspace + runtime"
+// @Success 200 {object} apiresponse.Data[InstallExpertResp]
+// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
+// @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 503 {object} apiresponse.Error "UPSTREAM_UNAVAILABLE"
+// @Router /experts/{expert_id}/install [post]
+func (h *Handler) InstallExpert(c *gin.Context) {
+	caller, ok := callerFromContext(c)
+	if !ok {
+		unauthorized(c)
+		return
+	}
+	var req InstallExpertReq
+	if !decodeJSON(c, &req) {
+		return
+	}
+	result, err := h.svc.InstallExpert(c.Request.Context(), caller, c.Param("expert_id"), expertsvc.InstallInput{
+		WorkspaceID: strings.TrimSpace(req.WorkspaceID),
+		RuntimeID:   strings.TrimSpace(req.RuntimeID),
+		SpaceID:     caller.SpaceID,
+		// The token is forwarded to fleet; middleware discarded it, so re-read it.
+		Token: middleware.Token(c),
+	})
+	if err != nil {
+		writeInstallError(c, err)
+		return
+	}
+	apiresponse.OK(c, InstallExpertResp{AgentID: result.AgentID})
 }
 
 // GetExpertSkillMD godoc
@@ -869,4 +925,55 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 	default:
 		apiresponse.Internal(c, err, operation)
 	}
+}
+
+// writeInstallError maps the extra failure modes of the install aggregation on
+// top of the shared sentinels: an unconfigured fleet → 503, and a fleet
+// *APIError → its own status (4xx surfaced verbatim, 5xx/transport collapsed to
+// UPSTREAM_UNAVAILABLE so a fleet hiccup never masquerades as a client fault).
+func writeInstallError(c *gin.Context, err error) {
+	if errors.Is(err, expertsvc.ErrFleetNotConfigured) {
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is not configured", nil, "")
+		return
+	}
+	var apiErr *fleet.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.Status >= 400 && apiErr.Status < 500 {
+			apiresponse.Fail(c, apiErr.Status, installErrCode(apiErr.Status), fleetErrorMessage(apiErr), nil, "")
+			return
+		}
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", nil, "")
+		return
+	}
+	// ErrNotFound / ErrInvalidRequest and the rest share the catalog mapping.
+	writeServiceError(c, err, "expert.install")
+}
+
+// installErrCode maps a fleet 4xx status to the marketplace wire error code.
+func installErrCode(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return errcode.Unauthorized
+	case http.StatusForbidden:
+		return errcode.PermissionDenied
+	case http.StatusNotFound:
+		return errcode.NotFound
+	case http.StatusConflict:
+		return errcode.Conflict
+	default:
+		return errcode.BadRequest
+	}
+}
+
+// fleetErrorMessage returns fleet's message, capped so an upstream string can't
+// bloat our envelope, with a safe fallback.
+func fleetErrorMessage(e *fleet.APIError) string {
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		return "loop service rejected the request"
+	}
+	if len(msg) > 200 {
+		return msg[:200]
+	}
+	return msg
 }

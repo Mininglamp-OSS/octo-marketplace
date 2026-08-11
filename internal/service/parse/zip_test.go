@@ -152,3 +152,58 @@ func TestExtractZip_SkillMDInSubdir(t *testing.T) {
 		t.Errorf("expected SKILL.md content to be extracted")
 	}
 }
+
+func TestExtractSkillFiles_TextOnlyExcludingSkillMD(t *testing.T) {
+	zipPath := createTestZip(t, map[string][]byte{
+		"SKILL.md":     []byte("# Skill"),                          // excluded (reserved)
+		"reference.md": []byte("# Reference\nnotes"),               // text → kept
+		"scripts/a.sh": []byte("echo hi\n"),                        // text → kept
+		"logo.png":     {0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe}, // binary → skipped
+	})
+
+	files, skipped, errCode, errMsg := ExtractSkillFiles(zipPath, 20*1024*1024, 0)
+	if errCode != "" {
+		t.Fatalf("unexpected error: %s: %s", errCode, errMsg)
+	}
+	got := map[string]string{}
+	for _, f := range files {
+		got[f.Path] = f.Content
+	}
+	if _, ok := got["SKILL.md"]; ok {
+		t.Errorf("SKILL.md should be excluded, got %v", got)
+	}
+	if got["reference.md"] != "# Reference\nnotes" || got["scripts/a.sh"] != "echo hi\n" {
+		t.Errorf("text files not extracted correctly: %#v", got)
+	}
+	if len(files) != 2 {
+		t.Errorf("kept %d files, want 2: %#v", len(files), got)
+	}
+	found := false
+	for _, s := range skipped {
+		if s == "logo.png" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("logo.png should be reported skipped, skipped=%v", skipped)
+	}
+}
+
+func TestExtractSkillFiles_RespectsMaxFiles(t *testing.T) {
+	zipPath := createTestZip(t, map[string][]byte{
+		"SKILL.md": []byte("# S"),
+		"a.txt":    []byte("a"),
+		"b.txt":    []byte("b"),
+		"c.txt":    []byte("c"),
+	})
+	files, skipped, errCode, _ := ExtractSkillFiles(zipPath, 20*1024*1024, 2)
+	if errCode != "" {
+		t.Fatalf("errCode=%s", errCode)
+	}
+	if len(files) != 2 {
+		t.Fatalf("kept %d, want 2 (maxFiles)", len(files))
+	}
+	if len(skipped) != 1 {
+		t.Fatalf("skipped %d, want 1 over the cap", len(skipped))
+	}
+}

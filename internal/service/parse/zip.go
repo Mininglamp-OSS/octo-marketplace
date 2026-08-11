@@ -7,12 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
 	maxExtractedSize = 50 * 1024 * 1024 // 50MB total extracted size limit
 	maxSkillMDSize   = 1 * 1024 * 1024  // 1MB SKILL.md size limit
 	maxManifestFiles = 500              // cap on the number of paths recorded in Files
+	// maxSkillFileSize caps one supporting file read by ExtractSkillFiles. Files
+	// larger than this are skipped rather than truncated.
+	maxSkillFileSize = 1 * 1024 * 1024 // 1MB per supporting file
 )
 
 // ExtractResult holds the results of zip extraction.
@@ -107,6 +111,65 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 	}, "", ""
 }
 
+// SkillFile is one supporting file (path + text content) extracted from a
+// skill package for provisioning into a downstream skill store.
+type SkillFile struct {
+	Path    string
+	Content string
+}
+
+// ExtractSkillFiles returns the UTF-8 text supporting files inside the package —
+// everything EXCEPT the SKILL.md itself — applying the same zip-slip/symlink
+// guards as ExtractZip. It reads on trusted, already-validated stored bytes; a
+// file is skipped (its path returned in `skipped`) when it exceeds
+// maxSkillFileSize or is not valid UTF-8 (binary, which downstream text-only
+// skill-file stores can't hold). `maxFiles` caps how many files are returned
+// (<=0 means maxManifestFiles). Directories and SKILL.md are excluded silently.
+func ExtractSkillFiles(zipPath string, maxZipSize int64, maxFiles int) (files []SkillFile, skipped []string, errCode, errMsg string) {
+	info, err := os.Stat(zipPath)
+	if err != nil {
+		return nil, nil, "INVALID_ZIP", "cannot stat zip file"
+	}
+	if info.Size() > maxZipSize {
+		return nil, nil, "FILE_TOO_LARGE", fmt.Sprintf("zip file exceeds %dMB limit", maxZipSize/(1024*1024))
+	}
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, nil, "INVALID_ZIP", "cannot open zip file: " + err.Error()
+	}
+	defer r.Close()
+
+	if maxFiles <= 0 {
+		maxFiles = maxManifestFiles
+	}
+
+	for _, f := range r.File {
+		if errCode, errMsg := validateZipEntry(f); errCode != "" {
+			return nil, nil, errCode, errMsg
+		}
+		if f.FileInfo().IsDir() || isSkillMDCandidate(f.Name) {
+			continue
+		}
+		if len(files) >= maxFiles {
+			skipped = append(skipped, f.Name)
+			continue
+		}
+		if f.UncompressedSize64 > maxSkillFileSize {
+			skipped = append(skipped, f.Name)
+			continue
+		}
+		data, err := readZipFileLimited(f, maxSkillFileSize)
+		if err != nil || !utf8.Valid(data) {
+			// Unreadable or binary (non-UTF-8): text-only downstream stores
+			// can't represent it, so skip rather than corrupt it.
+			skipped = append(skipped, f.Name)
+			continue
+		}
+		files = append(files, SkillFile{Path: f.Name, Content: string(data)})
+	}
+	return files, skipped, "", ""
+}
+
 // isSkillMDCandidate reports whether name is a SKILL.md (case-insensitive) at
 // the root or exactly one directory deep — the only two locations the catalog
 // recognises. Backslashes are normalised to "/" first so a Windows-style path
@@ -176,19 +239,24 @@ func isWindowsRooted(name string) bool {
 
 // readZipFile reads the contents of a single zip entry.
 func readZipFile(f *zip.File) ([]byte, error) {
+	return readZipFileLimited(f, maxSkillMDSize)
+}
+
+// readZipFileLimited reads one zip entry, capped at max bytes (rejecting a
+// decompression bomb that lies about its size).
+func readZipFileLimited(f *zip.File, max int64) ([]byte, error) {
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
 
-	// Read with limit to prevent decompression bombs
-	limited := io.LimitReader(rc, maxSkillMDSize+1)
+	limited := io.LimitReader(rc, max+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(data)) > maxSkillMDSize {
+	if int64(len(data)) > max {
 		return nil, fmt.Errorf("file too large")
 	}
 	return data, nil

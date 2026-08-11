@@ -15,12 +15,14 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/blob"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/config"
 	marketdb "github.com/Mininglamp-OSS/octo-marketplace/internal/db"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/repository"
 	metricsrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/metrics"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/service"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	metricssvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/metrics"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
@@ -118,6 +120,17 @@ func main() {
 		model.Identity{UID: cfg.DevAuthUID, Name: cfg.DevAuthName},
 	)
 
+	// Fleet client powers POST /experts/{id}/install. Left nil (interface, not a
+	// typed-nil) when OCTO_FLEET_URL is unset so the endpoint returns a clean
+	// UPSTREAM_UNAVAILABLE instead of dialing an empty base URL.
+	var fleetClient expertsvc.FleetProvisioner
+	if cfg.OctoFleetURL != "" {
+		fleetClient = fleet.New(cfg.OctoFleetURL)
+		log.Printf("[fleet] expert install enabled (url=%q)", cfg.OctoFleetURL)
+	} else {
+		log.Printf("[fleet] expert install disabled: OCTO_FLEET_URL not set")
+	}
+
 	mcpSvc := service.New(repository.New(database)).WithProbeAllowPrivate(cfg.ProbeAllowPrivate)
 	if cfg.Storage.Enabled() {
 		mcpSvc.WithIconStore(
@@ -197,7 +210,7 @@ func main() {
 			WorkerPoolSize:    cfg.SkillParseWorkerPoolSize,
 			BotPublishTimeout: cfg.BotPublishTimeout,
 			DevBotMode:        devBotMode,
-		}, router.RedisConfig{Client: metricsRDB}),
+		}, fleetClient, router.RedisConfig{Client: metricsRDB}),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,

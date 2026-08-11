@@ -106,6 +106,9 @@ type Service struct {
 	store storage.Storage
 	idGen func() string
 	now   func() time.Time
+	// fleet provisions agents/skills in octo-fleet for InstallExpert. Nil unless
+	// wired via WithFleet (see router); a nil fleet makes install a clean 503.
+	fleet FleetProvisioner
 }
 
 // New returns a Service backed by the expert repository (which also owns the
