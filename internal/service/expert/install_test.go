@@ -20,7 +20,7 @@ type fakeFleet struct {
 	skillIDs    []string // returned by successive CreateSkill calls
 	skillIdx    int
 	agentErr    error
-	failAgentAt int // when agentIDs is set, CreateAgent fails at this index (-1 = never)
+	failAgentAt int   // when agentIDs is set, CreateAgent fails at this index (-1 = never)
 	skillErr    error // fails the CreateSkill at index failSkillAt
 	failSkillAt int
 	setErr      error
@@ -441,5 +441,45 @@ func TestInstallExpertRollbackRunsAfterContextCanceled(t *testing.T) {
 		if e != nil {
 			t.Fatalf("DeleteSkill[%d] ran on canceled ctx (%v); want detached live ctx", i, e)
 		}
+	}
+}
+
+// fileBudget caps the aggregate supporting-file fan-out per install.
+func TestFileBudgetTake(t *testing.T) {
+	b := &fileBudget{remaining: 2}
+	if !b.take() || !b.take() {
+		t.Fatal("first two takes should succeed")
+	}
+	if b.take() {
+		t.Fatal("third take should fail once budget is exhausted")
+	}
+	// A nil budget is unbounded (defensive: no caller passes nil today).
+	var nb *fileBudget
+	if !nb.take() {
+		t.Fatal("nil budget should be unbounded")
+	}
+}
+
+// A package whose supporting files exceed the remaining install budget makes
+// attachSkillFiles fail with ErrInstallTooLarge, so the install rolls back
+// rather than fanning out unbounded UpsertSkillFile calls.
+func TestAttachSkillFilesRejectsWhenBudgetExhausted(t *testing.T) {
+	ff := &fakeFleet{}
+	store := newFakeStore()
+	obj := newMemObjectStore()
+	zipKey := "k/skill.zip"
+	obj.objects[zipKey] = makeSkillZip(t, map[string][]byte{
+		"SKILL.md":     []byte("# s"),
+		"reference.md": []byte("notes"), // one supporting text file
+	})
+	svc := New(store, obj, func() string { return "gen" }).WithFleet(ff)
+
+	ref := model.SkillRef{Name: "packaged", ObjectKey: "k/SKILL.md", ZipObjectKey: zipKey}
+	err := svc.attachSkillFiles(context.Background(), baseInput(), ref, "s1", &fileBudget{remaining: 0})
+	if !errors.Is(err, ErrInstallTooLarge) {
+		t.Fatalf("err = %v, want ErrInstallTooLarge", err)
+	}
+	if len(ff.upsertedFiles) != 0 {
+		t.Fatalf("no files should be upserted once the budget is exhausted, got %#v", ff.upsertedFiles)
 	}
 }

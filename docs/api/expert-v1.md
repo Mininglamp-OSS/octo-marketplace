@@ -467,6 +467,41 @@ Owner only. Row soft-deleted (`deleted_at = now()`); list + detail treat it as
 gone; the name frees up for reuse. **Response (200):** `{"data":{}}`. **Errors:**
 401 / 403 / 404.
 
+### 4.6.1 `POST /experts/{expert_id}/install` — provision to a Loop workspace/runtime
+
+Provision the expert as a Loop agent in the caller's chosen workspace/runtime.
+The server, acting **as the calling user** (the octo `Token` is forwarded to
+octo-fleet, which enforces workspace membership, runtime access, and space
+scoping — this service does not re-check them):
+
+1. resolves the **visible** expert (§4.4 visibility rule),
+2. creates a Loop agent seeded with the expert's `instruction` + `mcp_config`,
+3. creates one workspace skill per packaged skill and attaches its supporting
+   files, then binds the skills to the agent.
+
+On any partial failure it **rolls back** the agent and every skill it created
+(best-effort, on a context detached from the request so cancellation still
+cleans up). The whole install is bounded by an aggregate timeout, and the total
+supporting-file fan-out is capped across all skills (a package exceeding it →
+`400`).
+
+**Request:**
+
+```json
+{ "workspace_id": "ws-123", "runtime_id": "rt-456" }
+```
+
+**Response (200):**
+
+```json
+{ "data": { "agent_id": "agent-789" } }
+```
+
+**Errors:** 400 (`invalid_request` — missing workspace/runtime, or an install
+that exceeds the resource caps) · 401 · 403 · 404 (expert not visible) · 409
+(fleet rejects a duplicate agent name in the workspace) · 500 · 503
+(`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).
+
 ### 4.7–4.12 `/squads` family
 
 Identical verbs and semantics to §4.1–4.6, with the squad payload (§3.5/§3.6)
@@ -500,9 +535,13 @@ and `squad_id`:
   **rolls back** the squad plus every provisioned member agent on any partial
   failure. **Response (200):** `{ "squad_id", "leader_agent_id" }`. Mirrors the
   single-agent expert flow `POST /experts/{expert_id}/install`. **Errors:** 400
-  (`invalid_request`, incl. a squad with no members) · 401 · 403 · 404 · 409
-  (fleet rejects a duplicate agent/squad name in the workspace) · 503
-  (`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).
+  (`invalid_request`, incl. a squad with no members, or an install that exceeds
+  the aggregate resource caps) · 401 · 403 · 404 · 409 (fleet rejects a duplicate
+  agent/squad name in the workspace) · 500 · 503 (`UPSTREAM_UNAVAILABLE` when
+  octo-fleet is unconfigured or unavailable).
+
+  **Request:** `{ "workspace_id": "ws-123", "runtime_id": "rt-456" }` —
+  **Response (200):** `{ "data": { "squad_id": "sq-1", "leader_agent_id": "agent-1" } }`.
 
 **Errors:** same catalog as the experts family, with
 `err.marketplace.expert.invalid_members` added on create/update.

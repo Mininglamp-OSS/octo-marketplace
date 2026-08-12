@@ -15,13 +15,46 @@ import (
 // cleanupTimeout bounds the detached rollback deletes so they can't hang.
 const cleanupTimeout = 15 * time.Second
 
+// installTimeout bounds a whole install (expert or squad). The per-fleet-call
+// timeout on the http client bounds each hop, but nothing bounds their sum: a
+// squad of many members each with many packaged skills fans out to a large
+// number of sequential upstream calls. This aggregate deadline caps the total.
+const installTimeout = 5 * time.Minute
+
 // maxSkillFilesPerSkill caps how many supporting files one packaged skill
 // contributes to the created fleet skill, bounding the PUT fan-out.
 const maxSkillFilesPerSkill = 50
 
+// maxSkillFilesPerInstall caps the TOTAL supporting files one install may push
+// to fleet across every skill and (for a squad) every member — a bound on the
+// aggregate UpsertSkillFile fan-out that maxSkillFilesPerSkill alone can't give
+// (30 members × 20 skills × 50 files would otherwise be ~30k PUTs per request).
+const maxSkillFilesPerInstall = 500
+
 // ErrFleetNotConfigured is returned by InstallExpert when no fleet client is
 // wired (OCTO_FLEET_URL unset). The handler maps it to UPSTREAM_UNAVAILABLE.
 var ErrFleetNotConfigured = errors.New("fleet not configured")
+
+// ErrInstallTooLarge is returned when an install would exceed the aggregate
+// skill-file fan-out cap (maxSkillFilesPerInstall). The handler maps it to 400.
+var ErrInstallTooLarge = errors.New("install exceeds resource limits")
+
+// fileBudget bounds the total supporting files an install may push to fleet. It
+// is created once per install and shared across all skills/members, so the cap
+// is on the aggregate — not reset per skill the way maxSkillFilesPerSkill is.
+type fileBudget struct{ remaining int }
+
+// take consumes one file from the budget, reporting false once it's exhausted.
+func (b *fileBudget) take() bool {
+	if b == nil {
+		return true
+	}
+	if b.remaining <= 0 {
+		return false
+	}
+	b.remaining--
+	return true
+}
 
 // FleetProvisioner is the octo-fleet surface InstallExpert drives. *fleet.Client
 // satisfies it; tests provide a fake. Every method forwards the end user's octo
@@ -78,6 +111,11 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		return InstallResult{}, ErrInvalidRequest
 	}
 
+	// Bound the whole install; rollback runs on a detached context so it still
+	// fires if this deadline is what trips.
+	ctx, cancel := context.WithTimeout(ctx, installTimeout)
+	defer cancel()
+
 	m, err := s.loadVisibleExpert(ctx, caller, expertID)
 	if err != nil {
 		return InstallResult{}, err
@@ -89,7 +127,7 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		Instruction: m.Instruction,
 		MCPConfig:   m.MCPConfig,
 		Skills:      m.Skills,
-	})
+	}, &fileBudget{remaining: maxSkillFilesPerInstall})
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -112,7 +150,7 @@ type agentProvisionSpec struct {
 // rolls back everything IT created (skills + agent) and returns the error, so
 // the caller has nothing to unwind for this agent. Shared by InstallExpert (one
 // agent) and InstallSquad (one per member).
-func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec) (string, []string, error) {
+func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget) (string, []string, error) {
 	agentSpec := fleet.AgentSpec{
 		Name:         spec.Name,
 		Description:  spec.Summary,
@@ -130,7 +168,7 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 
 	// From here on, roll back the created agent (and any skills) on failure so a
 	// partial provision never leaves an orphaned agent behind.
-	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in)
+	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget)
 	if err != nil {
 		s.rollbackAgent(ctx, in, agentID, skillIDs)
 		return "", nil, err
@@ -151,7 +189,7 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 // returning the new skill ids. Name-only skills (no ObjectKey) carry nothing to
 // install and are skipped. On the first failure it deletes the skills it already
 // created and returns the error, so the caller only has the agent left to unwind.
-func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput) ([]string, error) {
+func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget) ([]string, error) {
 	created := make([]string, 0, len(skills))
 	for i := range skills {
 		if skills[i].ObjectKey == "" {
@@ -173,7 +211,7 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 		}
 		// Track before attaching files so a file failure also unwinds this skill.
 		created = append(created, skillID)
-		if err := s.attachSkillFiles(ctx, in, skills[i], skillID); err != nil {
+		if err := s.attachSkillFiles(ctx, in, skills[i], skillID, budget); err != nil {
 			s.deleteSkills(ctx, in, created)
 			return nil, err
 		}
@@ -187,7 +225,7 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 // ExtractSkillFiles). A missing/unreadable/unparseable package is treated as
 // "no extra files" — the SKILL.md-backed skill is already usable — so it does
 // NOT fail the install; only an actual fleet PUT error does.
-func (s *Service) attachSkillFiles(ctx context.Context, in InstallInput, ref model.SkillRef, skillID string) error {
+func (s *Service) attachSkillFiles(ctx context.Context, in InstallInput, ref model.SkillRef, skillID string, budget *fileBudget) error {
 	if ref.ZipObjectKey == "" || s.store == nil {
 		return nil
 	}
@@ -202,6 +240,12 @@ func (s *Service) attachSkillFiles(ctx context.Context, in InstallInput, ref mod
 		return nil
 	}
 	for _, f := range files {
+		// Charge the aggregate budget first: an install that would push more than
+		// maxSkillFilesPerInstall files across all skills/members is rejected
+		// (and rolled back) rather than allowed to fan out unbounded.
+		if !budget.take() {
+			return ErrInstallTooLarge
+		}
 		if err := s.fleet.UpsertSkillFile(ctx, in.Token, in.SpaceID, in.WorkspaceID, skillID, f.Path, f.Content); err != nil {
 			return err
 		}

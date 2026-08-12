@@ -112,6 +112,16 @@ components:
         data:
           $ref: '#/components/schemas/internal_api_handler_expert.ExpertDetailResp'
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_expert_InstallExpertResp:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_expert.InstallExpertResp'
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_expert_InstallSquadResp:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_expert.InstallSquadResp'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_expert_SkillContentResp:
       properties:
         data:
@@ -1209,6 +1219,32 @@ components:
           type: string
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
+      type: object
+    internal_api_handler_expert.InstallExpertReq:
+      properties:
+        runtime_id:
+          type: string
+        workspace_id:
+          type: string
+      type: object
+    internal_api_handler_expert.InstallExpertResp:
+      properties:
+        agent_id:
+          type: string
+      type: object
+    internal_api_handler_expert.InstallSquadReq:
+      properties:
+        runtime_id:
+          type: string
+        workspace_id:
+          type: string
+      type: object
+    internal_api_handler_expert.InstallSquadResp:
+      properties:
+        leader_agent_id:
+          type: string
+        squad_id:
+          type: string
       type: object
     internal_api_handler_expert.SkillContentResp:
       properties:
@@ -3242,6 +3278,84 @@ paths:
       security:
       - Bearer: []
       summary: Update expert
+      tags:
+      - expert
+  /experts/{expert_id}/install:
+    post:
+      description: Provision the expert as a Loop agent (with its skills) in the chosen
+        workspace/runtime. Aggregates octo-fleet calls on behalf of the caller and
+        rolls back on partial failure.
+      operationId: expert.install
+      parameters:
+      - description: Expert ID
+        in: path
+        name: expert_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_expert.InstallExpertReq'
+                description: Target workspace + runtime
+                summary: body
+        description: Target workspace + runtime
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_expert_InstallExpertResp'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: UPSTREAM_UNAVAILABLE
+      security:
+      - Bearer: []
+      summary: Install expert to a Loop workspace/runtime
       tags:
       - expert
   /experts/{expert_id}/skill_download:
@@ -5641,6 +5755,85 @@ paths:
       summary: Update squad
       tags:
       - expert_squad
+  /squads/{squad_id}/install:
+    post:
+      description: 'Provision a squad into the chosen workspace/runtime: install each
+        member as a Loop agent (with its skills), then form the squad (create it led
+        by the leader member and attach the rest). Aggregates octo-fleet calls on
+        behalf of the caller and rolls back on partial failure.'
+      operationId: squad.install
+      parameters:
+      - description: Squad ID
+        in: path
+        name: squad_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_expert.InstallSquadReq'
+                description: Target workspace + runtime
+                summary: body
+        description: Target workspace + runtime
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_expert_InstallSquadResp'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: UPSTREAM_UNAVAILABLE
+      security:
+      - Bearer: []
+      summary: Install squad to a Loop workspace/runtime
+      tags:
+      - expert
   /squads/{squad_id}/skill_download:
     get:
       description: Return a short-lived presigned GET URL for a squad member's skill

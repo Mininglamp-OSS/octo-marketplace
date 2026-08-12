@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
@@ -283,6 +284,7 @@ func (h *Handler) GetExpert(c *gin.Context) {
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Failure 503 {object} apiresponse.Error "UPSTREAM_UNAVAILABLE"
 // @Router /experts/{expert_id}/install [post]
 func (h *Handler) InstallExpert(c *gin.Context) {
@@ -325,6 +327,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Failure 503 {object} apiresponse.Error "UPSTREAM_UNAVAILABLE"
 // @Router /squads/{squad_id}/install [post]
 func (h *Handler) InstallSquad(c *gin.Context) {
@@ -992,6 +995,10 @@ func writeInstallError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is not configured", nil, "")
 		return
 	}
+	if errors.Is(err, expertsvc.ErrInstallTooLarge) {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "install exceeds resource limits", nil, "")
+		return
+	}
 	var apiErr *fleet.APIError
 	if errors.As(err, &apiErr) {
 		if apiErr.Status >= 400 && apiErr.Status < 500 {
@@ -1028,8 +1035,15 @@ func fleetErrorMessage(e *fleet.APIError) string {
 	if msg == "" {
 		return "loop service rejected the request"
 	}
-	if len(msg) > 200 {
-		return msg[:200]
+	// Cap on a rune boundary — fleet returns Chinese text, so a byte slice could
+	// split a multi-byte rune and emit a U+FFFD.
+	const maxBytes = 200
+	if len(msg) <= maxBytes {
+		return msg
 	}
-	return msg
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(msg[end]) {
+		end--
+	}
+	return msg[:end]
 }

@@ -266,3 +266,58 @@ func TestDeleteSquadUsesDelete(t *testing.T) {
 		t.Fatalf("got %s %s, want DELETE /api/squads/squad-1", cap.method, cap.path)
 	}
 }
+
+// The client must NOT follow redirects: it forwards the end user's raw Token in
+// a custom header, and Go copies custom headers verbatim across a cross-origin
+// redirect. A 3xx is surfaced as an *APIError and the credential never reaches
+// the redirect target.
+func TestClientDoesNotFollowRedirects(t *testing.T) {
+	var leakedToken string
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leakedToken = r.Header.Get("Token")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"leaked"}`))
+	}))
+	defer sink.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, sink.URL+"/api/agents", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	_, err := New(origin.URL).CreateAgent(context.Background(), "USER-SECRET", "space-1", "ws-1", AgentSpec{Name: "a"})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusFound {
+		t.Fatalf("err = %v, want *APIError 302 (redirect not followed)", err)
+	}
+	if leakedToken != "" {
+		t.Fatalf("token leaked to redirect target: %q", leakedToken)
+	}
+}
+
+// parseFleetError caps the message without splitting a multi-byte rune (fleet
+// returns Chinese error text).
+func TestParseFleetErrorTruncatesOnRuneBoundary(t *testing.T) {
+	// 100 Chinese runes (3 bytes each = 300 bytes) exceeds the 200-byte cap.
+	long := ""
+	for i := 0; i < 100; i++ {
+		long += "错"
+	}
+	body, _ := json.Marshal(map[string]string{"error": long})
+	got := parseFleetError(body)
+	if len(got) > 200 {
+		t.Fatalf("message not capped: %d bytes", len(got))
+	}
+	if !utf8ValidString(got) {
+		t.Fatalf("message split a rune (invalid UTF-8): %q", got)
+	}
+}
+
+func utf8ValidString(s string) bool {
+	for _, r := range s {
+		if r == '�' {
+			return false
+		}
+	}
+	return true
+}

@@ -39,6 +39,12 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		return InstallSquadResult{}, ErrInvalidRequest
 	}
 
+	// Bound the whole squad install (its fan-out is the largest: members ×
+	// skills × files). Rollback runs on a detached context, so it still fires if
+	// this deadline is what trips.
+	ctx, cancel := context.WithTimeout(ctx, installTimeout)
+	defer cancel()
+
 	m, err := s.loadVisibleSquad(ctx, caller, squadID)
 	if err != nil {
 		return InstallSquadResult{}, err
@@ -48,6 +54,10 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	}
 
 	leaderIdx := squadLeaderIndex(m)
+
+	// One file budget shared across every member so the cap is on the whole
+	// install, not per member.
+	budget := &fileBudget{remaining: maxSkillFilesPerInstall}
 
 	// Provision every member as a Loop agent, tracking created agents so a
 	// later failure unwinds them all. provisionAgent is atomic per member, so a
@@ -61,7 +71,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 			Instruction: m.Members[i].Instruction,
 			MCPConfig:   m.Members[i].MCPConfig,
 			Skills:      m.Members[i].Skills,
-		})
+		}, budget)
 		if err != nil {
 			s.rollbackSquad(ctx, in, "", created)
 			return InstallSquadResult{}, err

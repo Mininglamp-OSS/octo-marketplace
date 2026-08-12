@@ -6,8 +6,9 @@
 // /api/skills, so every call forwards the END USER's own octo `Token` verbatim
 // plus the workspace selector `X-Workspace-Id` (and optional `X-Space-Id`).
 // This mirrors exactly what octo-web sends. The client is deliberately plain
-// (base URL + a timed http.Client), like internal/auth/resolver.go — fleet is
-// trusted infrastructure, so no SSRF hardening is needed.
+// (base URL + a timed http.Client), like internal/auth/resolver.go, but it does
+// NOT follow redirects: because it forwards a raw user credential in a custom
+// header, chasing a 3xx to another host would leak that credential (see New).
 package fleet
 
 import (
@@ -18,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"time"
+	"unicode/utf8"
 )
 
 // maxRespBytes bounds a fleet response body so a misbehaving upstream can't
@@ -34,7 +36,20 @@ type Client struct {
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: baseURL,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http: &http.Client{
+			Timeout: 30 * time.Second,
+			// Never follow redirects. We forward the end user's raw octo Token as
+			// a custom header, and Go only strips the well-known auth headers
+			// (Authorization/Cookie/…) on a cross-origin redirect — a custom
+			// "Token"/"X-Workspace-Id"/"X-Space-Id" would be copied verbatim to
+			// whatever host a 3xx names, leaking a live credential (and turning an
+			// install into an SSRF primitive). A server-to-server JSON API has no
+			// legitimate reason to redirect, so surface the 3xx as the response
+			// instead of chasing it.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -242,11 +257,21 @@ func parseFleetError(data []byte) string {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(data, &env); err == nil && env.Error != "" {
-		return env.Error
+		return truncateRunes(env.Error, 200)
 	}
-	const maxMsg = 200
-	if len(data) > maxMsg {
-		return string(data[:maxMsg])
+	return truncateRunes(string(data), 200)
+}
+
+// truncateRunes caps s at maxBytes without splitting a multi-byte rune (fleet
+// returns Chinese error text, so a naive s[:n] could leave a dangling U+FFFD).
+func truncateRunes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
 	}
-	return string(data)
+	// Back up to the start of the rune that straddles the byte boundary.
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
 }
