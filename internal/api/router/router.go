@@ -156,7 +156,12 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		if fleetClient != nil {
 			expertSvc = expertSvc.WithFleet(fleetClient)
 		}
-		experthandler.New(expertSvc).Register(v1)
+		expertHandler := experthandler.New(expertSvc)
+		expertHandler.Register(v1)
+		// Admin (SuperAdmin) surface: /api/v1/admin/experts|squads|expert_categories
+		// |expert_tags|expert_skill_uploads for managing platform-provided
+		// (visibility=system) records.
+		expertHandler.RegisterAdmin(r, adminAuth)
 
 		// Wire up metrics service and handler.
 		var mSvc *metricssvc.Service

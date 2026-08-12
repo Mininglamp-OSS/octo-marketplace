@@ -98,6 +98,19 @@ type Store interface {
 	// ListCategoriesWithCount returns every live category with a visible-record
 	// count of the given kind for GET /expert_categories.
 	ListCategoriesWithCount(ctx context.Context, kind expertrepo.Entity, spaceID, ownerUID string) ([]expertrepo.CategoryCount, error)
+
+	// ── Admin (SuperAdmin) surface: system rows keyed by id, plus category CRUD ──
+	UpdateSystemExpert(ctx context.Context, m *model.Expert) error
+	DeleteSystemExpert(ctx context.Context, id string, now time.Time) error
+	SystemExpertNameExists(ctx context.Context, name, excludeID string) (bool, error)
+	UpdateSystemSquad(ctx context.Context, m *model.Squad) error
+	DeleteSystemSquad(ctx context.Context, id string, now time.Time) error
+	SystemSquadNameExists(ctx context.Context, name, excludeID string) (bool, error)
+
+	ListExpertCategoriesAdmin(ctx context.Context) ([]expertrepo.CategoryAdminRow, error)
+	CreateExpertCategory(ctx context.Context, id, name, iconKey string, sortOrder int, now time.Time) error
+	UpdateExpertCategory(ctx context.Context, id, name, iconKey string, sortOrder int, now time.Time) error
+	DeleteExpertCategory(ctx context.Context, id string, now time.Time) (int, error)
 }
 
 // Service implements the expert + squad catalog operations.

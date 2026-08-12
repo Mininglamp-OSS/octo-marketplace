@@ -100,7 +100,8 @@ type ExpertAgentDetail struct {
 }
 
 // ExpertAgentListItem is the list projection (doc §3.3) — detail minus the
-// heavy ExpertSpec trio (instruction / mcp_config / skills).
+// heavy ExpertSpec trio (instruction / mcp_config / skills), plus skill_count
+// (the squad twin carries member_count).
 type ExpertAgentListItem struct {
 	ExpertID         string        `json:"expert_id"`
 	ShortName        string        `json:"short_name"`
@@ -114,6 +115,7 @@ type ExpertAgentListItem struct {
 	CreatedByType    CreatedByType `json:"created_by_type"`
 	CreatedByBotUID  string        `json:"created_by_bot_uid,omitempty"`
 	CreatedByBotName string        `json:"created_by_bot_name,omitempty"`
+	SkillCount       int           `json:"skill_count"`
 }
 
 // ToAgentDetail projects a domain Expert onto the detail wire shape.
@@ -154,6 +156,7 @@ func (e *Expert) ToAgentListItem() ExpertAgentListItem {
 		CreatedByType:    normalizeCreatedByType(e.CreatedByType),
 		CreatedByBotUID:  e.CreatedByBotUID,
 		CreatedByBotName: e.CreatedByBotName,
+		SkillCount:       len(e.Skills),
 	}
 }
 

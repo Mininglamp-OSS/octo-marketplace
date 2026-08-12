@@ -25,6 +25,10 @@ type ListFilter struct {
 	// MineOnly restricts the result to rows owned by CallerUID inside SpaceID
 	// (GET /{entity}/mine). When false the visible-set rule applies.
 	MineOnly bool
+	// SystemOnly restricts the result to visibility=system rows across every
+	// Space (the /admin surface). It takes precedence over the caller-scoped
+	// visible-set rule and ignores MineOnly / SpaceID / CallerUID.
+	SystemOnly bool
 }
 
 // ListExperts returns the page of experts matching the filter plus the total
@@ -157,6 +161,9 @@ func (f ListFilter) buildWhere() (string, []any) {
 	if f.MineOnly {
 		clauses = append(clauses, "owner_uid = ? AND space_id = ?")
 		args = append(args, f.CallerUID, f.SpaceID)
+	} else if f.SystemOnly {
+		// Admin surface: every system row across all Spaces, no caller scope.
+		clauses = append(clauses, "visibility = 'system'")
 	} else {
 		clauses = append(clauses,
 			"(visibility = 'system' OR (space_id = ? AND (visibility = 'public' OR owner_uid = ?)))")

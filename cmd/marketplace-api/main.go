@@ -55,6 +55,8 @@ import (
 // @tag.description Expert catalog — single experts (专家) and tag suggestions
 // @tag.name expert_squad
 // @tag.description Expert squad catalog — expert teams (专家团)
+// @tag.name admin_expert
+// @tag.description Administrative Expert catalog — system experts, squads, categories, tags
 // @securityDefinitions.bearerauth Bearer
 
 // @securityDefinitions.apikey AdminToken

@@ -220,7 +220,8 @@ Request bodies are strict — unknown or server-owned fields yield
 
 Projection for `GET /experts` and `GET /experts/mine`. Drops the heavy
 `ExpertSpec` payload (`instruction` / `mcp_config` / `skills`) — those load on
-detail.
+detail. `skill_count` is the length of the dropped `skills` array (the squad
+twin §3.6 carries `member_count` the same way).
 
 ```json
 {
@@ -233,7 +234,8 @@ detail.
   "publisher": "Octo Community",
   "visibility": "public",
   "creator_name": "王决",
-  "created_by_type": "human"
+  "created_by_type": "human",
+  "skill_count": 2
 }
 ```
 
@@ -664,9 +666,30 @@ Sized for prototype scale; revisit on scale metrics. Mirrors `mcp-v1.md` §7.
 - `ExpertSpec` (§3.1) is a shared shape; a change to it affects both the expert
   top level and squad members — version both together.
 
-## 9. Admin surface (deferred)
+## 9. Admin surface
 
-A separate `/api/v1/admin/experts` + `/api/v1/admin/squads` surface for
-platform-provided (`visibility = system`) records — mirroring `mcp-v1.md` §9 —
-is out of scope for v1 and will get its own follow-up brief. The public
-surface REJECTS `visibility = system` on write.
+A separate SuperAdmin surface manages platform-provided (`visibility = system`)
+records — mirroring `mcp-v1.md` §9. The public surface still REJECTS
+`visibility = system` on write.
+
+Implemented endpoints (all under `/api/v1/admin`, gated by
+`AdminAuthenticator`; wire shapes reuse §3, and generated OpenAPI under
+`docs/openapi/` is the field-level reference — tag `admin_expert`):
+
+- `POST/GET /admin/experts`, `GET/PATCH/DELETE /admin/experts/{expert_id}` —
+  create stamps `visibility = system` (a client-sent `visibility` is rejected
+  as an unknown field); list bypasses Space scoping and pages by
+  `page`/`page_size`; create/patch bodies are §4.1/§4.5 shapes.
+- `GET /admin/experts/{expert_id}/skill_md?i=N` — stored SKILL.md text of the
+  skill at index `i` (§3.1 `SkillContentResp`).
+- The same six verbs for squads under `/admin/squads`, plus
+  `GET /admin/squads/{squad_id}/skill_md?member=<member_key>&i=N`.
+- `GET/POST /admin/expert_categories`,
+  `PATCH/DELETE /admin/expert_categories/{category_id}` — taxonomy management;
+  delete is rejected 409 with the reference count while records still use the
+  category. NOTE: update writes all three columns (`name`, `icon_key`,
+  `sort_order`) — clients must echo the current `icon_key` back or it is
+  cleared.
+- `GET /admin/expert_tags?kind=agent|squad` — tag aggregation over system rows.
+- `POST /admin/expert_skill_uploads` — the §5 presigned-upload handshake,
+  reused verbatim.

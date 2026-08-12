@@ -32,6 +32,8 @@ type fakeStore struct {
 	categoryIDByName map[string]string
 	categoryNames    map[string]string
 	categoryList     []expertrepo.CategoryCount
+	// adminCategories backs the admin category CRUD fakes.
+	adminCategories []expertrepo.CategoryAdminRow
 }
 
 func newFakeStore() *fakeStore {
@@ -162,6 +164,105 @@ func (s *fakeStore) CategoryNamesByIDs(_ context.Context, ids []string) (map[str
 
 func (s *fakeStore) ListCategoriesWithCount(_ context.Context, _ expertrepo.Entity, _, _ string) ([]expertrepo.CategoryCount, error) {
 	return s.categoryList, nil
+}
+
+// ── Admin surface fakes ──────────────────────────────────────────────────────
+
+func (s *fakeStore) UpdateSystemExpert(_ context.Context, m *model.Expert) error {
+	cur, ok := s.experts[m.ID]
+	if !ok || cur.Visibility != model.VisibilitySystem {
+		return expertrepo.ErrNotFound
+	}
+	cp := *m
+	s.experts[m.ID] = &cp
+	return nil
+}
+
+func (s *fakeStore) DeleteSystemExpert(_ context.Context, id string, _ time.Time) error {
+	cur, ok := s.experts[id]
+	if !ok || cur.Visibility != model.VisibilitySystem {
+		return expertrepo.ErrNotFound
+	}
+	delete(s.experts, id)
+	return nil
+}
+
+func (s *fakeStore) SystemExpertNameExists(_ context.Context, name, excludeID string) (bool, error) {
+	for id, e := range s.experts {
+		if id != excludeID && e.Visibility == model.VisibilitySystem && e.Name == strings.TrimSpace(name) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *fakeStore) UpdateSystemSquad(_ context.Context, m *model.Squad) error {
+	cur, ok := s.squads[m.ID]
+	if !ok || cur.Visibility != model.VisibilitySystem {
+		return expertrepo.ErrNotFound
+	}
+	cp := *m
+	s.squads[m.ID] = &cp
+	return nil
+}
+
+func (s *fakeStore) DeleteSystemSquad(_ context.Context, id string, _ time.Time) error {
+	cur, ok := s.squads[id]
+	if !ok || cur.Visibility != model.VisibilitySystem {
+		return expertrepo.ErrNotFound
+	}
+	delete(s.squads, id)
+	return nil
+}
+
+func (s *fakeStore) SystemSquadNameExists(_ context.Context, name, excludeID string) (bool, error) {
+	for id, sq := range s.squads {
+		if id != excludeID && sq.Visibility == model.VisibilitySystem && sq.Name == strings.TrimSpace(name) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *fakeStore) ListExpertCategoriesAdmin(_ context.Context) ([]expertrepo.CategoryAdminRow, error) {
+	out := make([]expertrepo.CategoryAdminRow, 0, len(s.adminCategories))
+	out = append(out, s.adminCategories...)
+	return out, nil
+}
+
+func (s *fakeStore) CreateExpertCategory(_ context.Context, id, name, iconKey string, sortOrder int, _ time.Time) error {
+	for _, c := range s.adminCategories {
+		if c.Name == strings.TrimSpace(name) {
+			return expertrepo.ErrCategoryNameTaken
+		}
+	}
+	s.adminCategories = append(s.adminCategories, expertrepo.CategoryAdminRow{
+		ID: id, Name: strings.TrimSpace(name), IconKey: iconKey, SortOrder: sortOrder,
+	})
+	return nil
+}
+
+func (s *fakeStore) UpdateExpertCategory(_ context.Context, id, name, iconKey string, sortOrder int, _ time.Time) error {
+	for i := range s.adminCategories {
+		if s.adminCategories[i].ID == id {
+			s.adminCategories[i] = expertrepo.CategoryAdminRow{ID: id, Name: strings.TrimSpace(name), IconKey: iconKey, SortOrder: sortOrder}
+			return nil
+		}
+	}
+	return expertrepo.ErrNotFound
+}
+
+func (s *fakeStore) DeleteExpertCategory(_ context.Context, id string, _ time.Time) (int, error) {
+	for i := range s.adminCategories {
+		if s.adminCategories[i].ID == id {
+			if n := s.adminCategories[i].Count; n > 0 {
+				return n, expertrepo.ErrCategoryInUse
+			}
+			s.adminCategories = append(s.adminCategories[:i], s.adminCategories[i+1:]...)
+			return 0, nil
+		}
+	}
+	return 0, expertrepo.ErrNotFound
 }
 
 func newService() (*Service, *fakeStore) {
