@@ -125,6 +125,55 @@ func (c *Client) DeleteSkill(ctx context.Context, token, spaceID, workspaceID, s
 	return err
 }
 
+// SquadSpec is the subset of fleet's CreateSquad request the squad-install flow
+// sets: a squad seeded from the marketplace squad's name/summary, led by an
+// already-created member agent. Fleet auto-adds the leader as a member.
+type SquadSpec struct {
+	Name          string
+	Description   string
+	LeaderAgentID string
+}
+
+// SquadMemberSpec is the subset of fleet's AddSquadMember request the flow sets:
+// a non-leader member agent and its team role.
+type SquadMemberSpec struct {
+	MemberType string
+	MemberID   string
+	Role       string
+}
+
+// CreateSquad creates a squad led by the given agent and returns its id (fleet
+// SquadResponse.id). Fleet requires the caller be a workspace owner/admin and
+// the leader to be an existing agent in the workspace; it auto-adds the leader
+// as a member with role "leader".
+func (c *Client) CreateSquad(ctx context.Context, token, spaceID, workspaceID string, spec SquadSpec) (string, error) {
+	body := map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"leader_id":   spec.LeaderAgentID,
+	}
+	return c.doCreate(ctx, http.MethodPost, "/api/squads", token, spaceID, workspaceID, body)
+}
+
+// AddSquadMember adds one member to a squad (POST /api/squads/{id}/members).
+// The leader is already a member from CreateSquad, so only non-leader members
+// go through here. A duplicate member returns a fleet 409 (*APIError).
+func (c *Client) AddSquadMember(ctx context.Context, token, spaceID, workspaceID, squadID string, m SquadMemberSpec) error {
+	body := map[string]any{
+		"member_type": m.MemberType,
+		"member_id":   m.MemberID,
+		"role":        m.Role,
+	}
+	_, err := c.do(ctx, http.MethodPost, "/api/squads/"+squadID+"/members", token, spaceID, workspaceID, body)
+	return err
+}
+
+// DeleteSquad archives a squad (rollback path; best-effort at the call site).
+func (c *Client) DeleteSquad(ctx context.Context, token, spaceID, workspaceID, squadID string) error {
+	_, err := c.do(ctx, http.MethodDelete, "/api/squads/"+squadID, token, spaceID, workspaceID, nil)
+	return err
+}
+
 // doCreate performs a create request and decodes the `{"id": "..."}` field
 // fleet returns for agents and skills.
 func (c *Client) doCreate(ctx context.Context, method, path, token, spaceID, workspaceID string, body any) (string, error) {

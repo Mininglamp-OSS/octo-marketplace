@@ -76,6 +76,19 @@ type InstallExpertResp struct {
 	AgentID string `json:"agent_id"`
 }
 
+// InstallSquadReq is the body for POST /squads/{id}/install: the Loop workspace
+// + runtime (from the fleet pickers) to provision the squad's member agents in.
+type InstallSquadReq struct {
+	WorkspaceID string `json:"workspace_id"`
+	RuntimeID   string `json:"runtime_id"`
+}
+
+// InstallSquadResp is the created Loop squad's id and its leader agent's id.
+type InstallSquadResp struct {
+	SquadID       string `json:"squad_id"`
+	LeaderAgentID string `json:"leader_agent_id"`
+}
+
 // Handler serves the expert + squad HTTP surface.
 type Handler struct {
 	svc *expertsvc.Service
@@ -102,6 +115,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	rg.GET("/squads/:squad_id", h.GetSquad)
 	rg.PATCH("/squads/:squad_id", h.PatchSquad)
 	rg.DELETE("/squads/:squad_id", h.DeleteSquad)
+	rg.POST("/squads/:squad_id/install", h.InstallSquad)
 
 	rg.GET("/expert_tags", h.ListTags)
 	rg.GET("/expert_categories", h.ListCategories)
@@ -293,6 +307,48 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 		return
 	}
 	apiresponse.OK(c, InstallExpertResp{AgentID: result.AgentID})
+}
+
+// InstallSquad godoc
+// @Summary Install squad to a Loop workspace/runtime
+// @Description Provision a squad into the chosen workspace/runtime: install each member as a Loop agent (with its skills), then form the squad (create it led by the leader member and attach the rest). Aggregates octo-fleet calls on behalf of the caller and rolls back on partial failure.
+// @Tags expert
+// @ID squad.install
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param squad_id path string true "Squad ID"
+// @Param body body InstallSquadReq true "Target workspace + runtime"
+// @Success 200 {object} apiresponse.Data[InstallSquadResp]
+// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
+// @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 503 {object} apiresponse.Error "UPSTREAM_UNAVAILABLE"
+// @Router /squads/{squad_id}/install [post]
+func (h *Handler) InstallSquad(c *gin.Context) {
+	caller, ok := callerFromContext(c)
+	if !ok {
+		unauthorized(c)
+		return
+	}
+	var req InstallSquadReq
+	if !decodeJSON(c, &req) {
+		return
+	}
+	result, err := h.svc.InstallSquad(c.Request.Context(), caller, c.Param("squad_id"), expertsvc.InstallInput{
+		WorkspaceID: strings.TrimSpace(req.WorkspaceID),
+		RuntimeID:   strings.TrimSpace(req.RuntimeID),
+		SpaceID:     caller.SpaceID,
+		// The token is forwarded to fleet; middleware discarded it, so re-read it.
+		Token: middleware.Token(c),
+	})
+	if err != nil {
+		writeInstallError(c, err)
+		return
+	}
+	apiresponse.OK(c, InstallSquadResp{SquadID: result.SquadID, LeaderAgentID: result.LeaderAgentID})
 }
 
 // GetExpertSkillMD godoc

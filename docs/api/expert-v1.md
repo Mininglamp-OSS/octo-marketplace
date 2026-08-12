@@ -487,6 +487,22 @@ and `squad_id`:
   merge) — the client always submits the complete member list, mirroring the
   octo-web squad editor. Immutable fields as §4.5.
 - `DELETE /squads/{squad_id}` — soft delete; 200 `{"data":{}}`.
+- `POST /squads/{squad_id}/install` — provision the squad into a Loop
+  workspace/runtime. Body `{ "workspace_id", "runtime_id" }`. The server first
+  installs **each member** as a Loop agent (create agent seeded with the
+  member's instruction + `mcp_config`, create + bind its packaged skills), then
+  **forms the squad** via octo-fleet: create it led by the leader member (first
+  member flagged `is_leader`, else the one whose name matches the squad `leader`
+  label, else the first member — fleet auto-adds the leader as a member) and
+  attach the remaining members with their roles. Aggregates the fleet calls on
+  behalf of the caller (forwarded token, so fleet enforces workspace membership
+  — squad create requires owner/admin — runtime access, and space scoping) and
+  **rolls back** the squad plus every provisioned member agent on any partial
+  failure. **Response (200):** `{ "squad_id", "leader_agent_id" }`. Mirrors the
+  single-agent expert flow `POST /experts/{expert_id}/install`. **Errors:** 400
+  (`invalid_request`, incl. a squad with no members) · 401 · 403 · 404 · 409
+  (fleet rejects a duplicate agent/squad name in the workspace) · 503
+  (`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).
 
 **Errors:** same catalog as the experts family, with
 `err.marketplace.expert.invalid_members` added on create/update.

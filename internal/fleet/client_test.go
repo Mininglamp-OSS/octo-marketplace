@@ -192,3 +192,77 @@ func TestMissingIDInResponseIsError(t *testing.T) {
 		t.Fatal("expected error when response has no id")
 	}
 }
+
+func TestCreateSquadForwardsLeaderAndReturnsID(t *testing.T) {
+	var cap capture
+	srv := newFakeFleet(t, http.StatusCreated, `{"id":"squad-1"}`, &cap)
+	defer srv.Close()
+
+	id, err := New(srv.URL).CreateSquad(context.Background(), "tok", "space-1", "ws-1", SquadSpec{
+		Name:          "Delivery Squad",
+		Description:   "ships features",
+		LeaderAgentID: "agent-lead",
+	})
+	if err != nil {
+		t.Fatalf("CreateSquad: %v", err)
+	}
+	if id != "squad-1" {
+		t.Fatalf("id = %q, want squad-1", id)
+	}
+	if cap.method != http.MethodPost || cap.path != "/api/squads" {
+		t.Fatalf("got %s %s, want POST /api/squads", cap.method, cap.path)
+	}
+	if cap.token != "tok" || cap.workspaceID != "ws-1" || cap.spaceID != "space-1" {
+		t.Fatalf("headers token=%q ws=%q space=%q", cap.token, cap.workspaceID, cap.spaceID)
+	}
+	if cap.body["name"] != "Delivery Squad" || cap.body["leader_id"] != "agent-lead" || cap.body["description"] != "ships features" {
+		t.Fatalf("unexpected body: %#v", cap.body)
+	}
+}
+
+func TestAddSquadMemberPostsMemberFields(t *testing.T) {
+	var cap capture
+	srv := newFakeFleet(t, http.StatusCreated, `{}`, &cap)
+	defer srv.Close()
+
+	if err := New(srv.URL).AddSquadMember(context.Background(), "tok", "space-1", "ws-1", "squad-1", SquadMemberSpec{
+		MemberType: "agent",
+		MemberID:   "agent-2",
+		Role:       "coder",
+	}); err != nil {
+		t.Fatalf("AddSquadMember: %v", err)
+	}
+	if cap.method != http.MethodPost || cap.path != "/api/squads/squad-1/members" {
+		t.Fatalf("got %s %s", cap.method, cap.path)
+	}
+	if cap.body["member_type"] != "agent" || cap.body["member_id"] != "agent-2" || cap.body["role"] != "coder" {
+		t.Fatalf("body = %#v", cap.body)
+	}
+}
+
+func TestAddSquadMemberConflictReturnsAPIError(t *testing.T) {
+	var cap capture
+	srv := newFakeFleet(t, http.StatusConflict, `{"error":"member already in squad"}`, &cap)
+	defer srv.Close()
+
+	err := New(srv.URL).AddSquadMember(context.Background(), "tok", "space-1", "ws-1", "squad-1", SquadMemberSpec{
+		MemberType: "agent", MemberID: "agent-2", Role: "coder",
+	})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+		t.Fatalf("err = %v, want *APIError 409", err)
+	}
+}
+
+func TestDeleteSquadUsesDelete(t *testing.T) {
+	var cap capture
+	srv := newFakeFleet(t, http.StatusNoContent, ``, &cap)
+	defer srv.Close()
+
+	if err := New(srv.URL).DeleteSquad(context.Background(), "tok", "space-1", "ws-1", "squad-1"); err != nil {
+		t.Fatalf("DeleteSquad: %v", err)
+	}
+	if cap.method != http.MethodDelete || cap.path != "/api/squads/squad-1" {
+		t.Fatalf("got %s %s, want DELETE /api/squads/squad-1", cap.method, cap.path)
+	}
+}

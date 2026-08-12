@@ -15,9 +15,12 @@ import (
 // per-method errors and the ids CreateSkill hands back in sequence.
 type fakeFleet struct {
 	agentID     string
+	agentIDs    []string // when set, CreateAgent returns these in sequence (squad)
+	agentIdx    int
 	skillIDs    []string // returned by successive CreateSkill calls
 	skillIdx    int
 	agentErr    error
+	failAgentAt int // when agentIDs is set, CreateAgent fails at this index (-1 = never)
 	skillErr    error // fails the CreateSkill at index failSkillAt
 	failSkillAt int
 	setErr      error
@@ -31,6 +34,16 @@ type fakeFleet struct {
 	deletedAgents []string
 	deletedSkills []string
 
+	// Squad recorders + injectable errors (InstallSquad).
+	squadID       string
+	squadSpec     fleet.SquadSpec
+	squadErr      error
+	addedMembers  []fleet.SquadMemberSpec
+	memberErr     error
+	failMemberAt  int // index (over non-leader members) AddSquadMember fails at (-1 = never)
+	memberIdx     int
+	deletedSquads []string
+
 	// onCreateSkill, when set, fires at the start of each CreateSkill call — a
 	// test uses it to cancel the request context mid-install. The delete paths
 	// record the ctx error they observed so a test can assert rollback ran on a
@@ -38,6 +51,7 @@ type fakeFleet struct {
 	onCreateSkill      func()
 	deleteAgentCtxErr  error
 	deleteSkillCtxErrs []error
+	deleteSquadCtxErr  error
 }
 
 type upsertedFile struct {
@@ -46,6 +60,17 @@ type upsertedFile struct {
 
 func (f *fakeFleet) CreateAgent(_ context.Context, _, _, _ string, spec fleet.AgentSpec) (string, error) {
 	f.agentSpec = spec
+	if len(f.agentIDs) > 0 {
+		idx := f.agentIdx
+		f.agentIdx++
+		if f.agentErr != nil && idx == f.failAgentAt {
+			return "", f.agentErr
+		}
+		if idx < len(f.agentIDs) {
+			return f.agentIDs[idx], nil
+		}
+		return "agent-extra", nil
+	}
 	if f.agentErr != nil {
 		return "", f.agentErr
 	}
@@ -88,6 +113,30 @@ func (f *fakeFleet) DeleteAgent(ctx context.Context, _, _, _, agentID string) er
 func (f *fakeFleet) DeleteSkill(ctx context.Context, _, _, _, skillID string) error {
 	f.deleteSkillCtxErrs = append(f.deleteSkillCtxErrs, ctx.Err())
 	f.deletedSkills = append(f.deletedSkills, skillID)
+	return nil
+}
+
+func (f *fakeFleet) CreateSquad(_ context.Context, _, _, _ string, spec fleet.SquadSpec) (string, error) {
+	f.squadSpec = spec
+	if f.squadErr != nil {
+		return "", f.squadErr
+	}
+	return f.squadID, nil
+}
+
+func (f *fakeFleet) AddSquadMember(_ context.Context, _, _, _, _ string, m fleet.SquadMemberSpec) error {
+	idx := f.memberIdx
+	f.memberIdx++
+	f.addedMembers = append(f.addedMembers, m)
+	if f.memberErr != nil && idx == f.failMemberAt {
+		return f.memberErr
+	}
+	return nil
+}
+
+func (f *fakeFleet) DeleteSquad(ctx context.Context, _, _, _, squadID string) error {
+	f.deleteSquadCtxErr = ctx.Err()
+	f.deletedSquads = append(f.deletedSquads, squadID)
 	return nil
 }
 

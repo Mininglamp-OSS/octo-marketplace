@@ -33,6 +33,12 @@ type FleetProvisioner interface {
 	SetAgentSkills(ctx context.Context, token, spaceID, workspaceID, agentID string, skillIDs []string) error
 	DeleteAgent(ctx context.Context, token, spaceID, workspaceID, agentID string) error
 	DeleteSkill(ctx context.Context, token, spaceID, workspaceID, skillID string) error
+	// Squad provisioning (used by InstallSquad): create a squad led by an
+	// already-created member agent, attach the remaining members, and archive
+	// the squad on rollback.
+	CreateSquad(ctx context.Context, token, spaceID, workspaceID string, spec fleet.SquadSpec) (squadID string, err error)
+	AddSquadMember(ctx context.Context, token, spaceID, workspaceID, squadID string, m fleet.SquadMemberSpec) error
+	DeleteSquad(ctx context.Context, token, spaceID, workspaceID, squadID string) error
 }
 
 // WithFleet wires the fleet provisioner and returns the Service for chaining
@@ -59,12 +65,11 @@ type InstallResult struct {
 }
 
 // InstallExpert provisions the expert as a Loop agent in the caller's chosen
-// workspace/runtime, aggregating fleet calls: create the agent (seeded with the
-// expert's instruction + mcp_config), create one workspace skill per packaged
-// skill (SKILL.md content), then bind those skills to the agent. Any failure
-// after the agent exists rolls back everything created so far. It acts as the
-// calling user (forwarded token), so fleet enforces workspace membership,
-// runtime access, and space scoping — this layer does not re-check them.
+// workspace/runtime. It acts as the calling user (forwarded token), so fleet
+// enforces workspace membership, runtime access, and space scoping — this layer
+// does not re-check them. The per-agent provisioning (create agent → create
+// skills → bind, with rollback on partial failure) is shared with InstallSquad
+// via provisionAgent.
 func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID string, in InstallInput) (InstallResult, error) {
 	if s.fleet == nil {
 		return InstallResult{}, ErrFleetNotConfigured
@@ -78,59 +83,88 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		return InstallResult{}, err
 	}
 
+	agentID, _, err := s.provisionAgent(ctx, in, agentProvisionSpec{
+		Name:        m.Name,
+		Summary:     m.Summary,
+		Instruction: m.Instruction,
+		MCPConfig:   m.MCPConfig,
+		Skills:      m.Skills,
+	})
+	if err != nil {
+		return InstallResult{}, err
+	}
+	return InstallResult{AgentID: agentID}, nil
+}
+
+// agentProvisionSpec is the per-agent input to provisionAgent: the expert (or
+// squad member) fields that seed one Loop agent and its skills.
+type agentProvisionSpec struct {
+	Name        string
+	Summary     string
+	Instruction string
+	MCPConfig   string
+	Skills      []model.SkillRef
+}
+
+// provisionAgent creates one Loop agent (seeded with the instruction +
+// mcp_config), creates one workspace skill per packaged skill, then binds those
+// skills to the agent. It is atomic: on any failure after the agent exists it
+// rolls back everything IT created (skills + agent) and returns the error, so
+// the caller has nothing to unwind for this agent. Shared by InstallExpert (one
+// agent) and InstallSquad (one per member).
+func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec) (string, []string, error) {
 	agentSpec := fleet.AgentSpec{
-		Name:         m.Name,
-		Description:  m.Summary,
-		Instructions: m.Instruction,
+		Name:         spec.Name,
+		Description:  spec.Summary,
+		Instructions: spec.Instruction,
 		RuntimeID:    in.RuntimeID,
 	}
-	if mc := strings.TrimSpace(m.MCPConfig); mc != "" {
+	if mc := strings.TrimSpace(spec.MCPConfig); mc != "" {
 		agentSpec.MCPConfig = json.RawMessage(mc)
 	}
 
 	agentID, err := s.fleet.CreateAgent(ctx, in.Token, in.SpaceID, in.WorkspaceID, agentSpec)
 	if err != nil {
-		return InstallResult{}, err
+		return "", nil, err
 	}
 
 	// From here on, roll back the created agent (and any skills) on failure so a
-	// partial install never leaves an orphaned agent behind.
-	skillIDs, err := s.installExpertSkills(ctx, caller, m, in)
+	// partial provision never leaves an orphaned agent behind.
+	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in)
 	if err != nil {
-		s.rollbackInstall(ctx, in, agentID, skillIDs)
-		return InstallResult{}, err
+		s.rollbackAgent(ctx, in, agentID, skillIDs)
+		return "", nil, err
 	}
 
 	if len(skillIDs) > 0 {
 		if err := s.fleet.SetAgentSkills(ctx, in.Token, in.SpaceID, in.WorkspaceID, agentID, skillIDs); err != nil {
-			s.rollbackInstall(ctx, in, agentID, skillIDs)
-			return InstallResult{}, err
+			s.rollbackAgent(ctx, in, agentID, skillIDs)
+			return "", nil, err
 		}
 	}
 
-	return InstallResult{AgentID: agentID}, nil
+	return agentID, skillIDs, nil
 }
 
-// installExpertSkills creates one fleet workspace skill per packaged skill on
-// the expert (those with stored SKILL.md content), then attaches the skill
-// package's supporting files, returning the new skill ids. Name-only skills (no
-// ObjectKey) carry nothing to install and are skipped. On the first failure it
-// deletes the skills it already created and returns the error, so the caller
-// only has the agent left to unwind.
-func (s *Service) installExpertSkills(ctx context.Context, caller Caller, m *model.Expert, in InstallInput) ([]string, error) {
-	created := make([]string, 0, len(m.Skills))
-	for i := range m.Skills {
-		if m.Skills[i].ObjectKey == "" {
+// installSkills creates one fleet workspace skill per packaged skill (those with
+// stored SKILL.md content), then attaches each skill package's supporting files,
+// returning the new skill ids. Name-only skills (no ObjectKey) carry nothing to
+// install and are skipped. On the first failure it deletes the skills it already
+// created and returns the error, so the caller only has the agent left to unwind.
+func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput) ([]string, error) {
+	created := make([]string, 0, len(skills))
+	for i := range skills {
+		if skills[i].ObjectKey == "" {
 			continue
 		}
-		content, err := s.readSkillContent(ctx, m.Skills, i)
+		content, err := s.readSkillContent(ctx, skills, i)
 		if err != nil {
 			s.deleteSkills(ctx, in, created)
 			return nil, err
 		}
 		skillID, err := s.fleet.CreateSkill(ctx, in.Token, in.SpaceID, in.WorkspaceID, fleet.SkillSpec{
-			Name:        m.Skills[i].Name,
-			Description: m.Summary,
+			Name:        skills[i].Name,
+			Description: summary,
 			Content:     content,
 		})
 		if err != nil {
@@ -139,7 +173,7 @@ func (s *Service) installExpertSkills(ctx context.Context, caller Caller, m *mod
 		}
 		// Track before attaching files so a file failure also unwinds this skill.
 		created = append(created, skillID)
-		if err := s.attachSkillFiles(ctx, in, m.Skills[i], skillID); err != nil {
+		if err := s.attachSkillFiles(ctx, in, skills[i], skillID); err != nil {
 			s.deleteSkills(ctx, in, created)
 			return nil, err
 		}
@@ -175,10 +209,10 @@ func (s *Service) attachSkillFiles(ctx context.Context, in InstallInput, ref mod
 	return nil
 }
 
-// rollbackInstall best-effort deletes the created skills then the agent. Errors
+// rollbackAgent best-effort deletes the created skills then the agent. Errors
 // are ignored: the original failure is what the caller reports, and fleet GC /
 // the user can clean up any residue.
-func (s *Service) rollbackInstall(ctx context.Context, in InstallInput, agentID string, skillIDs []string) {
+func (s *Service) rollbackAgent(ctx context.Context, in InstallInput, agentID string, skillIDs []string) {
 	s.deleteSkills(ctx, in, skillIDs)
 	if agentID != "" {
 		cctx, cancel := cleanupContext(ctx)
