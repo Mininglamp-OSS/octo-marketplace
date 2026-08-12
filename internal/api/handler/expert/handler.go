@@ -427,6 +427,8 @@ func (h *Handler) GetSquadSkillMD(c *gin.Context) {
 // @Success 200 {object} apiresponse.Data[SkillUploadInitResp]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /expert_skill_uploads [post]
 func (h *Handler) InitSkillUpload(c *gin.Context) {
@@ -828,6 +830,7 @@ func (h *Handler) ListTags(c *gin.Context) {
 // @Success 200 {object} apiresponse.Data[CategoryListResp]
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /expert_categories [get]
 func (h *Handler) ListCategories(c *gin.Context) {
