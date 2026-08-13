@@ -24,9 +24,12 @@ delete two related-but-distinct catalog entities that the `octo-web`
   member experts plus a dispatch strategy (`leader`, `strategies`,
   `dependencies`, `permission`, `members`).
 
-No installation, no versioning, no audit, no ratings — that is later work. The
-copy-to-agent install prompt stays a pure frontend concern (`buildExpertPrompt`
-in octo-web); the backend ships no prompt endpoint.
+~~No installation~~ — **installation is now in scope** (see Load-bearing
+behavior and the trust-posture note below); no versioning, no audit, no
+ratings — that is later work. The copy-to-agent install prompt in octo-web
+(`buildExpertPrompt`) remains a frontend concern; the backend additionally
+ships a server-side install flow that provisions experts/squads into
+octo-fleet (Loop) workspaces.
 
 ## Design decisions (settled before this brief)
 
@@ -113,10 +116,31 @@ in octo-web); the backend ships no prompt endpoint.
   `ExpertMember`). Wire responses are a **superset** of the current TS types
   (extra `visibility` / `created_at` / `updated_at`, per the MCP precedent).
 
+### Install trust posture
+
+`POST /experts/{id}/install` and `POST /squads/{id}/install` (doc §4.6.1)
+forward the calling user's Octo token verbatim to octo-fleet
+(`internal/fleet`); fleet is the authority for workspace membership, runtime
+access, and Space scoping — marketplace validates only that the target record
+is visible to the caller. The fleet client refuses HTTP redirects (the
+credential travels in a custom header and would otherwise survive a
+cross-origin 3xx), enforces a 30 s per-call timeout and a 1 MiB response cap,
+surfaces fleet 4xx to the caller, and collapses 5xx/transport failures to
+`UPSTREAM_UNAVAILABLE`. A failed install rolls back every agent/skill it
+provisioned. Because `system` records are installable from any Space,
+admin-published content has platform-wide reach: before `OCTO_FLEET_URL` is
+set in production, the service owner must sign off on this posture and confirm
+on the fleet side that a forwarded end-user token is rejected for
+cross-workspace agent creation.
+
 ## Out of scope
 
-- Expert / squad installation, execution, or process supervision. Marketplace
-  is a registry only; the install prompt is generated client-side.
+- ~~Expert / squad installation~~ **Now in scope** (superseding the original
+  deferral): `POST /experts/{id}/install` and `POST /squads/{id}/install`
+  provision the record into an octo-fleet (Loop) workspace on behalf of the
+  calling user — see doc §4.6.1 and the trust-posture note below. Execution
+  and process supervision remain out of scope: Marketplace never runs Skill
+  code or MCP servers; fleet owns the agent/runtime lifecycle.
 - Versioning, publish/draft state, immutable release artifacts. (The octo-web
   prototype has already removed the version concept entirely.)
 - ~~Real Skill file upload / parse pipeline for `skills_json`.~~ **Now in
@@ -128,8 +152,15 @@ in octo-web); the backend ships no prompt endpoint.
 - Secret redaction inside `mcp_config`. v1 validates JSON well-formedness and
   size only; a later slice can add env-value blanking mirroring MCP §5 once a
   real install flow needs it.
-- Admin surface for `system` experts/squads (a follow-up brief, mirroring
-  MCP §9).
+- ~~Admin surface for `system` experts/squads (a follow-up brief, mirroring
+  MCP §9).~~ **Now in scope.** v1 ships the full SuperAdmin surface under
+  `/api/v1/admin` (18 routes: expert/squad CRUD + skill_md reads, category
+  CRUD, tag aggregation, skill upload), gated by `AdminAuthenticator`
+  (`identity.Role == "superAdmin"`). Admin create stamps
+  `visibility = system`; system records are readable in every Space and
+  installable by any authenticated caller. System name uniqueness is enforced
+  platform-wide by the `uq_*_system_name_live` unique indexes (migration
+  `20260813-00`). See doc §9.
 - Search relevance tuning, ratings, reviews, telemetry, install counts.
 - CLI synchronization endpoints.
 - Cross-entity unified feed / single-table redesign.
@@ -182,14 +213,28 @@ in octo-web); the backend ships no prompt endpoint.
 - Squad `members_json` round-trips the full `ExpertSpec` per member
   (instruction / mcp_config / skills) plus `member_key` / `template_id` /
   `role` / `is_leader`, preserving order.
+- Install: `POST /experts/{id}/install` / `POST /squads/{id}/install`
+  provision into fleet on behalf of the calling user and roll back every
+  provisioned agent/skill on failure; tests cover rollback (including after
+  context cancellation), the per-install file budgets, and the
+  unconfigured-fleet 503.
+- Admin surface: every `/api/v1/admin/*` route requires
+  `identity.Role == "superAdmin"`; admin create stamps `visibility = system`
+  and rejects a client-sent `visibility` with `VALIDATION_ERROR`; system rows
+  cannot be mutated through the public endpoints even by their owner; system
+  names are unique platform-wide, enforced by the `uq_*_system_name_live`
+  unique indexes, with a duplicate mapping to `DUPLICATE`.
 - `go test ./...`, `go build ./...`, `docker compose config` pass;
   `make fmt` / `make vet` / `make lint` clean; `make openapi-check` passes and
   generated OpenAPI matches the handlers.
 
 ## Non-goals for this brief
 
-- Seeding `system` experts/squads (follow-up admin brief).
-- Real skill upload/parse integration and `mcp_config` secret redaction
-  (gated by a future install flow).
+- ~~Seeding `system` experts/squads (follow-up admin brief).~~ **Now in
+  scope** — the SuperAdmin surface (doc §9) is how system records are seeded;
+  see Out of scope above for the details.
+- ~~Real skill upload/parse integration~~ **Now in scope** (see the skill
+  upload entry under Out of scope). `mcp_config` secret redaction remains
+  deferred, gated by a future install-flow hardening pass.
 - Frontend changes — tracked in `octo-web` under a separate branch
   (`expertService` seam + category remap).
