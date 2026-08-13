@@ -878,5 +878,86 @@ func TestAdminCreateCategoryMissingTokenUnauthorized(t *testing.T) {
 	}
 }
 
+// --- Expert admin surface: mount + role gate ---
+
+// stubMemberResolver returns a fixed non-SuperAdmin identity for any non-empty
+// token so the admin role gate's rejection path can be exercised end-to-end.
+type stubMemberResolver struct{}
+
+func (stubMemberResolver) Resolve(_ context.Context, token string) (model.Identity, error) {
+	if token == "" {
+		return model.Identity{}, nil
+	}
+	return model.Identity{
+		UID:             "user-9",
+		Name:            "Member",
+		Role:            "member",
+		ContextIncluded: true,
+	}, nil
+}
+
+func expertAdminEngine(t *testing.T, resolver auth.Resolver) (*gin.Engine, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	pubAuth := marketmiddleware.NewAuthenticator(false, nil, model.Identity{
+		UID:  "user-1",
+		Name: "Alice",
+		Role: "member",
+	}, "space-1")
+	storageCfg := router.StorageConfig{
+		Driver:   "local",
+		LocalDir: t.TempDir(),
+		BaseURL:  "http://localhost:8092",
+		MaxMB:    20,
+	}
+	return router.PublicWithDBAndAdminAuth(db, pubAuth, storageCfg, true, resolver), mock
+}
+
+func TestExpertAdminMountAcceptsSuperAdmin(t *testing.T) {
+	engine, mock := expertAdminEngine(t, stubSuperAdminResolver{})
+
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM experts").
+		WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(0))
+	mock.ExpectQuery("SELECT .* FROM experts").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "short_name", "name", "summary", "category_id", "tags", "publisher",
+			"owner_uid", "creator_name", "created_by_type", "created_by_bot_uid", "created_by_bot_name",
+			"space_id", "visibility", "instruction", "mcp_config", "skills_json", "created_at", "updated_at", "deleted_at",
+		}))
+
+	w := doRequestWithHeaders(engine, "GET", "/api/v1/admin/experts", nil,
+		map[string]string{"Token": "super-admin-session"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpertAdminMountRejectsNonSuperAdmin(t *testing.T) {
+	engine, _ := expertAdminEngine(t, stubMemberResolver{})
+
+	w := doRequestWithHeaders(engine, "GET", "/api/v1/admin/experts", nil,
+		map[string]string{"Token": "member-session"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusForbidden, w.Body.String())
+	}
+}
+
+func TestExpertAdminMountMissingTokenUnauthorized(t *testing.T) {
+	engine, _ := expertAdminEngine(t, stubSuperAdminResolver{})
+
+	w := doRequest(engine, "GET", "/api/v1/admin/experts", nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusUnauthorized, w.Body.String())
+	}
+}
+
 // Unused but needed by compiler if tests reference it
 var _ = fmt.Sprint
