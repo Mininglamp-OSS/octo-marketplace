@@ -653,6 +653,14 @@ Sized for prototype scale; revisit on scale metrics. Mirrors `mcp-v1.md` §7.
   `SELECT … FOR UPDATE` pre-check recipe is FORBIDDEN (proven to deadlock under
   concurrency — see `mcp-v1.md` §7); the repository does a plain insert/update
   and maps the duplicate-key error.
+- **System name uniqueness** is platform-wide: `system` rows store
+  `space_id = NULL`, and NULL tuples never collide in a MySQL unique index, so
+  the owner/space index above cannot cover them. A second generated column
+  `system_name_live = IF(visibility = 'system' AND deleted_at IS NULL, name,
+  NULL)` with its own UNIQUE index (`uq_expert_system_name_live` /
+  `uq_squad_system_name_live`, migration `20260813-00`) makes admin
+  create/rename atomic under concurrency; the admin service keeps a SELECT
+  pre-check only as a friendly fast path. Duplicates map to `DUPLICATE`.
 - **"我的" spans two entity tables** → two queries; the frontend renders them
   in separate sections so no merge/interleave is needed.
 - **Timestamps** are RFC 3339 ms in server-local timezone.
@@ -677,9 +685,12 @@ Implemented endpoints (all under `/api/v1/admin`, gated by
 `docs/openapi/` is the field-level reference — tag `admin_expert`):
 
 - `POST/GET /admin/experts`, `GET/PATCH/DELETE /admin/experts/{expert_id}` —
-  create stamps `visibility = system` (a client-sent `visibility` is rejected
-  as an unknown field); list bypasses Space scoping and pages by
-  `page`/`page_size`; create/patch bodies are §4.1/§4.5 shapes.
+  create stamps `visibility = system`; a client-sent `visibility` is rejected
+  with `400 VALIDATION_ERROR` (the field is declared on the shared create
+  shape, so the strict decoder accepts it — the admin service refuses it
+  explicitly). List bypasses Space scoping and pages by `page`/`page_size`;
+  create/patch bodies are §4.1/§4.5 shapes. System names are unique
+  platform-wide (§7); a collision is `409 DUPLICATE`.
 - `GET /admin/experts/{expert_id}/skill_md?i=N` — stored SKILL.md text of the
   skill at index `i` (§3.1 `SkillContentResp`).
 - The same six verbs for squads under `/admin/squads`, plus

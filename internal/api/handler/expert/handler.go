@@ -978,6 +978,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "category not found", nil, "")
 	case errors.Is(err, expertsvc.ErrInvalidVisibility):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be public or private", nil, "")
+	case errors.Is(err, expertsvc.ErrVisibilityNotAllowed):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility is stamped by the server on this surface", nil, "Omit visibility; admin create always publishes system records.")
 	case errors.Is(err, expertsvc.ErrInvalidMCPConfig):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "mcp_config must be valid JSON within the size limit", nil, "")
 	case errors.Is(err, expertsvc.ErrInvalidMembers):

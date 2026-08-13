@@ -38,6 +38,20 @@ func TestMapDuplicateName(t *testing.T) {
 	if !errors.Is(mapDuplicateName(squadDup), ErrNameTaken) {
 		t.Fatal("squad name constraint must map to ErrNameTaken")
 	}
+	systemExpertDup := &mysql.MySQLError{
+		Number:  mysqlErrDupEntry,
+		Message: "Duplicate entry 'x' for key 'experts.uq_expert_system_name_live'",
+	}
+	if !errors.Is(mapDuplicateName(systemExpertDup), ErrNameTaken) {
+		t.Fatal("system expert name constraint must map to ErrNameTaken")
+	}
+	systemSquadDup := &mysql.MySQLError{
+		Number:  mysqlErrDupEntry,
+		Message: "Duplicate entry 'x' for key 'expert_squads.uq_squad_system_name_live'",
+	}
+	if !errors.Is(mapDuplicateName(systemSquadDup), ErrNameTaken) {
+		t.Fatal("system squad name constraint must map to ErrNameTaken")
+	}
 	primaryDup := &mysql.MySQLError{
 		Number:  mysqlErrDupEntry,
 		Message: "Duplicate entry 'id' for key 'experts.PRIMARY'",

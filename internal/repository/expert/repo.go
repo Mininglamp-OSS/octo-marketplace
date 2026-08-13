@@ -28,15 +28,20 @@ var ErrNameTaken = errors.New("expert name taken")
 
 const mysqlErrDupEntry = 1062
 
-// mapDuplicateName converts a MySQL duplicate-key violation on either entity's
-// name uniqueness index into ErrNameTaken. The index names are
-// uq_expert_owner_space_name_live (experts) and uq_squad_owner_space_name_live
-// (expert_squads). Any other error passes through unchanged.
+// mapDuplicateName converts a MySQL duplicate-key violation on any of the
+// name uniqueness indexes into ErrNameTaken:
+// uq_expert_owner_space_name_live / uq_squad_owner_space_name_live for
+// Space-scoped rows (20260806-00), and uq_expert_system_name_live /
+// uq_squad_system_name_live for platform-wide system rows whose space_id NULL
+// keeps the owner/space index from firing (20260813-00). Any other error
+// passes through unchanged.
 func mapDuplicateName(err error) error {
 	var myErr *mysql.MySQLError
 	if errors.As(err, &myErr) && myErr.Number == mysqlErrDupEntry &&
 		(strings.Contains(myErr.Message, "uq_expert_owner_space_name_live") ||
-			strings.Contains(myErr.Message, "uq_squad_owner_space_name_live")) {
+			strings.Contains(myErr.Message, "uq_squad_owner_space_name_live") ||
+			strings.Contains(myErr.Message, "uq_expert_system_name_live") ||
+			strings.Contains(myErr.Message, "uq_squad_system_name_live")) {
 		return ErrNameTaken
 	}
 	return err

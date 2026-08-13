@@ -22,6 +22,12 @@ type fakeStore struct {
 	updateExpertErr error
 	createSquadErr  error
 
+	// Injectable admin-path failures, used to model the system-name unique
+	// index (uq_*_system_name_live) firing when a concurrent write races past
+	// the SystemExpertNameExists / SystemSquadNameExists pre-check.
+	updateSystemExpertErr error
+	updateSystemSquadErr  error
+
 	listExpertResult []model.Expert
 	listSquadResult  []model.Squad
 	lastFilter       expertrepo.ListFilter
@@ -169,6 +175,9 @@ func (s *fakeStore) ListCategoriesWithCount(_ context.Context, _ expertrepo.Enti
 // ── Admin surface fakes ──────────────────────────────────────────────────────
 
 func (s *fakeStore) UpdateSystemExpert(_ context.Context, m *model.Expert) error {
+	if s.updateSystemExpertErr != nil {
+		return s.updateSystemExpertErr
+	}
 	cur, ok := s.experts[m.ID]
 	if !ok || cur.Visibility != model.VisibilitySystem {
 		return expertrepo.ErrNotFound
@@ -197,6 +206,9 @@ func (s *fakeStore) SystemExpertNameExists(_ context.Context, name, excludeID st
 }
 
 func (s *fakeStore) UpdateSystemSquad(_ context.Context, m *model.Squad) error {
+	if s.updateSystemSquadErr != nil {
+		return s.updateSystemSquadErr
+	}
 	cur, ok := s.squads[m.ID]
 	if !ok || cur.Visibility != model.VisibilitySystem {
 		return expertrepo.ErrNotFound

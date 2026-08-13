@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	expertrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/expert"
 )
 
 // adminReq builds a minimal valid system-expert create request.
@@ -16,6 +17,18 @@ func adminExpertReq(name string) model.ExpertCreateRequest {
 		Category:    "研发工具",
 		Instruction: "do things",
 		MCPConfig:   `{"mcpServers":{}}`,
+	}
+}
+
+// adminSquadReq builds a minimal valid system-squad create request.
+func adminSquadReq(name string) model.SquadCreateRequest {
+	return model.SquadCreateRequest{
+		Name:     name,
+		Summary:  "s",
+		Category: "研发工具",
+		Members: []model.SquadMemberInput{
+			{Name: "组长", Role: "leader", IsLeader: true, Instruction: "lead"},
+		},
 	}
 }
 
@@ -51,6 +64,78 @@ func TestCreateSystemExpert_RejectsDuplicateName(t *testing.T) {
 	_, err := svc.CreateSystemExpert(context.Background(), caller, adminExpertReq("dup"))
 	if !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("second create err = %v, want ErrNameTaken", err)
+	}
+}
+
+// The SystemExpertNameExists pre-check is only a fast path: when a concurrent
+// admin write races past it, the uq_expert_system_name_live unique index fires
+// at insert time and the repo surfaces ErrNameTaken. The service must map that
+// to its own ErrNameTaken (409 DUPLICATE), not a 500.
+func TestCreateSystemExpert_MapsIndexDuplicateOnRace(t *testing.T) {
+	svc, store := newService()
+	store.createExpertErr = expertrepo.ErrNameTaken
+	_, err := svc.CreateSystemExpert(context.Background(), Caller{UID: "admin-1"}, adminExpertReq("racy"))
+	if !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("err = %v, want ErrNameTaken", err)
+	}
+}
+
+func TestUpdateSystemExpert_MapsIndexDuplicateOnRace(t *testing.T) {
+	svc, store := newService()
+	created, err := svc.CreateSystemExpert(context.Background(), Caller{UID: "admin-1"}, adminExpertReq("orig"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	store.updateSystemExpertErr = expertrepo.ErrNameTaken
+	newName := "racy"
+	_, err = svc.UpdateSystemExpert(context.Background(), created.ExpertID, model.ExpertPatchRequest{Name: &newName})
+	if !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("err = %v, want ErrNameTaken", err)
+	}
+}
+
+func TestCreateSystemSquad_MapsIndexDuplicateOnRace(t *testing.T) {
+	svc, store := newService()
+	store.createSquadErr = expertrepo.ErrNameTaken
+	_, err := svc.CreateSystemSquad(context.Background(), Caller{UID: "admin-1"}, adminSquadReq("racy"))
+	if !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("err = %v, want ErrNameTaken", err)
+	}
+}
+
+func TestUpdateSystemSquad_MapsIndexDuplicateOnRace(t *testing.T) {
+	svc, store := newService()
+	created, err := svc.CreateSystemSquad(context.Background(), Caller{UID: "admin-1"}, adminSquadReq("orig"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	store.updateSystemSquadErr = expertrepo.ErrNameTaken
+	newName := "racy"
+	_, err = svc.UpdateSystemSquad(context.Background(), created.SquadID, model.SquadPatchRequest{Name: &newName})
+	if !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("err = %v, want ErrNameTaken", err)
+	}
+}
+
+// Admin create stamps visibility=system; a client-sent visibility must be
+// rejected with 400 rather than silently ignored (doc §9).
+func TestCreateSystemExpert_RejectsClientVisibility(t *testing.T) {
+	svc, _ := newService()
+	req := adminExpertReq("专家")
+	req.Visibility = model.VisibilityPrivate
+	_, err := svc.CreateSystemExpert(context.Background(), Caller{UID: "admin-1"}, req)
+	if !errors.Is(err, ErrVisibilityNotAllowed) {
+		t.Fatalf("err = %v, want ErrVisibilityNotAllowed", err)
+	}
+}
+
+func TestCreateSystemSquad_RejectsClientVisibility(t *testing.T) {
+	svc, _ := newService()
+	req := adminSquadReq("小队")
+	req.Visibility = model.VisibilitySystem
+	_, err := svc.CreateSystemSquad(context.Background(), Caller{UID: "admin-1"}, req)
+	if !errors.Is(err, ErrVisibilityNotAllowed) {
+		t.Fatalf("err = %v, want ErrVisibilityNotAllowed", err)
 	}
 }
 

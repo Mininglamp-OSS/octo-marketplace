@@ -15,9 +15,10 @@ import (
 // This file holds the administrator (SuperAdmin) persistence surface for the
 // Expert Marketplace: mutating platform-provided (visibility=system) experts
 // and squads keyed by id (bypassing the owner/space scope the public path
-// enforces), the system-scoped name-uniqueness pre-check the DB unique index
-// can't provide for NULL-space rows, and full CRUD over the expert_categories
-// taxonomy. Everything here is reachable only from the /api/v1/admin/* routes.
+// enforces), the system-scoped name-uniqueness fast-path pre-check (the
+// authoritative guard is the uq_*_system_name_live unique index, 20260813-00),
+// and full CRUD over the expert_categories taxonomy. Everything here is
+// reachable only from the /api/v1/admin/* routes.
 
 // Category-management sentinels for the admin taxonomy surface.
 var (
@@ -156,10 +157,12 @@ func (r *Repo) softDeleteSystem(ctx context.Context, table, id string, now time.
 }
 
 // SystemExpertNameExists reports whether another live system expert already
-// carries name (excluding excludeID). The DB unique index keys on
-// (owner_uid, space_id, name_live), but system rows store space_id NULL — and
-// NULLs never collide in a MySQL unique index — so the service needs this
-// explicit pre-check to keep system names unique across the platform.
+// carries name (excluding excludeID). This is a friendly fast-path only: the
+// authoritative guard is the uq_expert_system_name_live unique index over the
+// system_name_live generated column (20260813-00), which fires as a
+// duplicate-key error mapped to ErrNameTaken when two concurrent admin writes
+// race past this check. (The owner/space index can't cover system rows —
+// their space_id is NULL, and NULLs never collide in a MySQL unique index.)
 func (r *Repo) SystemExpertNameExists(ctx context.Context, name, excludeID string) (bool, error) {
 	return r.systemNameExists(ctx, "experts", name, excludeID)
 }

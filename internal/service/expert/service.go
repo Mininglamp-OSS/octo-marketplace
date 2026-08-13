@@ -56,6 +56,9 @@ var (
 	ErrInvalidMCPConfig  = errors.New("invalid mcp_config")
 	ErrInvalidMembers    = errors.New("invalid members")
 	ErrInvalidRequest    = errors.New("invalid request")
+	// ErrVisibilityNotAllowed rejects a client-sent visibility on the admin
+	// create surface, where the server always stamps visibility=system.
+	ErrVisibilityNotAllowed = errors.New("visibility not settable here")
 )
 
 // Caller is the resolved identity + Space for a request, stamped server-side

@@ -14,10 +14,12 @@ import (
 // Marketplace: creating and managing platform-provided (visibility=system)
 // experts and squads, and the expert_categories taxonomy. It mirrors the MCP
 // admin surface (internal/service/mcp.go §"Admin surface"): create stamps
-// Visibility=system + SpaceID="" (space_id NULL) and pre-checks name uniqueness
-// (the DB unique index can't fire on NULL space_id); get/update/delete load by
-// id and require the row to be system (else ErrNotFound), bypassing the
-// owner/space scope the public path enforces.
+// Visibility=system + SpaceID="" (space_id NULL) and rejects a client-sent
+// visibility; name uniqueness across system rows is pre-checked for a friendly
+// error and enforced atomically by the uq_*_system_name_live unique index
+// (20260813-00) when concurrent writes race past the pre-check. Get/update/
+// delete load by id and require the row to be system (else ErrNotFound),
+// bypassing the owner/space scope the public path enforces.
 
 // Admin-only sentinels for the category taxonomy surface.
 var (
@@ -28,9 +30,14 @@ var (
 // ─── System experts ──────────────────────────────────────────────────────────
 
 // CreateSystemExpert publishes a platform-provided expert. Unlike the public
-// CreateExpert it stamps Visibility=system and SpaceID="" (space_id NULL), and
-// guards name uniqueness across all system experts via a pre-check.
+// CreateExpert it stamps Visibility=system and SpaceID="" (space_id NULL) —
+// a client-sent visibility is rejected rather than silently overridden — and
+// guards name uniqueness across all system experts via a pre-check backed by
+// the uq_expert_system_name_live unique index.
 func (s *Service) CreateSystemExpert(ctx context.Context, caller Caller, req model.ExpertCreateRequest) (*model.ExpertAgentDetail, error) {
+	if req.Visibility != "" {
+		return nil, ErrVisibilityNotAllowed
+	}
 	name := strings.TrimSpace(req.Name)
 	summary := strings.TrimSpace(req.Summary)
 	if err := validateGeneric(name, summary, req.Publisher); err != nil {
@@ -181,7 +188,11 @@ func (s *Service) loadSystemExpert(ctx context.Context, id string) (*model.Exper
 // ─── System squads ───────────────────────────────────────────────────────────
 
 // CreateSystemSquad publishes a platform-provided squad (visibility=system).
+// A client-sent visibility is rejected, mirroring CreateSystemExpert.
 func (s *Service) CreateSystemSquad(ctx context.Context, caller Caller, req model.SquadCreateRequest) (*model.ExpertSquadDetail, error) {
+	if req.Visibility != "" {
+		return nil, ErrVisibilityNotAllowed
+	}
 	name := strings.TrimSpace(req.Name)
 	summary := strings.TrimSpace(req.Summary)
 	if err := validateGeneric(name, summary, req.Publisher); err != nil {
