@@ -14,9 +14,13 @@ const (
 )
 
 type Config struct {
-	AppEnv             string
-	MySQLDSN           string
-	OctoAPIURL         string
+	AppEnv     string
+	MySQLDSN   string
+	OctoAPIURL string
+	// OctoFleetURL is the base URL of the octo-fleet service the expert-install
+	// aggregation calls out to (POST /experts/{id}/install). Empty disables the
+	// install endpoint (it returns UPSTREAM_UNAVAILABLE). Mirrors OctoAPIURL.
+	OctoFleetURL       string
 	APIPort            string
 	PublicBaseURL      string
 	CORSAllowedOrigins []string
@@ -106,6 +110,7 @@ func Load() Config {
 		AppEnv:             strings.ToLower(env("APP_ENV", "")),
 		MySQLDSN:           env("MYSQL_DSN", ""),
 		OctoAPIURL:         strings.TrimRight(env("OCTO_API_URL", ""), "/"),
+		OctoFleetURL:       strings.TrimRight(env("OCTO_FLEET_URL", ""), "/"),
 		APIPort:            env("API_PORT", "8092"),
 		PublicBaseURL:      strings.TrimRight(env("PUBLIC_BASE_URL", ""), "/"),
 		CORSAllowedOrigins: envCSV("CORS_ALLOWED_ORIGINS"),

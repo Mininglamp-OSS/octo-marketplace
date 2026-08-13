@@ -233,6 +233,14 @@ func requestToken(c *gin.Context) string {
 	return ""
 }
 
+// Token returns the raw credential on the request (`Token` header, else an
+// `Authorization: Bearer` value). The auth middleware resolves and then
+// discards this token; handlers that must forward it to another service
+// (e.g. the expert-install → fleet aggregation) re-read it via this helper.
+func Token(c *gin.Context) string {
+	return requestToken(c)
+}
+
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

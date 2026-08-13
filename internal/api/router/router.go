@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler"
 	categoryhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/category"
+	experthandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/expert"
 	metricshandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/metrics"
 	skillhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/skill"
 	uploadhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/upload"
@@ -19,8 +20,10 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	metricsredis "github.com/Mininglamp-OSS/octo-marketplace/internal/redis"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
+	expertrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/expert"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
 	categorysvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/category"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	metricssvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/metrics"
 	parsesvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
 	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
@@ -68,15 +71,15 @@ type RedisConfig struct {
 	Client *goredis.Client
 }
 
-func Public(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, parseCfg ParseConfig, redisCfg ...RedisConfig) *gin.Engine {
+func Public(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, parseCfg ParseConfig, fleetClient expertsvc.FleetProvisioner, redisCfg ...RedisConfig) *gin.Engine {
 	var rc RedisConfig
 	if len(redisCfg) > 0 {
 		rc = redisCfg[0]
 	}
-	return publicWithOptions(database, authenticator, adminAuth, storageCfg, mcp, adminMCP, authenticator.AuthEnabled(), parseCfg, rc)
+	return publicWithOptions(database, authenticator, adminAuth, storageCfg, mcp, adminMCP, authenticator.AuthEnabled(), parseCfg, fleetClient, rc)
 }
 
-func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, authEnabled bool, parseCfg ParseConfig, redisCfg RedisConfig) *gin.Engine {
+func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenticator, adminAuth *marketmiddleware.AdminAuthenticator, storageCfg StorageConfig, mcp *handler.MCP, adminMCP *handler.AdminMCP, authEnabled bool, parseCfg ParseConfig, fleetClient expertsvc.FleetProvisioner, redisCfg RedisConfig) *gin.Engine {
 	r := gin.New()
 	r.Use(logging.RequestID(), logging.AccessLog(), logging.Recovery(), corsMiddleware(storageCfg.CORSAllowedOrigins))
 
@@ -145,6 +148,20 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		skHandler := skillhandler.New(skSvc)
 		skHandler.Register(v1)
 		skHandler.RegisterAdmin(r, adminAuth)
+
+		// Expert Marketplace (docs/api/expert-v1.md): experts + squads + tags +
+		// the dedicated expert_categories taxonomy. Reuses the shared id generator.
+		// A fleet client (when configured) powers POST /experts/{id}/install.
+		expertSvc := expertsvc.New(expertrepo.New(db), store, generateID)
+		if fleetClient != nil {
+			expertSvc = expertSvc.WithFleet(fleetClient)
+		}
+		expertHandler := experthandler.New(expertSvc)
+		expertHandler.Register(v1)
+		// Admin (SuperAdmin) surface: /api/v1/admin/experts|squads|expert_categories
+		// |expert_tags|expert_skill_uploads for managing platform-provided
+		// (visibility=system) records.
+		expertHandler.RegisterAdmin(r, adminAuth)
 
 		// Wire up metrics service and handler.
 		var mSvc *metricssvc.Service
@@ -286,7 +303,7 @@ func PublicWithDB(db *sql.DB, authenticator *marketmiddleware.Authenticator, sto
 		StaleTimeout:   5 * time.Minute,
 		MaxAttempts:    2,
 		WorkerPoolSize: 10,
-	}, RedisConfig{})
+	}, nil, RedisConfig{})
 }
 
 // PublicWithDBAndAdminAuth is a test helper that mounts the admin surface with
@@ -300,5 +317,5 @@ func PublicWithDBAndAdminAuth(db *sql.DB, authenticator *marketmiddleware.Authen
 		StaleTimeout:   5 * time.Minute,
 		MaxAttempts:    2,
 		WorkerPoolSize: 10,
-	}, RedisConfig{})
+	}, nil, RedisConfig{})
 }

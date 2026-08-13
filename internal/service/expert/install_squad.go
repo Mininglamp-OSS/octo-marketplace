@@ -1,0 +1,151 @@
+package expert
+
+import (
+	"context"
+	"strings"
+
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+)
+
+// InstallSquadResult carries the created Loop squad's id and its leader agent's
+// id.
+type InstallSquadResult struct {
+	SquadID       string
+	LeaderAgentID string
+}
+
+// createdAgent tracks one provisioned member agent (its id + created skill ids)
+// so a later-step failure can roll the whole squad install back.
+type createdAgent struct {
+	agentID  string
+	skillIDs []string
+}
+
+// InstallSquad provisions a marketplace squad into the caller's Loop
+// workspace/runtime. It first installs each member as a Loop agent (create agent
+// → create skills → bind, reusing provisionAgent), then forms the squad (create
+// the squad led by the leader member, then attach the remaining members). Any
+// failure rolls back the squad (if created) and every member agent provisioned
+// so far, so a partial install never leaves orphans behind. It acts as the
+// calling user (forwarded token), so fleet enforces workspace membership (squad
+// create requires owner/admin), runtime access, and space scoping — this layer
+// does not re-check them.
+func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID string, in InstallInput) (InstallSquadResult, error) {
+	if s.fleet == nil {
+		return InstallSquadResult{}, ErrFleetNotConfigured
+	}
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.RuntimeID) == "" {
+		return InstallSquadResult{}, ErrInvalidRequest
+	}
+
+	// Bound the whole squad install (its fan-out is the largest: members ×
+	// skills × files). Rollback runs on a detached context, so it still fires if
+	// this deadline is what trips.
+	ctx, cancel := context.WithTimeout(ctx, installTimeout)
+	defer cancel()
+
+	m, err := s.loadVisibleSquad(ctx, caller, squadID)
+	if err != nil {
+		return InstallSquadResult{}, err
+	}
+	if len(m.Members) == 0 {
+		return InstallSquadResult{}, ErrInvalidRequest
+	}
+
+	leaderIdx := squadLeaderIndex(m)
+
+	// One file budget shared across every member so the cap is on the whole
+	// install, not per member.
+	budget := &fileBudget{remaining: maxSkillFilesPerInstall}
+
+	// Provision every member as a Loop agent, tracking created agents so a
+	// later failure unwinds them all. provisionAgent is atomic per member, so a
+	// failure here leaves only the *earlier* members to unwind.
+	created := make([]createdAgent, 0, len(m.Members))
+	memberAgentIDs := make([]string, len(m.Members))
+	for i := range m.Members {
+		agentID, skillIDs, err := s.provisionAgent(ctx, in, agentProvisionSpec{
+			Name:        m.Members[i].Name,
+			Summary:     m.Summary,
+			Instruction: m.Members[i].Instruction,
+			MCPConfig:   m.Members[i].MCPConfig,
+			Skills:      m.Members[i].Skills,
+		}, budget)
+		if err != nil {
+			s.rollbackSquad(ctx, in, "", created)
+			return InstallSquadResult{}, err
+		}
+		created = append(created, createdAgent{agentID: agentID, skillIDs: skillIDs})
+		memberAgentIDs[i] = agentID
+	}
+
+	// Form the squad. Fleet auto-adds the leader as a member (role "leader").
+	leaderAgentID := memberAgentIDs[leaderIdx]
+	fleetSquadID, err := s.fleet.CreateSquad(ctx, in.Token, in.SpaceID, in.WorkspaceID, fleet.SquadSpec{
+		Name:          m.Name,
+		Description:   m.Summary,
+		LeaderAgentID: leaderAgentID,
+	})
+	if err != nil {
+		s.rollbackSquad(ctx, in, "", created)
+		return InstallSquadResult{}, err
+	}
+
+	// Attach the remaining (non-leader) members.
+	for i := range m.Members {
+		if i == leaderIdx {
+			continue
+		}
+		role := strings.TrimSpace(m.Members[i].Role)
+		if role == "" {
+			role = "member"
+		}
+		if err := s.fleet.AddSquadMember(ctx, in.Token, in.SpaceID, in.WorkspaceID, fleetSquadID, fleet.SquadMemberSpec{
+			MemberType: "agent",
+			MemberID:   memberAgentIDs[i],
+			Role:       role,
+		}); err != nil {
+			s.rollbackSquad(ctx, in, fleetSquadID, created)
+			return InstallSquadResult{}, err
+		}
+	}
+
+	return InstallSquadResult{SquadID: fleetSquadID, LeaderAgentID: leaderAgentID}, nil
+}
+
+// squadLeaderIndex picks the leader member: the first member flagged IsLeader,
+// else the member whose name matches the squad's Leader label, else the first
+// member. InstallSquad guarantees len(m.Members) > 0 before calling.
+func squadLeaderIndex(m *model.Squad) int {
+	for i := range m.Members {
+		if m.Members[i].IsLeader {
+			return i
+		}
+	}
+	if strings.TrimSpace(m.Leader) != "" {
+		for i := range m.Members {
+			if m.Members[i].Name == m.Leader {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+// rollbackSquad best-effort archives the created squad (if any) then deletes
+// every provisioned member agent (and its skills). Errors are ignored: the
+// original failure is what the caller reports, and fleet GC / the user can clean
+// up any residue. The squad delete uses cleanupContext (detached from the
+// request's cancellation) for the same reason rollbackAgent does — a request
+// that failed *because* it was canceled must still clean up.
+func (s *Service) rollbackSquad(ctx context.Context, in InstallInput, fleetSquadID string, created []createdAgent) {
+	if fleetSquadID != "" {
+		cctx, cancel := cleanupContext(ctx)
+		_ = s.fleet.DeleteSquad(cctx, in.Token, in.SpaceID, in.WorkspaceID, fleetSquadID)
+		cancel()
+	}
+	for _, a := range created {
+		s.rollbackAgent(ctx, in, a.agentID, a.skillIDs)
+	}
+}
