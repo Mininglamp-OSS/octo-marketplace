@@ -212,6 +212,9 @@ Field notes:
   twins). `view_count` is bumped by `POST /metrics/track`; `install_count` is
   bumped server-side when `POST /{experts|squads}/{id}/install` succeeds. A
   squad install bumps only the squad's counter — never its member experts'.
+  Counters are eventually consistent: events buffer in Redis and flush to
+  `resource_metrics` on a periodic worker (default every 30 s), so a read
+  immediately after a view/install can lag by up to one flush interval.
 - `created_at` / `updated_at`: RFC 3339, millisecond precision, server-local
   timezone.
 

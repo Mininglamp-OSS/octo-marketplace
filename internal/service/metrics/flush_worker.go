@@ -42,7 +42,10 @@ type MetricsRepository interface {
 // these types are drained into resource_metrics. It must cover every type the
 // tracking surfaces accept (the resolver registry in the API process), which a
 // background flush process can't consult — keep the two in sync when adding a
-// resource type.
+// resource type, and roll the flush worker BEFORE the API: an old worker drops
+// the dirty markers of a type it doesn't know (counters survive, but a
+// low-traffic resource's accumulated delta stays unflushed until its next
+// event re-dirties it).
 var flushableResourceTypes = map[string]struct{}{
 	"skill":  {},
 	"expert": {},
