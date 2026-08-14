@@ -172,6 +172,10 @@ func TestGetExpertByIDScans(t *testing.T) {
 		"space-a", "public", "你是……", `{"mcpServers":{}}`, `[{"name":"清单","file_key":""}]`, now, now, nil,
 	)
 	mock.ExpectQuery("SELECT .* FROM experts WHERE id = \\?").WithArgs("e1").WillReturnRows(rows)
+	mock.ExpectQuery("SELECT resource_id, view_count, install_count FROM resource_metrics").
+		WithArgs("expert", "e1").
+		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "view_count", "install_count"}).
+			AddRow("e1", int64(7), int64(3)))
 
 	m, err := repo.GetExpertByID(context.Background(), "e1")
 	if err != nil {
@@ -185,6 +189,9 @@ func TestGetExpertByIDScans(t *testing.T) {
 	}
 	if len(m.Tags) != 0 {
 		t.Fatalf("tags should be empty: %#v", m.Tags)
+	}
+	if m.ViewCount != 7 || m.InstallCount != 3 {
+		t.Fatalf("metrics not hydrated: view=%d install=%d", m.ViewCount, m.InstallCount)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -209,6 +216,10 @@ func TestListExpertsCountsAndScans(t *testing.T) {
 	)
 	mock.ExpectQuery("SELECT .* FROM experts WHERE .* ORDER BY created_at DESC, id DESC LIMIT \\? OFFSET \\?").
 		WillReturnRows(rows)
+	// No metrics row for e1 — counts stay zero.
+	mock.ExpectQuery("SELECT resource_id, view_count, install_count FROM resource_metrics").
+		WithArgs("expert", "e1").
+		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "view_count", "install_count"}))
 
 	items, total, err := repo.ListExperts(context.Background(), ListFilter{
 		CallerUID: "u1", SpaceID: "space-a", Limit: 20, Offset: 0,
@@ -218,6 +229,9 @@ func TestListExpertsCountsAndScans(t *testing.T) {
 	}
 	if total != 1 || len(items) != 1 || items[0].ID != "e1" {
 		t.Fatalf("list wrong: total=%d items=%+v", total, items)
+	}
+	if items[0].ViewCount != 0 || items[0].InstallCount != 0 {
+		t.Fatalf("counts should default to zero: %+v", items[0])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

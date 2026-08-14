@@ -65,6 +65,18 @@ func (r *Repo) ListExperts(ctx context.Context, f ListFilter) ([]model.Expert, i
 	if err := r.hydrateListTagNames(ctx, idGroups, func(i int) *[]string { return &items[i].Tags }); err != nil {
 		return nil, 0, err
 	}
+	expertIDs := make([]string, len(items))
+	for i := range items {
+		expertIDs[i] = items[i].ID
+	}
+	counts, err := r.loadMetrics(ctx, EntityExpert, expertIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range items {
+		c := counts[items[i].ID]
+		items[i].ViewCount, items[i].InstallCount = c.View, c.Install
+	}
 	return items, total, nil
 }
 
@@ -100,6 +112,18 @@ func (r *Repo) ListSquads(ctx context.Context, f ListFilter) ([]model.Squad, int
 	}
 	if err := r.hydrateListTagNames(ctx, idGroups, func(i int) *[]string { return &items[i].Tags }); err != nil {
 		return nil, 0, err
+	}
+	squadIDs := make([]string, len(items))
+	for i := range items {
+		squadIDs[i] = items[i].ID
+	}
+	counts, err := r.loadMetrics(ctx, EntitySquad, squadIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range items {
+		c := counts[items[i].ID]
+		items[i].ViewCount, items[i].InstallCount = c.View, c.Install
 	}
 	return items, total, nil
 }

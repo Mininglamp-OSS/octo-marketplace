@@ -125,6 +125,9 @@ type Service struct {
 	// fleet provisions agents/skills in octo-fleet for InstallExpert. Nil unless
 	// wired via WithFleet (see router); a nil fleet makes install a clean 503.
 	fleet FleetProvisioner
+	// metrics bumps install_count after a successful install. Nil unless wired
+	// via WithMetrics (see router); nil makes install tracking a no-op.
+	metrics InstallTracker
 }
 
 // New returns a Service backed by the expert repository (which also owns the

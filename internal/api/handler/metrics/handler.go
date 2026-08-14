@@ -34,7 +34,7 @@ type trackRequest struct {
 
 // Track godoc
 // @Summary Track metric event
-// @Description Record a view event for a visible marketplace resource.
+// @Description Record a view event for a visible marketplace resource (skill, expert, or squad).
 // @Tags metrics
 // @ID metrics.track
 // @Accept json
@@ -55,15 +55,11 @@ func (h *Handler) Track(c *gin.Context) {
 		return
 	}
 
-	// v1 only accepts event_type=view
+	// The public track surface only accepts event_type=view. Download and
+	// install counts are bumped server-side by their own endpoints, so clients
+	// cannot inflate them through this endpoint.
 	if req.EventType != "view" {
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.MetricsUnsupportedEvent, "Unsupported event_type; only \"view\" is accepted.", map[string]any{"field": "event_type", "reason": "unsupported"}, "")
-		return
-	}
-
-	// v1 only accepts resource_type=skill
-	if req.ResourceType != "skill" {
-		apiresponse.Fail(c, http.StatusBadRequest, errcode.MetricsUnsupportedResource, "Unsupported resource_type; only \"skill\" is accepted.", map[string]any{"field": "resource_type", "reason": "unsupported"}, "")
 		return
 	}
 

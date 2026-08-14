@@ -111,6 +111,9 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		}
 	}
 
+	// Only the squad's own counter is bumped — member experts are self-contained
+	// snapshots inside the squad, so a squad install never inflates expert counts.
+	s.trackInstall(ctx, "squad", squadID)
 	return InstallSquadResult{SquadID: fleetSquadID, LeaderAgentID: leaderAgentID}, nil
 }
 

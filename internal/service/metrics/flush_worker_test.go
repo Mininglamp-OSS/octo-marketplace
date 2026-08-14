@@ -125,6 +125,76 @@ func TestParseDirtyKey_Invalid(t *testing.T) {
 	}
 }
 
+func TestFlushWorker_ExpertAndSquadFlush(t *testing.T) {
+	repo := &mockRepo{}
+	w, mr := setupTestWorker(t, repo)
+
+	ctx := context.Background()
+
+	// Expert and squad counters must drain like skill's — the whole point of
+	// the expert-metrics change. view for the expert, install for the squad.
+	mr.Set("metrics:expert:e-1:view", "4")
+	mr.SAdd("metrics:dirty", "expert:e-1")
+	mr.Set("metrics:squad:s-1:install", "2")
+	mr.SAdd("metrics:dirty", "squad:s-1")
+
+	w.flush(ctx)
+
+	if len(repo.calls) != 2 {
+		t.Fatalf("expected 2 upsert calls, got %d: %+v", len(repo.calls), repo.calls)
+	}
+	for _, c := range repo.calls {
+		switch c.ResourceID {
+		case "e-1":
+			if c.ResourceType != "expert" || c.ViewDelta != 4 || c.InstallDelta != 0 {
+				t.Errorf("e-1: got %+v", c)
+			}
+		case "s-1":
+			if c.ResourceType != "squad" || c.InstallDelta != 2 || c.ViewDelta != 0 {
+				t.Errorf("s-1: got %+v", c)
+			}
+		default:
+			t.Errorf("unexpected upsert: %+v", c)
+		}
+	}
+	members, _ := mr.Members("metrics:dirty")
+	if len(members) != 0 {
+		t.Errorf("expected empty dirty set, got %v", members)
+	}
+}
+
+func TestFlushWorker_UnsupportedTypeDroppedWithoutStalling(t *testing.T) {
+	repo := &mockRepo{}
+	w, mr := setupTestWorker(t, repo)
+
+	ctx := context.Background()
+
+	// A dirty member of an unknown type (garbage, or a newer API racing an
+	// older worker) must be dropped from the dirty set rather than re-sampled
+	// forever — a batch of only unsupported members would otherwise trip
+	// flush()'s !madeProgress break and stall supported members alongside it.
+	// Its counter hash is NOT drained, so nothing is lost: the next tracked
+	// event re-adds the dirty marker and a worker that supports the type
+	// flushes the accumulated delta.
+	mr.Set("metrics:mcp:mcp-1:view", "10")
+	mr.SAdd("metrics:dirty", "mcp:mcp-1")
+	mr.Set("metrics:skill:sk-1:view", "3")
+	mr.SAdd("metrics:dirty", "skill:sk-1")
+
+	w.flush(ctx)
+
+	if len(repo.calls) != 1 || repo.calls[0].ResourceID != "sk-1" {
+		t.Fatalf("expected only sk-1 upsert, got %+v", repo.calls)
+	}
+	members, _ := mr.Members("metrics:dirty")
+	if len(members) != 0 {
+		t.Fatalf("expected unsupported member dropped from dirty set, got %v", members)
+	}
+	if v, _ := mr.Get("metrics:mcp:mcp-1:view"); v != "10" {
+		t.Fatalf("unsupported member's counter must be preserved, got %q", v)
+	}
+}
+
 func TestFlushWorker_HappyPath(t *testing.T) {
 	repo := &mockRepo{}
 	w, mr := setupTestWorker(t, repo)
@@ -420,28 +490,6 @@ func (r *contextCancelRepo) UpsertCountsOnce(ctx context.Context, flushID, resou
 		r.cancel = nil
 	}
 	return r.mockRepo.UpsertCountsOnce(ctx, flushID, resourceType, resourceID, viewDelta, downloadDelta, installDelta)
-}
-
-func TestFlushWorker_NonSkillType_Requeued(t *testing.T) {
-	repo := &mockRepo{}
-	w, mr := setupTestWorker(t, repo)
-
-	ctx := context.Background()
-
-	// Non-skill type in dirty set
-	mr.Set("metrics:mcp:mcp-1:view", "10")
-	mr.SAdd("metrics:dirty", "mcp:mcp-1")
-
-	w.flush(ctx)
-
-	// Should not process non-skill types in v1
-	if len(repo.calls) != 0 {
-		t.Fatalf("expected 0 upserts for non-skill type, got %d", len(repo.calls))
-	}
-	members, _ := mr.Members("metrics:dirty")
-	if len(members) != 1 || members[0] != "mcp:mcp-1" {
-		t.Fatalf("expected non-skill member to be requeued, got %v", members)
-	}
 }
 
 func TestFlushWorker_ResourceIDWithColons(t *testing.T) {

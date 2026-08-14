@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
+	"go.uber.org/zap"
 )
 
 // cleanupTimeout bounds the detached rollback deletes so they can't hang.
@@ -81,6 +83,41 @@ func (s *Service) WithFleet(f FleetProvisioner) *Service {
 	return s
 }
 
+// InstallTracker is the metrics surface the install paths use to bump
+// install_count after a successful provision. *metricssvc.Service satisfies it;
+// the interface lives here (not an import) because the metrics package already
+// imports this one for its visibility resolvers.
+type InstallTracker interface {
+	TrackInstall(ctx context.Context, resourceType, resourceID string) error
+}
+
+// WithMetrics wires the install counter (chainable at construction, like
+// WithFleet). A nil / unwired tracker makes trackInstall a no-op.
+func (s *Service) WithMetrics(m InstallTracker) *Service {
+	s.metrics = m
+	return s
+}
+
+// trackInstall bumps the install counter after a successful install.
+// Best-effort and detached from the request context (a client disconnect right
+// after a successful provision must not cancel the count); failures are logged,
+// never returned — the install itself already succeeded.
+func (s *Service) trackInstall(ctx context.Context, resourceType, resourceID string) {
+	if s.metrics == nil {
+		return
+	}
+	cctx, cancel := cleanupContext(ctx)
+	defer cancel()
+	if err := s.metrics.TrackInstall(cctx, resourceType, resourceID); err != nil {
+		logging.Warn("install_metric_track_failed",
+			zap.String("operation", resourceType+".install.track"),
+			zap.String("resource_type", resourceType),
+			zap.String("resource_id", resourceID),
+			logging.ErrorField(err),
+		)
+	}
+}
+
 // InstallInput carries the per-request install parameters. WorkspaceID and
 // RuntimeID come from the request body; SpaceID and Token are the caller's
 // forwarded credentials (Token is re-read from the request header by the
@@ -131,6 +168,7 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	if err != nil {
 		return InstallResult{}, err
 	}
+	s.trackInstall(ctx, "expert", expertID)
 	return InstallResult{AgentID: agentID}, nil
 }
 

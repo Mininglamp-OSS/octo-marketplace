@@ -38,6 +38,17 @@ type MetricsRepository interface {
 	UpsertCountsOnce(ctx context.Context, flushID, resourceType, resourceID string, viewDelta, downloadDelta, installDelta int64) error
 }
 
+// flushableResourceTypes is the write-back whitelist: only dirty members of
+// these types are drained into resource_metrics. It must cover every type the
+// tracking surfaces accept (the resolver registry in the API process), which a
+// background flush process can't consult — keep the two in sync when adding a
+// resource type.
+var flushableResourceTypes = map[string]struct{}{
+	"skill":  {},
+	"expert": {},
+	"squad":  {},
+}
+
 type flushLedgerCleaner interface {
 	DeleteAppliedFlushesBefore(ctx context.Context, cutoff time.Time) error
 }
@@ -288,12 +299,23 @@ func (w *FlushWorker) processDirtyMember(ctx context.Context, member string, tot
 	resourceType := parts[0]
 	resourceID := parts[1]
 
-	if resourceType != "skill" {
+	if _, ok := flushableResourceTypes[resourceType]; !ok {
+		// Unknown types can only be Redis pollution (every server-side writer
+		// uses a flushable type). Drop the dirty marker like the invalid-member
+		// branch above — leaving it in place would re-sample and re-warn it
+		// every cycle and, once a sampled batch held only unsupported members,
+		// stall the whole flush loop (`!madeProgress` break in flush()).
 		w.warn("metrics_flush_unsupported_dirty_resource",
 			zap.String("resource_type", resourceType),
 			zap.String("member", member),
 		)
-		return false
+		if err := w.rdb.SRem(ctx, dirtySetKey, member).Err(); err != nil {
+			w.warn("metrics_flush_unsupported_dirty_resource_remove_failed",
+				zap.String("member", member),
+				logging.ErrorField(err),
+			)
+		}
+		return true
 	}
 
 	pending, hasDelta, err := w.drainToPending(ctx, member, resourceType, resourceID)

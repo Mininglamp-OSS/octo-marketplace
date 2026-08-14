@@ -95,6 +95,8 @@ type ExpertAgentDetail struct {
 	Instruction      string        `json:"instruction,omitempty"`
 	MCPConfig        string        `json:"mcp_config,omitempty"`
 	Skills           []SkillRead   `json:"skills,omitempty"`
+	ViewCount        int64         `json:"view_count"`
+	InstallCount     int64         `json:"install_count"`
 	CreatedAt        string        `json:"created_at"`
 	UpdatedAt        string        `json:"updated_at"`
 }
@@ -116,6 +118,8 @@ type ExpertAgentListItem struct {
 	CreatedByBotUID  string        `json:"created_by_bot_uid,omitempty"`
 	CreatedByBotName string        `json:"created_by_bot_name,omitempty"`
 	SkillCount       int           `json:"skill_count"`
+	ViewCount        int64         `json:"view_count"`
+	InstallCount     int64         `json:"install_count"`
 }
 
 // ToAgentDetail projects a domain Expert onto the detail wire shape.
@@ -136,6 +140,8 @@ func (e *Expert) ToAgentDetail() ExpertAgentDetail {
 		Instruction:      e.Instruction,
 		MCPConfig:        e.MCPConfig,
 		Skills:           skillRefsToRead(e.Skills),
+		ViewCount:        e.ViewCount,
+		InstallCount:     e.InstallCount,
 		CreatedAt:        FormatTimestamp(e.CreatedAt),
 		UpdatedAt:        FormatTimestamp(e.UpdatedAt),
 	}
@@ -157,6 +163,8 @@ func (e *Expert) ToAgentListItem() ExpertAgentListItem {
 		CreatedByBotUID:  e.CreatedByBotUID,
 		CreatedByBotName: e.CreatedByBotName,
 		SkillCount:       len(e.Skills),
+		ViewCount:        e.ViewCount,
+		InstallCount:     e.InstallCount,
 	}
 }
 
@@ -240,6 +248,8 @@ type ExpertSquadDetail struct {
 	Dependencies     SquadDependencies `json:"dependencies"`
 	Permission       string            `json:"permission"`
 	Members          []SquadMemberIO   `json:"members"`
+	ViewCount        int64             `json:"view_count"`
+	InstallCount     int64             `json:"install_count"`
 	CreatedAt        string            `json:"created_at"`
 	UpdatedAt        string            `json:"updated_at"`
 }
@@ -260,6 +270,8 @@ type ExpertSquadListItem struct {
 	CreatedByBotUID  string        `json:"created_by_bot_uid,omitempty"`
 	CreatedByBotName string        `json:"created_by_bot_name,omitempty"`
 	MemberCount      int           `json:"member_count"`
+	ViewCount        int64         `json:"view_count"`
+	InstallCount     int64         `json:"install_count"`
 }
 
 // ToSquadDetail projects a domain Squad onto the detail wire shape.
@@ -287,10 +299,12 @@ func (s *Squad) ToSquadDetail() ExpertSquadDetail {
 			Blocking:    nonNilStrings(s.Dependencies.Blocking),
 			Recommended: nonNilStrings(s.Dependencies.Recommended),
 		},
-		Permission: s.Permission,
-		Members:    members,
-		CreatedAt:  FormatTimestamp(s.CreatedAt),
-		UpdatedAt:  FormatTimestamp(s.UpdatedAt),
+		Permission:   s.Permission,
+		Members:      members,
+		ViewCount:    s.ViewCount,
+		InstallCount: s.InstallCount,
+		CreatedAt:    FormatTimestamp(s.CreatedAt),
+		UpdatedAt:    FormatTimestamp(s.UpdatedAt),
 	}
 }
 
@@ -310,6 +324,8 @@ func (s *Squad) ToSquadListItem() ExpertSquadListItem {
 		CreatedByBotUID:  s.CreatedByBotUID,
 		CreatedByBotName: s.CreatedByBotName,
 		MemberCount:      len(s.Members),
+		ViewCount:        s.ViewCount,
+		InstallCount:     s.InstallCount,
 	}
 }
 

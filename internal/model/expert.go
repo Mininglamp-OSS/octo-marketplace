@@ -89,9 +89,13 @@ type Expert struct {
 	Instruction      string
 	MCPConfig        string
 	Skills           []SkillRef
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        *time.Time
+	// ViewCount / InstallCount are hydrated from resource_metrics on reads;
+	// writes never persist them.
+	ViewCount    int64
+	InstallCount int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DeletedAt    *time.Time
 }
 
 // SquadMember is one member expert inside a squad — an ExpertSpec (instruction
@@ -138,7 +142,11 @@ type Squad struct {
 	Dependencies     SquadDependencies
 	Permission       string
 	Members          []SquadMember
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        *time.Time
+	// ViewCount / InstallCount are hydrated from resource_metrics on reads;
+	// writes never persist them.
+	ViewCount    int64
+	InstallCount int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DeletedAt    *time.Time
 }

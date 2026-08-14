@@ -39,6 +39,47 @@ func threeMembers() []model.SquadMember {
 	}
 }
 
+// A successful squad install counts once under resource_type "squad" — and
+// never counts the member experts, which are snapshots inside the squad. A
+// failed squad install must not count.
+func TestInstallSquadTracksInstallOnlyForSquad(t *testing.T) {
+	ff := &fakeFleet{
+		agentIDs:     []string{"a0", "a1", "a2"},
+		failAgentAt:  -1,
+		failSkillAt:  -1,
+		failMemberAt: -1,
+		squadID:      "squad-x",
+	}
+	svc, caller, id := installSquadFixture(t, ff, threeMembers())
+	tracker := &recordingTracker{}
+	svc = svc.WithMetrics(tracker)
+
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallSquad: %v", err)
+	}
+	if len(tracker.installs) != 1 || tracker.installs[0] != "squad/"+id {
+		t.Fatalf("installs = %v, want exactly [squad/%s] (no member expert counts)", tracker.installs, id)
+	}
+
+	// Failure path: squad formation fails → rollback, no count.
+	ffFail := &fakeFleet{
+		agentIDs:     []string{"a0", "a1", "a2"},
+		failAgentAt:  -1,
+		failSkillAt:  -1,
+		failMemberAt: -1,
+		squadErr:     errors.New("boom"),
+	}
+	svcFail, callerFail, idFail := installSquadFixture(t, ffFail, threeMembers())
+	trackerFail := &recordingTracker{}
+	svcFail = svcFail.WithMetrics(trackerFail)
+	if _, err := svcFail.InstallSquad(context.Background(), callerFail, idFail, baseInput()); err == nil {
+		t.Fatal("expected install failure")
+	}
+	if len(trackerFail.installs) != 0 {
+		t.Fatalf("failed install must not count, got %v", trackerFail.installs)
+	}
+}
+
 func TestInstallSquadHappyPath(t *testing.T) {
 	ff := &fakeFleet{
 		agentIDs:     []string{"a0", "a1", "a2"},
