@@ -98,6 +98,13 @@ func (s *Service) WithMetrics(m InstallTracker) *Service {
 	return s
 }
 
+// trackTimeout bounds the best-effort install counter bump. Deliberately much
+// tighter than cleanupTimeout: tracking runs on the response path AFTER the
+// install succeeded, and install is not idempotent — a stalled Redis must not
+// hold a successful response long enough for a gateway/client timeout to
+// trigger a duplicate-provisioning retry.
+const trackTimeout = 2 * time.Second
+
 // trackInstall bumps the install counter after a successful install.
 // Best-effort and detached from the request context (a client disconnect right
 // after a successful provision must not cancel the count); failures are logged,
@@ -106,7 +113,7 @@ func (s *Service) trackInstall(ctx context.Context, resourceType, resourceID str
 	if s.metrics == nil {
 		return
 	}
-	cctx, cancel := cleanupContext(ctx)
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), trackTimeout)
 	defer cancel()
 	if err := s.metrics.TrackInstall(cctx, resourceType, resourceID); err != nil {
 		logging.Warn("install_metric_track_failed",
