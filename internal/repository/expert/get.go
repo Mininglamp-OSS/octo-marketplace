@@ -60,9 +60,6 @@ func (r *Repo) GetSquadByID(ctx context.Context, id string) (*model.Squad, error
 	if err := r.hydrateTagNames(ctx, tagIDs, &m.Tags); err != nil {
 		return nil, err
 	}
-	if err := r.hydrateTagNames(ctx, tagIDs, &m.Tags); err != nil {
-		return nil, err
-	}
 	counts, err := r.loadMetrics(ctx, EntitySquad, []string{m.ID})
 	if err != nil {
 		return nil, err
