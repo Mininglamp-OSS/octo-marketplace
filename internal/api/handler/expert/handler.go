@@ -183,7 +183,7 @@ func (h *Handler) CreateExpert(c *gin.Context) {
 // @Param tag query []string false "Tag name filters; AND-combined"
 // @Param visibility query []string false "Visibility filters: system/public/private"
 // @Param created_by_type query []string false "Provenance filter: human/bot/import"
-// @Param sort query string false "Sort: updated (else creation-time DESC)"
+// @Param sort query string false "Sort: comprehensive, latest, installs, views, updated (else creation-time DESC)"
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"
 // @Success 200 {object} apiresponse.OffsetList[model.ExpertAgentListItem]
@@ -207,7 +207,7 @@ func (h *Handler) ListExperts(c *gin.Context) { h.listExperts(c, false) }
 // @Param tag query []string false "Tag name filters; AND-combined"
 // @Param visibility query []string false "Visibility filters: system/public/private"
 // @Param created_by_type query []string false "Provenance filter: human/bot/import"
-// @Param sort query string false "Sort: updated (else creation-time DESC)"
+// @Param sort query string false "Sort: comprehensive, latest, installs, views, updated (else creation-time DESC)"
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"
 // @Success 200 {object} apiresponse.OffsetList[model.ExpertAgentListItem]
@@ -628,7 +628,7 @@ func (h *Handler) CreateSquad(c *gin.Context) {
 // @Param tag query []string false "Tag name filters; AND-combined"
 // @Param visibility query []string false "Visibility filters: system/public/private"
 // @Param created_by_type query []string false "Provenance filter: human/bot/import"
-// @Param sort query string false "Sort: updated (else creation-time DESC)"
+// @Param sort query string false "Sort: comprehensive, latest, installs, views, updated (else creation-time DESC)"
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"
 // @Success 200 {object} apiresponse.OffsetList[model.ExpertSquadListItem]
@@ -652,7 +652,7 @@ func (h *Handler) ListSquads(c *gin.Context) { h.listSquads(c, false) }
 // @Param tag query []string false "Tag name filters; AND-combined"
 // @Param visibility query []string false "Visibility filters: system/public/private"
 // @Param created_by_type query []string false "Provenance filter: human/bot/import"
-// @Param sort query string false "Sort: updated (else creation-time DESC)"
+// @Param sort query string false "Sort: comprehensive, latest, installs, views, updated (else creation-time DESC)"
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"
 // @Success 200 {object} apiresponse.OffsetList[model.ExpertSquadListItem]

@@ -8,6 +8,17 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
+// Sort modes for expert / squad listing. `latest` (and unknown values) keep
+// the default creation-time ordering; `updated` surfaces recently-edited rows;
+// the metric-backed modes rank by resource_metrics counters.
+const (
+	SortComprehensive = "comprehensive"
+	SortLatest        = "latest"
+	SortInstalls      = "installs"
+	SortViews         = "views"
+	SortUpdated       = "updated"
+)
+
 // ListFilter carries the resolved visibility scope plus the query params. The
 // service builds it (resolving tag names to id groups); the repository only
 // translates it to SQL. Ordering defaults to created_at DESC, id DESC.
@@ -40,7 +51,7 @@ func (r *Repo) ListExperts(ctx context.Context, f ListFilter) ([]model.Expert, i
 		return nil, 0, err
 	}
 	q := `SELECT ` + expertColumns + ` FROM experts WHERE ` + where +
-		` ORDER BY ` + f.orderBy() + ` LIMIT ? OFFSET ?`
+		` ORDER BY ` + f.orderBy(EntityExpert) + ` LIMIT ? OFFSET ?`
 	pageArgs := append(append([]any{}, args...), f.Limit, f.Offset)
 
 	rows, err := r.db.QueryContext(ctx, q, pageArgs...)
@@ -88,7 +99,7 @@ func (r *Repo) ListSquads(ctx context.Context, f ListFilter) ([]model.Squad, int
 		return nil, 0, err
 	}
 	q := `SELECT ` + squadColumns + ` FROM expert_squads WHERE ` + where +
-		` ORDER BY ` + f.orderBy() + ` LIMIT ? OFFSET ?`
+		` ORDER BY ` + f.orderBy(EntitySquad) + ` LIMIT ? OFFSET ?`
 	pageArgs := append(append([]any{}, args...), f.Limit, f.Offset)
 
 	rows, err := r.db.QueryContext(ctx, q, pageArgs...)
@@ -161,14 +172,40 @@ func (r *Repo) count(ctx context.Context, table, where string, args []any) (int,
 	return total, nil
 }
 
-// orderBy resolves the sort mode. `updated` surfaces recently-edited rows
-// first; anything else (including `relevance` without special handling) falls
-// back to the default creation-time ordering (doc §4.2).
-func (f ListFilter) orderBy() string {
-	if strings.TrimSpace(f.Sort) == "updated" {
-		return "updated_at DESC, id DESC"
+// orderBy resolves the sort mode for one entity's table (derived from the
+// entity so the pair can never disagree). `updated` surfaces recently-edited
+// rows first; the metric-backed modes rank by the resource_metrics counters
+// via a correlated scalar subquery (the metrics table is keyed by
+// (resource_type, resource_id), so the lookup is a PK probe and the list
+// queries stay join-free). `comprehensive` mirrors the skill catalog's
+// ranking (skill/list.go — keep the weights in sync): installs weigh 5×,
+// views 1×, plus a recency boost that decays over days so fresh listings
+// still surface. Anything else (including `latest` and `relevance` without
+// special handling) falls back to the default creation-time ordering
+// (doc §4.2).
+func (f ListFilter) orderBy(entity Entity) string {
+	table := "experts"
+	if entity == EntitySquad {
+		table = "expert_squads"
 	}
-	return "created_at DESC, id DESC"
+	metric := func(column string) string {
+		return `COALESCE((SELECT rm.` + column + ` FROM resource_metrics rm
+			WHERE rm.resource_type = '` + string(entity) + `' AND rm.resource_id = ` + table + `.id), 0)`
+	}
+	recent := "created_at DESC, id DESC"
+	switch strings.TrimSpace(f.Sort) {
+	case SortUpdated:
+		return "updated_at DESC, id DESC"
+	case SortInstalls:
+		return metric("install_count") + " DESC, " + recent
+	case SortViews:
+		return metric("view_count") + " DESC, " + recent
+	case SortComprehensive:
+		return `(` + metric("install_count") + ` * 5 + ` + metric("view_count") + `
+			+ 20 / POW(TIMESTAMPDIFF(HOUR, created_at, NOW()) / 24 + 2, 1.2)) DESC, ` + recent
+	default: // SortLatest and unknown values
+		return recent
+	}
 }
 
 // buildWhere composes the visibility-scoped predicate shared by both entity

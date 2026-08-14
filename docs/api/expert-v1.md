@@ -420,7 +420,7 @@ records, plus all `public` records in `X-Space-Id`, plus the caller's own
 | `tag` | string (repeatable) | — | Tag-name filter; repeat / comma-separate to AND-combine. |
 | `visibility` | string (repeatable) | — | `system` / `public` / `private`; OR-combine. |
 | `created_by_type` | string (repeatable) | — | `human` / `bot` / `import`; OR-combine. |
-| `sort` | string | — | `updated` → `updated_at DESC, id DESC`; `relevance` (with non-empty `keyword`) → weighted match; else default (creation-time DESC). |
+| `sort` | string | — | `comprehensive` → weighted blend of `install_count × 5 + view_count` plus a recency boost (mirrors the skill catalog); `installs` / `views` → the matching `resource_metrics` counter DESC; `latest` → creation-time DESC (explicit form of the default); `updated` → `updated_at DESC, id DESC`; anything else (including `relevance` without special handling) → default (creation-time DESC). |
 | `page` | int | `1` | One-based page number. |
 | `page_size` | int | `20` | Max `100`. |
 

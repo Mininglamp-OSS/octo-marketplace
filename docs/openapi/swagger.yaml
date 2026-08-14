@@ -3978,7 +3978,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:
@@ -4492,7 +4493,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:
@@ -6453,7 +6455,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:
@@ -6981,7 +6984,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:
