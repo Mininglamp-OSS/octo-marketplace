@@ -149,10 +149,21 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		skHandler.Register(v1)
 		skHandler.RegisterAdmin(r, adminAuth)
 
+		// Metrics service: Redis-buffered counters (no-op without Redis). Built
+		// before the expert service so install tracking can be wired into it.
+		var mSvc *metricssvc.Service
+		if redisCfg.Client != nil {
+			metricsRedisClient := metricsredis.NewClient(redisCfg.Client)
+			mSvc = metricssvc.New(metricsRedisClient)
+		}
+		if mSvc == nil {
+			mSvc = metricssvc.New(nil)
+		}
+
 		// Expert Marketplace (docs/api/expert-v1.md): experts + squads + tags +
 		// the dedicated expert_categories taxonomy. Reuses the shared id generator.
 		// A fleet client (when configured) powers POST /experts/{id}/install.
-		expertSvc := expertsvc.New(expertrepo.New(db), store, generateID)
+		expertSvc := expertsvc.New(expertrepo.New(db), store, generateID).WithMetrics(mSvc)
 		if fleetClient != nil {
 			expertSvc = expertSvc.WithFleet(fleetClient)
 		}
@@ -163,16 +174,9 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		// (visibility=system) records.
 		expertHandler.RegisterAdmin(r, adminAuth)
 
-		// Wire up metrics service and handler.
-		var mSvc *metricssvc.Service
-		if redisCfg.Client != nil {
-			metricsRedisClient := metricsredis.NewClient(redisCfg.Client)
-			mSvc = metricssvc.New(metricsRedisClient)
-		}
-		if mSvc == nil {
-			mSvc = metricssvc.New(nil)
-		}
 		metricssvc.RegisterResolver("skill", metricssvc.NewSkillResolver(skSvc))
+		metricssvc.RegisterResolver("expert", metricssvc.NewExpertResolver(expertSvc))
+		metricssvc.RegisterResolver("squad", metricssvc.NewSquadResolver(expertSvc))
 		metricshandler.New(mSvc).Register(v1)
 
 		parseRepo := parsesvc.NewRepo(db)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	metricssvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/metrics"
 	skillsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/skill"
 	"github.com/gin-gonic/gin"
@@ -32,6 +33,25 @@ func (f *fakeSkillSvc) Get(_ context.Context, id, _, _ string) (*skillsvc.SkillI
 	return item, nil
 }
 
+type fakeExpertSvc struct {
+	experts map[string]bool
+	squads  map[string]bool
+}
+
+func (f *fakeExpertSvc) GetExpert(_ context.Context, _ expertsvc.Caller, id string) (*model.ExpertAgentDetail, error) {
+	if !f.experts[id] {
+		return nil, expertsvc.ErrNotFound
+	}
+	return &model.ExpertAgentDetail{ExpertID: id}, nil
+}
+
+func (f *fakeExpertSvc) GetSquad(_ context.Context, _ expertsvc.Caller, id string) (*model.ExpertSquadDetail, error) {
+	if !f.squads[id] {
+		return nil, expertsvc.ErrNotFound
+	}
+	return &model.ExpertSquadDetail{SquadID: id}, nil
+}
+
 // mockMetricsRedis is a mock implementation for handler tests.
 type mockMetricsRedis struct {
 	err error
@@ -50,6 +70,13 @@ func setupTestRouter(redisErr error) *gin.Engine {
 		},
 	}
 	metricssvc.RegisterResolver("skill", metricssvc.NewSkillResolver(skillService))
+
+	expertService := &fakeExpertSvc{
+		experts: map[string]bool{"expert-1": true},
+		squads:  map[string]bool{"squad-1": true},
+	}
+	metricssvc.RegisterResolver("expert", metricssvc.NewExpertResolver(expertService))
+	metricssvc.RegisterResolver("squad", metricssvc.NewSquadResolver(expertService))
 
 	redis := &mockMetricsRedis{err: redisErr}
 	svc := metricssvc.New(redis)
@@ -90,6 +117,39 @@ func TestTrack_Success(t *testing.T) {
 	}
 	if body := w.Body.String(); body != "{\"data\":{}}" {
 		t.Fatalf("body=%q", body)
+	}
+}
+
+func TestTrack_ExpertAndSquadSuccess(t *testing.T) {
+	r := setupTestRouter(nil)
+	defer metricssvc.ResetResolvers()
+
+	for _, tc := range []struct{ resourceType, resourceID string }{
+		{"expert", "expert-1"},
+		{"squad", "squad-1"},
+	} {
+		w := doTrack(r, map[string]string{
+			"resource_type": tc.resourceType,
+			"resource_id":   tc.resourceID,
+			"event_type":    "view",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", tc.resourceType, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestTrack_ExpertNotVisible(t *testing.T) {
+	r := setupTestRouter(nil)
+	defer metricssvc.ResetResolvers()
+
+	w := doTrack(r, map[string]string{
+		"resource_type": "expert",
+		"resource_id":   "nonexistent",
+		"event_type":    "view",
+	})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

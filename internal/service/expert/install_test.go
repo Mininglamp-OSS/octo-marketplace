@@ -172,6 +172,60 @@ func baseInput() InstallInput {
 	return InstallInput{WorkspaceID: "ws-1", RuntimeID: "rt-1", SpaceID: "space-1", Token: "tok"}
 }
 
+// recordingTracker records TrackInstall calls for asserting install counting.
+type recordingTracker struct {
+	installs []string // "resourceType/resourceID"
+	ctxErr   error    // ctx.Err() observed at call time (detachment guard)
+}
+
+func (r *recordingTracker) TrackInstall(ctx context.Context, resourceType, resourceID string) error {
+	r.ctxErr = ctx.Err()
+	r.installs = append(r.installs, resourceType+"/"+resourceID)
+	return nil
+}
+
+// A successful expert install bumps install_count exactly once, under
+// resource_type "expert", on a context detached from the request's — the
+// request is canceled mid-install here, and the tracker must still be called
+// with a live context. A failed install must not count.
+func TestInstallExpertTracksInstall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ff := &fakeFleet{agentID: "agent-1", skillIDs: []string{"s1"}, failSkillAt: -1}
+	// Cancel the request context mid-provision (the fakes ignore ctx, so the
+	// install still completes); tracking must run detached from it.
+	ff.onCreateSkill = cancel
+	svc, caller, id := installFixture(t, ff, []model.SkillRef{{Name: "Research", ObjectKey: "k/0"}})
+	tracker := &recordingTracker{}
+	svc = svc.WithMetrics(tracker)
+
+	res, err := svc.InstallExpert(ctx, caller, id, baseInput())
+	if err != nil {
+		t.Fatalf("InstallExpert: %v", err)
+	}
+	if res.AgentID != "agent-1" {
+		t.Fatalf("AgentID = %q", res.AgentID)
+	}
+	if len(tracker.installs) != 1 || tracker.installs[0] != "expert/"+id {
+		t.Fatalf("installs = %v, want [expert/%s]", tracker.installs, id)
+	}
+	if tracker.ctxErr != nil {
+		t.Fatalf("tracker ctx must be detached from the canceled request, got err %v", tracker.ctxErr)
+	}
+
+	// Failure path: fleet errors → no count.
+	ffFail := &fakeFleet{agentErr: errors.New("boom"), failSkillAt: -1}
+	svcFail, callerFail, idFail := installFixture(t, ffFail, nil)
+	trackerFail := &recordingTracker{}
+	svcFail = svcFail.WithMetrics(trackerFail)
+	if _, err := svcFail.InstallExpert(context.Background(), callerFail, idFail, baseInput()); err == nil {
+		t.Fatal("expected install failure")
+	}
+	if len(trackerFail.installs) != 0 {
+		t.Fatalf("failed install must not count, got %v", trackerFail.installs)
+	}
+}
+
 func TestInstallExpertHappyPathWithSkills(t *testing.T) {
 	ff := &fakeFleet{agentID: "agent-1", skillIDs: []string{"s1", "s2"}, failSkillAt: -1}
 	svc, caller, id := installFixture(t, ff, []model.SkillRef{

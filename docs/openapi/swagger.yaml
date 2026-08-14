@@ -435,6 +435,8 @@ components:
           type: string
         expert_id:
           type: string
+        install_count:
+          type: integer
         name:
           type: string
         publisher:
@@ -450,6 +452,8 @@ components:
             type: string
           type: array
           uniqueItems: false
+        view_count:
+          type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
       type: object
@@ -528,6 +532,8 @@ components:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.CreatedByType'
         creator_name:
           type: string
+        install_count:
+          type: integer
         member_count:
           type: integer
         name:
@@ -545,6 +551,8 @@ components:
             type: string
           type: array
           uniqueItems: false
+        view_count:
+          type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
       type: object
@@ -1230,6 +1238,8 @@ components:
           type: string
         expert_id:
           type: string
+        install_count:
+          type: integer
         instruction:
           type: string
         mcp_config:
@@ -1254,6 +1264,8 @@ components:
           uniqueItems: false
         updated_at:
           type: string
+        view_count:
+          type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
       type: object
@@ -1331,6 +1343,8 @@ components:
           type: string
         dependencies:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.SquadDependencies'
+        install_count:
+          type: integer
         leader:
           type: string
         members:
@@ -1362,6 +1376,8 @@ components:
           uniqueItems: false
         updated_at:
           type: string
+        view_count:
+          type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Visibility'
       type: object
@@ -3962,7 +3978,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:
@@ -4476,7 +4493,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:
@@ -5294,7 +5312,8 @@ paths:
       - mcp
   /metrics/track:
     post:
-      description: Record a view event for a visible marketplace resource.
+      description: Record a view event for a visible marketplace resource (skill,
+        expert, or squad).
       operationId: metrics.track
       requestBody:
         content:
@@ -6436,7 +6455,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:
@@ -6964,7 +6984,8 @@ paths:
           items:
             type: string
           type: array
-      - description: 'Sort: updated (else creation-time DESC)'
+      - description: 'Sort: comprehensive, latest, installs, views, updated (else
+          creation-time DESC)'
         in: query
         name: sort
         schema:

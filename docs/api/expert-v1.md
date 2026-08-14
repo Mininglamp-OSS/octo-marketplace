@@ -207,6 +207,14 @@ Field notes:
   identical to `mcp-v1.md` §3.1. `created_by_bot_uid` / `created_by_bot_name`
   present only when `created_by_type == "bot"`.
 - `instruction` / `mcp_config` / `skills`: the `ExpertSpec` (§3.1).
+- `view_count` / `install_count`: read-only counters hydrated from
+  `resource_metrics` (`resource_type = "expert"`, or `"squad"` for the §3.5/§3.6
+  twins). `view_count` is bumped by `POST /metrics/track`; `install_count` is
+  bumped server-side when `POST /{experts|squads}/{id}/install` succeeds. A
+  squad install bumps only the squad's counter — never its member experts'.
+  Counters are eventually consistent: events buffer in Redis and flush to
+  `resource_metrics` on a periodic worker (default every 30 s), so a read
+  immediately after a view/install can lag by up to one flush interval.
 - `created_at` / `updated_at`: RFC 3339, millisecond precision, server-local
   timezone.
 
@@ -235,7 +243,9 @@ twin §3.6 carries `member_count` the same way).
   "visibility": "public",
   "creator_name": "王决",
   "created_by_type": "human",
-  "skill_count": 2
+  "skill_count": 2,
+  "view_count": 128,
+  "install_count": 6
 }
 ```
 
@@ -340,7 +350,9 @@ Projection for `GET /squads` and `GET /squads/mine`. Drops `strategies` /
   "visibility": "public",
   "creator_name": "林澈",
   "created_by_type": "bot",
-  "member_count": 5
+  "member_count": 5,
+  "view_count": 42,
+  "install_count": 3
 }
 ```
 
@@ -408,7 +420,7 @@ records, plus all `public` records in `X-Space-Id`, plus the caller's own
 | `tag` | string (repeatable) | — | Tag-name filter; repeat / comma-separate to AND-combine. |
 | `visibility` | string (repeatable) | — | `system` / `public` / `private`; OR-combine. |
 | `created_by_type` | string (repeatable) | — | `human` / `bot` / `import`; OR-combine. |
-| `sort` | string | — | `updated` → `updated_at DESC, id DESC`; `relevance` (with non-empty `keyword`) → weighted match; else default (creation-time DESC). |
+| `sort` | string | — | `comprehensive` → weighted blend of `install_count × 5 + view_count` plus a recency boost (mirrors the skill catalog); `installs` / `views` → the matching `resource_metrics` counter DESC; `latest` → creation-time DESC (explicit form of the default); `updated` → `updated_at DESC, id DESC`; anything else (including `relevance` without special handling) → default (creation-time DESC). |
 | `page` | int | `1` | One-based page number. |
 | `page_size` | int | `20` | Max `100`. |
 
