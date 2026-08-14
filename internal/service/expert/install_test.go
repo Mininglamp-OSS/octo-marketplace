@@ -39,6 +39,10 @@ type fakeFleet struct {
 	squadID       string
 	squadSpec     fleet.SquadSpec
 	squadErr      error
+	instrSquadID  string // squad id UpdateSquadInstructions was called with
+	instrValue    string
+	instrCalls    int
+	instrErr      error
 	addedMembers  []fleet.SquadMemberSpec
 	memberErr     error
 	failMemberAt  int // index (over non-leader members) AddSquadMember fails at (-1 = never)
@@ -127,6 +131,13 @@ func (f *fakeFleet) CreateSquad(_ context.Context, _, _, _ string, spec fleet.Sq
 		return "", f.squadErr
 	}
 	return f.squadID, nil
+}
+
+func (f *fakeFleet) UpdateSquadInstructions(_ context.Context, _, _, _, squadID, instructions string) error {
+	f.instrCalls++
+	f.instrSquadID = squadID
+	f.instrValue = instructions
+	return f.instrErr
 }
 
 func (f *fakeFleet) AddSquadMember(_ context.Context, _, _, _, _ string, m fleet.SquadMemberSpec) error {

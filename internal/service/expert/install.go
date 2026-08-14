@@ -69,9 +69,11 @@ type FleetProvisioner interface {
 	DeleteAgent(ctx context.Context, token, spaceID, workspaceID, agentID string) error
 	DeleteSkill(ctx context.Context, token, spaceID, workspaceID, skillID string) error
 	// Squad provisioning (used by InstallSquad): create a squad led by an
-	// already-created member agent, attach the remaining members, and archive
+	// already-created member agent, write its instructions (fleet's create
+	// endpoint doesn't accept them), attach the remaining members, and archive
 	// the squad on rollback.
 	CreateSquad(ctx context.Context, token, spaceID, workspaceID string, spec fleet.SquadSpec) (squadID string, err error)
+	UpdateSquadInstructions(ctx context.Context, token, spaceID, workspaceID, squadID, instructions string) error
 	AddSquadMember(ctx context.Context, token, spaceID, workspaceID, squadID string, m fleet.SquadMemberSpec) error
 	DeleteSquad(ctx context.Context, token, spaceID, workspaceID, squadID string) error
 }
