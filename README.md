@@ -138,10 +138,12 @@ Local development must disable authentication explicitly. Never deploy with
 
 Administrative routes under `/api/v1/admin/*` reuse the caller's Octo session
 token and gate on the resolved identity's role. `superAdmin` is admitted on every
-admin group, mirroring `octo-server`'s `/v1/manager/*` gate. The platform catalog
-groups — MCP, Skill, skill categories and skill uploads — additionally admit
-`marketAdmin`, an `octo-server` role that carries no other administrative power.
-The Expert Market groups remain `superAdmin`-only.
+admin group, mirroring `octo-server`'s `/v1/manager/*` gate. Every admin group —
+the MCP catalog, the Skill catalog, skill uploads and the Expert Market — also
+admits `marketAdmin`, an `octo-server` role that carries no administrative power
+outside this service. Note what that means before granting it: a `marketAdmin`
+can publish, edit and delete the system MCPs, public Skills and experts that
+every tenant installs and runs locally.
 
 See [CONFIGURATION.md](CONFIGURATION.md) for all settings, secure defaults, and
 storage examples.

@@ -688,9 +688,10 @@ Sized for prototype scale; revisit on scale metrics. Mirrors `mcp-v1.md` §7.
 
 ## 9. Admin surface
 
-A separate SuperAdmin surface manages platform-provided (`visibility = system`)
-records — mirroring `mcp-v1.md` §9. The public surface still REJECTS
-`visibility = system` on write.
+A separate admin surface manages platform-provided (`visibility = system`)
+records — mirroring `mcp-v1.md` §9, and gated the same way: the resolved
+identity must carry `role == "superAdmin"` or `role == "marketAdmin"`. The
+public surface still REJECTS `visibility = system` on write.
 
 Implemented endpoints (all under `/api/v1/admin`, gated by
 `AdminAuthenticator`; wire shapes reuse §3, and generated OpenAPI under

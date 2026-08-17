@@ -940,7 +940,7 @@ func TestExpertAdminMountAcceptsSuperAdmin(t *testing.T) {
 	}
 }
 
-func TestExpertAdminMountRejectsNonSuperAdmin(t *testing.T) {
+func TestExpertAdminMountRejectsPlainMember(t *testing.T) {
 	engine, _ := expertAdminEngine(t, stubMemberResolver{})
 
 	w := doRequestWithHeaders(engine, "GET", "/api/v1/admin/experts", nil,
@@ -965,11 +965,39 @@ var _ = fmt.Sprint
 // ─── marketAdmin scoping, against the real router ───────────────────────────
 //
 // internal/middleware/admin_test.go proves roleAdmitted itself, but it mounts
-// routes the test registers by hand. The risk this change actually introduces
-// is a *registration* mistake — a future catalog group that forgets
-// RoleMarketAdmin, or an Expert Market group that gains it — and a synthetic
-// engine cannot catch either. These drive router.PublicWithDBAndAdminAuth, so
-// the assertions are about the wiring that ships.
+// routes the test registers by hand. The risk that survives it is a
+// *registration* mistake, and a synthetic engine cannot catch either direction:
+// a future admin group mounted with no gate at all (an open surface), or one
+// that forgets RoleMarketAdmin and silently 403s the curators who are supposed
+// to reach it. Admitting marketAdmin on the Expert Market groups is no longer
+// on that list — it is the intent as of this change. These drive
+// router.PublicWithDBAndAdminAuth, so the assertions are about the wiring that
+// ships.
+
+// requireGatePassed asserts that a request got past the admin role gate, without
+// asserting a success code — reaching 2xx on these paths would need sqlmock
+// expectations primed per route, which is not what is under test.
+//
+// The rejected set is every status that means "the gate did not admit this
+// caller" or "there was no gate to admit them": 403 is the gate refusing, 401 is
+// the auth layer refusing ahead of it, and 404/405 mean the route was never
+// registered under that path or verb — each would otherwise let a broken case
+// pass silently. What is left through is typically 500 here (sqlmock has nothing
+// primed), which is a downstream failure and therefore proof the gate was
+// cleared.
+//
+// 405 cannot occur today: gin.New() leaves HandleMethodNotAllowed at its false
+// default, so a verb mismatch surfaces as 404. It is rejected anyway so that
+// flipping that flag later cannot silently turn these into vacuous passes.
+func requireGatePassed(t *testing.T, w *httptest.ResponseRecorder, label string) {
+	t.Helper()
+	switch w.Code {
+	case http.StatusForbidden, http.StatusUnauthorized:
+		t.Fatalf("%s: marketAdmin must pass the admin gate, got %d body=%s", label, w.Code, w.Body.String())
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		t.Fatalf("%s: route is not registered for this method+path, so this case proves nothing (got %d)", label, w.Code)
+	}
+}
 
 type stubMarketAdminResolver struct{}
 
@@ -985,10 +1013,11 @@ func (stubMarketAdminResolver) Resolve(_ context.Context, token string) (model.I
 	}, nil
 }
 
-// TestExpertAdminMountRejectsMarketAdmin is the containment claim: the Expert
-// Market groups must stay SuperAdmin-only. 403 short-circuits before any query,
-// so no sqlmock expectation is needed.
-func TestExpertAdminMountRejectsMarketAdmin(t *testing.T) {
+// TestExpertAdminMountAdmitsMarketAdmin pins the Expert Market half of the role.
+// marketAdmin runs the whole platform market, so these groups admit it — the
+// same assertion shape as the catalog groups, including the explicit 404
+// rejection so an unregistered route cannot pass the case vacuously.
+func TestExpertAdminMountAdmitsMarketAdmin(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/admin/experts",
 		"/api/v1/admin/squads",
@@ -999,16 +1028,14 @@ func TestExpertAdminMountRejectsMarketAdmin(t *testing.T) {
 			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
 			w := doRequestWithHeaders(engine, "GET", path, nil,
 				map[string]string{"Token": "market-admin-session"})
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("%s: status=%d want=%d body=%s", path, w.Code, http.StatusForbidden, w.Body.String())
-			}
+			requireGatePassed(t, w, path)
 		})
 	}
 }
 
-// TestExpertAdminMountRejectsMarketAdminOnWrites covers the mutating verbs too,
-// so a widened gate cannot slip in on POST while GET stays correct.
-func TestExpertAdminMountRejectsMarketAdminOnWrites(t *testing.T) {
+// TestExpertAdminMountAdmitsMarketAdminOnWrites covers the mutating verbs too,
+// so a gate can't be correct on GET while a POST group was missed.
+func TestExpertAdminMountAdmitsMarketAdminOnWrites(t *testing.T) {
 	for _, tc := range []struct {
 		method string
 		path   string
@@ -1022,10 +1049,7 @@ func TestExpertAdminMountRejectsMarketAdminOnWrites(t *testing.T) {
 			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
 			w := doRequestWithHeaders(engine, tc.method, tc.path, nil,
 				map[string]string{"Token": "market-admin-session"})
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("%s %s: status=%d want=%d body=%s",
-					tc.method, tc.path, w.Code, http.StatusForbidden, w.Body.String())
-			}
+			requireGatePassed(t, w, tc.method+" "+tc.path)
 		})
 	}
 }
@@ -1058,26 +1082,47 @@ func TestCatalogAdminMountAdmitsMarketAdmin(t *testing.T) {
 			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
 			w := doRequestWithHeaders(engine, tc.method, tc.path, nil,
 				map[string]string{"Token": "market-admin-session"})
-			if w.Code == http.StatusForbidden {
-				t.Fatalf("%s %s: marketAdmin must pass the catalog gate, got 403 body=%s",
-					tc.method, tc.path, w.Body.String())
-			}
-			if w.Code == http.StatusNotFound {
-				t.Fatalf("%s %s: route is not registered, so this case proves nothing",
-					tc.method, tc.path)
-			}
+			requireGatePassed(t, w, tc.method+" "+tc.path)
 		})
 	}
 }
 
-// TestCatalogAdminMountStillRejectsPlainMember guards the direction that
-// matters most if alsoAllow were ever mis-wired: widening must not admit
-// everyone.
-func TestCatalogAdminMountStillRejectsPlainMember(t *testing.T) {
-	engine, _ := expertAdminEngine(t, stubMemberResolver{})
-	w := doRequestWithHeaders(engine, "GET", "/api/v1/admin/skill_categories", nil,
-		map[string]string{"Token": "member-session"})
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusForbidden, w.Body.String())
+// TestAdminMountStillRejectsPlainMember guards the direction that matters most
+// now that every /api/v1/admin/* group admits marketAdmin: widening must not
+// admit everyone.
+//
+// One case per independently mis-wireable Handler() call site that this harness
+// mounts, since each carries its own gate instance and can be broken on its own:
+// category/admin.go:16 and :22, skill/admin.go:16, upload/handler.go:93, and
+// expert/admin.go:37, :45 and :56. Note skill_uploads and skills live on
+// *different* groups despite the shared prefix, and expert_categories is a third
+// group again — covering one does not cover the others.
+//
+// The MCP groups (router.go:243 and :252) are not reachable here:
+// PublicWithDBAndAdminAuth passes a nil AdminMCP, so registerAdminMCP returns
+// before mounting them. Their deny direction is covered in internal/api/router
+// (TestAdminRejectsNonSuperAdminInProd).
+func TestAdminMountStillRejectsPlainMember(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: "GET", path: "/api/v1/admin/skill_categories"},
+		{method: "GET", path: "/api/v1/skill/admin/categories"},
+		{method: "GET", path: "/api/v1/admin/skills"},
+		{method: "POST", path: "/api/v1/admin/skill_uploads"},
+		{method: "GET", path: "/api/v1/admin/experts"},
+		{method: "GET", path: "/api/v1/admin/squads"},
+		{method: "GET", path: "/api/v1/admin/expert_categories"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			engine, _ := expertAdminEngine(t, stubMemberResolver{})
+			w := doRequestWithHeaders(engine, tc.method, tc.path, nil,
+				map[string]string{"Token": "member-session"})
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("%s %s: status=%d want=%d body=%s",
+					tc.method, tc.path, w.Code, http.StatusForbidden, w.Body.String())
+			}
+		})
 	}
 }

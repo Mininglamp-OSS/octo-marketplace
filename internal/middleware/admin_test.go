@@ -178,14 +178,20 @@ func containsErrorCode(body []byte, code string) bool {
 	return envelope.Error.Code == code
 }
 
-// newAdminEngineAllowing mounts two groups the way the real router does: a
-// catalog group widened to marketAdmin, and an Expert Market group left at the
-// default SuperAdmin-only gate.
+// newAdminEngineAllowing mounts one widened group and one left at the default
+// gate. All nine production admin gates currently admit marketAdmin (eight under
+// /api/v1/admin/* plus the legacy /api/v1/skill/admin/categories alias), so this
+// pair is synthetic on purpose: it exercises the alsoAllow mechanism itself,
+// which must keep working for the next role that is admitted somewhere but not
+// everywhere. Which production group carries which gate is pinned against the
+// real router in internal/api/integration (skill, category and expert groups)
+// and internal/api/router (the MCP groups, which the integration harness does
+// not mount).
 func newAdminEngineAllowing(a *AdminAuthenticator) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/api/v1/admin/skills", a.Handler(RoleMarketAdmin), adminPingHandler())
-	r.GET("/api/v1/admin/experts", a.Handler(), adminPingHandler())
+	r.GET("/widened", a.Handler(RoleMarketAdmin), adminPingHandler())
+	r.GET("/default", a.Handler(), adminPingHandler())
 	return r
 }
 
@@ -198,20 +204,22 @@ func adminGet(t *testing.T, engine *gin.Engine, path string) int {
 	return rr.Code
 }
 
-// TestAdminAuth_MarketAdminScopedToCatalog is the whole point of the alsoAllow
-// parameter: marketAdmin curates the platform catalogs and must NOT reach the
-// Expert Market, which stays SuperAdmin-only.
-func TestAdminAuth_MarketAdminScopedToCatalog(t *testing.T) {
+// TestAdminAuth_AlsoAllowIsPerGroup is the whole point of the alsoAllow
+// parameter: a role named on one group must not leak onto a group that did not
+// name it, superAdmin is admitted on both, and everything else is refused
+// everywhere. The default stays strictest, so a group registered without an
+// explicit role never widens by accident.
+func TestAdminAuth_AlsoAllowIsPerGroup(t *testing.T) {
 	tests := []struct {
 		name        string
 		role        string
-		wantCatalog int
-		wantExpert  int
+		wantWidened int
+		wantDefault int
 	}{
-		{name: "super admin reaches everything", role: RoleSuperAdmin, wantCatalog: http.StatusOK, wantExpert: http.StatusOK},
-		{name: "market admin is catalog only", role: RoleMarketAdmin, wantCatalog: http.StatusOK, wantExpert: http.StatusForbidden},
-		{name: "plain user reaches nothing", role: "", wantCatalog: http.StatusForbidden, wantExpert: http.StatusForbidden},
-		{name: "unknown role reaches nothing", role: "dashboardReader", wantCatalog: http.StatusForbidden, wantExpert: http.StatusForbidden},
+		{name: "super admin reaches everything", role: RoleSuperAdmin, wantWidened: http.StatusOK, wantDefault: http.StatusOK},
+		{name: "named role reaches only the widened group", role: RoleMarketAdmin, wantWidened: http.StatusOK, wantDefault: http.StatusForbidden},
+		{name: "plain user reaches nothing", role: "", wantWidened: http.StatusForbidden, wantDefault: http.StatusForbidden},
+		{name: "unnamed role reaches nothing", role: "dashboardReader", wantWidened: http.StatusForbidden, wantDefault: http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,11 +227,11 @@ func TestAdminAuth_MarketAdminScopedToCatalog(t *testing.T) {
 				UID: "u1", Name: "Alice", Role: tt.role, ContextIncluded: true,
 			}}, model.Identity{})
 			engine := newAdminEngineAllowing(a)
-			if got := adminGet(t, engine, "/api/v1/admin/skills"); got != tt.wantCatalog {
-				t.Fatalf("catalog group: got %d, want %d", got, tt.wantCatalog)
+			if got := adminGet(t, engine, "/widened"); got != tt.wantWidened {
+				t.Fatalf("widened group: got %d, want %d", got, tt.wantWidened)
 			}
-			if got := adminGet(t, engine, "/api/v1/admin/experts"); got != tt.wantExpert {
-				t.Fatalf("expert group: got %d, want %d", got, tt.wantExpert)
+			if got := adminGet(t, engine, "/default"); got != tt.wantDefault {
+				t.Fatalf("default group: got %d, want %d", got, tt.wantDefault)
 			}
 		})
 	}

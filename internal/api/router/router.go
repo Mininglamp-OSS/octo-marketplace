@@ -169,9 +169,9 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		}
 		expertHandler := experthandler.New(expertSvc)
 		expertHandler.Register(v1)
-		// Admin (SuperAdmin) surface: /api/v1/admin/experts|squads|expert_categories
-		// |expert_tags|expert_skill_uploads for managing platform-provided
-		// (visibility=system) records.
+		// Admin (superAdmin ∪ marketAdmin) surface: /api/v1/admin/experts|squads
+		// |expert_categories|expert_tags|expert_skill_uploads for managing
+		// platform-provided (visibility=system) records.
 		expertHandler.RegisterAdmin(r, adminAuth)
 
 		metricssvc.RegisterResolver("skill", metricssvc.NewSkillResolver(skSvc))
