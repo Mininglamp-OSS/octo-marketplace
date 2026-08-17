@@ -27,9 +27,14 @@ const RoleMarketAdmin = "marketAdmin"
 
 // AdminAuthenticator guards the /api/v1/admin/* namespace consumed by
 // octo-admin. It resolves the caller's Octo session token the same way as the
-// public Authenticator (via resolveUserIdentity) and additionally requires
-// identity.Role == "superAdmin", mirroring octo-server's /v1/manager/*
-// CheckLoginRoleIsSuperAdmin gate.
+// public Authenticator (via resolveUserIdentity) and then applies a per-group
+// role gate.
+//
+// SuperAdmin is admitted on every group, mirroring octo-server's /v1/manager/*
+// CheckLoginRoleIsSuperAdmin gate. Individual groups may additionally admit a
+// narrower octo-server fixed role by passing it to Handler — today only the
+// platform catalog groups do, admitting RoleMarketAdmin. Groups registered
+// without one (the Expert Market groups) stay SuperAdmin-only.
 //
 // AUTH_ENABLED=false skips the resolve+role check entirely and stamps the
 // configured dev identity, matching the dev bypass on the public

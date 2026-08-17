@@ -61,7 +61,7 @@ func (h *Handler) AdminList(c *gin.Context) {
 
 // AdminCreate godoc
 // @Summary Create Skill category
-// @Description Create a Skill category through the SuperAdmin-gated administrator surface.
+// @Description Create a Skill category through the administrator surface (superAdmin, or marketAdmin).
 // @Tags skill_category
 // @ID skill_category.create
 // @Accept json
@@ -100,7 +100,7 @@ func (h *Handler) AdminCreate(c *gin.Context) {
 
 // AdminUpdate godoc
 // @Summary Update Skill category
-// @Description Replace mutable fields of an existing Skill category through the SuperAdmin-gated administrator surface.
+// @Description Replace mutable fields of an existing Skill category through the administrator surface (superAdmin, or marketAdmin).
 // @Tags skill_category
 // @ID skill_category.update
 // @Accept json
@@ -143,7 +143,7 @@ func (h *Handler) AdminUpdate(c *gin.Context) {
 
 // AdminDelete godoc
 // @Summary Delete Skill category
-// @Description Delete an unused Skill category through the SuperAdmin-gated administrator surface; categories referenced by Skills are rejected.
+// @Description Delete an unused Skill category through the administrator surface (superAdmin, or marketAdmin); categories referenced by Skills are rejected.
 // @Tags skill_category
 // @ID skill_category.delete
 // @Accept json

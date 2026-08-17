@@ -773,13 +773,18 @@ rewrite handles both uniformly).
 
 | Header | Value | Notes |
 | --- | --- | --- |
-| `Token` | Octo session token | Same session token the user's browser holds for the public surface (`Authorization: Bearer <token>` is also accepted). Marketplace verifies it against octo-server's `/v1/auth/verify?include=context` and requires the returned identity to carry `role == "superAdmin"`. |
+| `Token` | Octo session token | Same session token the user's browser holds for the public surface (`Authorization: Bearer <token>` is also accepted). Marketplace verifies it against octo-server's `/v1/auth/verify?include=context` and requires the returned identity to carry `role == "superAdmin"` or `role == "marketAdmin"`. |
+
+`marketAdmin` is an octo-server role for staff who curate the platform catalogs
+and hold no other administrative power. It is admitted on the MCP admin routes
+documented here, and on the Skill catalog routes; the Expert Market admin routes
+remain `superAdmin`-only.
 
 **No `X-Space-Id` required.** Admin routes operate globally — the middleware
-resolves the caller's SuperAdmin identity and stamps it into the request
+resolves the caller's admin identity and stamps it into the request
 context so downstream handlers reuse the same `callerFromContext` accessor as
 the public surface. `creator_name` / `owner_uid` on newly created system MCPs
-reflect the real SuperAdmin user, not a synthetic account.
+reflect the real admin user, not a synthetic account.
 
 **Dev mode**: when the service runs with `AUTH_ENABLED=false`, the token
 resolve + role check are bypassed. `DEV_AUTH_UID` / `DEV_AUTH_NAME` (or a
@@ -849,7 +854,7 @@ octo-server during local development.
 | HTTP | Code | When |
 | --- | --- | --- |
 | 401 | `AUTH_REQUIRED` | Missing `Token` header or the token was rejected by octo-server. |
-| 403 | `FORBIDDEN` | Token resolved but the caller's `role` is not `superAdmin`. |
+| 403 | `FORBIDDEN` | Token resolved but the caller's `role` is admitted on neither this group nor globally (i.e. it is neither `marketAdmin` nor `superAdmin`). The message is deliberately generic and does not name the sufficient role. |
 | 503 | `UPSTREAM_UNAVAILABLE` | octo-server could not verify the token (network or upstream error). |
 
 Endpoint tables above cite `auth.admin_unauthorized` from the previous
@@ -870,6 +875,13 @@ Endpoint tables above cite `auth.admin_unauthorized` from the previous
 - Marketplace MUST NOT be reachable from the public internet; front it
   with nginx / an internal load balancer that only accepts traffic from
   trusted origins (admin console + `/market/*` gateway rewrite).
-- Admin access is gated by the caller's `superAdmin` role in octo-server;
-  revoke a compromised SuperAdmin account in octo-server to cut off
-  marketplace admin at the same time.
+- Admin access is gated by the caller's octo-server role, so cutting off
+  marketplace admin means revoking the role in octo-server. Note there is
+  more than one such role to check: `superAdmin` reaches every admin group,
+  and `marketAdmin` reaches the platform catalog groups (MCP, Skill, skill
+  categories, skill uploads). Revoking only the SuperAdmin accounts leaves
+  any `marketAdmin` account with catalog access.
+- Role revocation is not instant here: marketplace caches the resolved
+  identity — role included — per token for `AUTH_CACHE_TTL` (default 30s),
+  and octo-server caches the role for its own TTL on top of that. Revoke the
+  session as well when the change must take effect immediately.
