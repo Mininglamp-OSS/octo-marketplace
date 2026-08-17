@@ -4,8 +4,10 @@ import (
 	"net/http"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // RoleSuperAdmin is the identity.Role value octo-server encodes for global
@@ -104,6 +106,19 @@ func (a *AdminAuthenticator) Handler(alsoAllow ...string) gin.HandlerFunc {
 		if !roleAdmitted(identity.Role, alsoAllow) {
 			// One generic message for every rejected role: which role would have
 			// been sufficient is not something an unauthorized caller should learn.
+			//
+			// That opacity is deliberate for the client and unhelpful for the
+			// operator, so the discriminating facts go to the log instead. With
+			// more than one admissible role and only some groups widened, "a
+			// curator got a 403" is otherwise indistinguishable between a missing
+			// role, a mis-cased one, and a group that was never widened.
+			logging.Warn("admin_role_rejected", append(logging.RequestFields(c),
+				zap.String("operation", "admin.authorize"),
+				zap.String("route", c.FullPath()),
+				zap.String("uid", identity.UID),
+				zap.String("role", identity.Role),
+				zap.Strings("also_allow", alsoAllow),
+			)...)
 			abortError(c, http.StatusForbidden, "FORBIDDEN", "Insufficient role for this admin resource.")
 			return
 		}

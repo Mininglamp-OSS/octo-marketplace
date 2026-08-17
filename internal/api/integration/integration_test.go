@@ -1030,21 +1030,41 @@ func TestExpertAdminMountRejectsMarketAdminOnWrites(t *testing.T) {
 	}
 }
 
-// TestCatalogAdminMountAdmitsMarketAdmin is the other half: the catalog groups
-// must let the role through the gate. Asserting "not 403" rather than a success
-// code keeps the test about the gate — what happens downstream depends on
-// sqlmock expectations that are not the point here.
+// TestCatalogAdminMountAdmitsMarketAdmin is the other half: every catalog group
+// must let the role through the gate, so that dropping RoleMarketAdmin from any
+// one registration fails CI rather than silently breaking curators.
+//
+// The gate is what is under test, not the handler, so the assertion is "neither
+// refused nor missing" — a success code would depend on sqlmock expectations
+// that are beside the point. 404 has to be excluded explicitly: without it a
+// route that was never registered would satisfy "not 403" and the case would
+// pass vacuously.
+//
+// /api/v1/admin/mcps and /admin/mcp_icon_uploads are absent here on purpose —
+// PublicWithDBAndAdminAuth wires a nil AdminMCP handler, so registerAdminMCP
+// returns early and those routes do not exist in this harness. They are covered
+// against the real router in internal/api/router (TestAdminMcpsAdmitsMarketAdminInProd).
 func TestCatalogAdminMountAdmitsMarketAdmin(t *testing.T) {
-	for _, path := range []string{
-		"/api/v1/admin/skill_categories",
-		"/api/v1/skill/admin/categories",
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: "GET", path: "/api/v1/admin/skill_categories"},
+		{method: "GET", path: "/api/v1/skill/admin/categories"},
+		{method: "GET", path: "/api/v1/admin/skills"},
+		{method: "POST", path: "/api/v1/admin/skill_uploads"},
 	} {
-		t.Run(path, func(t *testing.T) {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
-			w := doRequestWithHeaders(engine, "GET", path, nil,
+			w := doRequestWithHeaders(engine, tc.method, tc.path, nil,
 				map[string]string{"Token": "market-admin-session"})
 			if w.Code == http.StatusForbidden {
-				t.Fatalf("%s: marketAdmin must pass the catalog gate, got 403 body=%s", path, w.Body.String())
+				t.Fatalf("%s %s: marketAdmin must pass the catalog gate, got 403 body=%s",
+					tc.method, tc.path, w.Body.String())
+			}
+			if w.Code == http.StatusNotFound {
+				t.Fatalf("%s %s: route is not registered, so this case proves nothing",
+					tc.method, tc.path)
 			}
 		})
 	}

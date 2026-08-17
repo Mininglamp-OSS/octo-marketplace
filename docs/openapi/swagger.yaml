@@ -2679,8 +2679,8 @@ paths:
       tags:
       - skill_category
     post:
-      description: Create a Skill category through the administrator surface
-        (superAdmin, or marketAdmin).
+      description: Create a Skill category through the administrator surface (superAdmin,
+        or marketAdmin).
       operationId: skill_category.create
       requestBody:
         content:
@@ -2743,9 +2743,8 @@ paths:
       - skill_category
   /admin/skill_categories/{skill_category_id}:
     delete:
-      description: Delete an unused Skill category through the administrator
-        surface (superAdmin, or marketAdmin); categories referenced by Skills are
-        rejected.
+      description: Delete an unused Skill category through the administrator surface
+        (superAdmin, or marketAdmin); categories referenced by Skills are rejected.
       operationId: skill_category.delete
       parameters:
       - description: Skill category ID
@@ -2802,8 +2801,8 @@ paths:
       tags:
       - skill_category
     patch:
-      description: Replace mutable fields of an existing Skill category through
-        the administrator surface (superAdmin, or marketAdmin).
+      description: Replace mutable fields of an existing Skill category through the
+        administrator surface (superAdmin, or marketAdmin).
       operationId: skill_category.update
       parameters:
       - description: Skill category ID

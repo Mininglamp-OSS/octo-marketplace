@@ -114,7 +114,7 @@ Repository layout:
 | `internal/service/` | Catalog rules, visibility, parsing, probing, and secret handling |
 | `internal/repository/` | MySQL persistence and transaction boundaries |
 | `internal/storage/` | Local and S3-compatible object-storage implementations |
-| `internal/middleware/` | User, User Bot, Space, and SuperAdmin role authentication |
+| `internal/middleware/` | User, User Bot, Space, and admin role authentication |
 | `migrations/sql/` | Embedded, ordered database migrations |
 | `docs/openapi/` | Generated OpenAPI 3.1 contract |
 | `docs/api/` | Additional protocol and contract documentation |
