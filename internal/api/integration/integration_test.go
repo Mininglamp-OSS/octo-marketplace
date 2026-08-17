@@ -985,10 +985,11 @@ func (stubMarketAdminResolver) Resolve(_ context.Context, token string) (model.I
 	}, nil
 }
 
-// TestExpertAdminMountRejectsMarketAdmin is the containment claim: the Expert
-// Market groups must stay SuperAdmin-only. 403 short-circuits before any query,
-// so no sqlmock expectation is needed.
-func TestExpertAdminMountRejectsMarketAdmin(t *testing.T) {
+// TestExpertAdminMountAdmitsMarketAdmin pins the Expert Market half of the role.
+// marketAdmin runs the whole platform market, so these groups admit it — the
+// same assertion shape as the catalog groups, including the explicit 404
+// rejection so an unregistered route cannot pass the case vacuously.
+func TestExpertAdminMountAdmitsMarketAdmin(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/admin/experts",
 		"/api/v1/admin/squads",
@@ -999,16 +1000,19 @@ func TestExpertAdminMountRejectsMarketAdmin(t *testing.T) {
 			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
 			w := doRequestWithHeaders(engine, "GET", path, nil,
 				map[string]string{"Token": "market-admin-session"})
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("%s: status=%d want=%d body=%s", path, w.Code, http.StatusForbidden, w.Body.String())
+			if w.Code == http.StatusForbidden {
+				t.Fatalf("%s: marketAdmin must pass the expert gate, got 403 body=%s", path, w.Body.String())
+			}
+			if w.Code == http.StatusNotFound {
+				t.Fatalf("%s: route is not registered, so this case proves nothing", path)
 			}
 		})
 	}
 }
 
-// TestExpertAdminMountRejectsMarketAdminOnWrites covers the mutating verbs too,
-// so a widened gate cannot slip in on POST while GET stays correct.
-func TestExpertAdminMountRejectsMarketAdminOnWrites(t *testing.T) {
+// TestExpertAdminMountAdmitsMarketAdminOnWrites covers the mutating verbs too,
+// so a gate can't be correct on GET while a POST group was missed.
+func TestExpertAdminMountAdmitsMarketAdminOnWrites(t *testing.T) {
 	for _, tc := range []struct {
 		method string
 		path   string
@@ -1022,9 +1026,13 @@ func TestExpertAdminMountRejectsMarketAdminOnWrites(t *testing.T) {
 			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
 			w := doRequestWithHeaders(engine, tc.method, tc.path, nil,
 				map[string]string{"Token": "market-admin-session"})
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("%s %s: status=%d want=%d body=%s",
-					tc.method, tc.path, w.Code, http.StatusForbidden, w.Body.String())
+			if w.Code == http.StatusForbidden {
+				t.Fatalf("%s %s: marketAdmin must pass the expert gate, got 403 body=%s",
+					tc.method, tc.path, w.Body.String())
+			}
+			if w.Code == http.StatusNotFound {
+				t.Fatalf("%s %s: route is not registered, so this case proves nothing",
+					tc.method, tc.path)
 			}
 		})
 	}
@@ -1070,14 +1078,26 @@ func TestCatalogAdminMountAdmitsMarketAdmin(t *testing.T) {
 	}
 }
 
-// TestCatalogAdminMountStillRejectsPlainMember guards the direction that
-// matters most if alsoAllow were ever mis-wired: widening must not admit
-// everyone.
-func TestCatalogAdminMountStillRejectsPlainMember(t *testing.T) {
-	engine, _ := expertAdminEngine(t, stubMemberResolver{})
-	w := doRequestWithHeaders(engine, "GET", "/api/v1/admin/skill_categories", nil,
-		map[string]string{"Token": "member-session"})
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusForbidden, w.Body.String())
+// TestAdminMountStillRejectsPlainMember guards the direction that matters most
+// now that every /api/v1/admin/* group admits marketAdmin: widening must not
+// admit everyone. With no group left on the strict-only gate, this is the last
+// test standing between a mis-wired alsoAllow and an open admin surface, so it
+// covers a catalog group and an Expert Market group rather than one path.
+func TestAdminMountStillRejectsPlainMember(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/admin/skill_categories",
+		"/api/v1/admin/skills",
+		"/api/v1/admin/experts",
+		"/api/v1/admin/squads",
+		"/api/v1/admin/expert_categories",
+	} {
+		t.Run(path, func(t *testing.T) {
+			engine, _ := expertAdminEngine(t, stubMemberResolver{})
+			w := doRequestWithHeaders(engine, "GET", path, nil,
+				map[string]string{"Token": "member-session"})
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("%s: status=%d want=%d body=%s", path, w.Code, http.StatusForbidden, w.Body.String())
+			}
+		})
 	}
 }

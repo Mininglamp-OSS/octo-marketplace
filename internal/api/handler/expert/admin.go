@@ -29,10 +29,12 @@ type AdminCategoryRequest struct {
 	SortOrder int    `json:"sort_order"`
 }
 
-// RegisterAdmin mounts the SuperAdmin-gated expert/squad/category/tag/upload
-// routes on the engine root under /api/v1/admin.
+// RegisterAdmin mounts the expert/squad/category/tag/upload admin routes on the
+// engine root under /api/v1/admin. Admitted: superAdmin everywhere, plus
+// marketAdmin — that role runs the platform market as a whole, so the Expert
+// Market is admitted alongside the MCP and Skill catalogs.
 func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthenticator) {
-	experts := r.Group("/api/v1/admin/experts", adminAuth.Handler())
+	experts := r.Group("/api/v1/admin/experts", adminAuth.Handler(middleware.RoleMarketAdmin))
 	experts.POST("", h.AdminCreateExpert)
 	experts.GET("", h.AdminListExperts)
 	experts.GET("/:expert_id", h.AdminGetExpert)
@@ -40,7 +42,7 @@ func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthen
 	experts.PATCH("/:expert_id", h.AdminPatchExpert)
 	experts.DELETE("/:expert_id", h.AdminDeleteExpert)
 
-	squads := r.Group("/api/v1/admin/squads", adminAuth.Handler())
+	squads := r.Group("/api/v1/admin/squads", adminAuth.Handler(middleware.RoleMarketAdmin))
 	squads.POST("", h.AdminCreateSquad)
 	squads.GET("", h.AdminListSquads)
 	squads.GET("/:squad_id", h.AdminGetSquad)
@@ -51,7 +53,7 @@ func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthen
 	// The taxonomy, tag, and upload endpoints live directly under /api/v1/admin
 	// (a separate group) so their static paths never collide with the
 	// /api/v1/admin/experts/:expert_id wildcard — same split registerAdminMCP uses.
-	admin := r.Group("/api/v1/admin", adminAuth.Handler())
+	admin := r.Group("/api/v1/admin", adminAuth.Handler(middleware.RoleMarketAdmin))
 	admin.GET("/expert_categories", h.AdminListCategories)
 	admin.POST("/expert_categories", h.AdminCreateCategory)
 	admin.PATCH("/expert_categories/:category_id", h.AdminUpdateCategory)
