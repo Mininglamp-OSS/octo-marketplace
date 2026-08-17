@@ -1,11 +1,12 @@
-// This file exposes the administrator (superAdmin or marketAdmin) HTTP surface for the Expert
-// Marketplace, mounted under /api/v1/admin and gated by AdminAuthenticator. It
-// mirrors the skill/category admin pattern (a RegisterAdmin method on the same
-// Handler) rather than the two-struct MCP pattern, because the expert handler
-// already shares callerFromContext + writeServiceError. Create stamps
-// visibility=system in the service; list bypasses Space scoping; get/update/
-// delete operate on system rows by id. The skill-package upload endpoint is the
-// user-surface handler reused verbatim (it is Space/owner-agnostic).
+// This file exposes the administrator (superAdmin or marketAdmin) HTTP surface
+// for the Expert Marketplace, mounted under /api/v1/admin and gated by
+// AdminAuthenticator. It mirrors the skill/category admin pattern (a
+// RegisterAdmin method on the same Handler) rather than the two-struct MCP
+// pattern, because the expert handler already shares callerFromContext +
+// writeServiceError. Create stamps visibility=system in the service; list
+// bypasses Space scoping; get/update/delete operate on system rows by id. The
+// skill-package upload endpoint is the user-surface handler reused verbatim (it
+// is Space/owner-agnostic).
 package expert
 
 import (

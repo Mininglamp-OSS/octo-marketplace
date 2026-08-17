@@ -179,7 +179,8 @@ func containsErrorCode(body []byte, code string) bool {
 }
 
 // newAdminEngineAllowing mounts one widened group and one left at the default
-// gate. All eight production admin groups currently admit marketAdmin, so this
+// gate. All nine production admin gates currently admit marketAdmin (eight under
+// /api/v1/admin/* plus the legacy /api/v1/skill/admin/categories alias), so this
 // pair is synthetic on purpose: it exercises the alsoAllow mechanism itself,
 // which must keep working for the next role that is admitted somewhere but not
 // everywhere. Which production group carries which gate is pinned against the

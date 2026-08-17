@@ -977,17 +977,22 @@ var _ = fmt.Sprint
 //
 // The rejected set is every status that means "the gate did not admit this
 // caller" or "there was no gate to admit them": 403 is the gate refusing, 401 is
-// the auth layer refusing ahead of it, and 404 means the route was never
-// registered — each would otherwise let a broken case pass silently. What is
-// left through is typically 500 here (sqlmock has nothing primed), which is a
-// downstream failure and therefore proof the gate was cleared.
+// the auth layer refusing ahead of it, and 404/405 mean the route was never
+// registered under that path or verb — each would otherwise let a broken case
+// pass silently. What is left through is typically 500 here (sqlmock has nothing
+// primed), which is a downstream failure and therefore proof the gate was
+// cleared.
+//
+// 405 cannot occur today: gin.New() leaves HandleMethodNotAllowed at its false
+// default, so a verb mismatch surfaces as 404. It is rejected anyway so that
+// flipping that flag later cannot silently turn these into vacuous passes.
 func requireGatePassed(t *testing.T, w *httptest.ResponseRecorder, label string) {
 	t.Helper()
 	switch w.Code {
 	case http.StatusForbidden, http.StatusUnauthorized:
 		t.Fatalf("%s: marketAdmin must pass the admin gate, got %d body=%s", label, w.Code, w.Body.String())
-	case http.StatusNotFound:
-		t.Fatalf("%s: route is not registered, so this case proves nothing", label)
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		t.Fatalf("%s: route is not registered for this method+path, so this case proves nothing (got %d)", label, w.Code)
 	}
 }
 

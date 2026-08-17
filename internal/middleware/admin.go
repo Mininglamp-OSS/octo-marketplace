@@ -24,8 +24,10 @@ const RoleSuperAdmin = "superAdmin"
 // octo-server's pkg/auth.ManagerRoleMarketAdmin, exactly like RoleSuperAdmin
 // above. Grep both repos before changing either string.
 //
-// It is currently admitted on every /api/v1/admin/* group; see Handler's
-// alsoAllow parameter for how that is expressed per group.
+// It is currently admitted on every /api/v1/admin/* group, and on the legacy
+// /api/v1/skill/admin/categories alias, which sits outside that prefix but
+// mounts the same handlers — nine gates in total. See Handler's alsoAllow
+// parameter for how that is expressed per group.
 const RoleMarketAdmin = "marketAdmin"
 
 // AdminAuthenticator guards the /api/v1/admin/* namespace consumed by
