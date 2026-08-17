@@ -965,11 +965,14 @@ var _ = fmt.Sprint
 // ─── marketAdmin scoping, against the real router ───────────────────────────
 //
 // internal/middleware/admin_test.go proves roleAdmitted itself, but it mounts
-// routes the test registers by hand. The risk this change actually introduces
-// is a *registration* mistake — a future catalog group that forgets
-// RoleMarketAdmin, or an Expert Market group that gains it — and a synthetic
-// engine cannot catch either. These drive router.PublicWithDBAndAdminAuth, so
-// the assertions are about the wiring that ships.
+// routes the test registers by hand. The risk that survives it is a
+// *registration* mistake, and a synthetic engine cannot catch either direction:
+// a future admin group mounted with no gate at all (an open surface), or one
+// that forgets RoleMarketAdmin and silently 403s the curators who are supposed
+// to reach it. Admitting marketAdmin on the Expert Market groups is no longer
+// on that list — it is the intent as of this change. These drive
+// router.PublicWithDBAndAdminAuth, so the assertions are about the wiring that
+// ships.
 
 // requireGatePassed asserts that a request got past the admin role gate, without
 // asserting a success code — reaching 2xx on these paths would need sqlmock
