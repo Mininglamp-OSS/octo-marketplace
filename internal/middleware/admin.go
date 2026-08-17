@@ -4,8 +4,10 @@ import (
 	"net/http"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/auth"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // RoleSuperAdmin is the identity.Role value octo-server encodes for global
@@ -16,11 +18,25 @@ import (
 // constant is updated to match. Grep both repos before changing.
 const RoleSuperAdmin = "superAdmin"
 
+// RoleMarketAdmin is the octo-server fixed role for staff who curate the
+// platform MCP / Skill catalogs and hold no other administrative power. Coupled
+// by convention — not by import — to octo-server's
+// pkg/auth.ManagerRoleMarketAdmin, exactly like RoleSuperAdmin above. Grep both
+// repos before changing either string.
+//
+// It is admitted only on the catalog groups; see Handler's alsoAllow parameter.
+const RoleMarketAdmin = "marketAdmin"
+
 // AdminAuthenticator guards the /api/v1/admin/* namespace consumed by
 // octo-admin. It resolves the caller's Octo session token the same way as the
-// public Authenticator (via resolveUserIdentity) and additionally requires
-// identity.Role == "superAdmin", mirroring octo-server's /v1/manager/*
-// CheckLoginRoleIsSuperAdmin gate.
+// public Authenticator (via resolveUserIdentity) and then applies a per-group
+// role gate.
+//
+// SuperAdmin is admitted on every group, mirroring octo-server's /v1/manager/*
+// CheckLoginRoleIsSuperAdmin gate. Individual groups may additionally admit a
+// narrower octo-server fixed role by passing it to Handler — today only the
+// platform catalog groups do, admitting RoleMarketAdmin. Groups registered
+// without one (the Expert Market groups) stay SuperAdmin-only.
 //
 // AUTH_ENABLED=false skips the resolve+role check entirely and stamps the
 // configured dev identity, matching the dev bypass on the public
@@ -63,7 +79,14 @@ func NewAdminAuthenticator(authEnabled bool, resolver auth.Resolver, devIdentity
 }
 
 // Handler guards admin marketplace routes in the Gin router.
-func (a *AdminAuthenticator) Handler() gin.HandlerFunc {
+//
+// SuperAdmin is admitted everywhere. alsoAllow widens one route group to
+// additional fixed octo-server roles: the platform catalog groups (MCP, Skill,
+// skill categories, skill uploads) pass RoleMarketAdmin, while the Expert Market
+// groups deliberately pass nothing and stay SuperAdmin-only. Widening is
+// therefore opt-in per group — a new admin group added without an explicit
+// alsoAllow inherits the strictest gate.
+func (a *AdminAuthenticator) Handler(alsoAllow ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !a.enabled {
 			setAuthContext(c, a.devIdentity, "")
@@ -80,11 +103,41 @@ func (a *AdminAuthenticator) Handler() gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		if identity.Role != RoleSuperAdmin {
-			abortError(c, http.StatusForbidden, "FORBIDDEN", "SuperAdmin role is required.")
+		if !roleAdmitted(identity.Role, alsoAllow) {
+			// One generic message for every rejected role: which role would have
+			// been sufficient is not something an unauthorized caller should learn.
+			//
+			// That opacity is deliberate for the client and unhelpful for the
+			// operator, so the discriminating facts go to the log instead. With
+			// more than one admissible role and only some groups widened, "a
+			// curator got a 403" is otherwise indistinguishable between a missing
+			// role, a mis-cased one, and a group that was never widened.
+			logging.Warn("admin_role_rejected", append(logging.RequestFields(c),
+				zap.String("operation", "admin.authorize"),
+				zap.String("route", c.FullPath()),
+				zap.String("uid", identity.UID),
+				zap.String("role", identity.Role),
+				zap.Strings("also_allow", alsoAllow),
+			)...)
+			abortError(c, http.StatusForbidden, "FORBIDDEN", "Insufficient role for this admin resource.")
 			return
 		}
 		setAuthContext(c, identity, "")
 		c.Next()
 	}
+}
+
+// roleAdmitted reports whether role may use a group guarded with alsoAllow.
+// An empty role (a plain user, or an octo-server that returned no role) matches
+// nothing, since neither RoleSuperAdmin nor any allowed entry is empty.
+func roleAdmitted(role string, alsoAllow []string) bool {
+	if role == RoleSuperAdmin {
+		return true
+	}
+	for _, allowed := range alsoAllow {
+		if allowed != "" && role == allowed {
+			return true
+		}
+	}
+	return false
 }

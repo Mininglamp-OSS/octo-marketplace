@@ -961,3 +961,123 @@ func TestExpertAdminMountMissingTokenUnauthorized(t *testing.T) {
 
 // Unused but needed by compiler if tests reference it
 var _ = fmt.Sprint
+
+// ─── marketAdmin scoping, against the real router ───────────────────────────
+//
+// internal/middleware/admin_test.go proves roleAdmitted itself, but it mounts
+// routes the test registers by hand. The risk this change actually introduces
+// is a *registration* mistake — a future catalog group that forgets
+// RoleMarketAdmin, or an Expert Market group that gains it — and a synthetic
+// engine cannot catch either. These drive router.PublicWithDBAndAdminAuth, so
+// the assertions are about the wiring that ships.
+
+type stubMarketAdminResolver struct{}
+
+func (stubMarketAdminResolver) Resolve(_ context.Context, token string) (model.Identity, error) {
+	if token == "" {
+		return model.Identity{}, nil
+	}
+	return model.Identity{
+		UID:             "catalog-curator",
+		Name:            "Curator",
+		Role:            marketmiddleware.RoleMarketAdmin,
+		ContextIncluded: true,
+	}, nil
+}
+
+// TestExpertAdminMountRejectsMarketAdmin is the containment claim: the Expert
+// Market groups must stay SuperAdmin-only. 403 short-circuits before any query,
+// so no sqlmock expectation is needed.
+func TestExpertAdminMountRejectsMarketAdmin(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/admin/experts",
+		"/api/v1/admin/squads",
+		"/api/v1/admin/expert_categories",
+		"/api/v1/admin/expert_tags",
+	} {
+		t.Run(path, func(t *testing.T) {
+			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
+			w := doRequestWithHeaders(engine, "GET", path, nil,
+				map[string]string{"Token": "market-admin-session"})
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("%s: status=%d want=%d body=%s", path, w.Code, http.StatusForbidden, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestExpertAdminMountRejectsMarketAdminOnWrites covers the mutating verbs too,
+// so a widened gate cannot slip in on POST while GET stays correct.
+func TestExpertAdminMountRejectsMarketAdminOnWrites(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: "POST", path: "/api/v1/admin/experts"},
+		{method: "POST", path: "/api/v1/admin/squads"},
+		{method: "POST", path: "/api/v1/admin/expert_categories"},
+		{method: "POST", path: "/api/v1/admin/expert_skill_uploads"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
+			w := doRequestWithHeaders(engine, tc.method, tc.path, nil,
+				map[string]string{"Token": "market-admin-session"})
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("%s %s: status=%d want=%d body=%s",
+					tc.method, tc.path, w.Code, http.StatusForbidden, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestCatalogAdminMountAdmitsMarketAdmin is the other half: every catalog group
+// must let the role through the gate, so that dropping RoleMarketAdmin from any
+// one registration fails CI rather than silently breaking curators.
+//
+// The gate is what is under test, not the handler, so the assertion is "neither
+// refused nor missing" — a success code would depend on sqlmock expectations
+// that are beside the point. 404 has to be excluded explicitly: without it a
+// route that was never registered would satisfy "not 403" and the case would
+// pass vacuously.
+//
+// /api/v1/admin/mcps and /admin/mcp_icon_uploads are absent here on purpose —
+// PublicWithDBAndAdminAuth wires a nil AdminMCP handler, so registerAdminMCP
+// returns early and those routes do not exist in this harness. They are covered
+// against the real router in internal/api/router (TestAdminMcpsAdmitsMarketAdminInProd).
+func TestCatalogAdminMountAdmitsMarketAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: "GET", path: "/api/v1/admin/skill_categories"},
+		{method: "GET", path: "/api/v1/skill/admin/categories"},
+		{method: "GET", path: "/api/v1/admin/skills"},
+		{method: "POST", path: "/api/v1/admin/skill_uploads"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			engine, _ := expertAdminEngine(t, stubMarketAdminResolver{})
+			w := doRequestWithHeaders(engine, tc.method, tc.path, nil,
+				map[string]string{"Token": "market-admin-session"})
+			if w.Code == http.StatusForbidden {
+				t.Fatalf("%s %s: marketAdmin must pass the catalog gate, got 403 body=%s",
+					tc.method, tc.path, w.Body.String())
+			}
+			if w.Code == http.StatusNotFound {
+				t.Fatalf("%s %s: route is not registered, so this case proves nothing",
+					tc.method, tc.path)
+			}
+		})
+	}
+}
+
+// TestCatalogAdminMountStillRejectsPlainMember guards the direction that
+// matters most if alsoAllow were ever mis-wired: widening must not admit
+// everyone.
+func TestCatalogAdminMountStillRejectsPlainMember(t *testing.T) {
+	engine, _ := expertAdminEngine(t, stubMemberResolver{})
+	w := doRequestWithHeaders(engine, "GET", "/api/v1/admin/skill_categories", nil,
+		map[string]string{"Token": "member-session"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusForbidden, w.Body.String())
+	}
+}

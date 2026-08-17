@@ -509,3 +509,42 @@ func TestAdminAcceptsSuperAdminInProd(t *testing.T) {
 		t.Fatal("superAdmin token must reach the handler")
 	}
 }
+
+// marketAdminResolver returns an identity carrying the catalog-curation role.
+func marketAdminResolver() auth.Resolver {
+	return stubResolver{identity: model.Identity{
+		UID:             "catalog-curator",
+		Name:            "Curator",
+		Role:            marketmiddleware.RoleMarketAdmin,
+		ContextIncluded: true,
+	}}
+}
+
+// TestAdminMcpsAdmitsMarketAdminInProd pins the widening on the MCP admin group
+// against the real router. The integration-package tests cover the skill and
+// category groups, but /api/v1/admin/mcps is only registered when a non-nil
+// AdminMCP handler is wired, which the sqlmock harness there does not do — so
+// without this test, dropping RoleMarketAdmin from router.go:243 ships green.
+//
+// Asserting svc.listed rather than a status code proves the request reached the
+// handler, so the test cannot pass on an unregistered route.
+func TestAdminMcpsAdmitsMarketAdminInProd(t *testing.T) {
+	prodAdminAuth := marketmiddleware.NewAdminAuthenticator(true, marketAdminResolver(),
+		model.Identity{})
+	svc := &reachedAdminService{}
+	engine := Public(stubPinger{}, testAuthenticator(), prodAdminAuth, testStorageConfig(),
+		testHandler(), handler.NewAdminMCP(svc), testParseConfig(), nil)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/mcps", nil)
+	req.Header.Set("Token", "market-admin-session")
+	engine.ServeHTTP(recorder, req)
+
+	if recorder.Code == http.StatusForbidden {
+		t.Fatalf("marketAdmin must pass the MCP admin gate, got 403 body=%s", recorder.Body.String())
+	}
+	if !svc.listed {
+		t.Fatalf("marketAdmin request did not reach the admin MCP handler (status=%d body=%s)",
+			recorder.Code, recorder.Body.String())
+	}
+}

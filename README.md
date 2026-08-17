@@ -114,7 +114,7 @@ Repository layout:
 | `internal/service/` | Catalog rules, visibility, parsing, probing, and secret handling |
 | `internal/repository/` | MySQL persistence and transaction boundaries |
 | `internal/storage/` | Local and S3-compatible object-storage implementations |
-| `internal/middleware/` | User, User Bot, Space, and SuperAdmin role authentication |
+| `internal/middleware/` | User, User Bot, Space, and admin role authentication |
 | `migrations/sql/` | Embedded, ordered database migrations |
 | `docs/openapi/` | Generated OpenAPI 3.1 contract |
 | `docs/api/` | Additional protocol and contract documentation |
@@ -137,8 +137,11 @@ Local development must disable authentication explicitly. Never deploy with
 `AUTH_ENABLED=false`.
 
 Administrative routes under `/api/v1/admin/*` reuse the caller's Octo session
-token and require the resolved identity to carry `role == "superAdmin"`,
-mirroring `octo-server`'s `/v1/manager/*` gate.
+token and gate on the resolved identity's role. `superAdmin` is admitted on every
+admin group, mirroring `octo-server`'s `/v1/manager/*` gate. The platform catalog
+groups — MCP, Skill, skill categories and skill uploads — additionally admit
+`marketAdmin`, an `octo-server` role that carries no other administrative power.
+The Expert Market groups remain `superAdmin`-only.
 
 See [CONFIGURATION.md](CONFIGURATION.md) for all settings, secure defaults, and
 storage examples.

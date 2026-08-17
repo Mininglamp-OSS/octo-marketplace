@@ -90,7 +90,7 @@ func (h *Handler) SetDevBotMode(enabled bool) {
 // These reuse the same handlers since the admin auth middleware injects identity
 // in the same way. Admin uploads are scoped to the global Skill space.
 func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthenticator) {
-	admin := r.Group("/api/v1/admin", adminAuth.Handler())
+	admin := r.Group("/api/v1/admin", adminAuth.Handler(middleware.RoleMarketAdmin))
 	admin.POST("/skill_uploads", h.InitUpload)
 	admin.POST("/skill_uploads/:skill_upload_id/parse", h.TriggerParse)
 	admin.GET("/skill_parse_tasks/:skill_parse_task_id", h.PollParse)

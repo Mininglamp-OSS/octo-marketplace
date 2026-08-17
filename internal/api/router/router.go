@@ -240,7 +240,7 @@ func registerAdminMCP(r *gin.Engine, adminAuth *marketmiddleware.AdminAuthentica
 	if admin == nil {
 		return
 	}
-	rg := r.Group("/api/v1/admin/mcps", adminAuth.Handler())
+	rg := r.Group("/api/v1/admin/mcps", adminAuth.Handler(marketmiddleware.RoleMarketAdmin))
 	rg.POST("", admin.Create)
 	rg.POST("/_probe", admin.Probe)
 	rg.POST("/probe", deprecatedRoute("/api/v1/admin/mcps/_probe"), admin.Probe)
@@ -249,7 +249,7 @@ func registerAdminMCP(r *gin.Engine, adminAuth *marketmiddleware.AdminAuthentica
 	rg.PATCH("/:mcp_id", admin.Patch)
 	rg.DELETE("/:mcp_id", admin.Delete)
 	if mcpIcon != nil {
-		adminRoot := r.Group("/api/v1/admin", adminAuth.Handler())
+		adminRoot := r.Group("/api/v1/admin", adminAuth.Handler(marketmiddleware.RoleMarketAdmin))
 		adminRoot.POST("/mcp_icon_uploads", mcpIcon.Init)
 		rg.POST("/upload/icon", deprecatedRoute("/api/v1/admin/mcp_icon_uploads"), mcpIcon.Init)
 	}
