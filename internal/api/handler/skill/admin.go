@@ -13,7 +13,7 @@ import (
 
 // RegisterAdmin registers admin skill routes on the given engine.
 func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthenticator) {
-	admin := r.Group("/api/v1/admin/skills", adminAuth.Handler())
+	admin := r.Group("/api/v1/admin/skills", adminAuth.Handler(middleware.RoleMarketAdmin))
 	admin.GET("", h.AdminList)
 	admin.GET("/:skill_id", h.AdminGet)
 	admin.POST("", h.AdminCreate)

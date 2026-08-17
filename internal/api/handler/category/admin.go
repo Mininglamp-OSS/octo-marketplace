@@ -13,13 +13,13 @@ import (
 
 func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthenticator, idGen func() string) {
 	h.idGen = idGen
-	admin := r.Group("/api/v1/admin/skill_categories", adminAuth.Handler())
+	admin := r.Group("/api/v1/admin/skill_categories", adminAuth.Handler(middleware.RoleMarketAdmin))
 	admin.GET("", h.AdminList)
 	admin.POST("", h.AdminCreate)
 	admin.PATCH("/:skill_category_id", h.AdminUpdate)
 	admin.DELETE("/:skill_category_id", h.AdminDelete)
 
-	legacy := r.Group("/api/v1/skill/admin/categories", adminAuth.Handler(), legacyCategoryEndpoint)
+	legacy := r.Group("/api/v1/skill/admin/categories", adminAuth.Handler(middleware.RoleMarketAdmin), legacyCategoryEndpoint)
 	legacy.GET("", h.AdminList)
 	legacy.POST("", h.AdminCreate)
 	legacy.PUT("/:skill_category_id", h.AdminUpdate)

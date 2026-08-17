@@ -16,6 +16,15 @@ import (
 // constant is updated to match. Grep both repos before changing.
 const RoleSuperAdmin = "superAdmin"
 
+// RoleMarketAdmin is the octo-server fixed role for staff who curate the
+// platform MCP / Skill catalogs and hold no other administrative power. Coupled
+// by convention — not by import — to octo-server's
+// pkg/auth.ManagerRoleMarketAdmin, exactly like RoleSuperAdmin above. Grep both
+// repos before changing either string.
+//
+// It is admitted only on the catalog groups; see Handler's alsoAllow parameter.
+const RoleMarketAdmin = "marketAdmin"
+
 // AdminAuthenticator guards the /api/v1/admin/* namespace consumed by
 // octo-admin. It resolves the caller's Octo session token the same way as the
 // public Authenticator (via resolveUserIdentity) and additionally requires
@@ -63,7 +72,14 @@ func NewAdminAuthenticator(authEnabled bool, resolver auth.Resolver, devIdentity
 }
 
 // Handler guards admin marketplace routes in the Gin router.
-func (a *AdminAuthenticator) Handler() gin.HandlerFunc {
+//
+// SuperAdmin is admitted everywhere. alsoAllow widens one route group to
+// additional fixed octo-server roles: the platform catalog groups (MCP, Skill,
+// skill categories, skill uploads) pass RoleMarketAdmin, while the Expert Market
+// groups deliberately pass nothing and stay SuperAdmin-only. Widening is
+// therefore opt-in per group — a new admin group added without an explicit
+// alsoAllow inherits the strictest gate.
+func (a *AdminAuthenticator) Handler(alsoAllow ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !a.enabled {
 			setAuthContext(c, a.devIdentity, "")
@@ -80,11 +96,28 @@ func (a *AdminAuthenticator) Handler() gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		if identity.Role != RoleSuperAdmin {
-			abortError(c, http.StatusForbidden, "FORBIDDEN", "SuperAdmin role is required.")
+		if !roleAdmitted(identity.Role, alsoAllow) {
+			// One generic message for every rejected role: which role would have
+			// been sufficient is not something an unauthorized caller should learn.
+			abortError(c, http.StatusForbidden, "FORBIDDEN", "Insufficient role for this admin resource.")
 			return
 		}
 		setAuthContext(c, identity, "")
 		c.Next()
 	}
+}
+
+// roleAdmitted reports whether role may use a group guarded with alsoAllow.
+// An empty role (a plain user, or an octo-server that returned no role) matches
+// nothing, since neither RoleSuperAdmin nor any allowed entry is empty.
+func roleAdmitted(role string, alsoAllow []string) bool {
+	if role == RoleSuperAdmin {
+		return true
+	}
+	for _, allowed := range alsoAllow {
+		if allowed != "" && role == allowed {
+			return true
+		}
+	}
+	return false
 }

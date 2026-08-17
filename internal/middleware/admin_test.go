@@ -177,3 +177,77 @@ func containsErrorCode(body []byte, code string) bool {
 	}
 	return envelope.Error.Code == code
 }
+
+// newAdminEngineAllowing mounts two groups the way the real router does: a
+// catalog group widened to marketAdmin, and an Expert Market group left at the
+// default SuperAdmin-only gate.
+func newAdminEngineAllowing(a *AdminAuthenticator) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/admin/skills", a.Handler(RoleMarketAdmin), adminPingHandler())
+	r.GET("/api/v1/admin/experts", a.Handler(), adminPingHandler())
+	return r
+}
+
+func adminGet(t *testing.T, engine *gin.Engine, path string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Token", "session")
+	rr := httptest.NewRecorder()
+	engine.ServeHTTP(rr, req)
+	return rr.Code
+}
+
+// TestAdminAuth_MarketAdminScopedToCatalog is the whole point of the alsoAllow
+// parameter: marketAdmin curates the platform catalogs and must NOT reach the
+// Expert Market, which stays SuperAdmin-only.
+func TestAdminAuth_MarketAdminScopedToCatalog(t *testing.T) {
+	tests := []struct {
+		name        string
+		role        string
+		wantCatalog int
+		wantExpert  int
+	}{
+		{name: "super admin reaches everything", role: RoleSuperAdmin, wantCatalog: http.StatusOK, wantExpert: http.StatusOK},
+		{name: "market admin is catalog only", role: RoleMarketAdmin, wantCatalog: http.StatusOK, wantExpert: http.StatusForbidden},
+		{name: "plain user reaches nothing", role: "", wantCatalog: http.StatusForbidden, wantExpert: http.StatusForbidden},
+		{name: "unknown role reaches nothing", role: "dashboardReader", wantCatalog: http.StatusForbidden, wantExpert: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewAdminAuthenticator(true, stubResolver{identity: model.Identity{
+				UID: "u1", Name: "Alice", Role: tt.role, ContextIncluded: true,
+			}}, model.Identity{})
+			engine := newAdminEngineAllowing(a)
+			if got := adminGet(t, engine, "/api/v1/admin/skills"); got != tt.wantCatalog {
+				t.Fatalf("catalog group: got %d, want %d", got, tt.wantCatalog)
+			}
+			if got := adminGet(t, engine, "/api/v1/admin/experts"); got != tt.wantExpert {
+				t.Fatalf("expert group: got %d, want %d", got, tt.wantExpert)
+			}
+		})
+	}
+}
+
+// TestRoleAdmitted covers the empty-role edge directly: an octo-server that
+// returned no role must never be admitted, including on a widened group.
+func TestRoleAdmitted(t *testing.T) {
+	cases := []struct {
+		role      string
+		alsoAllow []string
+		want      bool
+	}{
+		{role: RoleSuperAdmin, want: true},
+		{role: RoleSuperAdmin, alsoAllow: []string{RoleMarketAdmin}, want: true},
+		{role: RoleMarketAdmin, alsoAllow: []string{RoleMarketAdmin}, want: true},
+		{role: RoleMarketAdmin, want: false},
+		{role: "", want: false},
+		{role: "", alsoAllow: []string{RoleMarketAdmin}, want: false},
+		{role: "", alsoAllow: []string{""}, want: false},
+	}
+	for _, tc := range cases {
+		if got := roleAdmitted(tc.role, tc.alsoAllow); got != tc.want {
+			t.Fatalf("roleAdmitted(%q, %v) = %v, want %v", tc.role, tc.alsoAllow, got, tc.want)
+		}
+	}
+}
