@@ -18,13 +18,14 @@ import (
 // constant is updated to match. Grep both repos before changing.
 const RoleSuperAdmin = "superAdmin"
 
-// RoleMarketAdmin is the octo-server fixed role for staff who curate the
-// platform MCP / Skill catalogs and hold no other administrative power. Coupled
-// by convention — not by import — to octo-server's
-// pkg/auth.ManagerRoleMarketAdmin, exactly like RoleSuperAdmin above. Grep both
-// repos before changing either string.
+// RoleMarketAdmin is the octo-server fixed role for staff who run the platform
+// market — the MCP catalog, the Skill catalog and the Expert Market — and hold
+// no other administrative power. Coupled by convention — not by import — to
+// octo-server's pkg/auth.ManagerRoleMarketAdmin, exactly like RoleSuperAdmin
+// above. Grep both repos before changing either string.
 //
-// It is admitted only on the catalog groups; see Handler's alsoAllow parameter.
+// It is currently admitted on every /api/v1/admin/* group; see Handler's
+// alsoAllow parameter for how that is expressed per group.
 const RoleMarketAdmin = "marketAdmin"
 
 // AdminAuthenticator guards the /api/v1/admin/* namespace consumed by
@@ -34,9 +35,11 @@ const RoleMarketAdmin = "marketAdmin"
 //
 // SuperAdmin is admitted on every group, mirroring octo-server's /v1/manager/*
 // CheckLoginRoleIsSuperAdmin gate. Individual groups may additionally admit a
-// narrower octo-server fixed role by passing it to Handler — today only the
-// platform catalog groups do, admitting RoleMarketAdmin. Groups registered
-// without one (the Expert Market groups) stay SuperAdmin-only.
+// narrower octo-server fixed role by passing it to Handler. Today every admin
+// group passes RoleMarketAdmin, so no group is left on the SuperAdmin-only
+// default — but the default is still what a group registered without an
+// explicit role inherits, which is the property that keeps a new group strict
+// until someone decides otherwise.
 //
 // AUTH_ENABLED=false skips the resolve+role check entirely and stamps the
 // configured dev identity, matching the dev bypass on the public
@@ -81,11 +84,12 @@ func NewAdminAuthenticator(authEnabled bool, resolver auth.Resolver, devIdentity
 // Handler guards admin marketplace routes in the Gin router.
 //
 // SuperAdmin is admitted everywhere. alsoAllow widens one route group to
-// additional fixed octo-server roles: the platform catalog groups (MCP, Skill,
-// skill categories, skill uploads) pass RoleMarketAdmin, while the Expert Market
-// groups deliberately pass nothing and stay SuperAdmin-only. Widening is
-// therefore opt-in per group — a new admin group added without an explicit
-// alsoAllow inherits the strictest gate.
+// additional fixed octo-server roles. Every admin group currently passes
+// RoleMarketAdmin — the MCP catalog, the Skill catalog and the Expert Market
+// alike — so there is no SuperAdmin-only admin surface left in this service.
+// Widening stays opt-in per group: a new admin group added without an explicit
+// alsoAllow inherits the strictest gate, which is what keeps the next role from
+// spreading by default.
 func (a *AdminAuthenticator) Handler(alsoAllow ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !a.enabled {

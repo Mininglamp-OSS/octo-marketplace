@@ -179,11 +179,13 @@ func containsErrorCode(body []byte, code string) bool {
 }
 
 // newAdminEngineAllowing mounts one widened group and one left at the default
-// gate. Both /api/v1/admin/* groups in production currently admit marketAdmin,
-// so this pair is synthetic on purpose: it exercises the alsoAllow mechanism
-// itself, which must keep working for the next role that is admitted somewhere
-// but not everywhere. Which production group carries which gate is pinned
-// separately against the real router in internal/api/integration.
+// gate. All eight production admin groups currently admit marketAdmin, so this
+// pair is synthetic on purpose: it exercises the alsoAllow mechanism itself,
+// which must keep working for the next role that is admitted somewhere but not
+// everywhere. Which production group carries which gate is pinned against the
+// real router in internal/api/integration (skill, category and expert groups)
+// and internal/api/router (the MCP groups, which the integration harness does
+// not mount).
 func newAdminEngineAllowing(a *AdminAuthenticator) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

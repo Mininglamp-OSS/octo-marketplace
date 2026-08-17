@@ -1,4 +1,4 @@
-// This file exposes the administrator (SuperAdmin) HTTP surface for the Expert
+// This file exposes the administrator (superAdmin or marketAdmin) HTTP surface for the Expert
 // Marketplace, mounted under /api/v1/admin and gated by AdminAuthenticator. It
 // mirrors the skill/category admin pattern (a RegisterAdmin method on the same
 // Handler) rather than the two-struct MCP pattern, because the expert handler

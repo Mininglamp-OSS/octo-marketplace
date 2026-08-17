@@ -775,10 +775,10 @@ rewrite handles both uniformly).
 | --- | --- | --- |
 | `Token` | Octo session token | Same session token the user's browser holds for the public surface (`Authorization: Bearer <token>` is also accepted). Marketplace verifies it against octo-server's `/v1/auth/verify?include=context` and requires the returned identity to carry `role == "superAdmin"` or `role == "marketAdmin"`. |
 
-`marketAdmin` is an octo-server role for staff who curate the platform catalogs
-and hold no other administrative power. It is admitted on the MCP admin routes
-documented here, and on the Skill catalog routes; the Expert Market admin routes
-remain `superAdmin`-only.
+`marketAdmin` is an octo-server role for staff who run the platform market and
+hold no administrative power outside this service. It is admitted on every
+`/api/v1/admin/*` group — the MCP admin routes documented here, the Skill catalog
+routes, and the Expert Market routes.
 
 **No `X-Space-Id` required.** Admin routes operate globally — the middleware
 resolves the caller's admin identity and stamps it into the request
@@ -875,13 +875,19 @@ Endpoint tables above cite `auth.admin_unauthorized` from the previous
 - Marketplace MUST NOT be reachable from the public internet; front it
   with nginx / an internal load balancer that only accepts traffic from
   trusted origins (admin console + `/market/*` gateway rewrite).
-- Admin access is gated by the caller's octo-server role, so cutting off
-  marketplace admin means revoking the role in octo-server. Note there is
-  more than one such role to check: `superAdmin` reaches every admin group,
-  and `marketAdmin` reaches the platform catalog groups (MCP, Skill, skill
-  categories, skill uploads). Revoking only the SuperAdmin accounts leaves
-  any `marketAdmin` account with catalog access.
-- Role revocation is not instant here: marketplace caches the resolved
-  identity — role included — per token for `AUTH_CACHE_TTL` (default 30s),
-  and octo-server caches the role for its own TTL on top of that. Revoke the
-  session as well when the change must take effect immediately.
+- Admin access is gated by the caller's octo-server role, and there is more
+  than one role to check: `superAdmin` and `marketAdmin` both reach **every**
+  admin group — MCP, Skill, skill categories, skill uploads, experts, squads
+  and the expert taxonomy. Revoking only the SuperAdmin accounts leaves any
+  `marketAdmin` account with full publishing access to the market.
+- **Revoking the role is not enough — revoke the session.** Marketplace
+  resolves callers through octo-server's `/v1/auth/verify`, which answers from
+  the role snapshotted into the session token at login, not from the live
+  `user.role` column. Clearing the role therefore never reaches this service
+  for an existing session: access survives for the remaining token lifetime
+  (octo-server's `Cache.TokenExpire`, 30 days by default). Revoking the
+  session does work.
+- Even then it is not instant: marketplace caches the resolved identity per
+  token for `AUTH_CACHE_TTL` (default 30s) and that cache has no invalidation
+  entry point, so expect up to one TTL of residual access after a session
+  revocation. Lower the TTL or restart the process if you need it sooner.
