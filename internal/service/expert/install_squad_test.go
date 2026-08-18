@@ -211,6 +211,31 @@ func TestInstallSquadWritesStrategiesAsInstructions(t *testing.T) {
 	}
 }
 
+func TestInstallSquadRetriesTransientInstructionsFailure(t *testing.T) {
+	ff := &fakeFleet{
+		agentIDs:     []string{"a0", "a1", "a2"},
+		failAgentAt:  -1,
+		failSkillAt:  -1,
+		failMemberAt: -1,
+		squadID:      "squad-x",
+		instrErrs:    []error{errors.New("temporary failure"), nil},
+	}
+	svc, caller, id := installSquadFixtureStrategies(t, ff, threeMembers(), []string{"规则一"})
+
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallSquad: %v", err)
+	}
+	if ff.instrCalls != 2 {
+		t.Fatalf("instructions calls = %d, want 2", ff.instrCalls)
+	}
+	if len(ff.deletedSquads) != 0 || len(ff.deletedAgents) != 0 {
+		t.Fatalf("transient failure must not roll back: squads=%v agents=%v", ff.deletedSquads, ff.deletedAgents)
+	}
+	if len(ff.addedMembers) != 2 {
+		t.Fatalf("members added = %d, want 2", len(ff.addedMembers))
+	}
+}
+
 func TestInstallSquadSkipsInstructionsWithoutStrategies(t *testing.T) {
 	ff := &fakeFleet{
 		agentIDs:     []string{"a0", "a1", "a2"},
@@ -230,15 +255,19 @@ func TestInstallSquadSkipsInstructionsWithoutStrategies(t *testing.T) {
 }
 
 func TestInstallSquadRollsBackOnInstructionsFailure(t *testing.T) {
+	members := threeMembers()
+	members[0].Skills = []model.SkillRef{{Name: "Planner Skill", ObjectKey: "members/0/planner"}}
+	members[1].Skills = []model.SkillRef{{Name: "Lead Skill", ObjectKey: "members/1/lead"}}
 	ff := &fakeFleet{
 		agentIDs:     []string{"a0", "a1", "a2"},
+		skillIDs:     []string{"s0", "s1"},
 		failAgentAt:  -1,
 		failSkillAt:  -1,
 		failMemberAt: -1,
 		squadID:      "squad-x",
 		instrErr:     errors.New("instructions boom"),
 	}
-	svc, caller, id := installSquadFixtureStrategies(t, ff, threeMembers(), []string{"规则一"})
+	svc, caller, id := installSquadFixtureStrategies(t, ff, members, []string{"规则一"})
 
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
 		t.Fatal("expected error on instructions-write failure")
@@ -248,6 +277,12 @@ func TestInstallSquadRollsBackOnInstructionsFailure(t *testing.T) {
 	}
 	if len(ff.deletedAgents) != 3 {
 		t.Fatalf("deleted agents = %#v, want all 3", ff.deletedAgents)
+	}
+	if ff.instrCalls != squadInstructionUpdateAttempts {
+		t.Fatalf("instructions calls = %d, want %d", ff.instrCalls, squadInstructionUpdateAttempts)
+	}
+	if len(ff.deletedSkills) != 2 || ff.deletedSkills[0] != "s0" || ff.deletedSkills[1] != "s1" {
+		t.Fatalf("deleted skills = %#v, want [s0 s1]", ff.deletedSkills)
 	}
 	if len(ff.addedMembers) != 0 {
 		t.Fatalf("no members should be attached: %#v", ff.addedMembers)

@@ -43,6 +43,7 @@ type fakeFleet struct {
 	instrValue    string
 	instrCalls    int
 	instrErr      error
+	instrErrs     []error
 	addedMembers  []fleet.SquadMemberSpec
 	memberErr     error
 	failMemberAt  int // index (over non-leader members) AddSquadMember fails at (-1 = never)
@@ -137,6 +138,11 @@ func (f *fakeFleet) UpdateSquadInstructions(_ context.Context, _, _, _, squadID,
 	f.instrCalls++
 	f.instrSquadID = squadID
 	f.instrValue = instructions
+	if len(f.instrErrs) > 0 {
+		err := f.instrErrs[0]
+		f.instrErrs = f.instrErrs[1:]
+		return err
+	}
 	return f.instrErr
 }
 

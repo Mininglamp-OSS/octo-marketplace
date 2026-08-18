@@ -5,7 +5,7 @@ description: Prevent squad installation rollback when members package Skills wit
 tags: ["expert", "squad", "skills", "installation"]
 timestamp: 2026-08-18T15:34:00+08:00
 slug: skip-duplicate-squad-skills
-upstream: Mininglamp-OSS/octo-marketplace#62
+upstream: Mininglamp-OSS/octo-marketplace#62, Mininglamp-OSS/octo-marketplace#64
 source: self
 ---
 
@@ -55,8 +55,10 @@ back. See [issue #62](https://github.com/Mininglamp-OSS/octo-marketplace/issues/
 - Non-blank strategies are trimmed and rendered as ordered numbered lines in an
   `instructions`-only Fleet squad update; no strategies skip that update.
 - Duplicate-Skill filtering and instruction rendering work in the same install.
-- A Fleet create or instruction-update failure rolls back the squad when created,
-  all member agents, and created Skills.
+- A transient instruction-update failure is retried with a bounded policy before
+  destructive rollback.
+- A persistent Fleet create or instruction-update failure rolls back the squad
+  when created, all member agents, and created Skills.
 - Existing rollback behavior remains intact.
 - `go test ./internal/service/expert` passes.
 - `go test ./...` passes.

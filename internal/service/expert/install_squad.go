@@ -104,7 +104,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	// exists to prevent. No strategies → leave fleet's instructions empty
 	// instead of injecting a client-side default.
 	if instructions := squadInstructions(m); instructions != "" {
-		if err := s.fleet.UpdateSquadInstructions(ctx, in.Token, in.SpaceID, in.WorkspaceID, fleetSquadID, instructions); err != nil {
+		if err := s.updateSquadInstructions(ctx, in, fleetSquadID, instructions); err != nil {
 			s.rollbackSquad(ctx, in, fleetSquadID, created)
 			return InstallSquadResult{}, err
 		}
@@ -155,6 +155,24 @@ func squadInstructions(m *model.Squad) string {
 		b.WriteString(rule)
 	}
 	return b.String()
+}
+
+// updateSquadInstructions retries the small, idempotent partial update before
+// allowing its failure to trigger destructive rollback. There is intentionally
+// no sleep: Fleet's HTTP request already consumes bounded time and immediate
+// retries cover transient connection resets/5xx without extending installs.
+func (s *Service) updateSquadInstructions(ctx context.Context, in InstallInput, squadID, instructions string) error {
+	var err error
+	for attempt := 0; attempt < squadInstructionUpdateAttempts; attempt++ {
+		err = s.fleet.UpdateSquadInstructions(ctx, in.Token, in.SpaceID, in.WorkspaceID, squadID, instructions)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return err
 }
 
 // squadLeaderIndex picks the leader member: the first member flagged IsLeader,

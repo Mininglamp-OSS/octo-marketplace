@@ -17,6 +17,12 @@ import (
 // cleanupTimeout bounds the detached rollback deletes so they can't hang.
 const cleanupTimeout = 15 * time.Second
 
+// squadInstructionUpdateAttempts gives the post-create instructions update a
+// small bounded retry window before destructive rollback. A transient failure at
+// this late stage would otherwise archive every member agent and can make a
+// clean retry collide with Fleet's archived-name uniqueness.
+const squadInstructionUpdateAttempts = 3
+
 // installTimeout bounds a whole install (expert or squad). The per-fleet-call
 // timeout on the http client bounds each hop, but nothing bounds their sum: a
 // squad of many members each with many packaged skills fans out to a large
