@@ -308,7 +308,7 @@ func (h *Handler) Create(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private, system", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: space, private", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidSourceSkill) {
@@ -316,7 +316,7 @@ func (h *Handler) Create(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrForbidden) {
-			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "system skills can only be changed by administrators", nil, "")
+			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public and system skills can only be changed by administrators", nil, "")
 			return
 		}
 		apiresponse.Internal(c, err, "skill.create")
@@ -419,11 +419,11 @@ func (h *Handler) Update(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private, system", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: space, private", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrForbidden) {
-			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "system skills can only be changed by administrators", nil, "")
+			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public and system skills can only be changed by administrators", nil, "")
 			return
 		}
 		apiresponse.Internal(c, err, "skill.update")
@@ -494,7 +494,7 @@ func (h *Handler) Delete(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrForbidden) {
-			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "system skills can only be changed by administrators", nil, "")
+			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public and system skills can only be changed by administrators", nil, "")
 			return
 		}
 		apiresponse.Internal(c, err, "skill.delete")

@@ -31,7 +31,7 @@ func (r *Repo) ListWithCount(ctx context.Context, f ListFilter) ([]CategoryWithC
 		"s.category_id = c.id",
 		"s.is_deleted = 0",
 		`(
-			s.visibility = 'public'
+			s.visibility = 'system'
 			OR (s.visibility = 'space' AND s.space_id = ?)
 			OR (s.visibility = 'private' AND s.owner_id = ? AND s.space_id = ?)
 		)`,

@@ -249,7 +249,7 @@ func TestBotPublishUnavailableUsesUpstreamErrorCode(t *testing.T) {
 	}
 }
 
-func TestBotPublishInvalidVisibilityReturnsBadRequest(t *testing.T) {
+func TestBotPublishSystemVisibilityReturnsForbidden(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +321,7 @@ func TestBotPublishInvalidVisibilityReturnsBadRequest(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "system skills can only be changed by administrators") {
+	if !strings.Contains(w.Body.String(), "public and system skills can only be changed by administrators") {
 		t.Fatalf("body = %s, want system visibility permission message", w.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

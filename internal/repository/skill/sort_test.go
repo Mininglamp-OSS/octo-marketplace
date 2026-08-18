@@ -465,7 +465,7 @@ func TestListVisibilityIncludesSystemAndPreservesExistingRules(t *testing.T) {
 	}
 	defer db.Close()
 
-	visibilitySQL := "s\\.visibility IN \\('system', 'public'\\).*s\\.visibility = 'space' AND s\\.space_id = \\?.*s\\.visibility = 'private' AND s\\.owner_id = \\? AND s\\.space_id = \\?"
+	visibilitySQL := "s\\.visibility = 'system'.*s\\.visibility = 'space' AND s\\.space_id = \\?.*s\\.visibility = 'private' AND s\\.owner_id = \\? AND s\\.space_id = \\?"
 	mock.ExpectQuery("SELECT COUNT.*"+visibilitySQL).
 		WithArgs("space-1", "user-1", "space-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))

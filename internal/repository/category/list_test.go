@@ -7,14 +7,14 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestListWithCount_PublicSkillsAreNotScopedToCurrentSpace(t *testing.T) {
+func TestListWithCount_SystemSkillsAreNotScopedToCurrentSpace(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
-	mock.ExpectQuery("(?s)LEFT JOIN skills s.*s\\.is_deleted = 0").
+	mock.ExpectQuery("(?s)LEFT JOIN skills s.*s\\.is_deleted = 0.*s\\.visibility = 'system'.*s\\.visibility = 'space'.*s\\.visibility = 'private'").
 		WithArgs("space-1", "user-1", "space-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "icon_key", "sort_order", "skill_count"}).
 			AddRow("cat-1", "Category 1", "icon", 10, 2))

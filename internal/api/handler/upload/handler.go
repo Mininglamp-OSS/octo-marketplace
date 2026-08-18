@@ -263,11 +263,11 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: space, private", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrForbidden) {
-			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "system skills can only be changed by administrators", nil, "")
+			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "public and system skills can only be changed by administrators", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidSourceSkill) {

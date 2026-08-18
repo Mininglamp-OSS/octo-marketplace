@@ -265,19 +265,17 @@ func TestGetSkillVisibilitySystemCrossSpace(t *testing.T) {
 	}
 }
 
-func TestGetSkillVisibilityLegacyPublicRemainsCrossSpaceVisible(t *testing.T) {
+func TestGetSkillVisibilityPublicIsHidden(t *testing.T) {
 	engine, mock, db := testSetup(t)
 	defer db.Close()
 
-	// Legacy public skill in another space stays cross-space visible; only the
-	// official badge moves to system (see issue #57).
 	mock.ExpectQuery("SELECT .+ FROM skills").
-		WillReturnRows(skillRow("skill-public", "Legacy Public Skill", "other-user", "Alice", "other-space", "public"))
+		WillReturnRows(skillRow("skill-public", "Public Skill", "other-user", "Alice", "other-space", "public"))
 
 	w := doRequest(engine, "GET", "/api/v1/skill/skill-public", nil)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusNotFound, w.Body.String())
 	}
 }
 

@@ -1,12 +1,14 @@
 -- +migrate Up
 
--- Administrator-created Skills use system visibility. Existing public rows
--- intentionally remain unchanged.
+-- Administrator-created Skills use system visibility.
 ALTER TABLE skills
   MODIFY COLUMN visibility ENUM('public','space','private','system') NOT NULL DEFAULT 'space';
 
 -- +migrate Down
 
--- A rollback is only safe when no system Skill rows exist.
+-- Restore the previous representation before removing the ENUM value so the
+-- rollback remains valid after administrator-published Skills have been created.
+UPDATE skills SET visibility = 'public' WHERE visibility = 'system';
+
 ALTER TABLE skills
   MODIFY COLUMN visibility ENUM('public','space','private') NOT NULL DEFAULT 'space';
