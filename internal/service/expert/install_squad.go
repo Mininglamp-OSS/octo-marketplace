@@ -64,6 +64,9 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	// failure here leaves only the *earlier* members to unwind.
 	created := make([]createdAgent, 0, len(m.Members))
 	memberAgentIDs := make([]string, len(m.Members))
+	// Fleet skill names are workspace-wide. Keep the first packaged skill with a
+	// given normalized name and skip later duplicates across squad members.
+	seenSkillNames := make(map[string]struct{})
 	for i := range m.Members {
 		agentID, skillIDs, err := s.provisionAgent(ctx, in, agentProvisionSpec{
 			Name:        m.Members[i].Name,
@@ -71,7 +74,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 			Instruction: m.Members[i].Instruction,
 			MCPConfig:   m.Members[i].MCPConfig,
 			Skills:      m.Members[i].Skills,
-		}, budget)
+		}, budget, seenSkillNames)
 		if err != nil {
 			s.rollbackSquad(ctx, in, "", created)
 			return InstallSquadResult{}, err

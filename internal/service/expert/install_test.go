@@ -31,6 +31,7 @@ type fakeFleet struct {
 	upsertedFiles []upsertedFile
 	boundAgent    string
 	boundSkills   []string
+	bindings      map[string][]string
 	deletedAgents []string
 	deletedSkills []string
 
@@ -101,6 +102,10 @@ func (f *fakeFleet) UpsertSkillFile(_ context.Context, _, _, _, skillID, path, c
 func (f *fakeFleet) SetAgentSkills(_ context.Context, _, _, _, agentID string, skillIDs []string) error {
 	f.boundAgent = agentID
 	f.boundSkills = skillIDs
+	if f.bindings == nil {
+		f.bindings = make(map[string][]string)
+	}
+	f.bindings[agentID] = append([]string(nil), skillIDs...)
 	return f.setErr
 }
 

@@ -24,6 +24,13 @@ func installSquadFixture(t *testing.T, fleetClient FleetProvisioner, members []m
 		OwnerUID:   "owner-9",
 		Members:    members,
 	}
+	for i := range members {
+		for j := range members[i].Skills {
+			if key := members[i].Skills[j].ObjectKey; key != "" {
+				obj.objects[key] = []byte("# " + members[i].Skills[j].Name)
+			}
+		}
+	}
 	svc := New(store, obj, func() string { return "gen" }).WithFleet(fleetClient)
 	caller := Caller{UID: "me", SpaceID: "space-1"}
 	return svc, caller, squadID
@@ -117,6 +124,56 @@ func TestInstallSquadHappyPath(t *testing.T) {
 	}
 	if len(ff.deletedAgents) != 0 || len(ff.deletedSquads) != 0 {
 		t.Fatalf("unexpected rollback: agents=%#v squads=%#v", ff.deletedAgents, ff.deletedSquads)
+	}
+}
+
+func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
+	members := []model.SquadMember{
+		{
+			MemberKey: "member_01",
+			Name:      "Planner",
+			IsLeader:  true,
+			Skills: []model.SkillRef{
+				{Name: "Shared Skill", ObjectKey: "members/1/shared"},
+				{Name: "Planner Only", ObjectKey: "members/1/only"},
+			},
+		},
+		{
+			MemberKey: "member_02",
+			Name:      "Coder",
+			Skills: []model.SkillRef{
+				{Name: " shared skill ", ObjectKey: "members/2/shared"},
+				{Name: "Coder Only", ObjectKey: "members/2/only"},
+			},
+		},
+	}
+	ff := &fakeFleet{
+		agentIDs:     []string{"a0", "a1"},
+		skillIDs:     []string{"shared", "planner", "coder"},
+		failAgentAt:  -1,
+		failSkillAt:  -1,
+		failMemberAt: -1,
+		squadID:      "squad-x",
+	}
+	svc, caller, id := installSquadFixture(t, ff, members)
+
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallSquad: %v", err)
+	}
+	if len(ff.createdSkills) != 3 {
+		t.Fatalf("created skills = %#v, want three unique names", ff.createdSkills)
+	}
+	wantNames := []string{"Shared Skill", "Planner Only", "Coder Only"}
+	for i, want := range wantNames {
+		if ff.createdSkills[i].Name != want {
+			t.Fatalf("createdSkills[%d].Name = %q, want %q", i, ff.createdSkills[i].Name, want)
+		}
+	}
+	if got := ff.bindings["a0"]; len(got) != 2 || got[0] != "shared" || got[1] != "planner" {
+		t.Fatalf("leader bindings = %#v, want [shared planner]", got)
+	}
+	if got := ff.bindings["a1"]; len(got) != 1 || got[0] != "coder" {
+		t.Fatalf("second member bindings = %#v, want [coder]", got)
 	}
 }
 

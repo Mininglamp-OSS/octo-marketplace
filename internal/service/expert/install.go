@@ -171,7 +171,7 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		Instruction: m.Instruction,
 		MCPConfig:   m.MCPConfig,
 		Skills:      m.Skills,
-	}, &fileBudget{remaining: maxSkillFilesPerInstall})
+	}, &fileBudget{remaining: maxSkillFilesPerInstall}, nil)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -195,7 +195,7 @@ type agentProvisionSpec struct {
 // rolls back everything IT created (skills + agent) and returns the error, so
 // the caller has nothing to unwind for this agent. Shared by InstallExpert (one
 // agent) and InstallSquad (one per member).
-func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget) (string, []string, error) {
+func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget, seenSkillNames map[string]struct{}) (string, []string, error) {
 	agentSpec := fleet.AgentSpec{
 		Name:         spec.Name,
 		Description:  spec.Summary,
@@ -213,7 +213,7 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 
 	// From here on, roll back the created agent (and any skills) on failure so a
 	// partial provision never leaves an orphaned agent behind.
-	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget)
+	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget, seenSkillNames)
 	if err != nil {
 		s.rollbackAgent(ctx, in, agentID, skillIDs)
 		return "", nil, err
@@ -234,11 +234,17 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 // returning the new skill ids. Name-only skills (no ObjectKey) carry nothing to
 // install and are skipped. On the first failure it deletes the skills it already
 // created and returns the error, so the caller only has the agent left to unwind.
-func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget) ([]string, error) {
+func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget, seenSkillNames map[string]struct{}) ([]string, error) {
 	created := make([]string, 0, len(skills))
 	for i := range skills {
 		if skills[i].ObjectKey == "" {
 			continue
+		}
+		nameKey := strings.ToLower(strings.TrimSpace(skills[i].Name))
+		if seenSkillNames != nil {
+			if _, exists := seenSkillNames[nameKey]; exists {
+				continue
+			}
 		}
 		content, err := s.readSkillContent(ctx, skills, i)
 		if err != nil {
@@ -259,6 +265,9 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 		if err := s.attachSkillFiles(ctx, in, skills[i], skillID, budget); err != nil {
 			s.deleteSkills(ctx, in, created)
 			return nil, err
+		}
+		if seenSkillNames != nil {
+			seenSkillNames[nameKey] = struct{}{}
 		}
 	}
 	return created, nil
