@@ -96,11 +96,11 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		args = append(args, f.UserID, f.SpaceID)
 	} else {
 		// Visibility filter:
-		// - public: visible regardless of the current space
+		// - system/public: visible regardless of the current space
 		// - space: visible to members of the same space
 		// - private: visible only to the owner within the same space
 		conditions = append(conditions, `(
-			s.visibility = 'public'
+			s.visibility IN ('system', 'public')
 			OR (s.visibility = 'space' AND s.space_id = ?)
 			OR (s.visibility = 'private' AND s.owner_id = ? AND s.space_id = ?)
 		)`)

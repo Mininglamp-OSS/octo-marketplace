@@ -13,7 +13,7 @@ import (
 )
 
 // TestAdminGet_RejectsNonPublic verifies that AdminGet returns ErrNotFound for
-// skills that are not visibility='public'.
+// skills that are not visibility='system'.
 func TestAdminGet_RejectsNonPublic(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -52,8 +52,8 @@ func TestAdminGet_RejectsNonPublic(t *testing.T) {
 	}
 }
 
-// TestAdminGet_AcceptsPublic verifies that AdminGet succeeds for public skills.
-func TestAdminGet_AcceptsPublic(t *testing.T) {
+// TestAdminGet_AcceptsSystem verifies that AdminGet succeeds for system skills.
+func TestAdminGet_AcceptsSystem(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +74,9 @@ func TestAdminGet_AcceptsPublic(t *testing.T) {
 		"resolved_version", "version_storage",
 		"view_count", "download_count",
 	}).AddRow(
-		"sk-2", "public-skill", "Public Skill", "", "", "v1",
-		"a public skill", "cat1", []byte(`["demo"]`),
-		"admin-uid", "Admin", "", "public", "1.0.0",
+		"sk-2", "system-skill", "System Skill", "", "", "v1",
+		"a system skill", "cat1", []byte(`["demo"]`),
+		"admin-uid", "Admin", "", "system", "1.0.0",
 		"", "skill.zip", "skills/sk-2/v1.0.0/skill.zip", int64(1024), "sha",
 		time.Now(), time.Now(),
 		"1.0.0", "",
@@ -91,8 +91,8 @@ func TestAdminGet_AcceptsPublic(t *testing.T) {
 	if item.ID != "sk-2" {
 		t.Fatalf("expected skill_id=sk-2, got %s", item.ID)
 	}
-	if item.Visibility != "public" {
-		t.Fatalf("expected visibility=public, got %s", item.Visibility)
+	if item.Visibility != "system" {
+		t.Fatalf("expected visibility=system, got %s", item.Visibility)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestAdminDeleteSoftDeletesWithoutArtifactCleanup(t *testing.T) {
 		}).AddRow(
 			"admin-skill", "octo-style", "octo-style", "", "", "v2",
 			"desc", "cat1", []byte(`[]`),
-			"owner-1", "Owner", "", "public", "2.0.0",
+			"owner-1", "Owner", "", "system", "2.0.0",
 			"", "skill.zip", "skills/admin-skill/v2/skill.zip", int64(2048), "sha2",
 			now, now,
 			"2.0.0", currentStorage,
@@ -168,7 +168,7 @@ func TestAdminReuploadNameMismatchDeletesTempObject(t *testing.T) {
 		}).AddRow(
 			"admin-skill", "octo-style", "octo-style", "", "", "v1",
 			"desc", "cat1", []byte(`[]`),
-			"owner-1", "Owner", "", "public", "1.0.0",
+			"owner-1", "Owner", "", "system", "1.0.0",
 			"", "skill.zip", "skills/admin-skill/v1.0.0/skill.zip", int64(1024), "sha",
 			now, now,
 			"1.0.0", "",
@@ -230,7 +230,7 @@ func TestAdminReuploadRejectsParseTaskForOtherSkill(t *testing.T) {
 		}).AddRow(
 			"admin-skill-a", "octo-style", "octo-style", "", "", "v1",
 			"desc", "cat1", []byte(`[]`),
-			"owner-1", "Owner", "", "public", "1.0.0",
+			"owner-1", "Owner", "", "system", "1.0.0",
 			"", "skill.zip", "skills/admin-skill-a/v1.0.0/skill.zip", int64(1024), "sha",
 			now, now,
 			"1.0.0", "",
@@ -338,7 +338,7 @@ func TestAdminReuploadRejectsParseTaskFromOtherTenant(t *testing.T) {
 		}).AddRow(
 			"admin-skill", "octo-style", "octo-style", "", "", "v1",
 			"desc", "cat1", []byte(`[]`),
-			"owner-1", "Owner", "", "public", "1.0.0",
+			"owner-1", "Owner", "", "system", "1.0.0",
 			"", "skill.zip", "skills/admin-skill/v1.0.0/skill.zip", int64(1024), "sha",
 			now, now,
 			"1.0.0", "",
@@ -371,7 +371,7 @@ func TestAdminReuploadRejectsParseTaskFromOtherTenant(t *testing.T) {
 }
 
 // TestAdminGetSkillMD_RejectsNonPublic verifies that AdminGetSkillMD returns
-// ErrNotFound for non-public skills.
+// ErrNotFound for non-system skills.
 func TestAdminGetSkillMD_RejectsNonPublic(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -410,7 +410,7 @@ func TestAdminGetSkillMD_RejectsNonPublic(t *testing.T) {
 }
 
 // TestAdminUpdate_RejectsNonPublic verifies that AdminUpdate returns ErrNotFound
-// for non-public skills.
+// for non-system skills.
 func TestAdminUpdate_RejectsNonPublic(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -449,8 +449,8 @@ func TestAdminUpdate_RejectsNonPublic(t *testing.T) {
 	}
 }
 
-// TestAdminList_OnlyReturnsPublic verifies AdminList filters by visibility=public.
-func TestAdminList_OnlyReturnsPublic(t *testing.T) {
+// TestAdminList_OnlyReturnsSystem verifies AdminList filters by visibility=system.
+func TestAdminList_OnlyReturnsSystem(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -475,9 +475,9 @@ func TestAdminList_OnlyReturnsPublic(t *testing.T) {
 		"resolved_version", "version_storage",
 		"view_count", "download_count",
 	}).AddRow(
-		"sk-pub", "public-skill", "", "", "", "",
+		"sk-pub", "system-skill", "", "", "", "",
 		"desc", "", []byte(`[]`),
-		"owner-1", "Owner", "space-1", "public", "1.0.0",
+		"owner-1", "Owner", "space-1", "system", "1.0.0",
 		"", "", "", int64(0), "",
 		time.Now(), time.Now(),
 		"1.0.0", "",
@@ -524,7 +524,7 @@ func TestAdminUpdate_InvalidTags(t *testing.T) {
 	}).AddRow(
 		"sk-up", "pub-skill", "", "", "", "",
 		"", "", []byte(`[]`),
-		"owner-1", "Owner", "space-1", "public", "1.0.0",
+		"owner-1", "Owner", "space-1", "system", "1.0.0",
 		"", "", "", int64(0), "",
 		time.Now(), time.Now(),
 		"", "",
@@ -563,7 +563,7 @@ func TestAdminUpdate_UpsertsGlobalTags(t *testing.T) {
 	}).AddRow(
 		"sk-global", "pub-skill", "", "", "", "",
 		"", "", []byte(`[]`),
-		"owner-1", "Owner", "space-1", "public", "1.0.0",
+		"owner-1", "Owner", "space-1", "system", "1.0.0",
 		"", "", "", int64(0), "",
 		time.Now(), time.Now(),
 		"", "",
@@ -588,7 +588,7 @@ func TestAdminUpdate_UpsertsGlobalTags(t *testing.T) {
 	}).AddRow(
 		"sk-global", "pub-skill", "", "", "", "",
 		"", "", tagIDJSON(1),
-		"owner-1", "Owner", "space-1", "public", "1.0.0",
+		"owner-1", "Owner", "space-1", "system", "1.0.0",
 		"", "", "", int64(0), "",
 		time.Now(), time.Now(),
 		"", "",

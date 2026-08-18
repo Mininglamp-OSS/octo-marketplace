@@ -318,11 +318,11 @@ func TestBotPublishInvalidVisibilityReturnsBadRequest(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "visibility must be one of") {
-		t.Fatalf("body = %s, want visibility validation message", w.Body.String())
+	if !strings.Contains(w.Body.String(), "system skills can only be changed by administrators") {
+		t.Fatalf("body = %s, want system visibility permission message", w.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

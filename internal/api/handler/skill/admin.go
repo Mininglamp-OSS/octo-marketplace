@@ -24,8 +24,8 @@ func (h *Handler) RegisterAdmin(r *gin.Engine, adminAuth *middleware.AdminAuthen
 }
 
 // AdminList godoc
-// @Summary List public skills (admin)
-// @Description List all visibility=public skills without Space restriction.
+// @Summary List system skills (admin)
+// @Description List all visibility=system skills without Space restriction.
 // @Tags admin_skill
 // @ID admin_skill.list
 // @Accept json
@@ -82,8 +82,8 @@ func (h *Handler) AdminList(c *gin.Context) {
 }
 
 // AdminGet godoc
-// @Summary Get public skill detail (admin)
-// @Description Return one public skill without Space restriction.
+// @Summary Get system skill detail (admin)
+// @Description Return one visibility=system skill without Space restriction.
 // @Tags admin_skill
 // @ID admin_skill.get
 // @Accept json
@@ -127,8 +127,8 @@ type AdminCreateRequest struct {
 }
 
 // AdminCreate godoc
-// @Summary Create public skill (admin)
-// @Description Create a system skill with visibility=public.
+// @Summary Create system skill (admin)
+// @Description Create a system skill with visibility=system.
 // @Tags admin_skill
 // @ID admin_skill.create
 // @Accept json
@@ -204,8 +204,8 @@ type AdminUpdateRequest struct {
 }
 
 // AdminUpdate godoc
-// @Summary Update public skill (admin)
-// @Description Update basic info of a public skill.
+// @Summary Update system skill (admin)
+// @Description Update basic info of a visibility=system skill.
 // @Tags admin_skill
 // @ID admin_skill.update
 // @Accept json
@@ -264,8 +264,8 @@ func (h *Handler) AdminUpdate(c *gin.Context) {
 }
 
 // AdminDelete godoc
-// @Summary Delete public skill (admin)
-// @Description Delete a public skill and its versions.
+// @Summary Delete system skill (admin)
+// @Description Delete a visibility=system skill and its versions.
 // @Tags admin_skill
 // @ID admin_skill.delete
 // @Accept json
@@ -298,7 +298,7 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 
 // AdminGetSkillMD godoc
 // @Summary Get SKILL.md (admin)
-// @Description Return SKILL.md for a public skill without Space restriction.
+// @Description Return SKILL.md for a visibility=system skill without Space restriction.
 // @Tags admin_skill
 // @ID admin_skill.skillmd.get
 // @Accept json
@@ -342,7 +342,7 @@ type AdminReuploadRequest struct {
 }
 
 // AdminReupload godoc
-// @Summary Reupload public skill version (admin)
+// @Summary Reupload system skill version (admin)
 // @Description Upload a new zip to update the skill version.
 // @Tags admin_skill
 // @ID admin_skill.reupload

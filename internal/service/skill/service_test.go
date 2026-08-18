@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	categoryrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/category"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
 )
@@ -22,18 +23,25 @@ func TestCanView(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "public same space is visible",
-			row:      &skillrepo.SkillRow{Visibility: "public", SpaceID: "s1", OwnerID: "u1"},
+			name:     "system same space is visible",
+			row:      &skillrepo.SkillRow{Visibility: "system", SpaceID: "s1", OwnerID: "u1"},
 			spaceID:  "s1",
 			userID:   "u2",
 			expected: true,
 		},
 		{
-			name:     "public cross-space is visible",
-			row:      &skillrepo.SkillRow{Visibility: "public", SpaceID: "s1", OwnerID: "u1"},
+			name:     "system cross-space is visible",
+			row:      &skillrepo.SkillRow{Visibility: "system", SpaceID: "s1", OwnerID: "u1"},
 			spaceID:  "s2",
 			userID:   "u2",
 			expected: true,
+		},
+		{
+			name:     "legacy public is hidden",
+			row:      &skillrepo.SkillRow{Visibility: "public", SpaceID: "s1", OwnerID: "u1"},
+			spaceID:  "s1",
+			userID:   "u1",
+			expected: false,
 		},
 		{
 			name:     "space same space",
@@ -359,8 +367,8 @@ func TestNormalizeVisibility(t *testing.T) {
 	if string(v) != "space" {
 		t.Fatalf("normalizeVisibility default = %q, want space", v)
 	}
-	if _, err := normalizeVisibility("system", ""); !errors.Is(err, ErrInvalidVisibility) {
-		t.Fatalf("normalizeVisibility invalid error = %v, want ErrInvalidVisibility", err)
+	if v, err := normalizeVisibility("system", ""); err != nil || v != model.VisibilitySystem {
+		t.Fatalf("normalizeVisibility system = %q, %v, want system, nil", v, err)
 	}
 }
 

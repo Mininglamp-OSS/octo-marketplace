@@ -263,7 +263,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error
 	if err != nil {
 		return nil, err
 	}
-	if visibility == model.VisibilityPublic {
+	if visibility == model.VisibilityPublic || visibility == model.VisibilitySystem {
 		return nil, ErrForbidden
 	}
 
@@ -459,7 +459,7 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 	if row == nil || row.OwnerID != userID || row.SpaceID != spaceID {
 		return nil, ErrNotFound
 	}
-	if row.Visibility == string(model.VisibilityPublic) {
+	if row.Visibility == string(model.VisibilityPublic) || row.Visibility == string(model.VisibilitySystem) {
 		return nil, ErrForbidden
 	}
 
@@ -480,7 +480,7 @@ func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p Upda
 		if err != nil {
 			return nil, err
 		}
-		if normalized == model.VisibilityPublic {
+		if normalized == model.VisibilityPublic || normalized == model.VisibilitySystem {
 			return nil, ErrForbidden
 		}
 		vis = &normalized
@@ -767,7 +767,7 @@ func (s *Service) Delete(ctx context.Context, id, userID, spaceID string) error 
 	if row == nil || row.OwnerID != userID || row.SpaceID != spaceID {
 		return ErrNotFound
 	}
-	if row.Visibility == string(model.VisibilityPublic) {
+	if row.Visibility == string(model.VisibilityPublic) || row.Visibility == string(model.VisibilitySystem) {
 		return ErrForbidden
 	}
 
@@ -786,7 +786,7 @@ func normalizeVisibility(v string, defaultValue string) (model.Visibility, error
 		v = defaultValue
 	}
 	switch v {
-	case string(model.VisibilityPublic), string(model.VisibilitySpace), string(model.VisibilityPrivate):
+	case string(model.VisibilityPublic), string(model.VisibilitySpace), string(model.VisibilityPrivate), string(model.VisibilitySystem):
 		return model.Visibility(v), nil
 	default:
 		return "", ErrInvalidVisibility
@@ -804,7 +804,7 @@ func firstNonEmpty(values ...string) string {
 
 func canView(row *skillrepo.SkillRow, spaceID, userID string) bool {
 	switch row.Visibility {
-	case "public":
+	case "system":
 		return true
 	case "space":
 		return row.SpaceID == spaceID

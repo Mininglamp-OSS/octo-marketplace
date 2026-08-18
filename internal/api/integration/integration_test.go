@@ -235,13 +235,13 @@ func TestAdminDeleteCategoryNotFound(t *testing.T) {
 
 // --- Skill Visibility Tests ---
 
-func TestGetSkillVisibilityPublicSameSpace(t *testing.T) {
+func TestGetSkillVisibilitySystemSameSpace(t *testing.T) {
 	engine, mock, db := testSetup(t)
 	defer db.Close()
 
-	// Public skill by another user in the same space - should be visible
+	// System skill by another user in the same space should be visible.
 	mock.ExpectQuery("SELECT .+ FROM skills").
-		WillReturnRows(skillRow("skill-1", "Public Skill", "other-user", "Bob", "space-1", "public"))
+		WillReturnRows(skillRow("skill-1", "System Skill", "other-user", "Bob", "space-1", "system"))
 
 	w := doRequest(engine, "GET", "/api/v1/skill/skill-1", nil)
 
@@ -250,18 +250,32 @@ func TestGetSkillVisibilityPublicSameSpace(t *testing.T) {
 	}
 }
 
-func TestGetSkillVisibilityPublicCrossSpace(t *testing.T) {
+func TestGetSkillVisibilitySystemCrossSpace(t *testing.T) {
 	engine, mock, db := testSetup(t)
 	defer db.Close()
 
-	// Public skill in another space should remain visible.
+	// System skill in another space should remain visible.
 	mock.ExpectQuery("SELECT .+ FROM skills").
-		WillReturnRows(skillRow("skill-1x", "Public Skill", "other-user", "Bob", "other-space", "public"))
+		WillReturnRows(skillRow("skill-1x", "System Skill", "other-user", "Bob", "other-space", "system"))
 
 	w := doRequest(engine, "GET", "/api/v1/skill/skill-1x", nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestGetSkillVisibilityLegacyPublicIsHidden(t *testing.T) {
+	engine, mock, db := testSetup(t)
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT .+ FROM skills").
+		WillReturnRows(skillRow("skill-public", "Legacy Public Skill", "user-1", "Alice", "space-1", "public"))
+
+	w := doRequest(engine, "GET", "/api/v1/skill/skill-public", nil)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusNotFound, w.Body.String())
 	}
 }
 

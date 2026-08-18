@@ -156,7 +156,7 @@ func TestCreateDBFailureSynchronouslyDeletesNewArtifacts(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsInvalidVisibilityBeforeStorageWrites(t *testing.T) {
+func TestCreateRejectsSystemVisibilityForUserBeforeStorageWrites(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -183,8 +183,8 @@ func TestCreateRejectsInvalidVisibilityBeforeStorageWrites(t *testing.T) {
 		UserName:    "User One",
 		SpaceID:     "space-1",
 	})
-	if !errors.Is(err, ErrInvalidVisibility) {
-		t.Fatalf("Create error = %v, want ErrInvalidVisibility", err)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("Create error = %v, want ErrForbidden", err)
 	}
 	if store.putCount != 0 {
 		t.Fatalf("PutObject count = %d, want 0", store.putCount)
@@ -277,7 +277,7 @@ func TestCreateRejectsInaccessibleSourceBeforeStorageWrites(t *testing.T) {
 	}
 }
 
-func TestUpdateRejectsInvalidVisibilityBeforeStorageWrites(t *testing.T) {
+func TestUpdateRejectsSystemVisibilityForUserBeforeStorageWrites(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -300,8 +300,8 @@ func TestUpdateRejectsInvalidVisibilityBeforeStorageWrites(t *testing.T) {
 	_, err = svc.Update(context.Background(), "skill-1", "user-1", "space-1", UpdateParams{
 		Visibility: &visibility,
 	})
-	if !errors.Is(err, ErrInvalidVisibility) {
-		t.Fatalf("Update error = %v, want ErrInvalidVisibility", err)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("Update error = %v, want ErrForbidden", err)
 	}
 	if store.putCount != 0 {
 		t.Fatalf("PutObject count = %d, want 0", store.putCount)
@@ -429,7 +429,7 @@ func TestAdminReuploadDuplicateVersionDoesNotDeletePublishedObjects(t *testing.T
 		WillReturnRows(skillRowsForSecurityTest().
 			AddRow("admin-dup", "Admin Duplicate", "Admin Duplicate", "", "", "old-version-id",
 				"desc", "cat-1", []byte(`[]`), "admin", "Admin",
-				"", "public", "2.0.0", "old readme", "skill.zip",
+				"", "system", "2.0.0", "old readme", "skill.zip",
 				oldZipKey, int64(len(zipData)), "oldsha", now, now,
 				"2.0.0", `{"type":"s3","zip_object_key":"`+oldZipKey+`","skill_md_object_key":"`+oldMDKey+`","zip_file_name":"skill.zip","zip_size":100,"zip_sha256":"oldsha"}`, int64(0), int64(0)))
 	mock.ExpectQuery("SELECT .+ FROM parse_tasks WHERE id").

@@ -56,7 +56,7 @@ type AdminReuploadParams struct {
 	AdminUID    string
 }
 
-// AdminList returns public skills without Space restriction.
+// AdminList returns system skills without Space restriction.
 func (s *Service) AdminList(ctx context.Context, p AdminListParams) (*ListResult, error) {
 	tags := normalizeTags(p.Tags)
 	tagIDGroups, err := s.resolveListTagIDGroups(ctx, skillrepo.GlobalTagSpaceID, tags)
@@ -81,20 +81,20 @@ func (s *Service) AdminList(ctx context.Context, p AdminListParams) (*ListResult
 	return s.toListResult(ctx, repoResult), nil
 }
 
-// AdminGet returns a single public skill by ID without Space restriction.
+// AdminGet returns a single system skill by ID without Space restriction.
 func (s *Service) AdminGet(ctx context.Context, id string) (*SkillItem, error) {
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if row == nil || row.Visibility != "public" {
+	if row == nil || row.Visibility != string(model.VisibilitySystem) {
 		return nil, ErrNotFound
 	}
 	item := s.rowToItem(ctx, row)
 	return &item, nil
 }
 
-// AdminCreate creates a new public skill from a completed admin parse task.
+// AdminCreate creates a new system skill from a completed admin parse task.
 func (s *Service) AdminCreate(ctx context.Context, p AdminCreateParams) (*SkillItem, error) {
 	pt, err := s.repo.GetParseTask(ctx, p.ParseTaskID)
 	if err != nil {
@@ -227,7 +227,7 @@ func (s *Service) AdminCreate(ctx context.Context, p AdminCreateParams) (*SkillI
 		OwnerID:          p.AdminUID,
 		OwnerName:        p.AdminName,
 		SpaceID:          skillrepo.GlobalTagSpaceID,
-		Visibility:       "public",
+		Visibility:       model.VisibilitySystem,
 		Version:          version,
 		ReadmeContent:    readmeContent,
 		FileName:         "skill.zip",
@@ -264,13 +264,13 @@ func (s *Service) AdminCreate(ctx context.Context, p AdminCreateParams) (*SkillI
 	return &item, nil
 }
 
-// AdminUpdate updates basic info of a public skill.
+// AdminUpdate updates basic info of a system skill.
 func (s *Service) AdminUpdate(ctx context.Context, id string, p AdminUpdateParams) (*SkillItem, error) {
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if row == nil || row.Visibility != "public" {
+	if row == nil || row.Visibility != string(model.VisibilitySystem) {
 		return nil, ErrNotFound
 	}
 
@@ -328,13 +328,13 @@ func (s *Service) AdminUpdate(ctx context.Context, id string, p AdminUpdateParam
 	return &item, nil
 }
 
-// AdminDelete soft-deletes a public skill.
+// AdminDelete soft-deletes a system skill.
 func (s *Service) AdminDelete(ctx context.Context, id string) error {
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
-	if row == nil || row.Visibility != "public" {
+	if row == nil || row.Visibility != string(model.VisibilitySystem) {
 		return ErrNotFound
 	}
 
@@ -349,13 +349,13 @@ func (s *Service) AdminDelete(ctx context.Context, id string) error {
 	return nil
 }
 
-// AdminGetSkillMD retrieves the SKILL.md content for a public skill.
+// AdminGetSkillMD retrieves the SKILL.md content for a system skill.
 func (s *Service) AdminGetSkillMD(ctx context.Context, id string) ([]byte, error) {
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if row == nil || row.Visibility != "public" {
+	if row == nil || row.Visibility != string(model.VisibilitySystem) {
 		return nil, ErrNotFound
 	}
 
@@ -384,13 +384,13 @@ func (s *Service) AdminGetSkillMD(ctx context.Context, id string) ([]byte, error
 	return data, nil
 }
 
-// AdminReupload uploads a new version for a public skill.
+// AdminReupload uploads a new version for a system skill.
 func (s *Service) AdminReupload(ctx context.Context, id string, p AdminReuploadParams) (*SkillItem, error) {
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if row == nil || row.Visibility != "public" {
+	if row == nil || row.Visibility != string(model.VisibilitySystem) {
 		return nil, ErrNotFound
 	}
 
@@ -572,7 +572,7 @@ func (s *Service) AdminReupload(ctx context.Context, id string, p AdminReuploadP
 	return &item, nil
 }
 
-// AdminGetDownloadInfo resolves the artifact download URL for a public skill (no space/user check).
+// AdminGetDownloadInfo resolves the artifact download URL for a system skill (no space/user check).
 func (s *Service) AdminGetDownloadInfo(ctx context.Context, id string) (*DownloadInfo, error) {
 	item, err := s.AdminGet(ctx, id)
 	if err != nil {

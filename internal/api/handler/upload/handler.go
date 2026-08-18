@@ -266,6 +266,10 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private", nil, "")
 			return
 		}
+		if errors.Is(err, skillsvc.ErrForbidden) {
+			apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "system skills can only be changed by administrators", nil, "")
+			return
+		}
 		if errors.Is(err, skillsvc.ErrInvalidSourceSkill) {
 			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "source skill not found or inaccessible", nil, "")
 			return

@@ -2866,7 +2866,7 @@ paths:
       - skill_category
   /admin/skills:
     get:
-      description: List all visibility=public skills without Space restriction.
+      description: List all visibility=system skills without Space restriction.
       operationId: admin_skill.list
       parameters:
       - description: Search name/description
@@ -2937,11 +2937,11 @@ paths:
           description: INTERNAL_ERROR
       security:
       - AdminToken: []
-      summary: List public skills (admin)
+      summary: List system skills (admin)
       tags:
       - admin_skill
     post:
-      description: Create a system skill with visibility=public.
+      description: Create a system skill with visibility=system.
       operationId: admin_skill.create
       requestBody:
         content:
@@ -2999,12 +2999,12 @@ paths:
           description: INTERNAL_ERROR
       security:
       - AdminToken: []
-      summary: Create public skill (admin)
+      summary: Create system skill (admin)
       tags:
       - admin_skill
   /admin/skills/{skill_id}:
     delete:
-      description: Delete a public skill and its versions.
+      description: Delete a visibility=system skill and its versions.
       operationId: admin_skill.delete
       parameters:
       - description: Skill ID
@@ -3051,11 +3051,11 @@ paths:
           description: INTERNAL_ERROR
       security:
       - AdminToken: []
-      summary: Delete public skill (admin)
+      summary: Delete system skill (admin)
       tags:
       - admin_skill
     get:
-      description: Return one public skill without Space restriction.
+      description: Return one visibility=system skill without Space restriction.
       operationId: admin_skill.get
       parameters:
       - description: Skill ID
@@ -3102,11 +3102,11 @@ paths:
           description: INTERNAL_ERROR
       security:
       - AdminToken: []
-      summary: Get public skill detail (admin)
+      summary: Get system skill detail (admin)
       tags:
       - admin_skill
     patch:
-      description: Update basic info of a public skill.
+      description: Update basic info of a visibility=system skill.
       operationId: admin_skill.update
       parameters:
       - description: Skill ID
@@ -3171,7 +3171,7 @@ paths:
           description: INTERNAL_ERROR
       security:
       - AdminToken: []
-      summary: Update public skill (admin)
+      summary: Update system skill (admin)
       tags:
       - admin_skill
   /admin/skills/{skill_id}/download:
@@ -3301,12 +3301,12 @@ paths:
           description: INTERNAL_ERROR
       security:
       - AdminToken: []
-      summary: Reupload public skill version (admin)
+      summary: Reupload system skill version (admin)
       tags:
       - admin_skill
   /admin/skills/{skill_id}/skill_md:
     get:
-      description: Return SKILL.md for a public skill without Space restriction.
+      description: Return SKILL.md for a visibility=system skill without Space restriction.
       operationId: admin_skill.skillmd.get
       parameters:
       - description: Skill ID

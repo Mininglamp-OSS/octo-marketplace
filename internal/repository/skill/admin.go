@@ -19,7 +19,7 @@ type AdminListFilter struct {
 	Sort        string
 }
 
-// AdminList returns paginated public skills without Space restriction.
+// AdminList returns paginated system skills without Space restriction.
 func (r *Repo) AdminList(ctx context.Context, f AdminListFilter) (*ListResult, error) {
 	if f.Limit <= 0 {
 		f.Limit = 20
@@ -37,7 +37,7 @@ func (r *Repo) AdminList(ctx context.Context, f AdminListFilter) (*ListResult, e
 	var args []interface{}
 
 	conditions = append(conditions, "s.is_deleted = 0")
-	conditions = append(conditions, "s.visibility = 'public'")
+	conditions = append(conditions, "s.visibility = 'system'")
 
 	if f.CategoryID != "" {
 		conditions = append(conditions, "s.category_id = ?")
