@@ -265,7 +265,7 @@ func TestGetSkillVisibilitySystemCrossSpace(t *testing.T) {
 	}
 }
 
-func TestGetSkillVisibilityLegacyPublicIsHidden(t *testing.T) {
+func TestGetSkillVisibilityPublicRemainsVisible(t *testing.T) {
 	engine, mock, db := testSetup(t)
 	defer db.Close()
 
@@ -274,8 +274,8 @@ func TestGetSkillVisibilityLegacyPublicIsHidden(t *testing.T) {
 
 	w := doRequest(engine, "GET", "/api/v1/skill/skill-public", nil)
 
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusNotFound, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 }
 
