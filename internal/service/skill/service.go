@@ -804,7 +804,10 @@ func firstNonEmpty(values ...string) string {
 
 func canView(row *skillrepo.SkillRow, spaceID, userID string) bool {
 	switch row.Visibility {
-	case "system":
+	case "system", "public":
+		// system: administrator official Skills, cross-space visible.
+		// public: legacy administrator Skills predating system; they stay
+		// cross-space visible (only the official badge moves to system).
 		return true
 	case "space":
 		return row.SpaceID == spaceID
