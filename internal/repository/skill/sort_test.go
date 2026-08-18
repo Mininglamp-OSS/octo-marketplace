@@ -458,6 +458,41 @@ func TestGetByIDNoMetricsRow(t *testing.T) {
 	}
 }
 
+func TestListMineOnlyIncludesUserWritableVisibility(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mineSQL := "s\\.owner_id = \\? AND s\\.space_id = \\? AND s\\.visibility IN \\('space', 'private'\\)"
+	mock.ExpectQuery("SELECT COUNT.*"+mineSQL).
+		WithArgs("user-1", "space-1").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("SELECT.*"+mineSQL).
+		WithArgs("user-1", "space-1", 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "display_name", "icon_url", "source_skill_id", "current_version_id",
+			"description", "category_id", "tags", "owner_id", "owner_name", "space_id", "visibility", "version",
+			"readme_content", "file_name", "file_url", "file_size", "file_sha256", "created_at", "updated_at",
+			"resolved_version", "version_storage", "view_count", "download_count",
+		}))
+
+	_, err = New(db).List(context.Background(), ListFilter{
+		SpaceID:  "space-1",
+		UserID:   "user-1",
+		MineOnly: true,
+		Limit:    20,
+		Sort:     SortComprehensive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestListVisibilityIncludesSystemAndPreservesExistingRules(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

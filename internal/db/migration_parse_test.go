@@ -9,6 +9,27 @@ import (
 	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
 )
 
+func TestSkillSystemVisibilityMigrationNormalizesBothPublicPopulations(t *testing.T) {
+	const migration = "20260818-00-skill-system-visibility.sql"
+
+	content, err := migrationsql.FS.ReadFile(migration)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error=%v", migration, err)
+	}
+
+	sql := string(content)
+	checks := []string{
+		"UPDATE skills SET visibility = 'system' WHERE visibility = 'public' AND space_id = '';",
+		"UPDATE skills SET visibility = 'space' WHERE visibility = 'public' AND space_id <> '';",
+		"UPDATE skills SET visibility = 'public' WHERE visibility = 'system';",
+	}
+	for _, check := range checks {
+		if !strings.Contains(sql, check) {
+			t.Errorf("%s missing %q", migration, check)
+		}
+	}
+}
+
 func TestCurrentVersionBackfillUsesExplicitCollation(t *testing.T) {
 	const migration = "20260717-06-backfill-current-version.sql"
 

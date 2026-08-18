@@ -92,7 +92,9 @@ func (r *Repo) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	conditions = append(conditions, "s.is_deleted = 0")
 
 	if f.MineOnly {
-		conditions = append(conditions, "s.owner_id = ? AND s.space_id = ?")
+		// "Mine" only includes user-writable scopes. System Skills are managed by
+		// administrators, and public is a migration-only legacy value for Skills.
+		conditions = append(conditions, "s.owner_id = ? AND s.space_id = ? AND s.visibility IN ('space', 'private')")
 		args = append(args, f.UserID, f.SpaceID)
 	} else {
 		// Visibility filter:
