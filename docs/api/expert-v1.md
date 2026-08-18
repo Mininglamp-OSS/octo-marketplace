@@ -539,7 +539,9 @@ and `squad_id`:
 - `POST /squads/{squad_id}/install` — provision the squad into a Loop
   workspace/runtime. Body `{ "workspace_id", "runtime_id" }`. The server first
   installs **each member** as a Loop agent (create agent seeded with the
-  member's instruction + `mcp_config`, create + bind its packaged skills), then
+  member's instruction + `mcp_config`, create + bind its packaged skills; exact
+  duplicate Skill names are first-wins across members, while case/whitespace
+  variants remain distinct), then
   **forms the squad** via octo-fleet: create it led by the leader member (first
   member flagged `is_leader`, else the one whose name matches the squad `leader`
   label, else the first member — fleet auto-adds the leader as a member), write

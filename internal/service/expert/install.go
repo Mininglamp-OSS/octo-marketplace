@@ -248,7 +248,10 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 		if skills[i].ObjectKey == "" {
 			continue
 		}
-		nameKey := strings.ToLower(strings.TrimSpace(skills[i].Name))
+		// Fleet's UNIQUE(workspace_id, name) constraint is byte-exact. Deduplicate
+		// only the names that Fleet itself would reject; case/whitespace variants
+		// remain distinct packaged Skills and must both be installed.
+		nameKey := skills[i].Name
 		if seenSkillNames != nil {
 			if _, exists := seenSkillNames[nameKey]; exists {
 				continue

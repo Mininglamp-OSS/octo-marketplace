@@ -16,7 +16,7 @@ source: self
 Allow an expert squad to install into a Loop workspace when multiple members
 package Skills with the same name, while preserving its squad-level dispatch
 instructions. During one installation, create and bind the first packaged Skill
-with a normalized name, skip later duplicates, and write numbered strategies
+with an exact stored name, skip later byte-identical duplicates, and write numbered strategies
 through Fleet's existing squad-update route after creation.
 
 ## Background
@@ -48,9 +48,9 @@ back. See [issue #62](https://github.com/Mininglamp-OSS/octo-marketplace/issues/
 
 ## Acceptance
 
-- The first packaged Skill for a normalized name is created and bound normally.
-- Later packaged Skills with that name are not created or bound.
-- Name normalization trims surrounding whitespace and ignores letter case.
+- The first packaged Skill for an exact stored name is created and bound normally.
+- Later packaged Skills with that byte-identical name are not created or bound.
+- Case and whitespace variants remain distinct and are all installed.
 - Unique Skills on later members still install and bind normally.
 - Non-blank strategies are trimmed and rendered as ordered numbered lines in an
   `instructions`-only Fleet squad update; no strategies skip that update.

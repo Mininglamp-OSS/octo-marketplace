@@ -313,7 +313,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 
 // InstallSquad godoc
 // @Summary Install squad to a Loop workspace/runtime
-// @Description Provision a squad into the chosen workspace/runtime: install each member as a Loop agent (with its skills), create the squad led by the leader member, write its strategies as instructions with bounded retries, and attach the rest. Aggregates octo-fleet calls on behalf of the caller and rolls back on persistent partial failure.
+// @Description Provision a squad into the chosen workspace/runtime: install each member as a Loop agent (exact duplicate Skill names are first-wins across members), create the squad led by the leader member, write its strategies as instructions with bounded retries, and attach the rest. Aggregates octo-fleet calls on behalf of the caller and rolls back on persistent partial failure.
 // @Tags expert
 // @ID squad.install
 // @Accept json

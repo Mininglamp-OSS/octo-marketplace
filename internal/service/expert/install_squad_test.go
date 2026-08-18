@@ -149,7 +149,7 @@ func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
 			MemberKey: "member_02",
 			Name:      "Coder",
 			Skills: []model.SkillRef{
-				{Name: " shared skill ", ObjectKey: "members/2/shared"},
+				{Name: "Shared Skill", ObjectKey: "members/2/shared"},
 				{Name: "Coder Only", ObjectKey: "members/2/only"},
 			},
 		},
@@ -189,6 +189,40 @@ func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
 
 // The squad's dispatch strategies must land in fleet as the squad's
 // instructions — one numbered line per rule, blank rules skipped.
+func TestInstallSquadKeepsCaseAndWhitespaceVariantSkillNames(t *testing.T) {
+	members := []model.SquadMember{
+		{MemberKey: "member_01", Name: "Planner", IsLeader: true, Skills: []model.SkillRef{
+			{Name: "Deploy", ObjectKey: "members/1/deploy"},
+		}},
+		{MemberKey: "member_02", Name: "Coder", Skills: []model.SkillRef{
+			{Name: "deploy", ObjectKey: "members/2/deploy-lower"},
+			{Name: "Deploy ", ObjectKey: "members/2/deploy-space"},
+		}},
+	}
+	ff := &fakeFleet{
+		agentIDs:     []string{"a0", "a1"},
+		skillIDs:     []string{"upper", "lower", "space"},
+		failAgentAt:  -1,
+		failSkillAt:  -1,
+		failMemberAt: -1,
+		squadID:      "squad-x",
+	}
+	svc, caller, id := installSquadFixture(t, ff, members)
+
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallSquad: %v", err)
+	}
+	if len(ff.createdSkills) != 3 {
+		t.Fatalf("created skills = %#v, want all three exact-name variants", ff.createdSkills)
+	}
+	if got := ff.bindings["a0"]; len(got) != 1 || got[0] != "upper" {
+		t.Fatalf("leader bindings = %#v, want [upper]", got)
+	}
+	if got := ff.bindings["a1"]; len(got) != 2 || got[0] != "lower" || got[1] != "space" {
+		t.Fatalf("second member bindings = %#v, want [lower space]", got)
+	}
+}
+
 func TestInstallSquadWritesStrategiesAsInstructions(t *testing.T) {
 	ff := &fakeFleet{
 		agentIDs:     []string{"a0", "a1", "a2"},
