@@ -308,7 +308,7 @@ func (h *Handler) Create(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private, system", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidSourceSkill) {
@@ -419,7 +419,7 @@ func (h *Handler) Update(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, skillsvc.ErrInvalidVisibility) {
-			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private", nil, "")
+			apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "visibility must be one of: public, space, private, system", nil, "")
 			return
 		}
 		if errors.Is(err, skillsvc.ErrForbidden) {

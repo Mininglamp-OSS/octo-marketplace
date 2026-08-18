@@ -37,11 +37,11 @@ func TestCanView(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "public cross-space is visible",
+			name:     "legacy public is hidden",
 			row:      &skillrepo.SkillRow{Visibility: "public", SpaceID: "s1", OwnerID: "u1"},
 			spaceID:  "s1",
 			userID:   "u1",
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "space same space",
