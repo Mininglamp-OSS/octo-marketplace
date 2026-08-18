@@ -162,7 +162,7 @@ func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
 		failMemberAt: -1,
 		squadID:      "squad-x",
 	}
-	svc, caller, id := installSquadFixture(t, ff, members)
+	svc, caller, id := installSquadFixtureStrategies(t, ff, members, []string{"先分析", "再执行"})
 
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
 		t.Fatalf("InstallSquad: %v", err)
@@ -181,6 +181,9 @@ func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
 	}
 	if got := ff.bindings["a1"]; len(got) != 1 || got[0] != "coder" {
 		t.Fatalf("second member bindings = %#v, want [coder]", got)
+	}
+	if ff.instrCalls != 1 || ff.instrValue != "1. 先分析\n2. 再执行" {
+		t.Fatalf("instruction update calls=%d value=%q", ff.instrCalls, ff.instrValue)
 	}
 }
 

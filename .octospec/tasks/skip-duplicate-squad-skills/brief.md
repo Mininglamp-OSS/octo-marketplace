@@ -14,8 +14,10 @@ source: self
 ## Goal
 
 Allow an expert squad to install into a Loop workspace when multiple members
-package Skills with the same name. During one squad installation, create and bind
-the first packaged Skill with a normalized name and skip later duplicates.
+package Skills with the same name, while preserving its squad-level dispatch
+instructions. During one installation, create and bind the first packaged Skill
+with a normalized name, skip later duplicates, and write numbered strategies
+through Fleet's existing squad-update route after creation.
 
 ## Background
 
@@ -27,7 +29,9 @@ back. See [issue #62](https://github.com/Mininglamp-OSS/octo-marketplace/issues/
 ## Load-bearing list
 
 - The squad install sequence: provision all member agents, create the Loop squad,
-  and add non-leader members.
+  update it with rendered instructions, and add non-leader members.
+- The deployed Fleet `PUT /api/squads/{id}` partial-update contract, which accepts
+  an `instructions`-only body without clobbering omitted fields.
 - Per-member Skill creation and binding through Fleet.
 - Atomic rollback of Skills, agents, and the squad after any provisioning error.
 - Standalone expert installation, which shares the agent/Skill provisioning path.
@@ -48,6 +52,11 @@ back. See [issue #62](https://github.com/Mininglamp-OSS/octo-marketplace/issues/
 - Later packaged Skills with that name are not created or bound.
 - Name normalization trims surrounding whitespace and ignores letter case.
 - Unique Skills on later members still install and bind normally.
+- Non-blank strategies are trimmed and rendered as ordered numbered lines in an
+  `instructions`-only Fleet squad update; no strategies skip that update.
+- Duplicate-Skill filtering and instruction rendering work in the same install.
+- A Fleet create or instruction-update failure rolls back the squad when created,
+  all member agents, and created Skills.
 - Existing rollback behavior remains intact.
 - `go test ./internal/service/expert` passes.
 - `go test ./...` passes.

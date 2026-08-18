@@ -544,9 +544,8 @@ and `squad_id`:
   member flagged `is_leader`, else the one whose name matches the squad `leader`
   label, else the first member — fleet auto-adds the leader as a member), write
   the squad's `strategies` as its Loop instructions (one numbered line per
-  rule, via a follow-up squad update since fleet's create endpoint doesn't
-  accept instructions; skipped when the squad has no strategies) and
-  attach the remaining members with their roles. Aggregates the fleet calls on
+  rule, via a follow-up squad update; skipped when the squad has no strategies),
+  and attach the remaining members with their roles. Aggregates the fleet calls on
   behalf of the caller (forwarded token, so fleet enforces workspace membership
   — squad create requires owner/admin — runtime access, and space scoping) and
   **rolls back** the squad plus every provisioned member agent on any partial
