@@ -254,6 +254,29 @@ func TestAddSquadMemberConflictReturnsAPIError(t *testing.T) {
 	}
 }
 
+func TestUpdateSquadInstructionsPutsOnlyInstructions(t *testing.T) {
+	var cap capture
+	srv := newFakeFleet(t, http.StatusOK, `{"id":"squad-1"}`, &cap)
+	defer srv.Close()
+
+	if err := New(srv.URL).UpdateSquadInstructions(context.Background(), "tok", "space-1", "ws-1", "squad-1", "1. 先分析\n2. 再分派"); err != nil {
+		t.Fatalf("UpdateSquadInstructions: %v", err)
+	}
+	if cap.method != http.MethodPut || cap.path != "/api/squads/squad-1" {
+		t.Fatalf("got %s %s, want PUT /api/squads/squad-1", cap.method, cap.path)
+	}
+	if cap.body["instructions"] != "1. 先分析\n2. 再分派" {
+		t.Fatalf("body = %#v", cap.body)
+	}
+	// Fleet's update treats absent fields as unchanged — the body must not carry
+	// name/description/leader_id, or the update would blank them.
+	for _, k := range []string{"name", "description", "leader_id"} {
+		if _, ok := cap.body[k]; ok {
+			t.Fatalf("body must not include %q: %#v", k, cap.body)
+		}
+	}
+}
+
 func TestDeleteSquadUsesDelete(t *testing.T) {
 	var cap capture
 	srv := newFakeFleet(t, http.StatusNoContent, ``, &cap)

@@ -2,6 +2,7 @@ package expert
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
@@ -25,7 +26,8 @@ type createdAgent struct {
 // InstallSquad provisions a marketplace squad into the caller's Loop
 // workspace/runtime. It first installs each member as a Loop agent (create agent
 // → create skills → bind, reusing provisionAgent), then forms the squad (create
-// the squad led by the leader member, then attach the remaining members). Any
+// the squad led by the leader member, write the squad's dispatch strategies as
+// its instructions, then attach the remaining members). Any
 // failure rolls back the squad (if created) and every member agent provisioned
 // so far, so a partial install never leaves orphans behind. It acts as the
 // calling user (forwarded token), so fleet enforces workspace membership (squad
@@ -64,6 +66,9 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	// failure here leaves only the *earlier* members to unwind.
 	created := make([]createdAgent, 0, len(m.Members))
 	memberAgentIDs := make([]string, len(m.Members))
+	// Fleet skill names are workspace-wide. Keep the first packaged skill with a
+	// given normalized name and skip later duplicates across squad members.
+	seenSkillNames := make(map[string]struct{})
 	for i := range m.Members {
 		agentID, skillIDs, err := s.provisionAgent(ctx, in, agentProvisionSpec{
 			Name:        m.Members[i].Name,
@@ -71,7 +76,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 			Instruction: m.Members[i].Instruction,
 			MCPConfig:   m.Members[i].MCPConfig,
 			Skills:      m.Members[i].Skills,
-		}, budget)
+		}, budget, seenSkillNames)
 		if err != nil {
 			s.rollbackSquad(ctx, in, "", created)
 			return InstallSquadResult{}, err
@@ -90,6 +95,19 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	if err != nil {
 		s.rollbackSquad(ctx, in, "", created)
 		return InstallSquadResult{}, err
+	}
+
+	// Write the squad's dispatch strategies as its Loop instructions. This is a
+	// second call because fleet's create endpoint doesn't accept instructions,
+	// and it fails the install (with full rollback) rather than best-effort — a
+	// squad silently missing its dispatch rules is exactly the defect this write
+	// exists to prevent. No strategies → leave fleet's instructions empty
+	// instead of injecting a client-side default.
+	if instructions := squadInstructions(m); instructions != "" {
+		if err := s.updateSquadInstructions(ctx, in, fleetSquadID, instructions); err != nil {
+			s.rollbackSquad(ctx, in, fleetSquadID, created)
+			return InstallSquadResult{}, err
+		}
 	}
 
 	// Attach the remaining (non-leader) members.
@@ -115,6 +133,46 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	// snapshots inside the squad, so a squad install never inflates expert counts.
 	s.trackInstall(ctx, "squad", squadID)
 	return InstallSquadResult{SquadID: fleetSquadID, LeaderAgentID: leaderAgentID}, nil
+}
+
+// squadInstructions renders the squad's ordered dispatch strategies (专家团的
+// 调度策略) as the Loop squad's instructions: one numbered line per rule. Blank
+// rules are skipped; no usable rules → "".
+func squadInstructions(m *model.Squad) string {
+	var b strings.Builder
+	n := 0
+	for _, raw := range m.Strategies {
+		rule := strings.TrimSpace(raw)
+		if rule == "" {
+			continue
+		}
+		n++
+		if n > 1 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(strconv.Itoa(n))
+		b.WriteString(". ")
+		b.WriteString(rule)
+	}
+	return b.String()
+}
+
+// updateSquadInstructions retries the small, idempotent partial update before
+// allowing its failure to trigger destructive rollback. There is intentionally
+// no sleep: Fleet's HTTP request already consumes bounded time and immediate
+// retries cover transient connection resets/5xx without extending installs.
+func (s *Service) updateSquadInstructions(ctx context.Context, in InstallInput, squadID, instructions string) error {
+	var err error
+	for attempt := 0; attempt < squadInstructionUpdateAttempts; attempt++ {
+		err = s.fleet.UpdateSquadInstructions(ctx, in.Token, in.SpaceID, in.WorkspaceID, squadID, instructions)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return err
 }
 
 // squadLeaderIndex picks the leader member: the first member flagged IsLeader,

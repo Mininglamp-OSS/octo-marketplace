@@ -6751,9 +6751,10 @@ paths:
   /squads/{squad_id}/install:
     post:
       description: 'Provision a squad into the chosen workspace/runtime: install each
-        member as a Loop agent (with its skills), then form the squad (create it led
-        by the leader member and attach the rest). Aggregates octo-fleet calls on
-        behalf of the caller and rolls back on partial failure.'
+        member as a Loop agent (exact duplicate Skill names are first-wins across
+        members), create the squad led by the leader member, write its strategies
+        as instructions with bounded retries, and attach the rest. Aggregates octo-fleet
+        calls on behalf of the caller and rolls back on persistent partial failure.'
       operationId: squad.install
       parameters:
       - description: Squad ID

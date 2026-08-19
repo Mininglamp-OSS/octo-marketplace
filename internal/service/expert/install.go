@@ -17,6 +17,12 @@ import (
 // cleanupTimeout bounds the detached rollback deletes so they can't hang.
 const cleanupTimeout = 15 * time.Second
 
+// squadInstructionUpdateAttempts gives the post-create instructions update a
+// small bounded retry window before destructive rollback. A transient failure at
+// this late stage would otherwise archive every member agent and can make a
+// clean retry collide with Fleet's archived-name uniqueness.
+const squadInstructionUpdateAttempts = 3
+
 // installTimeout bounds a whole install (expert or squad). The per-fleet-call
 // timeout on the http client bounds each hop, but nothing bounds their sum: a
 // squad of many members each with many packaged skills fans out to a large
@@ -69,9 +75,11 @@ type FleetProvisioner interface {
 	DeleteAgent(ctx context.Context, token, spaceID, workspaceID, agentID string) error
 	DeleteSkill(ctx context.Context, token, spaceID, workspaceID, skillID string) error
 	// Squad provisioning (used by InstallSquad): create a squad led by an
-	// already-created member agent, attach the remaining members, and archive
+	// already-created member agent, write its instructions (fleet's create
+	// endpoint doesn't accept them), attach the remaining members, and archive
 	// the squad on rollback.
 	CreateSquad(ctx context.Context, token, spaceID, workspaceID string, spec fleet.SquadSpec) (squadID string, err error)
+	UpdateSquadInstructions(ctx context.Context, token, spaceID, workspaceID, squadID, instructions string) error
 	AddSquadMember(ctx context.Context, token, spaceID, workspaceID, squadID string, m fleet.SquadMemberSpec) error
 	DeleteSquad(ctx context.Context, token, spaceID, workspaceID, squadID string) error
 }
@@ -171,7 +179,7 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		Instruction: m.Instruction,
 		MCPConfig:   m.MCPConfig,
 		Skills:      m.Skills,
-	}, &fileBudget{remaining: maxSkillFilesPerInstall})
+	}, &fileBudget{remaining: maxSkillFilesPerInstall}, nil)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -195,7 +203,7 @@ type agentProvisionSpec struct {
 // rolls back everything IT created (skills + agent) and returns the error, so
 // the caller has nothing to unwind for this agent. Shared by InstallExpert (one
 // agent) and InstallSquad (one per member).
-func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget) (string, []string, error) {
+func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget, seenSkillNames map[string]struct{}) (string, []string, error) {
 	agentSpec := fleet.AgentSpec{
 		Name:         spec.Name,
 		Description:  spec.Summary,
@@ -213,7 +221,7 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 
 	// From here on, roll back the created agent (and any skills) on failure so a
 	// partial provision never leaves an orphaned agent behind.
-	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget)
+	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget, seenSkillNames)
 	if err != nil {
 		s.rollbackAgent(ctx, in, agentID, skillIDs)
 		return "", nil, err
@@ -234,11 +242,20 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 // returning the new skill ids. Name-only skills (no ObjectKey) carry nothing to
 // install and are skipped. On the first failure it deletes the skills it already
 // created and returns the error, so the caller only has the agent left to unwind.
-func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget) ([]string, error) {
+func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget, seenSkillNames map[string]struct{}) ([]string, error) {
 	created := make([]string, 0, len(skills))
 	for i := range skills {
 		if skills[i].ObjectKey == "" {
 			continue
+		}
+		// Fleet's UNIQUE(workspace_id, name) constraint is byte-exact. Deduplicate
+		// only the names that Fleet itself would reject; case/whitespace variants
+		// remain distinct packaged Skills and must both be installed.
+		nameKey := skills[i].Name
+		if seenSkillNames != nil {
+			if _, exists := seenSkillNames[nameKey]; exists {
+				continue
+			}
 		}
 		content, err := s.readSkillContent(ctx, skills, i)
 		if err != nil {
@@ -259,6 +276,9 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 		if err := s.attachSkillFiles(ctx, in, skills[i], skillID, budget); err != nil {
 			s.deleteSkills(ctx, in, created)
 			return nil, err
+		}
+		if seenSkillNames != nil {
+			seenSkillNames[nameKey] = struct{}{}
 		}
 	}
 	return created, nil

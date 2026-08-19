@@ -31,6 +31,7 @@ type fakeFleet struct {
 	upsertedFiles []upsertedFile
 	boundAgent    string
 	boundSkills   []string
+	bindings      map[string][]string
 	deletedAgents []string
 	deletedSkills []string
 
@@ -38,6 +39,11 @@ type fakeFleet struct {
 	squadID       string
 	squadSpec     fleet.SquadSpec
 	squadErr      error
+	instrSquadID  string // squad id UpdateSquadInstructions was called with
+	instrValue    string
+	instrCalls    int
+	instrErr      error
+	instrErrs     []error
 	addedMembers  []fleet.SquadMemberSpec
 	memberErr     error
 	failMemberAt  int // index (over non-leader members) AddSquadMember fails at (-1 = never)
@@ -101,6 +107,10 @@ func (f *fakeFleet) UpsertSkillFile(_ context.Context, _, _, _, skillID, path, c
 func (f *fakeFleet) SetAgentSkills(_ context.Context, _, _, _, agentID string, skillIDs []string) error {
 	f.boundAgent = agentID
 	f.boundSkills = skillIDs
+	if f.bindings == nil {
+		f.bindings = make(map[string][]string)
+	}
+	f.bindings[agentID] = append([]string(nil), skillIDs...)
 	return f.setErr
 }
 
@@ -122,6 +132,18 @@ func (f *fakeFleet) CreateSquad(_ context.Context, _, _, _ string, spec fleet.Sq
 		return "", f.squadErr
 	}
 	return f.squadID, nil
+}
+
+func (f *fakeFleet) UpdateSquadInstructions(_ context.Context, _, _, _, squadID, instructions string) error {
+	f.instrCalls++
+	f.instrSquadID = squadID
+	f.instrValue = instructions
+	if len(f.instrErrs) > 0 {
+		err := f.instrErrs[0]
+		f.instrErrs = f.instrErrs[1:]
+		return err
+	}
+	return f.instrErr
 }
 
 func (f *fakeFleet) AddSquadMember(_ context.Context, _, _, _, _ string, m fleet.SquadMemberSpec) error {

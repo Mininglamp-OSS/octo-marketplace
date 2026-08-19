@@ -183,6 +183,17 @@ func (c *Client) AddSquadMember(ctx context.Context, token, spaceID, workspaceID
 	return err
 }
 
+// UpdateSquadInstructions sets a squad's instructions (PUT /api/squads/{id}).
+// Fleet's create endpoint does not accept instructions, so the squad-install
+// flow writes them in a follow-up update right after CreateSquad. Fleet's
+// update handler treats absent fields as "leave unchanged", so sending only
+// instructions never clobbers the name/description/leader set at create.
+func (c *Client) UpdateSquadInstructions(ctx context.Context, token, spaceID, workspaceID, squadID, instructions string) error {
+	body := map[string]any{"instructions": instructions}
+	_, err := c.do(ctx, http.MethodPut, "/api/squads/"+squadID, token, spaceID, workspaceID, body)
+	return err
+}
+
 // DeleteSquad archives a squad (rollback path; best-effort at the call site).
 func (c *Client) DeleteSquad(ctx context.Context, token, spaceID, workspaceID, squadID string) error {
 	_, err := c.do(ctx, http.MethodDelete, "/api/squads/"+squadID, token, spaceID, workspaceID, nil)
