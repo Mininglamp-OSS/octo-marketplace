@@ -10,3 +10,31 @@
 # expert_tags — was already retired on main by #69, so it does not appear in the
 # main->HEAD diff and needs no entry here.)
 post /plugins/publish api path removed without deprecation
+
+# ---------------------------------------------------------------------------
+# `version` narrowed to strict x.y.z on the three upsert-bodied endpoints.
+#
+# This is a REAL break and it is reported here on purpose. The narrowing itself
+# already shipped in code (internal/service/plugin/validation.go's versionPattern):
+# labels have to be orderable for the forward-only rule and the published-label set
+# to work at all. What did NOT ship was any way to see it — the spec carried
+# `version` as an unconstrained `type: string`, so oasdiff had no constraint to
+# detect a tightening of, and the narrowing landed green across several rounds of
+# review. Declaring the pattern is what makes the gate fire, and the gate firing is
+# the point: the next change to this value domain will be visible before it ships.
+#
+# Coordinated rather than rolled back:
+#   * Existing rows are grandfathered. Re-sending a plugin's own stored label is
+#     always accepted (model.VersionNotRegressed short-circuits on equality;
+#     buildWrite exempts req.grandfatheredVersion), so no plugin carrying a
+#     pre-tightening label such as `1.0` or `v1.2.3` becomes uneditable, and the
+#     fetch-edit-save clients keep working untouched.
+#   * Only a NEW non-x.y.z label is refused, with a 400 naming the field.
+#   * Called out in PR #74's Risk / rollout section with an explicit ask that
+#     someone who knows the client population confirm no caller sends one.
+#
+# Scoped to these three request bodies. Adding a pattern anywhere else still fails.
+# ---------------------------------------------------------------------------
+post /plugins/upsert added the pattern `^\d{1,9}\.\d{1,9}\.\d{1,9}$` to the request property `oneOf[#/components/schemas/internal_api_handler_plugin.upsertRequest]/plugin/version`
+post /admin/plugins added the pattern `^\d{1,9}\.\d{1,9}\.\d{1,9}$` to the request property `oneOf[#/components/schemas/internal_api_handler_plugin.upsertRequest]/plugin/version`
+patch /admin/plugins/{plugin_id} added the pattern `^\d{1,9}\.\d{1,9}\.\d{1,9}$` to the request property `oneOf[#/components/schemas/internal_api_handler_plugin.upsertRequest]/plugin/version`

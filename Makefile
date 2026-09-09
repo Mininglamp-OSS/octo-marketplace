@@ -22,7 +22,7 @@ docker-build:
 	docker build -f Dockerfile.api -t octo-marketplace-api:local .
 
 OPENAPI_MAIN := cmd/marketplace-api/main.go
-OPENAPI_SCAN_DIRS := internal/api/handler/mcp.go internal/api/handler/plugin/handler.go internal/api/handler/plugin/admin.go internal/api/handler/mcp_icon.go internal/api/handler/admin_mcp.go internal/api/handler/session.go internal/api/handler/metrics/handler.go internal/api/handler/skill/handler.go internal/api/handler/skill/admin.go internal/api/handler/upload/handler.go internal/api/handler/category/handler.go internal/api/handler/expert/handler.go
+OPENAPI_SCAN_DIRS := internal/api/handler/mcp.go internal/api/handler/plugin/handler.go internal/api/handler/plugin/listing.go internal/api/handler/plugin/review.go internal/api/handler/plugin/admin.go internal/api/handler/mcp_icon.go internal/api/handler/admin_mcp.go internal/api/handler/session.go internal/api/handler/metrics/handler.go internal/api/handler/skill/handler.go internal/api/handler/skill/admin.go internal/api/handler/upload/handler.go internal/api/handler/category/handler.go internal/api/handler/expert/handler.go
 
 # OpenAPI toolchain (installed by octo-openapi-dev-skill main)
 include tools/octo-api/assets/openapi.mk

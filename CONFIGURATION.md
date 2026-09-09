@@ -16,6 +16,7 @@ Environment variables configure the API service.
 | `DEV_AUTH_UID` | no | `dev-user` | Local identity when auth is disabled |
 | `DEV_AUTH_NAME` | no | `Developer` | Local display name when auth is disabled |
 | `DEV_SPACE_ID` | no | `dev-space` | Local Space when auth is disabled |
+| `DEV_AUTH_SPACE_ROLE` | no | `2` | Local Space role when auth is disabled (`0` member / `1` admin / `2` owner). Admin/owner is required to exercise the review queue locally. |
 | `HTTP_READ_HEADER_TIMEOUT` | no | `5s` | Header read timeout |
 | `HTTP_READ_TIMEOUT` | no | `15s` | Request read timeout |
 | `HTTP_WRITE_TIMEOUT` | no | `150s` | Response write timeout; must be greater than `BOT_PUBLISH_TIMEOUT` because bot publish waits synchronously for parsing |
@@ -23,6 +24,24 @@ Environment variables configure the API service.
 | `PROBE_ALLOW_PRIVATE` | no | `false` | Allow MCP probes to private/local network targets; enable only in trusted self-hosted deployments |
 | `BOT_PUBLISH_TIMEOUT` | no | `2m` | End-to-end synchronous parse budget for `POST /api/v1/bot/skills/publish` |
 | `SKIP_MIGRATION` | no | `false` | Skip embedded SQL migrations when `true` |
+
+## Plugin Review & IM Notification
+
+These variables drive the Space-level plugin review workflow: notification of
+new submissions to Space admins, and HMAC-signed card-action callbacks when an
+admin clicks approve/deny inside an IM card.
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `OCTO_NOTIFY_TIMEOUT` | no | `3s` | HTTP client timeout for calls to octo-server's internal notify and member-role endpoints. Must be short enough that a slow IM service does not stall the tenant submit path. Note: the dispatch path wraps the entire notify call in a hard 2-second best-effort budget (see `internal/notify/best_effort.go`); values above 2s will never bind the HTTP client, because the enclosing context is cancelled first. The 3s default and any larger configured value are effectively 2s at the wire. |
+| `OCTO_MARKETPLACE_INTERNAL_TOKEN` | when notify URL set | empty | Shared secret sent as `X-Internal-Token` to octo-server's internal `/v1/internal/spaces/:space_id/members/:uid/role` and `/v1/internal/notify` endpoints. Setting `OCTO_API_URL` without this token produces a boot WARNING: review endpoints return 200 over HTTP but no approval cards are dispatched (the first signal is humans asking why their plugin was never reviewed). A mismatch produces 401s on every card dispatch and every card-action decision. |
+| `OCTO_MARKETPLACE_CARD_ACTION_SECRET` | requires `OCTO_MARKETPLACE_INTERNAL_TOKEN` | empty | Shared HMAC secret octo-server uses to sign card-action callbacks (`POST /v1/card-actions/decide`). When empty, the callback route is permanently CLOSED (every request returns 401) rather than accepting unsigned input — that is the safe rollout path. Setting this WITHOUT `OCTO_MARKETPLACE_INTERNAL_TOKEN` FAILS BOOT: signatures would verify but operator-role authorization cannot happen, so every admin click 503s and retries into the DLQ. Setting `OCTO_MARKETPLACE_INTERNAL_TOKEN` without this secret produces a boot WARNING: cards are dispatched but every admin click is rejected (401). Match this against octo-server's `MARKETPLACE_CARD_ACTION_SECRET` / equivalent. |
+| `OCTO_CARD_ACTION_MAX_SKEW` | no | `5m` | Maximum clock skew allowed on the `X-Octo-Timestamp` header (Go duration, e.g. `300s`, `2m`). Outside this window a signed request is rejected as stale to bound replay time. Hard upper bound: **15 minutes**. The default is 5m, which is already generous for inter-pod NTP drift; anything beyond 15m would leave a captured valid callback replayable against a still-valid signature for longer than any realistic delivery lag. Negative, zero, or malformed values fall back to the 5m default; values above 15m FAIL BOOT. |
+
+For local development, `scripts/dev-octo-stub.py` is a minimal octo-server that
+implements the member-role and notify endpoints; it honors
+`OCTO_MARKETPLACE_INTERNAL_TOKEN`, and its synthetic role table is configured by
+`DEV_STUB_ROLES="uid1:2,uid2:0"` (role `0` member / `1` admin / `2` owner).
 
 ## Logging Settings
 

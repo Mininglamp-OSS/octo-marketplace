@@ -28,6 +28,13 @@ type ListFilter struct {
 	// the admin listing to one visibility class (e.g. system connectors).
 	AllSpaces  bool
 	Visibility model.PluginVisibility
+	// IncludeReviewState appends the two review facts a displayed listing status
+	// needs, so 我的发布 does not have to fetch the review list and join client-side.
+	//
+	// Set ONLY for mode=mine. The marketplace grid is the hot path and every row in
+	// it is published by construction, so its display status is a constant and the
+	// two extra correlated subqueries per row would buy nothing.
+	IncludeReviewState bool
 }
 
 // pluginMetric embeds a correlated counter lookup, mirroring the expert list
@@ -38,6 +45,25 @@ func pluginMetric(column string) string {
 }
 
 var pluginMetricColumns = `,` + pluginMetric("view_count") + `,` + pluginMetric("install_count") + `,` + pluginMetric("download_count")
+
+// pluginReviewStateColumns resolves the review half of the displayed status.
+//
+// has_pending_review stays a separate EXISTS rather than being inferred from
+// latest_review_status='pending': the precedence rule is about EXISTENCE, and an
+// EXISTS on (plugin_id, status) is the cheapest question this schema can answer.
+//
+// The `(status='pending') DESC` leading sort key is what makes "the review the
+// author cares about" deterministic. The single-pending invariant guarantees at
+// most one such row, so it sorts to the top when present and the ordering
+// degrades to plain latest-by-submission otherwise.
+const pluginReviewStateColumns = `,EXISTS(SELECT 1 FROM plugin_review_requests rr
+  WHERE rr.plugin_id=p.plugin_id AND rr.status='pending' AND rr.deleted_at IS NULL)
+,(SELECT rr2.review_id FROM plugin_review_requests rr2
+  WHERE rr2.plugin_id=p.plugin_id AND rr2.deleted_at IS NULL
+  ORDER BY (rr2.status='pending') DESC, rr2.submitted_at DESC, rr2.review_id DESC LIMIT 1)
+,(SELECT rr3.status FROM plugin_review_requests rr3
+  WHERE rr3.plugin_id=p.plugin_id AND rr3.deleted_at IS NULL
+  ORDER BY (rr3.status='pending') DESC, rr3.submitted_at DESC, rr3.review_id DESC LIMIT 1)`
 
 func (r *Repo) Get(ctx context.Context, scope Scope, pluginID string) (*model.Plugin, error) {
 	var row *sql.Row
@@ -77,7 +103,11 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	if f.PlacementCode != "" {
 		group = ` GROUP BY p.plugin_id`
 	}
-	q := `SELECT ` + pluginSummaryColumns + pluginMetricColumns + from + where + group + listOrder(f) + ` LIMIT ? OFFSET ?`
+	reviewState := ``
+	if f.IncludeReviewState {
+		reviewState = pluginReviewStateColumns
+	}
+	q := `SELECT ` + pluginSummaryColumns + pluginMetricColumns + reviewState + from + where + group + listOrder(f) + ` LIMIT ? OFFSET ?`
 	rows, err := r.db.QueryContext(ctx, q, queryArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -85,7 +115,7 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	defer rows.Close()
 	var out []model.Plugin
 	for rows.Next() {
-		p, err := scanPluginSummary(rows)
+		p, err := scanPluginRow(rows, false, true, f.IncludeReviewState)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -96,6 +126,21 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	}
 	return out, total, nil
 }
+
+// listedSQL is the marketplace GRID's listing gate: only a published row is on
+// the shelf. It is deliberately NOT part of visibilitySQL, which is a scope rule
+// and still lets an owner READ their own draft (detail, versions, edit).
+//
+// Every surface that mirrors the grid must apply it — the grid itself
+// (buildListQuery), its tag chips (ListTags) and its category counts
+// (ListPlacementCategories) — or a facet advertises rows the grid will not
+// return: a chip that filters to nothing, a count that overstates the page. The
+// "mine" variants of those surfaces deliberately omit it, because 我的发布 shows
+// every state, and so does the admin listing (AllSpaces).
+//
+// 'published' is a literal, not a placeholder, so appending it never disturbs a
+// call site's argument list.
+const listedSQL = ` AND p.listing_state='published'`
 
 func buildListQuery(scope Scope, f ListFilter) (string, string, []any) {
 	from := ` FROM plugins p`
@@ -143,6 +188,17 @@ func buildListQuery(scope Scope, f ListFilter) (string, string, []any) {
 	if f.Mine {
 		where += ` AND p.owner_uid=? AND p.space_id=?`
 		args = append(args, scope.CallerUID, scope.SpaceID)
+	} else if !f.AllSpaces {
+		// The marketplace GRID shows listed plugins only — including to the author.
+		// That exclusion is what distinguishes a private draft from a published
+		// private plugin; without it "save as draft" and "publish" would look
+		// identical to the person who just pressed one of them.
+		//
+		// This is a LIST rule, not a scope rule: visibilitySQL deliberately still
+		// lets an owner READ their own draft (detail, versions, edit), and Mine —
+		// which backs 我的发布 — deliberately shows every state. The admin listing
+		// (AllSpaces) manages rows in all states and is exempt.
+		where += listedSQL
 	}
 	return from, where, args
 }
@@ -522,27 +578,28 @@ WHERE r.source_plugin_id=? AND r.status=1 AND r.deleted_at IS NULL`, pluginID).S
 }
 
 func scanPlugin(s interface{ Scan(...any) error }) (*model.Plugin, error) {
-	return scanPluginRow(s, true, false)
+	return scanPluginRow(s, true, false, false)
 }
 
 // scanPluginWithMetrics scans a row selected with pluginColumns plus the
 // correlated metric counters appended by pluginMetricColumns.
 func scanPluginWithMetrics(s interface{ Scan(...any) error }) (*model.Plugin, error) {
-	return scanPluginRow(s, true, true)
+	return scanPluginRow(s, true, true, false)
 }
 
 // scanPluginSummary scans a row selected with pluginSummaryColumns plus metric
 // counters; the package stays nil so list pages never materialize it.
 func scanPluginSummary(s interface{ Scan(...any) error }) (*model.Plugin, error) {
-	return scanPluginRow(s, false, true)
+	return scanPluginRow(s, false, true, false)
 }
 
-func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMetrics bool) (*model.Plugin, error) {
+func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMetrics, includeReviewState bool) (*model.Plugin, error) {
 	var p model.Plugin
 	var category, space, botUID, botName, version, versionName sql.NullString
+	var reviewID, reviewStatus sql.NullString
 	var tags, manifest, pkg, attachKeys []byte
 	var deleted sql.NullTime
-	dest := []any{&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &category, &tags, &p.Publisher, &p.OwnerUID, &space, &p.Visibility, &p.CreatorName, &p.CreatedByType, &botUID, &botName, &p.Icon, &p.ToolCount, &manifest}
+	dest := []any{&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &category, &tags, &p.Publisher, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &p.CreatorName, &p.CreatedByType, &botUID, &botName, &p.Icon, &p.ToolCount, &manifest}
 	if includePackage {
 		dest = append(dest, &pkg, &attachKeys)
 	}
@@ -550,8 +607,17 @@ func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMet
 	if includeMetrics {
 		dest = append(dest, &p.ViewCount, &p.InstallCount, &p.DownloadCount)
 	}
+	if includeReviewState {
+		dest = append(dest, &p.HasPendingReview, &reviewID, &reviewStatus)
+	}
 	if err := s.Scan(dest...); err != nil {
 		return nil, err
+	}
+	if reviewID.Valid {
+		p.LatestReviewID = reviewID.String
+	}
+	if reviewStatus.Valid {
+		p.LatestReviewStatus = model.ReviewStatus(reviewStatus.String)
 	}
 	p.CategoryID = nullString(category)
 	p.SpaceID = nullString(space)

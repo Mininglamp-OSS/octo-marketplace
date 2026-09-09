@@ -225,7 +225,9 @@ func TestImportCreatesSkillPluginAndAttachesDefaultPlacement(t *testing.T) {
 func TestImportReuploadPreservesIconWhenOmitted(t *testing.T) {
 	store, _, _, svc := importFixtures(t)
 	space := "space-a"
-	existing := &model.Plugin{ID: "skill-1", Name: "Existing", Type: model.PluginTypeSkill, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilitySpace, Icon: "icons/kept.png", Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[]}`)}
+	// Private: a LISTED plugin can no longer be reuploaded at all (that is an
+	// unreviewed change to what the org reads — see TestReimportOfAListedPluginIsRefused).
+	existing := &model.Plugin{ID: "skill-1", Name: "Existing", Type: model.PluginTypeSkill, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilityPrivate, Icon: "icons/kept.png", Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[]}`)}
 	store.plugins["skill-1"] = existing
 
 	// Re-upload to a fresh version with NO icon in the request.
@@ -252,7 +254,7 @@ func TestImportReuploadKeepsStoredVersionWhenOmitted(t *testing.T) {
 	store, _, _, svc := importFixtures(t)
 	space := "space-a"
 	ver := "2.4.0"
-	existing := &model.Plugin{ID: "skill-1", Name: "Existing", Type: model.PluginTypeSkill, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilitySpace, CurrentVersion: &ver, Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[]}`)}
+	existing := &model.Plugin{ID: "skill-1", Name: "Existing", Type: model.PluginTypeSkill, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilityPrivate, CurrentVersion: &ver, Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[]}`)}
 	store.plugins["skill-1"] = existing
 
 	// No Version in the request — the stored 2.4.0 label must survive.
@@ -520,5 +522,135 @@ func TestSkillMarkdownRefObjectWinsOverInlineStub(t *testing.T) {
 	content, err = New(store, blobs).SkillMarkdown(context.Background(), testCaller, "snap-1")
 	if err != nil || content != "# stub" {
 		t.Fatalf("fallback content=%q err=%v", content, err)
+	}
+}
+
+// A tenant upload lands as a DRAFT and keeps the visibility it declared. The old
+// behaviour clamped the value to private, which under the current model would
+// throw away the author's stated intent — the thing Publish reads to decide
+// whether the upload needs org review.
+func TestImportLandsDraftAndKeepsTheDeclaredVisibility(t *testing.T) {
+	for _, tc := range []struct {
+		asked model.PluginVisibility
+		want  model.PluginVisibility
+	}{
+		{"", model.PluginVisibilityPrivate}, // unset defaults to the narrowest intent
+		{model.PluginVisibilitySpace, model.PluginVisibilitySpace},
+		{model.PluginVisibilityPrivate, model.PluginVisibilityPrivate},
+	} {
+		store, _, _, svc := importFixtures(t)
+		if _, err := svc.Import(context.Background(), testCaller, ImportParams{ParseTaskID: "task-1", Visibility: tc.asked}); err != nil {
+			t.Fatalf("visibility=%q import err = %v", tc.asked, err)
+		}
+		if store.create == nil {
+			t.Fatalf("visibility=%q: nothing persisted", tc.asked)
+		}
+		if store.create.Visibility != tc.want {
+			t.Errorf("import asked %q, PERSISTED visibility %q, want %q", tc.asked, store.create.Visibility, tc.want)
+		}
+		if store.create.ListingState != model.PluginListingStateDraft {
+			t.Errorf("import asked %q, PERSISTED listing_state %q; a fresh upload must not be listed", tc.asked, store.create.ListingState)
+		}
+	}
+}
+
+// A re-import must not delist an already-approved plugin (nor promote a private
+// one). It therefore replaces LIVE content without re-review — deliberate, and
+// recorded in the divergence note.
+func TestReimportPreservesTheExistingVisibility(t *testing.T) {
+	// Only `private` is exercised here: a LISTED plugin cannot be reuploaded at
+	// all any more (TestReimportOfAListedPluginIsRefused), so "preserves space" is
+	// no longer a reachable outcome.
+	for _, existing := range []model.PluginVisibility{model.PluginVisibilityPrivate} {
+		store, _, _, svc := importFixtures(t)
+		space := "space-a"
+		store.plugins["plugin-1"] = &model.Plugin{
+			ID: "plugin-1", Name: "My Skill", Type: model.PluginTypeSkill,
+			OwnerUID: "user-1", SpaceID: &space, Visibility: existing,
+			Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{"plugin_name":"My Skill","name":"my-skill","description":"d"}`),
+			Package: json.RawMessage(`{"attachments":[]}`),
+		}
+		// A client asking to widen the plugin on reupload must not get it.
+		if _, err := svc.Import(context.Background(), testCaller, ImportParams{
+			ParseTaskID: "task-1", PluginID: "plugin-1", Visibility: model.PluginVisibilitySpace,
+		}); err != nil {
+			t.Fatalf("existing=%q reupload err = %v", existing, err)
+		}
+		if store.update == nil {
+			t.Fatalf("existing=%q: nothing persisted", existing)
+		}
+		if store.update.Visibility != existing {
+			t.Fatalf("existing=%q, PERSISTED %q; a reupload must neither promote nor delist", existing, store.update.Visibility)
+		}
+	}
+}
+
+// resolveImportFields is the import path's own visibility decision, tested
+// directly because Service.createWithID independently validates it on a fresh
+// create: without this the import-side default could be deleted and the
+// end-to-end import tests would still pass on the create path alone.
+func TestResolveImportFieldsDefaultsToPrivateAndPreservesIntent(t *testing.T) {
+	task := &skillrepo.ParseTaskRow{ID: "task-1", ResultName: "My Skill", ResultVersion: "2.0.0"}
+	space := "space-a"
+	listed := &model.Plugin{
+		ID: "plugin-1", Name: "My Skill", Visibility: model.PluginVisibilitySpace, SpaceID: &space,
+		ListingState: model.PluginListingStatePublished,
+		Manifest:     json.RawMessage(`{"plugin_name":"My Skill","name":"my-skill","description":"d"}`),
+	}
+	tests := []struct {
+		name        string
+		params      ImportParams
+		systemAdmin bool
+		old         *model.Plugin
+		want        model.PluginVisibility
+	}{
+		{name: "fresh tenant import defaults private", want: model.PluginVisibilityPrivate},
+		{name: "fresh tenant import asking for space keeps space",
+			params: ImportParams{Visibility: model.PluginVisibilitySpace}, want: model.PluginVisibilitySpace},
+		{name: "reupload of a listed plugin keeps space",
+			params: ImportParams{Visibility: model.PluginVisibilityPrivate}, old: listed, want: model.PluginVisibilitySpace},
+		{name: "system admin import is untouched",
+			params: ImportParams{Visibility: model.PluginVisibilitySystem}, systemAdmin: true, want: model.PluginVisibilitySystem},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := resolveImportFields(tt.params, task, tt.systemAdmin, tt.old)
+			if err != nil {
+				t.Fatalf("resolveImportFields: %v", err)
+			}
+			if f.visibility != tt.want {
+				t.Fatalf("visibility = %q, want %q", f.visibility, tt.want)
+			}
+		})
+	}
+	// An explicitly invalid value must still be a 400, not a silent downgrade.
+	if _, err := resolveImportFields(ImportParams{Visibility: model.PluginVisibilityPublic}, task, false, nil); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("public visibility err = %v, want ErrInvalidRequest", err)
+	}
+}
+
+// The re-import path goes through Service.update, so the listed-plugin lock
+// covers it too: replacing a listed skill's package is an unreviewed change to
+// what the whole Space is reading.
+func TestReimportOfAListedPluginIsRefused(t *testing.T) {
+	store, _, tasks, svc := importFixtures(t)
+	space := "space-a"
+	store.plugins["plugin-1"] = &model.Plugin{
+		ID: "plugin-1", Name: "My Skill", Type: model.PluginTypeSkill,
+		OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilitySpace,
+		ListingState: model.PluginListingStatePublished,
+		Tags:         json.RawMessage(`[]`), Manifest: json.RawMessage(`{"plugin_name":"My Skill","name":"my-skill","description":"d"}`),
+		Package: json.RawMessage(`{"attachments":[]}`),
+	}
+	_, err := svc.Import(context.Background(), testCaller, ImportParams{ParseTaskID: "task-1", PluginID: "plugin-1"})
+	if !errors.Is(err, ErrListedRequiresReview) {
+		t.Fatalf("err = %v, want ErrListedRequiresReview", err)
+	}
+	if store.update != nil {
+		t.Fatal("an unreviewed reupload of a listed plugin was PERSISTED")
+	}
+	// The parse task is released so the author can retry through the review flow.
+	if len(tasks.released) != 1 {
+		t.Fatalf("released = %#v; a refused reupload must not consume the upload", tasks.released)
 	}
 }

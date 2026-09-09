@@ -199,16 +199,71 @@ func resolveImportFields(p ImportParams, task *skillrepo.ParseTaskRow, systemAdm
 		_ = json.Unmarshal(task.ResultTags, &f.tags)
 	}
 	if f.visibility == "" {
-		f.visibility = model.PluginVisibilitySpace
+		// Default to the narrowest intent. This used to default to `space` and get
+		// clamped to `private` afterwards, which amounted to the same thing; now that
+		// the declared value survives, the default has to be the safe one directly.
+		f.visibility = model.PluginVisibilityPrivate
 	}
 	// Match the legacy skill upload rule: uploads never publish publicly.
 	if f.visibility == model.PluginVisibilityPublic {
 		return nil, ErrInvalidRequest
 	}
-	if !validName(f.pluginName) || f.name == "" || !validVersion(f.version) || !validVisibility(f.visibility, systemAdmin) {
+	if !validName(f.pluginName) || f.name == "" || !validVisibility(f.visibility, systemAdmin) {
 		return nil, ErrInvalidRequest
 	}
+	// The version may come from the uploaded package's own frontmatter rather than
+	// from the caller. Since the format was tightened to x.y.z, a zip declaring
+	// `1.0` or `1.0.0-beta.1` — accepted for as long as those packages have
+	// existed — would fail the whole upload over a field the author did not type.
+	//
+	// A caller-SUBMITTED label is still validated, because that one they can fix.
+	// A package-derived one falls back to the default: the upload is the point, and
+	// the author can set a real label when they publish.
+	//
+	// The one exception is the label the row ALREADY holds. A reupload form is
+	// prefilled from the row (octo-web's edit modal seeds the version input from
+	// current_version), so on a package-only reupload the "submitted" label is
+	// routinely the row's own — and on a row minted before the tightening it no
+	// longer parses. Refusing it here would contradict the exemption every other
+	// save path grants (see WriteRequest.grandfatheredVersion) and would leave the
+	// reupload route as the single place a legacy-labeled skill stays unsavable,
+	// 400ing on a value the row already stores.
+	if f.versionSubmitted {
+		if !validVersion(f.version) && !isStoredVersionLabel(old, f.version) {
+			return nil, &ReviewFieldError{Field: "version", Reason: "invalid"}
+		}
+	} else if !validVersion(f.version) {
+		f.version = defaultCurrentVersion
+	}
+	// An upload lands as a DRAFT whatever visibility it declares (buildWrite stamps
+	// listing_state), so the declared value is kept rather than clamped: an author
+	// who uploads intending 仅本组织可见 says so once, here, and Publish routes it
+	// through review.
+	//
+	// A re-import keeps whatever visibility the plugin already has, because
+	// silently rewriting the intent of a row mid-edit is surprising. It does NOT
+	// let the re-import through: `Service.update` refuses a PUBLISHED org-visible
+	// plugin outright with ErrListedRequiresReview (409), so re-importing a listed
+	// plugin never replaces live content — the author submits a review request
+	// (skills via `parse_task_id`) and approval is what swaps it. Re-importing a
+	// draft or delisted row still replaces it directly; nobody else can read it.
+	// Tests: TestReimportOfAListedPluginIsRefused,
+	// TestReimportPreservesTheExistingVisibility.
+	if !systemAdmin && old != nil && old.Visibility != "" {
+		f.visibility = old.Visibility
+	}
 	return f, nil
+}
+
+// isStoredVersionLabel reports whether v is byte-for-byte (modulo surrounding
+// space) the version label the row already holds.
+//
+// Read from the STORED row, never from the request, so a caller cannot smuggle a
+// malformed label past the format gate by asserting it is grandfathered — the
+// same property WriteRequest.grandfatheredVersion relies on.
+func isStoredVersionLabel(old *model.Plugin, v string) bool {
+	return old != nil && old.CurrentVersion != nil &&
+		strings.TrimSpace(*old.CurrentVersion) == strings.TrimSpace(v)
 }
 
 func (s *Service) importConsumedTask(ctx context.Context, caller Caller, task *skillrepo.ParseTaskRow, f *importFields, updateID string, oldPlugin *model.Plugin) (*Detail, error) {

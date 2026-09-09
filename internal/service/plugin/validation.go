@@ -34,7 +34,15 @@ const (
 const defaultCurrentVersion = "1.0.0"
 
 var (
-	versionPattern    = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`)
+	// A version label is three numeric parts and nothing else: 1.0.1. The old
+	// pattern accepted any identifier-ish string, which is how labels like
+	// "v999", "1.0.0lll" and "oooo1.0.0" reached production — none of them can be
+	// ordered against another, so "the version may only go up" was unanswerable.
+	//
+	// Tightening this alone would strand those rows: every save re-sends the
+	// stored label, so an existing plugin would become permanently uneditable.
+	// versionNotRegressed exempts an UNCHANGED label for exactly that reason.
+	versionPattern    = regexp.MustCompile(`^\d{1,9}\.\d{1,9}\.\d{1,9}$`)
 	relationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	// iconKeyPattern identifies storage-object-key shaped icons that the read
 	// path resolves to presigned URLs (legacy skill icons are object keys).
@@ -100,11 +108,30 @@ func validVisibility(v model.PluginVisibility, systemAdmin bool) bool {
 	}
 }
 
+// tenantVisibilityAllowed was removed with the introduction of listing_state.
+// It encoded "a tenant may keep its visibility or lower it to private, never
+// raise it", which was the gate that kept a single upsert from bypassing review
+// while `private` doubled as the draft state. visibility is now a declared intent
+// that lists nothing on its own, so raising it on an unlisted row is meaningless
+// and lowering it is no longer a way to self-delist. The gate that replaced it is
+// listing_state: ErrListedRequiresReview refuses edits to a published org-visible
+// row, and only ApproveReview and Publish can set published.
+
 func validName(v string) bool {
 	return v != "" && utf8.ValidString(v) && len(v) <= maxNameBytes && !strings.ContainsRune(v, '\x00')
 }
 
-func validVersion(v string) bool    { return versionPattern.MatchString(strings.TrimSpace(v)) }
+func validVersion(v string) bool { return versionPattern.MatchString(strings.TrimSpace(v)) }
+
+// versionNotRegressed reports whether `next` may replace `current`.
+//
+// The ordering rule itself lives in model.VersionNotRegressed so the unlocked
+// service pre-check here and the authoritative locked re-check inside
+// repository.InsertReviewRequest share one implementation and cannot drift. This
+// stays a package-local alias so existing call sites read naturally.
+func versionNotRegressed(current, next string) bool {
+	return model.VersionNotRegressed(current, next)
+}
 func validRelationID(v string) bool { return relationIDPattern.MatchString(v) }
 
 // relationEndpointProbe* are fixed well-formed identities so the octo-plugin-

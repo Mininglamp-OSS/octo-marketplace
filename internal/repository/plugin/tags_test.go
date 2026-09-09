@@ -18,7 +18,7 @@ func TestListTagsAggregatesVisibleRowsWithFilters(t *testing.T) {
 	query := `SELECT jt.tag, COUNT\(DISTINCT p.plugin_id\) cnt FROM plugins p` +
 		` JOIN plugin_placements pp ON pp.plugin_id=p.plugin_id AND pp.placement_code=\? AND pp.visible=1` +
 		` JOIN JSON_TABLE\(p.tags_json, '\$\[\*\]' COLUMNS \(tag VARCHAR\(128\) CHARACTER SET utf8mb4 PATH '\$'\)\) jt` +
-		` WHERE p.status=1 AND p.deleted_at IS NULL AND p.is_embedded=0 AND \(p.visibility IN \('public','system'\) OR \(p.space_id = \? AND \(p.visibility = 'space' OR p.owner_uid = \?\)\)\)` +
+		` WHERE p.status=1 AND p.deleted_at IS NULL AND p.is_embedded=0 AND \(p.visibility IN \('public','system'\) OR \(p.space_id = \? AND \(\(p.visibility = 'space' AND p.listing_state = 'published'\) OR p.owner_uid = \?\)\)\)` +
 		` AND p.plugin_type=\? AND p.owner_uid=\? AND p.space_id=\? AND jt.tag IS NOT NULL AND jt.tag <> ''` +
 		` AND jt.tag LIKE \? ESCAPE '!'` +
 		` GROUP BY jt.tag ORDER BY cnt DESC, jt.tag ASC LIMIT \?`

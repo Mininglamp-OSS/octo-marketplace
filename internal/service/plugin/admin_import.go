@@ -152,6 +152,18 @@ func (s *Service) adminImportConsumedTask(ctx context.Context, caller Caller, ta
 
 	// REUPLOAD: replace the package while preserving the row's visibility, Space,
 	// owner, and creation provenance — never force-publish or flip visibility.
+	//
+	// The same two stored-label version rules AdminUpdate applies. The
+	// grandfathering half is what makes resolveImportFields' stored-label
+	// exemption actually reach the store on this path: buildWrite would otherwise
+	// still refuse the row's own pre-tightening label, and as a bare
+	// ErrInvalidRequest ({"field":"body"}) rather than the version field error the
+	// tenant path produces. The forward-only half closes the admin twin of the
+	// AdminUpdate gap — reuploading at a lower label is the same regression.
+	if err := applyStoredVersionRules(req, oldPlugin); err != nil {
+		s.deleteObjects(ctx, uploaded...)
+		return nil, err
+	}
 	p, rels, err := s.adminEffectiveWrite(ctx, caller, updateID, *req, oldPlugin.Visibility, effSpace)
 	if err != nil {
 		s.deleteObjects(ctx, uploaded...)

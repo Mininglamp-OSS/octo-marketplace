@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strconv"
 
@@ -27,6 +28,53 @@ type Mutation struct {
 	// Changelog is the optional note stored on that snapshot.
 	SnapshotVersion bool
 	Changelog       *string
+	// ResetListingToDraft un-lists the plugin as part of this save. The ONLY
+	// caller is Service.update, for a published row whose declared visibility
+	// CHANGED (not merely widened); see the comment at the UPDATE statement for
+	// why that case cannot leave the row published. When EnforceListingGate is
+	// set this flag is IGNORED and the reset is re-derived from the locked row
+	// instead — the service value is a hint the locked truth overrides.
+	ResetListingToDraft bool
+	// RefusePendingReview aborts the update with ErrReviewPending if an open
+	// review request exists on the plugin, checked under the plugin row's lock.
+	// Set by Service.update for a non-admin visibility CHANGE: the service already
+	// refuses that case from an UNLOCKED HasPendingReview, but a concurrent
+	// SubmitReview can land between that read and this transaction, after which
+	// ApproveReview would stamp visibility=space against the author's since-changed
+	// intent (or, on a private target, strand the row). Re-checking under lock here
+	// closes the window in the same idiom PublishPlugin uses.
+	RefusePendingReview bool
+	// EnforceListingGate makes Repo.Update re-derive the two listing decisions
+	// from the plugin row it LOCKS rather than trusting the service's unlocked
+	// read: (a) a locked (published AND space) row is refused with
+	// ErrListedRequiresReview, and (b) ResetListingToDraft is recomputed as
+	// "locked row is published AND the declared visibility differs from the
+	// locked visibility". Set by Service.update for every non-admin caller. This
+	// closes the window where an approval (or a publish) commits between the
+	// service's read and this write and turns an edit that looked legal on the
+	// stale value into unreviewed content on a live org row (or a gate bypass).
+	EnforceListingGate bool
+	// EnforceForwardOnlyVersion makes Repo.Update re-derive the version ordering
+	// rule against the label on the plugin row it LOCKS. Both write surfaces check
+	// it first from an UNLOCKED read — Service.update (service.go) and
+	// Service.AdminUpdate via adminVersionGuard (admin.go) — and both then take a
+	// FOR UPDATE lock several round trips later. Anything that advances
+	// current_version in that window (an ApproveReview publishing the frozen label,
+	// a concurrent save) makes the earlier comparison stale, and the UPDATE would
+	// stamp a label the locked row has already moved past. Restating it here is the
+	// same discipline RefusePendingReview and EnforceListingGate apply, against the
+	// same lock, and it shares one implementation (model.VersionNotRegressed) with
+	// the unlocked pre-checks and with InsertReviewRequest's locked re-check so the
+	// three cannot drift.
+	//
+	// Set by both update surfaces, so the locked verdict is authoritative rather
+	// than additional: it is evaluated on the same two values the pre-check used
+	// (stored label vs submitted label), so a caller the pre-check exempted — no
+	// stored label, an omitted version that carries the stored one forward, or a
+	// legacy unorderable current — is exempt here for the same reason and not by a
+	// separate rule. Container reupload and the create paths do not set it: a graph
+	// rebuild mints its own labels, and a create has no prior label to regress from.
+	EnforceForwardOnlyVersion bool
 }
 
 // RelationSync reports the outcome of synchronizing a Plugin's one-level
@@ -107,10 +155,20 @@ func jsonColumn(raw []byte) any {
 
 // insertPlugin writes one current-state plugin row. Callers hold the
 // transaction and have already locked the category and relation targets.
+//
+// listing_state is written explicitly rather than left to the column DEFAULT:
+// RebuildGraph re-inserts a container's embedded children, and relying on a
+// default there is how a draft container's children would silently acquire a
+// different listing state from their parent. An unset value falls back to the
+// fail-closed 'draft' rather than to whatever the schema happens to default to.
 func insertPlugin(ctx context.Context, tx *sql.Tx, now interface{}, p model.Plugin) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO plugins (plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,
+	listing := p.ListingState
+	if listing == "" {
+		listing = model.PluginListingStateDraft
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO plugins (plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,
 creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version_id,current_version,status,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Type, p.IsEmbedded, p.CategoryID, string(p.Tags), p.Publisher, p.OwnerUID, p.SpaceID, p.Visibility, p.CreatorName, p.CreatedByType, p.CreatedByBotUID, p.CreatedByBotName, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, p.CurrentVersion, p.Status, now, now)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Type, p.IsEmbedded, p.CategoryID, string(p.Tags), p.Publisher, p.OwnerUID, p.SpaceID, p.Visibility, listing, p.CreatorName, p.CreatedByType, p.CreatedByBotUID, p.CreatedByBotName, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, p.CurrentVersion, p.Status, now, now)
 	if err != nil {
 		return wrapped("create", err)
 	}
@@ -268,7 +326,8 @@ func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) (
 // prior op committed. This closes the concurrent-reupload / delete-vs-reupload
 // race where a stale snapshot severed the top→child edge but soft-deleted the
 // already-gone old child, leaving the swapped-in child live and unreachable.
-func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newChildren []Mutation) (*RelationSync, error) {
+func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newChildren []Mutation) (_ *RelationSync, err error) {
+	defer func() { err = classifyDeadlock(err) }()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -295,12 +354,16 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 		return nil, err
 	}
 	// P2-1: the service stamped the top's preserved identity and each child's
-	// visibility/Space/owner from an UNLOCKED pre-parse read. Re-derive the
-	// race-sensitive fields from the row locked here (`before`) so a concurrent
-	// visibility/Space/owner change during the multi-second parse cannot be
-	// silently reverted or promoted. The top's owner_uid/space_id are preserved by
-	// omission from its UPDATE, but visibility IS written, so re-stamp it; every
-	// new child is freshly inserted below, so re-stamp all three. A preserved legacy
+	// visibility/listing_state/Space/owner from an UNLOCKED pre-parse read.
+	// Re-derive the race-sensitive fields from the row locked here (`before`) so a
+	// concurrent visibility/Space/owner change — or a delist/approve — during the
+	// multi-second parse cannot be silently reverted or promoted. The top's
+	// owner_uid/space_id are preserved by omission from its UPDATE, and so is its
+	// listing_state; visibility IS written, so re-stamp it. Every new child is
+	// freshly inserted below, so re-stamp all four there: a child whose listing
+	// state disagrees with the top is either independently readable (child
+	// published under a draft top) or breaks every non-owner install with
+	// ErrDependencyHidden (child draft under a published top). A preserved legacy
 	// `public` visibility on the locked row is normalized to `system` here (the
 	// single NormalizeLegacyVisibility helper) so a reupload stops persisting the
 	// retired value. Residual: the top's icon and category still come from the
@@ -313,6 +376,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	topPlugin.OwnerUID = before.OwnerUID
 	for i := range newChildren {
 		newChildren[i].Plugin.Visibility = lockedVisibility
+		newChildren[i].Plugin.ListingState = before.ListingState
 		newChildren[i].Plugin.SpaceID = before.SpaceID
 		newChildren[i].Plugin.OwnerUID = before.OwnerUID
 	}
@@ -447,13 +511,24 @@ func softDeleteRebuiltChild(ctx context.Context, tx *sql.Tx, newID func() string
 WHERE source_plugin_id=? AND deleted_at IS NULL`, now, now, id); err != nil {
 		return wrapped("rebuild delete child relations", err)
 	}
+	// Cascade the same way the single-row Delete does, so the invariant is
+	// structural: no path that soft-deletes a plugins row leaves a pending review
+	// request pointing at it. Reaching it through the SERVICE requires a row that
+	// became embedded after submitting (SubmitReview refuses is_embedded), so in
+	// practice this matches zero rows — that is the point. Placing the cascade at
+	// the soft-delete itself rather than at the two callers also covers RebuildGraph,
+	// whose replaced children are removed exactly as permanently.
+	if err = cancelPendingReviewFor(ctx, tx, now, id, top.OperatorID, top.OperatorName, reasonCanceledOnDelete); err != nil {
+		return err
+	}
 	m := Mutation{OperatorID: top.OperatorID, OperatorName: top.OperatorName, RequestID: top.RequestID, Remark: top.Remark}
 	return insertAudit(ctx, tx, newID(), now, *before, "delete", m, before.PluginHash, "")
 }
 
 // Update atomically updates an owned Plugin, synchronizes its one-level
 // relations to the submitted target state, and appends audit.
-func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (*RelationSync, error) {
+func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *RelationSync, err error) {
+	defer func() { err = classifyDeadlock(err) }()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -462,6 +537,61 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (*RelationSy
 	before, err := getOwnedForUpdate(ctx, tx, scope, m.Plugin.ID)
 	if err != nil {
 		return nil, err
+	}
+	// A visibility change while a review is pending is refused by the service, but
+	// from an UNLOCKED read. Re-check under the plugin row lock this transaction now
+	// holds so a SubmitReview that committed after the service's read cannot slip a
+	// pending request past the guard and have ApproveReview publish against the
+	// author's since-changed intent. The service passes this only for the
+	// visibility-change case; a content-only save leaves it false.
+	if m.RefusePendingReview {
+		var pendingID string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT review_id FROM plugin_review_requests
+			  WHERE plugin_id=? AND status='pending' AND deleted_at IS NULL LIMIT 1`,
+			m.Plugin.ID).Scan(&pendingID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, wrapped("check pending review", err)
+		} else if pendingID != "" {
+			return nil, ErrReviewPending
+		}
+	}
+	// Re-derive the two listing decisions from the row this transaction LOCKS,
+	// not from the service's earlier unlocked read. An approval or a publish can
+	// commit between that read and this lock; deciding from `before` (the locked
+	// row) instead of the stale value closes the window in which an edit that
+	// looked legal turns into unreviewed content on a live org row, or a widening
+	// that overlaps a publish lists a row that never had a review request.
+	//
+	//   (a) A locked (published AND space) row cannot be edited through this path
+	//       at all — it must go through the review workflow. This is the same
+	//       gate the service applies from its unlocked read (ErrListedRequiresReview);
+	//       restating it here makes the locked row authoritative.
+	//   (b) Un-list-on-widen: a published row whose declared visibility differs
+	//       from the locked visibility drops to draft. Recomputed here so a
+	//       publish that committed after the service's read (turning a draft row
+	//       published under the lock) still un-lists on the same save.
+	//
+	// The service passes EnforceListingGate for every non-admin caller; the exempt
+	// system admin keeps the platform-operator escape hatch and is not gated here.
+	resetListing := m.ResetListingToDraft
+	if m.EnforceListingGate {
+		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
+			return nil, ErrListedRequiresReview
+		}
+		resetListing = before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility
+	}
+	// Forward-only, restated against the LOCKED label. Both update surfaces compare
+	// the submitted label against an unlocked read taken several round trips before
+	// this lock; an ApproveReview that publishes a frozen label in that window (or
+	// a concurrent save) advances current_version, and without this the UPDATE
+	// would stamp a label the locked row has already moved past — the same staleness
+	// the two guards above close for the listing decisions. The rule and its
+	// grandfathering both live in model.VersionNotRegressed, shared with the
+	// unlocked pre-checks and with InsertReviewRequest, so an unchanged label and a
+	// legacy unorderable one behave here exactly as they do there.
+	if m.EnforceForwardOnlyVersion && before.CurrentVersion != nil && m.Plugin.CurrentVersion != nil &&
+		!model.VersionNotRegressed(*before.CurrentVersion, *m.Plugin.CurrentVersion) {
+		return nil, ErrVersionRegressed
 	}
 	now := r.now()
 	p := m.Plugin
@@ -491,8 +621,27 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (*RelationSy
 	if scope.Admin {
 		updWhere, updTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{p.ID}
 	}
+	// An ordinary save cannot change listing_state — EXCEPT when the caller is
+	// changing the declared audience of an already-listed plugin. Writing the new
+	// visibility while leaving listing_state='published' would list the plugin to
+	// the whole organization with no review, which is the one thing this workflow
+	// exists to prevent. Dropping back to 'draft' costs the author nothing (a
+	// published PRIVATE plugin was visible only to them) and puts the row back on
+	// the normal 发布 path, where the new visibility routes it through review.
+	//
+	// Set by Service.update, which is the only place that can compare the declared
+	// visibility against the persisted one. Its condition is any CHANGE, not a
+	// widening: for a tenant the only change reaching here is the widening one
+	// (published+space is refused earlier), and for the exempt system admin a
+	// narrowing drops the row to draft too, which is the safe direction. For a
+	// non-admin caller the decision above (resetListing) overrides the service's
+	// hint with the value derived from the LOCKED row.
+	listingReset := ``
+	if resetListing {
+		listingReset = `listing_state='draft',`
+	}
 	updArgs := append([]any{p.Name, p.Type, p.CategoryID, string(p.Tags), p.Publisher, p.Visibility, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.Status, now}, updTail...)
-	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
+	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
 `+updWhere, updArgs...)
 	if err != nil {
 		return nil, wrapped("update", err)
@@ -547,7 +696,8 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (*RelationSy
 // Delete soft-deletes an owned Plugin, invalidates its outgoing relation edges,
 // and appends an audit event. A live Plugin cannot be deleted while another
 // live, active Plugin has a live, active incoming relation to it.
-func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, operatorName, requestID string, remark *string) error {
+func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, operatorName, requestID string, remark *string) (err error) {
+	defer func() { err = classifyDeadlock(err) }()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -556,6 +706,19 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	before, err := getOwnedForUpdate(ctx, tx, scope, pluginID)
 	if err != nil {
 		return err
+	}
+	// Re-derive the listed-plugin gate against the LOCKED row. The service refuses
+	// published+space from an unlocked read taken several round trips earlier; an
+	// ApproveReview that commits between that read and this FOR UPDATE lock can
+	// promote the draft to space+published, and without this re-check the soft
+	// delete below takes out a plugin the org just listed — exactly what the
+	// service-level comment ("the author deliberately cannot do this") promises
+	// cannot happen. This is the same locked re-derivation Repo.Update performs via
+	// EnforceListingGate for edits (write.go:554-557). System admins are exempt
+	// (they are the Delist actor themselves and can remove abusive listed content).
+	if !scope.Admin &&
+		before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
+		return ErrListedRequiresReview
 	}
 	if err = rejectLiveIncomingRelations(ctx, tx, pluginID); err != nil {
 		return err
@@ -575,6 +738,51 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	_, err = tx.ExecContext(ctx, `UPDATE plugin_relations SET deleted_at=?,updated_at=?
 WHERE source_plugin_id=? AND deleted_at IS NULL`, now, now, pluginID)
 	if err != nil {
+		return err
+	}
+	// Cascade onto any open review request, in this transaction. Without it the
+	// request stays `pending` forever and NOBODY can settle it — see
+	// cancelPendingReviewFor for why every read and every decision path refuses a
+	// deleted plugin's request, and why relaxing one of them instead would be dead
+	// code. Same cascade DelistPlugin performs, deliberately through the same
+	// helper rather than a second idiom.
+	//
+	// Storage objects are deliberately NOT collected, and the argument is a
+	// DIFFERENT one from delist's.
+	//
+	// Delist keeps its hands off because the author never abandoned the submission:
+	// a third party's takedown cancelled it as a side effect. That test does not
+	// protect anything here. Delete is the author acting on their own content — the
+	// same actor and the same submission that CancelReview destroys objects for —
+	// so on who-is-acting alone this belongs on the collecting side of the line.
+	//
+	// What decides it instead is that this is a SOFT delete. The plugins row, its
+	// whole plugin_versions history and its live attachment sidecar all survive on
+	// purpose, and nothing in this service ever deletes a plugin's own objects:
+	// neither Service.Delete nor the admin delete touches storage at all. So
+	// collecting only the pending submission's spill would make this transaction the
+	// single place a soft delete performs an irreversible external side effect — on
+	// the smallest slice of the objects it is knowingly leaving behind, while the
+	// larger leak it sits inside stays untouched.
+	//
+	// The asymmetry settles it. NOT collecting is recoverable: every row a sweeper
+	// would need survives the soft delete, so the same difference (a canceled
+	// request's frozen sidecar minus retainedAttachmentKeys, which reads the live
+	// sidecar and every version snapshot and is not filtered by deleted_at) can
+	// still be computed later, with more context. Collecting now is not —
+	// object-storage deletes do not come back — and it would prejudge a question
+	// nobody has answered: whether `deleted_at` on a plugin means "recoverable".
+	// There is no undelete path in this repository today, but
+	// migrations/sql/20260902-00-plugin-listing-state.sql deliberately fails CLOSED
+	// against a manual one ("so an accidental undelete does not republish it"),
+	// which is not the posture of a codebase that treats a soft-deleted plugin as
+	// destroyed.
+	//
+	// Residual, stated plainly: the canceled submission's spilled objects leak, as
+	// do the plugin's own. Reclaiming them is one deliberate decision about
+	// plugin-delete object GC — live sidecar, version sidecars and any frozen
+	// submission together — not a fragment of it bolted onto this cascade.
+	if err = cancelPendingReviewFor(ctx, tx, now, pluginID, operatorID, operatorName, reasonCanceledOnDelete); err != nil {
 		return err
 	}
 	m := Mutation{OperatorID: operatorID, OperatorName: operatorName, RequestID: requestID, Remark: remark}
@@ -599,7 +807,8 @@ WHERE source_plugin_id=? AND deleted_at IS NULL`, now, now, pluginID)
 // softDeleteRebuiltChild, which is idempotent and carries the same operator
 // identity. A failure at any step rolls the whole delete back. Connector/skill
 // deletes stay on the single-row Delete.
-func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, operatorID, operatorName, requestID string, remark *string) error {
+func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, operatorID, operatorName, requestID string, remark *string) (err error) {
+	defer func() { err = classifyDeadlock(err) }()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -608,6 +817,16 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	before, err := getOwnedForUpdate(ctx, tx, scope, topID)
 	if err != nil {
 		return err
+	}
+	// Same locked re-derivation as Repo.Delete: a concurrent ApproveReview can
+	// promote a draft container to space+published between the service's unlocked
+	// read and this FOR UPDATE lock. Graph roots essentially never carry incoming
+	// live relations, so rejectLiveIncomingRelations cannot protect them; the
+	// listing-gate check is what prevents a published org container from vanishing
+	// at its author's discretion.
+	if !scope.Admin &&
+		before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
+		return ErrListedRequiresReview
 	}
 	if err = rejectLiveIncomingRelations(ctx, tx, topID); err != nil {
 		return err
@@ -634,6 +853,14 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE plugin_relations SET deleted_at=?,updated_at=?
 WHERE source_plugin_id=? AND deleted_at IS NULL`, now, now, topID); err != nil {
+		return err
+	}
+	// The top takes the same cascade as the single-row Delete, including its
+	// deliberate refusal to collect the submission's storage objects; the argument
+	// is written out there. Each embedded child gets its own inside
+	// softDeleteRebuiltChild, so no plugins row this transaction soft-deletes is
+	// left with a pending request pointing at it.
+	if err = cancelPendingReviewFor(ctx, tx, now, topID, operatorID, operatorName, reasonCanceledOnDelete); err != nil {
 		return err
 	}
 	if err = insertAudit(ctx, tx, r.id(), now, *before, "delete", m, before.PluginHash, ""); err != nil {
@@ -1028,6 +1255,11 @@ func decodeSidecarMap(raw json.RawMessage) map[string]string {
 	return m
 }
 
+// defaultPlacementCode is the one placement code the unified plugin surface
+// manages. Every market list INNER JOINs it on `visible=1`; publish-era
+// multi-scene placements are gone.
+const defaultPlacementCode = "default"
+
 // syncDefaultPlacement keeps a plugin listable across a save. Market list pages
 // INNER JOIN the "default" placement, and after publish-removal no non-create
 // path inserts one — so a plugin created before auto-placement (e.g. an old
@@ -1039,18 +1271,61 @@ func decodeSidecarMap(raw json.RawMessage) map[string]string {
 // multi-scene placements are gone.
 func syncDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, pluginID string, categoryID *string) error {
 	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM plugin_placements WHERE plugin_id=? AND placement_code=?)`, pluginID, "default").Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM plugin_placements WHERE plugin_id=? AND placement_code=?)`, pluginID, defaultPlacementCode).Scan(&exists); err != nil {
 		return wrapped("check placement", err)
 	}
 	if !exists {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_placements (placement_id,placement_code,plugin_id,category_id,visible,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
-			newID(), "default", pluginID, categoryID, true, 0, now, now); err != nil {
+			newID(), defaultPlacementCode, pluginID, categoryID, true, 0, now, now); err != nil {
 			return wrapped("insert default placement", err)
 		}
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE plugin_placements SET category_id=?,updated_at=? WHERE plugin_id=?`, categoryID, now, pluginID); err != nil {
 		return wrapped("update placements", err)
+	}
+	return nil
+}
+
+// ensureVisibleDefaultPlacement makes the plugin's default placement exist and be
+// visible. Approval is the moment a plugin becomes org-readable, and the market
+// list applies TWO independent filters: the visibility predicate AND an INNER
+// JOIN on a `visible=1` default placement. Flipping only `plugins.visibility`
+// therefore lists nothing for a row whose placement is missing (pre-auto-placement
+// legacy) or hidden (publish-era `visible=0`) — and the author cannot repair it,
+// because a listed plugin's ordinary write path is 409 `listed_requires_review`.
+// So approve self-heals the placement inside the same transaction as the status
+// and visibility swap.
+//
+// It is deliberately idempotent: an already-visible placement is left untouched
+// (no `updated_at` churn), a hidden one is flipped, and a missing one is
+// inserted. The insert carries `ON DUPLICATE KEY UPDATE visible=1` because the
+// unique key is (placement_code, plugin_id, category_key) — a concurrent writer
+// that inserted first must not turn approval into a duplicate-key error.
+//
+// Only `visible` is forced. Category stays whatever the placement already
+// carries; syncDefaultPlacement owns category reconciliation on the write path.
+func ensureVisibleDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, pluginID string, categoryID *string) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM plugin_placements WHERE plugin_id=? AND placement_code=?)`,
+		pluginID, defaultPlacementCode).Scan(&exists); err != nil {
+		return wrapped("check default placement", err)
+	}
+	if exists {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE plugin_placements SET visible=1,updated_at=? WHERE plugin_id=? AND placement_code=? AND visible=0`,
+			now, pluginID, defaultPlacementCode); err != nil {
+			return wrapped("reveal default placement", err)
+		}
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO plugin_placements (placement_id,placement_code,plugin_id,category_id,visible,sort_order,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?)
+		 ON DUPLICATE KEY UPDATE visible=1,updated_at=VALUES(updated_at)`,
+		newID(), defaultPlacementCode, pluginID, categoryID, true, 0, now, now); err != nil {
+		return wrapped("insert default placement", err)
 	}
 	return nil
 }

@@ -103,12 +103,12 @@ func TestListVersionsCrossSpaceReturnsNotFoundBeforeCount(t *testing.T) {
 }
 
 func ownedPluginRow(id string, scope Scope, now time.Time) *sqlmock.Rows {
-	return sqlmock.NewRows(pluginTestColumns()).AddRow(id, "Plugin", model.PluginTypeExpert, 0, nil, []byte(`[]`), "pub", scope.CallerUID, scope.SpaceID, model.PluginVisibilityPrivate, "Creator", "human", nil, nil, "", 0, []byte(`{"manifest":true}`), []byte(`{"package":true}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil)
+	return sqlmock.NewRows(pluginTestColumns()).AddRow(id, "Plugin", model.PluginTypeExpert, 0, nil, []byte(`[]`), "pub", scope.CallerUID, scope.SpaceID, model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, []byte(`{"manifest":true}`), []byte(`{"package":true}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil)
 }
 
 // visiblePluginRow mirrors ownedPluginRow for the Get visibility path, which
 // additionally selects the correlated metric counters.
 func visiblePluginRow(id string, scope Scope, now time.Time) *sqlmock.Rows {
 	columns := append(pluginTestColumns(), "view_count", "install_count", "download_count")
-	return sqlmock.NewRows(columns).AddRow(id, "Plugin", model.PluginTypeExpert, 0, nil, []byte(`[]`), "pub", scope.CallerUID, scope.SpaceID, model.PluginVisibilityPrivate, "Creator", "human", nil, nil, "", 0, []byte(`{"manifest":true}`), []byte(`{"package":true}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil, 0, 0, 0)
+	return sqlmock.NewRows(columns).AddRow(id, "Plugin", model.PluginTypeExpert, 0, nil, []byte(`[]`), "pub", scope.CallerUID, scope.SpaceID, model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, []byte(`{"manifest":true}`), []byte(`{"package":true}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil, 0, 0, 0)
 }

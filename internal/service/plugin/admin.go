@@ -138,6 +138,12 @@ func (s *Service) adminEffectiveWrite(ctx context.Context, caller Caller, plugin
 	if req.Type == model.PluginTypeConnector {
 		p.SpaceID = nil
 	}
+	// The marketplace-admin surface has no draft or review step — an admin create
+	// IS the publish, which is why it also auto-attaches a visible default
+	// placement. buildWrite mints the tenant default (draft), so re-stamp it here.
+	// On an AdminUpdate the value is inert: the UPDATE statement never writes
+	// listing_state, so an admin edit cannot delist or republish a row.
+	p.ListingState = model.PluginListingStatePublished
 	return p, rels, nil
 }
 
@@ -190,6 +196,66 @@ func (s *Service) AdminCreate(ctx context.Context, caller Caller, req WriteReque
 	return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
 }
 
+// applyStoredVersionRules is the admin-surface twin of the two version rules
+// Service.update applies against the STORED label: the label may only move
+// forward, and the row's own label is always accepted.
+//
+// Neither rule was here before, which predates the x.y.z tightening — but it is
+// an omission, not a deliberate exemption. Service.update places the
+// forward-only check ABOVE its IsSystemAdmin branch, so a super-admin editing
+// through /plugins/upsert is already bound by it; and the escape hatch that
+// branch does grant is enumerated there (edit an already-listed row's live
+// content with no review request) and does not include moving a version
+// backwards. The two admin routes were simply never visited.
+//
+// Why forward-only has to hold on the admin surface too: the label is not
+// cosmetic. SubmitReview compares the applicant's label against the plugin's
+// current_version, and publishedVersionLabels folds current_version into the set
+// of labels the org has already seen. Dropping a LISTED plugin from 2.0.0 to
+// 1.5.0 re-opens the entire range below 2.0.0 — the next reviewed upgrade can
+// land at 1.6.0 and every installer watches the plugin go backwards, which is
+// exactly what the forward-only rule exists to prevent. It does NOT corrupt
+// plugin_versions: that table's `version` column is a per-plugin auto-increment
+// counter, not this label, so no snapshot is shadowed or collided with.
+//
+// Why this does not cost the admin surface its data-repair role: the repair that
+// actually comes up is a row stuck on a pre-tightening label (`v999`, `1.0`)
+// being corrected to a real one, and versionNotRegressed already lets that
+// through — an unparseable current label blocks nothing. What stays refused is a
+// downgrade between two WELL-FORMED labels. That is a real if rare need with no
+// route left, and the trade is taken deliberately: refusing fails loudly with a
+// 400 naming the version field, while allowing it fails silently for every
+// consumer of the plugin. A genuinely stuck well-formed label needs a DB fix.
+func applyStoredVersionRules(req *WriteRequest, old *model.Plugin) error {
+	if old == nil || old.CurrentVersion == nil {
+		return nil
+	}
+	// Compared against the STORED label rather than the request's own history, and
+	// only when a version was actually submitted: an omitted version keeps the
+	// stored label (see the callers), so there is nothing to move.
+	//
+	// The ordering check is gated on the submitted label being WELL-FORMED, which
+	// is the one place this reads differently from the tenant copy. The set of
+	// accepted writes is identical either way — versionNotRegressed refuses a
+	// malformed next, and buildWrite refuses it too unless it is the grandfathered
+	// stored label, which versionNotRegressed lets through as "unchanged" — so the
+	// only difference is WHICH refusal a caller sees. A malformed label is a format
+	// problem, and reporting it as "version must not go backwards / use a higher
+	// one" sends the caller after the wrong thing; letting it fall through to
+	// buildWrite attributes it to the format gate that actually rejected it.
+	if v := strings.TrimSpace(req.Version); v != "" && validVersion(v) && !versionNotRegressed(*old.CurrentVersion, v) {
+		return ErrVersionRegressed
+	}
+	// The same grandfathering the tenant update performs. The admin UI is also
+	// fetch-edit-save and echoes `version` back, so without this the tightened
+	// x.y.z format 400s every save of an admin-managed row whose stored label
+	// predates it (`1.0`, `v1.2.3`, `2.0.0-beta.1`) — permanently, since the label
+	// can only be corrected by a save. The exemption is for an UNCHANGED label
+	// only; buildWrite still refuses a malformed new one.
+	req.grandfatheredVersion = *old.CurrentVersion
+	return nil
+}
+
 // AdminUpdate updates any admin plugin by id, regardless of owner/Space. It
 // PRESERVES the row's existing visibility, Space, and owner: an admin metadata
 // edit must never force-publish a plugin (A1) — a tenant-private row stays
@@ -226,6 +292,11 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	// Fetch-edit-save: re-inject stored keys for unchanged storage attachments the
 	// GET response returned keyless, so the round-trip is not rejected on write.
 	req.Package = reinjectUpdateStorageKeys(req.Package, old.Package, old.AttachmentKeys)
+	// Forward-only + grandfathering against the row's stored label; see the helper
+	// for why the admin surface is not exempt from the first one.
+	if err := applyStoredVersionRules(&req, old); err != nil {
+		return nil, err
+	}
 	p, rels, err := s.adminEffectiveWrite(ctx, caller, storageID, req, old.Visibility, effSpace)
 	if err != nil {
 		return nil, err
@@ -253,6 +324,12 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	audit := s.audit(caller, storageID, "update", old, p, s.now())
 	m := mutation(*p, rels, audit)
 	m.SnapshotVersion = true
+	// adminVersionGuard compared forward-only against the UNLOCKED `old` read; have
+	// the repo restate it under the row lock. The admin is exempt from the listing
+	// gates, not from version ordering — and this is the path that reaches an
+	// already-listed row without EnforceListingGate, so leaving it unrestated is
+	// what let a label raced past by an approval still land.
+	m.EnforceForwardOnlyVersion = true
 	sync, err := s.repo.Update(ctx, adminScope(caller), m)
 	if err != nil {
 		return nil, mapStoreError(err)

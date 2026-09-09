@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -34,6 +35,15 @@ type Authenticator struct {
 	devSpaceID  string
 }
 
+// NewAuthenticator constructs the public request authenticator.
+//
+// When enabled=false, devIdentity is stamped on every request. Its Space role
+// travels in devIdentity.SpaceRoles keyed on devSpaceID (see
+// cmd/marketplace-api, which builds it from DEV_AUTH_SPACE_ROLE); the handler
+// rebinds that role onto whichever Space the request names. The signature is
+// deliberately unchanged — the dev role rides in the identity rather than in a
+// new parameter, so the many existing call sites keep compiling and a test that
+// wants a reviewer dev identity just sets the map.
 func NewAuthenticator(enabled bool, resolver auth.Resolver, devIdentity model.Identity, devSpaceID string, botResolvers ...auth.BotResolver) *Authenticator {
 	authenticator := &Authenticator{
 		enabled:     enabled,
@@ -59,7 +69,7 @@ func (a *Authenticator) Handler() gin.HandlerFunc {
 			if spaceID == "" {
 				spaceID = a.devSpaceID
 			}
-			setAuthContext(c, a.devIdentity, spaceID)
+			setAuthContext(c, a.devIdentityFor(spaceID), spaceID)
 			c.Next()
 			return
 		}
@@ -134,6 +144,48 @@ func resolveUserIdentity(c *gin.Context, resolver auth.Resolver, token string) (
 		return model.Identity{}, false
 	}
 	return identity, true
+}
+
+// devIdentityFor returns the fixed dev identity bound to the Space the request
+// is actually in, for AUTH_ENABLED=false only.
+//
+// The dev bypass already honours the caller's X-Space-Id header and only falls
+// back to DEV_SPACE_ID when it is absent, so a browser signed in to a real
+// octo-server sends a real space_id that DEV_SPACE_ID does not name. Without
+// this rebinding the configured dev Space role (keyed on DEV_SPACE_ID) would
+// simply miss on lookup and the developer would silently degrade to role 0 —
+// able to submit a plugin for review and never to approve one, with nothing on
+// screen or in the log explaining why.
+//
+// TENSION, stated rather than buried: CLAUDE.md says disabled mode uses fixed
+// DEV_AUTH_* values and "never caller-supplied identity headers". Letting the
+// header pick which Space the fixed role applies to widens the dev identity in
+// exactly that direction. It does not let the header choose the role itself,
+// and an auth-disabled instance is already fully open to anyone who can reach
+// it, so the marginal risk is small — but this is one more reason
+// AUTH_ENABLED=false must never run outside a developer's machine.
+//
+// Returns a copy. Identity is a value type but SpaceRoles is a map, so a
+// shallow copy still aliases the shared map; writing through it would be a data
+// race between concurrent requests and would leak one request's Space into
+// another's identity. The map is therefore rebuilt, never mutated in place.
+func (a *Authenticator) devIdentityFor(spaceID string) model.Identity {
+	identity := a.devIdentity
+	if spaceID == "" || len(identity.SpaceRoles) == 0 {
+		return identity
+	}
+	if _, ok := identity.SpaceRoles[spaceID]; ok {
+		return identity
+	}
+	role, ok := identity.SpaceRoles[a.devSpaceID]
+	if !ok {
+		return identity
+	}
+	roles := make(map[string]int, len(identity.SpaceRoles)+1)
+	maps.Copy(roles, identity.SpaceRoles)
+	roles[spaceID] = role
+	identity.SpaceRoles = roles
+	return identity
 }
 
 func (a *Authenticator) authenticateBot(c *gin.Context, token string) {

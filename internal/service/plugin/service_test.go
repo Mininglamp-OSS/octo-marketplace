@@ -58,6 +58,10 @@ type fakeStore struct {
 	detailGraphRels    []model.PluginRelation
 	detailGraphRelated []*model.Plugin
 	err                error
+	// review carries the review-request half of the fake (see review_fake_test.go).
+	review reviewFake
+	// listing carries the publish/delist half (see review_fake_test.go).
+	listing listingFake
 }
 
 func (f *fakeStore) List(_ context.Context, s pluginrepo.Scope, filter pluginrepo.ListFilter) ([]model.Plugin, int64, error) {
@@ -606,7 +610,7 @@ func TestVersionListPropagatesExactTotalsAndNotFound(t *testing.T) {
 
 func TestDeleteConflictMapsToServiceError(t *testing.T) {
 	f := &fakeStore{plugins: map[string]*model.Plugin{
-		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeExpert, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID)},
+		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeExpert, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), ListingState: model.PluginListingStateDraft},
 	}}
 	f.err = pluginrepo.ErrConflict
 	if err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1"); !errors.Is(err, ErrConflict) {
@@ -713,6 +717,83 @@ func TestDeleteExpertRemovesEmbeddedChildrenNotStandalone(t *testing.T) {
 	}
 	if len(f.deleteChildIDs) != 1 || f.deleteChildIDs[0] != "skill-emb" {
 		t.Fatalf("child ids = %#v, want only the embedded [skill-emb]", f.deleteChildIDs)
+	}
+}
+
+// TestDeleteRequiresDelistFirst pins the symmetric gate with Service.update:
+// a published, org-visible plugin cannot be soft-deleted by its author, because
+// that would bypass the Delist Space-admin takedown gate (listing.go:141-148)
+// irreversibly. An admin must Delist first, returning the row to draft; then
+// the author can delete it.
+func TestDeleteRequiresDelistFirst(t *testing.T) {
+	f := &fakeStore{plugins: map[string]*model.Plugin{
+		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
+	}}
+	err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1")
+	if !errors.Is(err, ErrListedRequiresReview) {
+		t.Fatalf("Delete of published+space = %v, want ErrListedRequiresReview; author must not remove a live org plugin unilaterally", err)
+	}
+	if f.deleteID != "" || f.deleteGraphID != "" {
+		t.Fatalf("repo.Delete/DeleteGraph were called (id=%q graph=%q); gate must fire BEFORE the repo", f.deleteID, f.deleteGraphID)
+	}
+}
+
+// TestDeleteOfAPublishedExpertGraphAlsoRequiresDelistFirst covers the graph
+// shape flagged in the blocker brief: expert/expert_team tops route through
+// DeleteGraph, which is the MOST exposed shape (graph roots almost never have
+// incoming live relations, so rejectLiveIncomingRelations never fires). The
+// gate must run before the type switch so DeleteGraph is covered too.
+func TestDeleteOfAPublishedExpertGraphAlsoRequiresDelistFirst(t *testing.T) {
+	expert := &model.Plugin{ID: "expert-1", Type: model.PluginTypeExpert, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished}
+	f := &fakeStore{plugins: map[string]*model.Plugin{"expert-1": expert}}
+	err := fixedService(f).Delete(context.Background(), testCaller, "expert-1")
+	if !errors.Is(err, ErrListedRequiresReview) {
+		t.Fatalf("Delete of a published expert = %v, want ErrListedRequiresReview; the graph path must be gated too", err)
+	}
+	if f.deleteGraphID != "" {
+		t.Fatalf("repo.DeleteGraph was called for %q; gate must fire BEFORE the type switch", f.deleteGraphID)
+	}
+}
+
+// TestDeletePositiveRegressions cover the cases that MUST keep working:
+// private+published (nobody else can read it, no review channel exists),
+// space+draft (never listed), and space+delisted (an admin already took it
+// down; the author can now clean it up). These pin that the gate is exactly
+// (published AND space), not "published alone" or "space alone".
+func TestDeletePositiveRegressions(t *testing.T) {
+	cases := []struct {
+		name string
+		p    *model.Plugin
+	}{
+		{"private_published", &model.Plugin{ID: "p1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilityPrivate, ListingState: model.PluginListingStatePublished}},
+		{"space_draft", &model.Plugin{ID: "p2", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStateDraft}},
+		{"space_delisted", &model.Plugin{ID: "p3", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStateDelisted}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeStore{plugins: map[string]*model.Plugin{tc.p.ID: tc.p}}
+			if err := fixedService(f).Delete(context.Background(), testCaller, tc.p.ID); err != nil {
+				t.Fatalf("Delete = %v, want nil; %s rows must stay deletable by the owner", err, tc.name)
+			}
+			if f.deleteID != tc.p.ID {
+				t.Fatalf("deleteID = %q, want %q", f.deleteID, tc.p.ID)
+			}
+		})
+	}
+}
+
+// TestSystemAdminCanDeleteListedPlugin pins the platform-operator escape hatch:
+// matching Service.update, a system admin is exempt from the tenant gate so an
+// operator can still remove abusive content immediately without a round-trip
+// through Delist.
+func TestSystemAdminCanDeleteListedPlugin(t *testing.T) {
+	f := &fakeStore{plugins: map[string]*model.Plugin{
+		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
+	}}
+	admin := testCaller
+	admin.IsSystemAdmin = true
+	if err := fixedService(f).Delete(context.Background(), admin, "plugin-1"); err != nil {
+		t.Fatalf("admin Delete of listed plugin = %v, want nil; the platform-operator escape hatch must survive", err)
 	}
 }
 

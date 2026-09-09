@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>OCTO 市场 · 组织审核 原型</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #fff; --border: #e5e7eb; --text: #1f2329; --text2: #6b7280;
+    --primary: #3b6cf0; --primary-weak: #eef2fe;
+    --green: #16a34a; --green-weak: #ecfdf3;
+    --orange: #d97706; --orange-weak: #fffbeb;
+    --red: #dc2626; --red-weak: #fef2f2;
+    --gray-weak: #f3f4f6;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+
+  /* ===== 顶栏 ===== */
+  .topbar { height: 52px; background: #fff; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; gap: 16px; position: sticky; top: 0; z-index: 50; }
+  .topbar .logo { font-weight: 700; font-size: 16px; }
+  .topbar .hint { color: var(--text2); font-size: 12px; }
+  .role-switch { margin-left: auto; display: flex; background: var(--gray-weak); border-radius: 8px; padding: 3px; }
+  .role-switch button { border: 0; background: transparent; padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text2); }
+  .role-switch button.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 500; }
+
+  /* ===== 布局 ===== */
+  .layout { display: flex; height: calc(100vh - 52px); }
+  .sidebar { width: 210px; background: #fff; border-right: 1px solid var(--border); padding: 14px 10px; flex-shrink: 0; }
+  .sidebar .sec { font-size: 12px; color: var(--text2); padding: 6px 10px; margin-top: 6px; }
+  .side-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; cursor: pointer; color: var(--text); margin-bottom: 2px; }
+  .side-item:hover { background: var(--gray-weak); }
+  .side-item.active { background: var(--primary-weak); color: var(--primary); font-weight: 500; }
+  .side-item .badge { margin-left: auto; background: var(--red); color: #fff; border-radius: 9px; font-size: 11px; padding: 1px 7px; }
+  .side-item .admin-tag { margin-left: auto; font-size: 10px; color: var(--orange); border: 1px solid var(--orange); border-radius: 4px; padding: 0 4px; }
+  .side-item .badge + .admin-tag { margin-left: 6px; }
+
+  .main { flex: 1; overflow-y: auto; padding: 22px 26px; }
+  .page-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .page-sub { color: var(--text2); font-size: 13px; margin-bottom: 18px; }
+
+  /* ===== 通用 ===== */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .tabs button { border: 0; background: transparent; padding: 9px 14px; cursor: pointer; font-size: 14px; color: var(--text2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+  .btn { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 7px 16px; cursor: pointer; font-size: 13px; }
+  .btn:hover { border-color: #c9cdd4; }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn.primary:hover { opacity: .9; }
+  .btn.danger-ghost { color: var(--red); border-color: #f3caca; }
+  .btn.danger-ghost:hover { background: var(--red-weak); }
+  .btn.sm { padding: 4px 12px; font-size: 12px; border-radius: 6px; }
+  .tag { display: inline-flex; align-items: center; font-size: 11px; border-radius: 4px; padding: 1px 7px; font-weight: 500; }
+  .tag.type { background: var(--gray-weak); color: var(--text2); }
+  .tag.first { background: var(--primary-weak); color: var(--primary); }
+  .tag.upgrade { background: #f5f0ff; color: #7c3aed; }
+  .st { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border-radius: 20px; padding: 2px 10px; font-weight: 500; }
+  .st.private { background: var(--gray-weak); color: var(--text2); }
+  .st.pending { background: var(--orange-weak); color: var(--orange); }
+  .st.live { background: var(--green-weak); color: var(--green); }
+  .st.rejected { background: var(--red-weak); color: var(--red); }
+  .empty { text-align: center; color: var(--text2); padding: 60px 0; font-size: 13px; }
+
+  /* ===== 卡片网格(我的插件 / 技能市场) ===== */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .card .head { display: flex; gap: 10px; align-items: flex-start; }
+  .icon { width: 40px; height: 40px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+  .card .name { font-weight: 600; font-size: 14px; }
+  .card .meta { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .card .desc { font-size: 12px; color: var(--text2); line-height: 1.6; min-height: 38px; }
+  .card .foot { display: flex; align-items: center; gap: 8px; }
+  .card .foot .right { margin-left: auto; display: flex; gap: 6px; }
+  .reject-box { background: var(--red-weak); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--red); line-height: 1.6; }
+  .toolbar { display: flex; align-items: center; margin-bottom: 16px; gap: 10px; }
+  .toolbar .spacer { flex: 1; }
+
+  /* ===== 审核列表 ===== */
+  .review-list { display: flex; flex-direction: column; gap: 10px; }
+  .review-row { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; align-items: center; gap: 14px; cursor: pointer; }
+  .review-row:hover { border-color: #c9d5f7; box-shadow: 0 1px 6px rgba(59,108,240,.08); }
+  .review-row .info { flex: 1; min-width: 0; }
+  .review-row .title-line { display: flex; align-items: center; gap: 8px; }
+  .review-row .name { font-weight: 600; }
+  .review-row .sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+  .review-row .actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+  /* ===== 抽屉 ===== */
+  .drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 100; display: none; }
+  .drawer-mask.open { display: block; }
+  .drawer { position: fixed; top: 0; right: -580px; width: 560px; max-width: 92vw; height: 100vh; background: #fff; z-index: 101; box-shadow: -4px 0 24px rgba(0,0,0,.12); transition: right .25s; display: flex; flex-direction: column; }
+  .drawer.open { right: 0; }
+  .drawer .d-head { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .drawer .d-head .close { margin-left: auto; border: 0; background: none; font-size: 18px; cursor: pointer; color: var(--text2); }
+  .drawer .d-body { flex: 1; overflow-y: auto; padding: 20px; }
+  .drawer .d-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
+  .kv { display: grid; grid-template-columns: 92px 1fr; row-gap: 10px; font-size: 13px; margin-bottom: 18px; }
+  .kv .k { color: var(--text2); }
+  .ver-diff { background: #f5f0ff; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #7c3aed; margin-bottom: 18px; }
+  .md-preview { border: 1px solid var(--border); border-radius: 8px; }
+  .md-preview .md-head { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text2); background: #fafafa; border-radius: 8px 8px 0 0; }
+  .md-preview pre { padding: 14px; font-size: 12px; line-height: 1.7; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; color: #374151; max-height: 300px; overflow-y: auto; }
+
+  /* ===== 弹窗 ===== */
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 200; display: none; align-items: center; justify-content: center; }
+  .modal-mask.open { display: flex; }
+  .modal { background: #fff; border-radius: 12px; width: 460px; max-width: 92vw; padding: 22px; }
+  .modal h3 { font-size: 16px; margin-bottom: 14px; }
+  .modal textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 13px; min-height: 84px; resize: vertical; font-family: inherit; }
+  .modal textarea:focus { outline: 2px solid var(--primary-weak); border-color: var(--primary); }
+  .modal input[type=text] { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; font-size: 13px; font-family: inherit; }
+  .modal input[type=text]:focus { outline: 2px solid var(--primary-weak); border-color: var(--primary); }
+  .field-label { font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
+  .field-label .req { color: var(--red); }
+  .field-hint { font-size: 12px; color: var(--text2); margin-top: 5px; line-height: 1.5; }
+  .modal .m-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  .modal .err { color: var(--red); font-size: 12px; margin-top: 6px; display: none; }
+
+  /* 上传弹窗 */
+  .upload-step { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; font-size: 13px; display: flex; gap: 10px; align-items: center; color: var(--text2); }
+  .upload-step .ok { color: var(--green); }
+  .vis-opt { border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; display: flex; gap: 10px; }
+  .vis-opt.sel { border-color: var(--primary); background: var(--primary-weak); }
+  .vis-opt .t { font-weight: 600; font-size: 13px; }
+  .vis-opt .d { font-size: 12px; color: var(--text2); margin-top: 3px; line-height: 1.5; }
+  .vis-opt input { margin-top: 3px; accent-color: var(--primary); }
+
+  /* toast */
+  #toast { position: fixed; top: 68px; left: 50%; transform: translateX(-50%); background: #1f2329; color: #fff; padding: 9px 18px; border-radius: 8px; font-size: 13px; z-index: 300; display: none; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+
+  .note { background: var(--orange-weak); border: 1px dashed var(--orange); color: #92600a; border-radius: 8px; padding: 8px 12px; font-size: 12px; margin-bottom: 16px; line-height: 1.6; }
+
+  /* ===== IM 浮层(通知助手) ===== */
+  #im-fab { position: fixed; right: 20px; bottom: 20px; width: 52px; height: 52px; border-radius: 50%;
+    background: linear-gradient(135deg, #3b6cf0, #6d4aff); color: #fff; border: 0; cursor: pointer; font-size: 22px;
+    box-shadow: 0 6px 20px rgba(59,108,240,.35); z-index: 150; display: flex; align-items: center; justify-content: center; }
+  #im-fab .dot { position: absolute; top: 6px; right: 8px; min-width: 18px; height: 18px; border-radius: 9px;
+    background: var(--red); color: #fff; font-size: 11px; padding: 0 5px; display: none; align-items: center; justify-content: center; font-weight: 600; border: 2px solid #fff; }
+  #im-panel { position: fixed; right: 20px; bottom: 84px; width: 360px; max-height: 520px; background: #f5f6f8;
+    border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.18); z-index: 150; display: none; flex-direction: column; overflow: hidden; border: 1px solid var(--border); }
+  #im-panel.open { display: flex; }
+  .im-head { background: linear-gradient(135deg, #3b6cf0, #6d4aff); color: #fff; padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+  .im-head .avatar { width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,.2); display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .im-head .name { font-weight: 600; font-size: 14px; }
+  .im-head .status { font-size: 11px; opacity: .85; margin-top: 1px; }
+  .im-head .close-im { margin-left: auto; background: none; border: 0; color: #fff; font-size: 18px; cursor: pointer; opacity: .8; }
+  .im-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; background: #f5f6f8; }
+  .im-empty { text-align: center; color: var(--text2); font-size: 12px; padding: 30px 0; }
+  .im-msg { display: flex; gap: 8px; align-items: flex-start; }
+  .im-msg .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg,#3b6cf0,#6d4aff); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 15px; }
+  .im-bubble { background: #fff; border-radius: 0 10px 10px 10px; padding: 10px 12px; max-width: 270px; box-shadow: 0 1px 2px rgba(0,0,0,.06); position: relative; }
+  .im-bubble .title { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--text); word-break: break-all; }
+  .im-bubble .meta { font-size: 11px; color: var(--text2); line-height: 1.6; margin-bottom: 8px; white-space: pre-line; }
+  .im-bubble .btns { display: flex; gap: 6px; }
+  .im-bubble .btns button { flex: 1; border: 0; border-radius: 6px; padding: 6px 0; font-size: 12px; cursor: pointer; font-weight: 500; }
+  .im-bubble .btns .pass { background: var(--primary); color: #fff; }
+  .im-bubble .btns .pass:hover { opacity: .9; }
+  .im-bubble .btns .deny { background: #fef2f2; color: var(--red); border: 1px solid #f3caca; }
+  .im-bubble .btns .deny:hover { background: #fee2e2; }
+  .im-bubble .done { font-size: 12px; padding: 6px 0; text-align: center; border-radius: 6px; }
+  .im-bubble .done.ok { background: var(--green-weak); color: var(--green); }
+  .im-bubble .done.no { background: var(--red-weak); color: var(--red); }
+  .im-bubble .done.warn { background: var(--orange-weak); color: var(--orange); }
+  .im-bubble .done small { display: block; font-size: 10px; opacity: .75; margin-top: 2px; font-weight: 400; }
+  .im-time { font-size: 10px; color: var(--text2); text-align: center; margin: -4px 0; }
+  .im-self { flex-direction: row-reverse; }
+  .im-self .im-bubble { border-radius: 10px 0 10px 10px; background: var(--primary); color: #fff; }
+  .im-self .im-bubble .title { color: #fff; }
+  .im-self .im-bubble .meta { color: rgba(255,255,255,.85); }
+  .im-self .avatar { background: #c7d3f9; color: var(--primary); }
+  .im-note { background: #fff9e6; border: 1px dashed var(--orange); border-radius: 8px; padding: 8px 10px; font-size: 11px; color: #92600a; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">OCTO 市场</span>
+  <span class="hint">原型演示 · 组织(Space)级插件审核 · IM 通知助手可直接审批 · 数据为 mock,刷新即重置</span>
+  <div class="role-switch">
+    <button id="roleEmp" class="active" onclick="switchRole('emp')">👤 员工视角 · 张小明</button>
+    <button id="roleAdm" onclick="switchRole('adm')">🛡️ 管理员视角 · 李经理</button>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- ===== 左侧市场 sidebar ===== -->
+  <div class="sidebar">
+    <div class="sec">市场</div>
+    <div class="side-item" data-view="market" onclick="nav('market')">🧩 <span>技能</span></div>
+    <div class="side-item" onclick="toast('原型未包含此页(与现状一致)')">🔌 <span>连接器</span></div>
+    <div class="side-item" onclick="toast('原型未包含此页(与现状一致)')">🧑‍💻 <span>专家</span></div>
+    <div class="side-item" data-view="mine" onclick="nav('mine')">📦 <span>我的插件</span><span class="badge" id="mineBadge" style="display:none"></span></div>
+    <div class="sec">管理</div>
+    <div class="side-item" data-view="org" id="orgEntry" onclick="nav('org')">✅ <span>组织管理</span><span class="badge" id="pendingBadge"></span><span class="admin-tag">管理员</span></div>
+  </div>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main" id="main"></div>
+</div>
+
+<!-- 抽屉 -->
+<div class="drawer-mask" id="drawerMask" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer"></div>
+
+<!-- 拒绝理由弹窗 -->
+<div class="modal-mask" id="rejectMask">
+  <div class="modal">
+    <h3>拒绝上架申请</h3>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:10px">拒绝理由将展示给申请人,请说明需要修改的内容。<b style="color:var(--red)">必填</b>。</div>
+    <textarea id="rejectReason" placeholder="例如:描述与实际功能不符,请补充使用示例后重新提交"></textarea>
+    <div class="err" id="rejectErr">请填写拒绝理由</div>
+    <div class="m-foot">
+      <button class="btn" onclick="closeReject()">取消</button>
+      <button class="btn primary" style="background:var(--red);border-color:var(--red)" onclick="confirmReject()">确认拒绝</button>
+    </div>
+  </div>
+</div>
+
+<!-- 提交审核弹窗(版本号 + 更新说明) -->
+<div class="modal-mask" id="submitMask">
+  <div class="modal" style="width:500px">
+    <h3 id="submitTitle">提交组织审核</h3>
+    <div style="font-size:13px;color:var(--text2);line-height:1.6" id="submitDesc"></div>
+    <div class="field-label">版本号 <span class="req">*</span></div>
+    <input type="text" id="submitVer" placeholder="例如 1.0.0">
+    <div class="field-hint">提交时冻结当前内容为该版本的快照;<b>审核通过后</b>才进入组织版本历史。个人日常编辑不产生版本。</div>
+    <div class="err" id="submitVerErr" style="color:var(--red);font-size:12px;margin-top:6px;display:none">版本号必填,且不能与已发布版本重复</div>
+    <div class="field-label">更新说明 <span class="req">*</span></div>
+    <textarea id="submitLog" placeholder="面向组织内使用者的说明:这个版本提供/修复了什么"></textarea>
+    <div class="err" id="submitLogErr" style="color:var(--red);font-size:12px;margin-top:6px;display:none">请填写更新说明</div>
+    <div class="m-foot">
+      <button class="btn" onclick="closeSubmit()">取消</button>
+      <button class="btn primary" onclick="confirmSubmit()">提交审核</button>
+    </div>
+  </div>
+</div>
+
+<!-- 上传弹窗(最后一步:可见性选择) -->
+<div class="modal-mask" id="uploadMask">
+  <div class="modal" style="width:520px">
+    <h3>发布技能</h3>
+    <div class="upload-step"><span class="ok">✓</span> 上传解析完成:<b style="color:var(--text)">周报生成助手.zip</b>(解析建议版本 1.0.0,元信息已自动填充)</div>
+    <div class="field-label">版本号 <span class="req">*</span> <span style="color:var(--text2);font-weight:400;font-size:12px">(解析自动填充,可修改)</span></div>
+    <input type="text" id="uploadVer" value="1.0.0">
+    <div style="font-weight:600;font-size:13px;margin:14px 0 8px">发布范围 <span style="color:var(--text2);font-weight:400">(现状:此选项不存在,上传即组织可见)</span></div>
+    <label class="vis-opt sel" id="visPrivate" onclick="pickVis('private')">
+      <input type="radio" name="vis" checked>
+      <div><div class="t">仅自己可见(私有)</div><div class="d">立即生效,只有你能在"我的插件"中看到并使用,适合先自测调试。之后可随时提交组织审核。</div></div>
+    </label>
+    <label class="vis-opt" id="visSpace" onclick="pickVis('space')">
+      <input type="radio" name="vis">
+      <div><div class="t">提交组织审核,通过后组织内可见</div><div class="d">提交后进入组织管理员审核队列,<b>审核通过前不会在组织市场上架</b>。审核结果可在"我的插件"中查看。</div></div>
+    </label>
+    <div class="m-foot">
+      <button class="btn" onclick="closeUpload()">取消</button>
+      <button class="btn primary" onclick="confirmUpload()">确认发布</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- ===== IM 通知助手浮层 ===== -->
+<button id="im-fab" onclick="toggleIM()" title="通知助手">🔔<span class="dot" id="imDot"></span></button>
+<div id="im-panel">
+  <div class="im-head">
+    <div class="avatar">🤖</div>
+    <div>
+      <div class="name">通知助手</div>
+      <div class="status">插件审核通知 · 实时</div>
+    </div>
+    <button class="close-im" onclick="toggleIM()">✕</button>
+  </div>
+  <div class="im-body" id="imBody">
+    <div class="im-empty">暂无新通知</div>
+  </div>
+</div>
+
+<script>
+/* ================= mock 数据 ================= */
+const ME = { emp: { uid: 'u_zhang', name: '张小明' }, adm: { uid: 'u_li', name: '李经理' } };
+let role = 'emp';
+let view = 'mine';
+let orgTab = 'pending';
+let pickedVis = 'private';
+let seq = 100;
+
+// 插件:status 由审核单派生展示;visibility: private|space
+let plugins = [
+  { id: 'p1', name: '会议纪要提取', type: 'skill', icon: '📝', color: '#eef2fe', ver: '1.2.0', owner: 'u_zhang', ownerName: '张小明', visibility: 'space', desc: '从会议录音转写文本中提取待办与结论,输出结构化纪要。', liveVer: '1.2.0' },
+  { id: 'p2', name: '合同风险初筛', type: 'skill', icon: '📑', color: '#ecfdf3', ver: '0.9.1', owner: 'u_zhang', ownerName: '张小明', visibility: 'private', desc: '对上传合同做条款风险初筛,标注高风险条款位置。', liveVer: null },
+  { id: 'p3', name: '数据大盘专家', type: 'expert', icon: '📊', color: '#fffbeb', ver: '2.0.0', owner: 'u_wang', ownerName: '王芳', visibility: 'private', desc: '面向经营数据的问答专家,内置 3 个查询技能。', liveVer: null },
+  { id: 'p4', name: '客服话术技能', type: 'skill', icon: '💬', color: '#fef2f2', ver: '1.0.0', owner: 'u_zhao', ownerName: '赵磊', visibility: 'space', desc: '统一客服应答话术,支持多场景模板。', liveVer: '1.0.0' },
+];
+
+// 审核单:target_scope 恒为 space(本期);kind: first(首次上架)| upgrade(版本更新)
+let requests = [
+  { id: 'r1', pluginId: 'p3', ver: '2.0.0', changelog: '首次发布:内置销售/运营/财务 3 个查询技能,支持自然语言问数。', kind: 'first', status: 'pending', applicant: 'u_wang', applicantName: '王芳', submittedAt: '08-30 14:22', reviewer: null, reason: null },
+  { id: 'r2', pluginId: 'p1', ver: '1.3.0', changelog: '新增多语言会议支持;修复长录音转写截断问题。', kind: 'upgrade', status: 'pending', applicant: 'u_zhang', applicantName: '张小明', submittedAt: '08-31 09:10', reviewer: null, reason: null },
+  { id: 'r3', pluginId: 'p4', ver: '1.0.0', changelog: '首次发布:覆盖售前/售后 12 类常见场景话术模板。', kind: 'first', status: 'approved', applicant: 'u_zhao', applicantName: '赵磊', submittedAt: '08-28 11:02', reviewer: '李经理', reviewedAt: '08-28 15:40', reason: null },
+  { id: 'r4', pluginId: 'p2', ver: '0.9.0', changelog: '首次发布:合同条款风险初筛。', kind: 'first', status: 'rejected', applicant: 'u_zhang', applicantName: '张小明', submittedAt: '08-27 10:00', reviewer: '李经理', reviewedAt: '08-27 16:20', reason: '技能描述与实际功能不符,且缺少使用示例;请完善 SKILL.md 后重新提交。' },
+];
+
+const p = id => plugins.find(x => x.id === id);
+const pendingOf = pid => requests.find(r => r.pluginId === pid && r.status === 'pending');
+const lastRejected = pid => requests.filter(r => r.pluginId === pid && r.status === 'rejected').sort((a,b)=>b.id>a.id?1:-1)[0];
+
+/* ================= IM 通知助手 ================= */
+// IM 收件人:按当前视角——员工视角不收到审核卡片(只有结果回执);管理员视角收到待审卡片
+// 每条消息: { id, reqId, kind: 'review'|'result', fromSelf?:bool, title, meta, state:'pending'|'approved'|'denied'|'conflict', decider?, reason?, decidedAt? }
+let imMsgs = [];
+let imOpen = false;
+function adminsInView() {
+  // mock:原型里只有 李经理(u_li) 是管理员;另一个 mock 管理员用于演示并发
+  return [{uid:'u_li', name:'李经理'}, {uid:'u_chen', name:'陈总监'}];
+}
+function pushIM(msg) {
+  imMsgs.push({ id: 'im'+(seq++), ts: now(), ...msg });
+  renderIM();
+  flashIM();
+}
+function flashIM() {
+  if (imOpen) return;
+  const dot = document.getElementById('imDot');
+  const unread = imMsgs.filter(m => m.kind==='review' && m.state==='pending').length
+              + imMsgs.filter(m => m.kind==='result' && !m._seen).length;
+  if (unread) { dot.textContent = unread; dot.style.display='flex'; }
+}
+function toggleIM() {
+  imOpen = !imOpen;
+  document.getElementById('im-panel').classList.toggle('open', imOpen);
+  if (imOpen) {
+    document.getElementById('imDot').style.display='none';
+    imMsgs.forEach(m => m._seen = true);
+  }
+}
+function renderIM() {
+  const body = document.getElementById('imBody');
+  // 视角过滤:员工只看得到自己提交的回执 + 关于自己插件的结果;管理员只看得到待审卡片 + 自己处理过的终态
+  const me = ME[role];
+  const visible = imMsgs.filter(m => {
+    if (m.fromSelf) return true;
+    if (role === 'emp') {
+      // 员工视角:不显示"新待审卡片"(那是给管理员的);只显示发给我的结果(简单按 title 包含我的插件名判断,mock 用)
+      if (m.kind === 'review') return false;
+      return true;
+    } else {
+      // 管理员视角:待审卡片可见;result 卡片是发给申请人的,不显示
+      if (m.kind === 'result' && !m.fromSelf) return false;
+      if (m.kind === 'review' && m.state === 'conflict' && m.decider === me.name) return false; // 自己处理过的不重复
+      return true;
+    }
+  });
+  if (!visible.length) { body.innerHTML = role==='adm'
+    ? '<div class="im-empty">暂无待审通知 🎉<br><div style="margin-top:6px;font-size:11px">当有成员提交审核时,会在这里推送可点击审批卡片</div></div>'
+    : '<div class="im-empty">暂无消息<br><div style="margin-top:6px;font-size:11px">提交审核或审批结果会发到这里</div></div>';
+    return;
+  }
+  body.innerHTML = visible.map(m => {
+    const selfCls = m.fromSelf ? 'im-self' : '';
+    const avatar = m.fromSelf ? (ME[role].name[0]||'我') : '🤖';
+    let bodyHTML = '';
+    if (m.kind === 'review') {
+      if (m.state === 'pending' && role === 'adm') {
+        bodyHTML = `<div class="btns">
+          <button class="pass" onclick="imDecide('${m.id}','approve')">✓ 通过</button>
+          <button class="deny" onclick="imDecide('${m.id}','deny')">✕ 拒绝</button>
+        </div>
+        <div style="font-size:10px;color:var(--text2);margin-top:6px;line-height:1.4">
+          点击「拒绝」将使用默认理由:<br>
+          管理员在消息卡片中拒绝,未填写原因
+        </div>`;
+      } else if (m.state === 'approved') {
+        bodyHTML = `<div class="done ok">✓ 已通过${m.decider?` · ${m.decider}`:''}<small>${m.ts||''}</small></div>`;
+      } else if (m.state === 'denied') {
+        bodyHTML = `<div class="done no">✕ 已拒绝 · ${m.decider||''}<small>${m.reason||''}</small></div>`;
+      } else if (m.state === 'conflict') {
+        bodyHTML = `<div class="done warn">⚠ 该申请已由 ${m.decider} 处理<small>${m.finalState==='approved'?'结果:通过':'结果:拒绝'}</small></div>`;
+      }
+    } else if (m.kind === 'result') {
+      const cls = m.state==='approved'?'ok':'no';
+      const icon = m.state==='approved'?'✓':'✕';
+      bodyHTML = `<div class="done ${cls}">${icon} ${m.title}<small>${m.meta||''}</small></div>`;
+    }
+    return `<div class="im-time">${m.ts}</div>
+      <div class="im-msg ${selfCls}">
+        <div class="avatar">${avatar}</div>
+        <div class="im-bubble">
+          ${m.kind==='review' ? `<div class="title">${m.title}</div><div class="meta">${m.meta}</div>` : ''}
+          ${bodyHTML}
+        </div>
+      </div>`;
+  }).join('');
+  body.scrollTop = body.scrollHeight;
+}
+function imDecide(msgId, decision) {
+  const m = imMsgs.find(x => x.id === msgId); if (!m) return;
+  const r = requests.find(x => x.id === m.reqId);
+  if (!r || r.status !== 'pending') return;
+  if (decision === 'approve') {
+    doApprove(r.id, 'im');
+  } else {
+    doReject(r.id, '管理员在消息卡片中拒绝,未填写原因', 'im');
+  }
+  // 其他管理员视角下的同一条请求卡片标为 conflict(演示并发)
+  imMsgs.forEach(x => {
+    if (x.id !== msgId && x.reqId === m.reqId && x.kind==='review' && x.state==='pending') {
+      x.state = 'conflict'; x.decider = ME[role].name; x.finalState = decision==='approve'?'approved':'denied';
+    }
+  });
+  renderIM(); render();
+}
+function imNotifyReviewSubmitted(r) {
+  // 提交后给所有管理员发一张待审卡片(在管理员视角可见);申请人自己收一条"已提交"回执
+  const pl = p(r.pluginId);
+  const kindTxt = r.kind==='first'?'首次上架':`版本更新 v${pl.liveVer||'?'} → v${r.ver}`;
+  pushIM({ kind:'result', fromSelf:true, title:`「${pl.name}」已提交组织审核`, meta:`v${r.ver} · 等待管理员审批`, state:'approved' });
+  adminsInView().forEach(a => {
+    pushIM({
+      reqId: r.id, kind: 'review', state: 'pending',
+      title: `插件上架申请 · ${pl.name}`,
+      meta: `类型:${typeName(pl.type)} · 申请人:${r.applicantName}\n版本:${r.ver}(${kindTxt})\n${(r.changelog||'').slice(0,60)}`,
+    });
+  });
+}
+function imNotifyDecided(r, decision, deciderName, reason) {
+  const pl = p(r.pluginId);
+  // 通知申请人
+  pushIM({
+    kind:'result',
+    title: `「${pl.name}」${decision==='approve'?'审核已通过':'审核未通过'}`,
+    meta: decision==='approve'
+      ? `v${r.ver} 已在组织市场上架 · ${deciderName} 审批`
+      : `理由:${reason} · ${deciderName} 审批`,
+    state: decision==='approve'?'approved':'denied',
+  });
+}
+
+/* ================= 派生展示状态 ================= */
+function pluginState(pl) {
+  const pend = pendingOf(pl.id);
+  if (pl.visibility === 'space') {
+    if (pend) return { cls: 'pending', text: '已上架 · 新版本审核中' };
+    return { cls: 'live', text: '组织内已上架 v' + pl.liveVer };
+  }
+  if (pend) return { cls: 'pending', text: '审核中' };
+  const rej = lastRejected(pl.id);
+  if (rej) return { cls: 'rejected', text: '已拒绝' };
+  return { cls: 'private', text: '私有' };
+}
+
+/* ================= 渲染 ================= */
+function render() {
+  // sidebar 状态
+  document.querySelectorAll('.side-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
+  document.getElementById('orgEntry').style.display = role === 'adm' ? 'flex' : 'none';
+  const pendCnt = requests.filter(r => r.status === 'pending').length;
+  const pb = document.getElementById('pendingBadge');
+  pb.textContent = pendCnt; pb.style.display = pendCnt ? '' : 'none';
+
+  const main = document.getElementById('main');
+  if (view === 'mine') main.innerHTML = renderMine();
+  else if (view === 'org') main.innerHTML = renderOrg();
+  else main.innerHTML = renderMarket();
+}
+
+function renderMarket() {
+  const live = plugins.filter(x => x.visibility === 'space');
+  return `<div class="page-title">技能</div>
+  <div class="page-sub">组织市场 · 仅展示审核通过并上架的插件(以及全平台插件)</div>
+  <div class="grid">${live.map(pl => `
+    <div class="card">
+      <div class="head"><div class="icon" style="background:${pl.color}">${pl.icon}</div>
+        <div><div class="name">${pl.name}</div><div class="meta">v${pl.liveVer} · ${pl.ownerName}</div></div></div>
+      <div class="desc">${pl.desc}</div>
+      <div class="foot"><span class="tag type">${typeName(pl.type)}</span><div class="right"><button class="btn sm" onclick="toast('安装流程与现状一致,原型不展开')">安装</button></div></div>
+    </div>`).join('')}</div>`;
+}
+
+function renderMine() {
+  const me = ME[role].uid;
+  const mine = plugins.filter(x => x.owner === me);
+  const cards = mine.map(pl => {
+    const st = pluginState(pl);
+    const rej = pl.visibility === 'private' && !pendingOf(pl.id) ? lastRejected(pl.id) : null;
+    let actions = '';
+    if (pl.visibility === 'private' && !pendingOf(pl.id)) {
+      actions = `<button class="btn sm primary" onclick="submitReview('${pl.id}')">${rej ? '重新提交审核' : '提交组织审核'}</button>`;
+    } else if (pendingOf(pl.id) && pendingOf(pl.id).applicant === me) {
+      actions = `<button class="btn sm" onclick="cancelReview('${pl.id}')">撤回申请</button>`;
+    } else if (pl.visibility === 'space') {
+      actions = `<button class="btn sm" onclick="submitUpgrade('${pl.id}')">发布新版本</button>`;
+    }
+    return `<div class="card">
+      <div class="head"><div class="icon" style="background:${pl.color}">${pl.icon}</div>
+        <div><div class="name">${pl.name}</div><div class="meta">当前版本 v${pl.ver}</div></div></div>
+      <div class="desc">${pl.desc}</div>
+      ${rej ? `<div class="reject-box"><b>审核未通过(${rej.reviewedAt} · ${rej.reviewer}):</b><br>${rej.reason}</div>` : ''}
+      <div class="foot"><span class="st ${st.cls}">${st.text}</span><div class="right">${actions}</div></div>
+    </div>`;
+  }).join('');
+  return `<div class="page-title">我的插件</div>
+  <div class="page-sub">你创建的全部插件。私有插件仅自己可见,可自由调试;提交组织审核并通过后在组织市场上架。</div>
+  ${role==='emp' ? `<div class="note">演示链路:点右侧「上传技能」→ 选「提交组织审核」→ 切到管理员视角审批 → 回到本页看状态变化。</div>` : ''}
+  <div class="toolbar"><div class="spacer"></div><button class="btn primary" onclick="openUpload()">＋ 上传技能</button></div>
+  ${mine.length ? `<div class="grid">${cards}</div>` : `<div class="empty">暂无插件,点击右上角上传</div>`}`;
+}
+
+function renderOrg() {
+  const pend = requests.filter(r => r.status === 'pending');
+  const done = requests.filter(r => r.status !== 'pending');
+  const list = orgTab === 'pending' ? pend : done;
+  const rows = list.map(r => {
+    const pl = p(r.pluginId);
+    const stMap = { approved: ['live','已通过'], rejected: ['rejected','已拒绝'], canceled: ['private','已撤回'] };
+    const right = r.status === 'pending'
+      ? `<div class="actions"><button class="btn sm primary" onclick="event.stopPropagation();approve('${r.id}')">通过</button><button class="btn sm danger-ghost" onclick="event.stopPropagation();openReject('${r.id}')">拒绝</button></div>`
+      : `<span class="st ${stMap[r.status][0]}">${stMap[r.status][1]}</span>`;
+    return `<div class="review-row" onclick="openDrawer('${r.id}')">
+      <div class="icon" style="background:${pl.color}">${pl.icon}</div>
+      <div class="info">
+        <div class="title-line"><span class="name">${pl.name}</span><span class="tag type">${typeName(pl.type)}</span>
+          <span class="tag ${r.kind==='first'?'first':'upgrade'}">${r.kind==='first'?'首次上架':'版本更新 v'+(pl.liveVer||'?')+' → v'+r.ver}</span></div>
+        <div class="sub">v${r.ver} · 申请人:${r.applicantName} · 提交于 ${r.submittedAt}${r.status!=='pending' && r.reviewer ? ' · '+r.reviewer+' 处理于 '+(r.reviewedAt||'') : ''}</div>
+        ${r.status==='rejected' ? `<div class="sub" style="color:var(--red)">拒绝理由:${r.reason}</div>` : ''}
+      </div>${right}</div>`;
+  }).join('');
+  return `<div class="page-title">组织管理 · 插件审核</div>
+  <div class="page-sub">组织成员提交的上架申请。通过后插件在组织市场对全体成员可见;版本更新审核期间,旧版本继续在架。</div>
+  <div class="tabs">
+    <button class="${orgTab==='pending'?'active':''}" onclick="orgTab='pending';render()">待审核(${pend.length})</button>
+    <button class="${orgTab==='done'?'active':''}" onclick="orgTab='done';render()">已处理(${done.length})</button>
+  </div>
+  ${list.length ? `<div class="review-list">${rows}</div>` : `<div class="empty">${orgTab==='pending'?'没有待审核的申请 🎉':'暂无记录'}</div>`}`;
+}
+
+/* ================= 抽屉(审核详情) ================= */
+let drawerReq = null;
+function openDrawer(rid) {
+  const r = requests.find(x => x.id === rid); drawerReq = r;
+  const pl = p(r.pluginId);
+  const d = document.getElementById('drawer');
+  d.innerHTML = `
+    <div class="d-head"><div class="icon" style="background:${pl.color}">${pl.icon}</div>
+      <div><div style="font-weight:600">${pl.name}</div><div style="font-size:12px;color:var(--text2)">申请版本 v${r.ver}</div></div>
+      <button class="close" onclick="closeDrawer()">✕</button></div>
+    <div class="d-body">
+      ${r.kind==='upgrade' ? `<div class="ver-diff">🔁 版本更新申请:当前在架 <b>v${pl.liveVer}</b> → 申请上架 <b>v${r.ver}</b>。审核期间 v${pl.liveVer} 保持在架;通过后自动切换。</div>` : ''}
+      <div class="kv">
+        <span class="k">类型</span><span>${typeName(pl.type)}</span>
+        <span class="k">申请人</span><span>${r.applicantName}</span>
+        <span class="k">提交时间</span><span>${r.submittedAt}</span>
+        <span class="k">申请类型</span><span>${r.kind==='first'?'首次上架(通过后组织内可见)':'版本更新'}</span>
+        <span class="k">版本号</span><span>v${r.ver} <span style="color:var(--text2)">(申请人填写,提交时冻结快照)</span></span>
+        <span class="k">更新说明</span><span>${r.changelog || pl.desc}</span>
+        <span class="k">描述</span><span>${pl.desc}</span>
+      </div>
+      <div class="md-preview"><div class="md-head">SKILL.md 预览(对应 v${r.ver} 提交快照,内容不可变;审核通过后才进入组织版本历史)</div>
+<pre># ${pl.name}
+
+## 功能
+${pl.desc}
+
+## 使用方式
+1. 在会话中 @ 该技能并描述需求
+2. 按提示上传所需文件
+3. 等待生成结构化结果
+
+## 更新记录 (v${r.ver})
+${r.changelog || '- 优化输出格式\n- 修复长文本截断问题'}</pre></div>
+    </div>
+    ${r.status==='pending' ? `<div class="d-foot">
+      <button class="btn danger-ghost" onclick="openReject('${r.id}')">拒绝</button>
+      <button class="btn primary" onclick="approve('${r.id}')">通过并上架</button></div>` : ''}`;
+  document.getElementById('drawerMask').classList.add('open');
+  d.classList.add('open');
+}
+function closeDrawer() {
+  document.getElementById('drawerMask').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+}
+
+/* ================= 审批动作 ================= */
+function doApprove(rid, source) {
+  const r = requests.find(x => x.id === rid);
+  if (!r || r.status !== 'pending') return;
+  r.status = 'approved'; r.reviewer = ME[role].name; r.reviewedAt = now(); r.source = source||'web';
+  const pl = p(r.pluginId);
+  pl.visibility = 'space'; pl.liveVer = r.ver; pl.ver = r.ver;
+  closeDrawer();
+  if (source === 'im') imNotifyDecided(r, 'approve', ME[role].name);
+  render();
+  toast(`已通过:「${pl.name}」v${r.ver} 已在组织市场上架`);
+}
+function approve(rid) { doApprove(rid, 'web'); }
+
+function doReject(rid, reason, source) {
+  const r = requests.find(x => x.id === rid);
+  if (!r || r.status !== 'pending') return;
+  r.status = 'rejected'; r.reason = reason; r.reviewer = ME[role].name; r.reviewedAt = now(); r.source = source||'web';
+  closeReject(); closeDrawer();
+  if (source === 'im') imNotifyDecided(r, 'deny', ME[role].name, reason);
+  render();
+  toast(`已拒绝:「${p(r.pluginId).name}」,理由将展示给申请人`);
+}
+
+let rejectRid = null;
+function openReject(rid) { rejectRid = rid; document.getElementById('rejectReason').value=''; document.getElementById('rejectErr').style.display='none'; document.getElementById('rejectMask').classList.add('open'); }
+function closeReject() { document.getElementById('rejectMask').classList.remove('open'); }
+function confirmReject() {
+  const v = document.getElementById('rejectReason').value.trim();
+  if (!v) { document.getElementById('rejectErr').style.display='block'; return; }
+  doReject(rejectRid, v, 'web');
+}
+
+/* ================= 员工动作:提交审核弹窗 ================= */
+let submitCtx = null; // { pid, kind }
+function submitReview(pid) { openSubmit(pid, 'first'); }
+function submitUpgrade(pid) { openSubmit(pid, 'upgrade'); }
+function openSubmit(pid, kind) {
+  const pl = p(pid);
+  submitCtx = { pid, kind };
+  document.getElementById('submitTitle').textContent = kind === 'first' ? `提交组织审核 · ${pl.name}` : `发布新版本 · ${pl.name}`;
+  document.getElementById('submitDesc').innerHTML = kind === 'first'
+    ? '审核通过后,该插件在组织市场对全体成员可见。'
+    : `当前在架版本 <b>v${pl.liveVer}</b>;新版本审核期间旧版本继续在架,通过后自动切换。`;
+  document.getElementById('submitVer').value = kind === 'first' ? pl.ver : bumpVer(pl.liveVer);
+  document.getElementById('submitLog').value = '';
+  document.getElementById('submitVerErr').style.display = 'none';
+  document.getElementById('submitLogErr').style.display = 'none';
+  document.getElementById('submitMask').classList.add('open');
+}
+function closeSubmit() { document.getElementById('submitMask').classList.remove('open'); submitCtx = null; }
+function confirmSubmit() {
+  const ver = document.getElementById('submitVer').value.trim();
+  const log = document.getElementById('submitLog').value.trim();
+  const pl = p(submitCtx.pid);
+  // 已发布版本号不可复用(被拒版本号可复用)
+  const published = requests.filter(r => r.pluginId === pl.id && r.status === 'approved').map(r => r.ver);
+  if (pl.liveVer) published.push(pl.liveVer);
+  const verBad = !ver || published.includes(ver);
+  document.getElementById('submitVerErr').style.display = verBad ? 'block' : 'none';
+  document.getElementById('submitLogErr').style.display = log ? 'none' : 'block';
+  if (verBad || !log) return;
+  const { pid, kind } = submitCtx;
+  requests.unshift({ id: 'r'+(seq++), pluginId: pid, ver, changelog: log, kind, status: 'pending', applicant: ME[role].uid, applicantName: ME[role].name, submittedAt: now(), reviewer: null, reason: null, source:'web' });
+  closeSubmit(); render();
+  imNotifyReviewSubmitted(requests[0]);
+  toast(kind === 'first' ? `「${pl.name}」v${ver} 已提交组织审核` : `已提交 v${ver} 版本更新审核,v${pl.liveVer} 继续在架`);
+}
+function cancelReview(pid) {
+  const r = pendingOf(pid); if (!r) return;
+  r.status = 'canceled'; r.reviewedAt = now();
+  render(); toast('已撤回申请');
+}
+
+/* ================= 上传流程 ================= */
+function openUpload() { pickedVis='private'; pickVis('private'); document.getElementById('uploadMask').classList.add('open'); }
+function closeUpload() { document.getElementById('uploadMask').classList.remove('open'); }
+function pickVis(v) {
+  pickedVis = v;
+  document.getElementById('visPrivate').classList.toggle('sel', v==='private');
+  document.getElementById('visSpace').classList.toggle('sel', v==='space');
+  document.querySelector('#visPrivate input').checked = v==='private';
+  document.querySelector('#visSpace input').checked = v==='space';
+}
+function confirmUpload() {
+  const ver = (document.getElementById('uploadVer').value.trim()) || '1.0.0';
+  const id = 'p'+(seq++);
+  plugins.unshift({ id, name: '周报生成助手', type: 'skill', icon: '🗓️', color: '#eef2fe', ver, owner: ME[role].uid, ownerName: ME[role].name, visibility: 'private', desc: '汇总本周任务与产出,自动生成周报草稿。', liveVer: null });
+  if (pickedVis === 'space') {
+    requests.unshift({ id: 'r'+(seq++), pluginId: id, ver, changelog: '首次发布:自动汇总本周任务与产出,生成周报草稿。', kind: 'first', status: 'pending', applicant: ME[role].uid, applicantName: ME[role].name, submittedAt: now(), reviewer: null, reason: null, source:'web' });
+    imNotifyReviewSubmitted(requests[0]);
+  }
+  closeUpload(); view='mine'; render();
+  toast(pickedVis==='space' ? `发布成功,v${ver} 已提交组织审核 —— 审核通过前仅自己可见` : '发布成功(私有),可随时提交组织审核');
+}
+
+/* ================= 工具 ================= */
+function switchRole(r) {
+  role = r;
+  document.getElementById('roleEmp').classList.toggle('active', r==='emp');
+  document.getElementById('roleAdm').classList.toggle('active', r==='adm');
+  if (r==='emp' && view==='org') view='mine';
+  if (r==='adm' && view==='mine') view='org';
+  // 切视角时 IM 消息按当前视角重新显示(员工视角只看得到自己提交/结果;管理员视角只看得到待审卡片和自己的处理回执)
+  renderIM();
+  render();
+}
+function nav(v) { view = v; render(); }
+function typeName(t) { return { skill:'技能', connector:'连接器', expert:'专家', expert_team:'专家组' }[t] || t; }
+function bumpVer(v) { const a=(v||'1.0.0').split('.'); a[1]=+a[1]+1; a[2]=0; return a.join('.'); }
+function now() { const d=new Date(); const z=n=>String(n).padStart(2,'0'); return `${z(d.getMonth()+1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; }
+let toastTimer=null;
+function toast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.style.display='none', 2600); }
+
+/* 初始 IM:把已有 pending 的两条待审请求推送成管理员视角的卡片(页面第一次切到管理员时能看到) */
+requests.filter(r => r.status==='pending').forEach(r => {
+  const pl = p(r.pluginId);
+  const kindTxt = r.kind==='first'?'首次上架':`版本更新 v${pl.liveVer||'?'} → v${r.ver}`;
+  imMsgs.push({ id: 'im'+(seq++), ts: r.submittedAt, reqId: r.id, kind: 'review', state: 'pending',
+    title: `插件上架申请 · ${pl.name}`,
+    meta: `类型:${typeName(pl.type)} · 申请人:${r.applicantName}\n版本:${r.ver}(${kindTxt})\n${(r.changelog||'').slice(0,60)}`,
+  });
+});
+
+renderIM(); flashIM();
+render();
+</script>
+</body>
+</html>

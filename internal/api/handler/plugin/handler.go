@@ -22,6 +22,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// maxBodyBytes caps a plugin write body. `maxReviewBodyBytes` (review.go) is
+// derived from it: a review submit carries the same declared content, so the two
+// paths must accept the same size.
 const maxBodyBytes = 3 << 20
 
 // Service is the handler-facing boundary over the unified Plugin service.
@@ -38,6 +41,20 @@ type Service interface {
 	OpenSkillPackage(context.Context, pluginsvc.Caller, string) (*pluginsvc.SkillPackageStream, error)
 	ListTags(context.Context, pluginsvc.Caller, pluginsvc.TagListParams) ([]model.TagFilter, error)
 	DetailGraph(context.Context, pluginsvc.Caller, string) (*pluginsvc.DetailGraph, error)
+
+	// Space review workflow (see review.go).
+	SubmitReview(context.Context, pluginsvc.Caller, pluginsvc.ReviewSubmitParams) (*model.PluginReviewRequest, error)
+	ListReviews(context.Context, pluginsvc.Caller, string, model.ReviewStatus, int, int) ([]*model.PluginReviewRequest, int64, error)
+	GetReview(context.Context, pluginsvc.Caller, string) (*model.PluginReviewRequest, error)
+	ApproveReview(context.Context, pluginsvc.Caller, string) (*model.Plugin, error)
+	RejectReview(context.Context, pluginsvc.Caller, string, string) error
+	CancelReview(context.Context, pluginsvc.Caller, string) error
+
+	// Listing lifecycle (see listing.go). Publish is the single 发布 door: it
+	// routes to an immediate listing or a review request based on the Plugin's
+	// declared visibility, so no client has to know the rule.
+	Publish(context.Context, pluginsvc.Caller, pluginsvc.PublishParams) (*pluginsvc.PublishResult, error)
+	Delist(context.Context, pluginsvc.Caller, pluginsvc.DelistParams) (*pluginsvc.Detail, error)
 }
 
 // CategoryService is separate because category listing is a read-only operation
@@ -68,11 +85,23 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	plugins.GET("/detail_graph", h.GetGraph)
 	plugins.POST("/upsert", h.Upsert)
 	plugins.POST("/delete", h.Delete)
+	plugins.POST("/publish", h.Publish)
+	plugins.POST("/delist", h.Delist)
 	plugins.GET("/versions", h.ListVersions)
 	plugins.POST("/install", h.Install)
 	plugins.POST("/import", h.Import)
 	plugins.GET("/skill_md", h.SkillMarkdown)
 	plugins.GET("/download", h.DownloadSkillPackage)
+	// Space review queue. Registered on the same authenticated group; the routes
+	// are resourceful (unlike the verb-style legacy plugin routes above) because
+	// the octo-web client is already built against these paths.
+	reviews := plugins.Group("/review_requests")
+	reviews.POST("", h.SubmitReview)
+	reviews.GET("", h.ListReviews)
+	reviews.GET("/:review_id", h.GetReview)
+	reviews.POST("/:review_id/approve", h.ApproveReview)
+	reviews.POST("/:review_id/reject", h.RejectReview)
+	reviews.POST("/:review_id/cancel", h.CancelReview)
 }
 
 type relationRequest struct {
@@ -85,17 +114,20 @@ type relationRequest struct {
 }
 
 type pluginWriteRequest struct {
-	PluginID     string                 `json:"plugin_id,omitempty"`
-	PluginName   string                 `json:"plugin_name"`
-	PluginType   model.PluginType       `json:"plugin_type"`
-	CategoryID   *string                `json:"category_id,omitempty"`
-	Tags         []string               `json:"tags"`
-	Publisher    string                 `json:"publisher,omitempty"`
-	Icon         string                 `json:"icon,omitempty"`
-	Visibility   model.PluginVisibility `json:"visibility"`
-	Version      string                 `json:"version,omitempty"`
-	ManifestJSON json.RawMessage        `json:"manifest_json" swaggertype:"object"`
-	PluginJSON   json.RawMessage        `json:"plugin_json" swaggertype:"object"`
+	PluginID   string                 `json:"plugin_id,omitempty"`
+	PluginName string                 `json:"plugin_name"`
+	PluginType model.PluginType       `json:"plugin_type"`
+	CategoryID *string                `json:"category_id,omitempty"`
+	Tags       []string               `json:"tags"`
+	Publisher  string                 `json:"publisher,omitempty"`
+	Icon       string                 `json:"icon,omitempty"`
+	Visibility model.PluginVisibility `json:"visibility"`
+	// Version label as MAJOR.MINOR.PATCH, each part 1-9 digits. Omit to keep the
+	// stored label. A plugin whose stored label predates this format stays editable by
+	// re-sending that exact label.
+	Version      string          `json:"version,omitempty" pattern:"^\\d{1,9}\\.\\d{1,9}\\.\\d{1,9}$"`
+	ManifestJSON json.RawMessage `json:"manifest_json" swaggertype:"object"`
+	PluginJSON   json.RawMessage `json:"plugin_json" swaggertype:"object"`
 }
 
 type upsertRequest struct {
@@ -121,20 +153,27 @@ type deleteResponse struct {
 }
 
 type pluginResponse struct {
-	PluginID         string                 `json:"plugin_id"`
-	PluginName       string                 `json:"plugin_name"`
-	PluginType       model.PluginType       `json:"plugin_type"`
-	IsEmbedded       bool                   `json:"is_embedded"`
-	CategoryID       *string                `json:"category_id,omitempty"`
-	Tags             []string               `json:"tags"`
-	Publisher        string                 `json:"publisher,omitempty"`
-	OwnerID          string                 `json:"owner_id"`
-	SpaceID          *string                `json:"space_id,omitempty"`
-	Visibility       model.PluginVisibility `json:"visibility"`
-	CreatorName      string                 `json:"creator_name"`
-	CreatedByType    string                 `json:"created_by_type"`
-	CreatedByBotID   *string                `json:"created_by_bot_id,omitempty"`
-	CreatedByBotName *string                `json:"created_by_bot_name,omitempty"`
+	PluginID     string                   `json:"plugin_id"`
+	PluginName   string                   `json:"plugin_name"`
+	PluginType   model.PluginType         `json:"plugin_type"`
+	IsEmbedded   bool                     `json:"is_embedded"`
+	CategoryID   *string                  `json:"category_id,omitempty"`
+	Tags         []string                 `json:"tags"`
+	Publisher    string                   `json:"publisher,omitempty"`
+	OwnerID      string                   `json:"owner_id"`
+	SpaceID      *string                  `json:"space_id,omitempty"`
+	Visibility   model.PluginVisibility   `json:"visibility"`
+	ListingState model.PluginListingState `json:"listing_state"`
+	// DisplayStatus is the single DERIVED status a client shows: draft /
+	// pending_review / published / rejected / delisted. It folds the listing axis
+	// together with the review axis so clients do not have to fetch the review list
+	// and join. Distinct from `status`, which is the row's soft-active flag.
+	DisplayStatus    model.PluginDisplayStatus `json:"display_status"`
+	ReviewID         *string                   `json:"review_id,omitempty"`
+	CreatorName      string                    `json:"creator_name"`
+	CreatedByType    string                    `json:"created_by_type"`
+	CreatedByBotID   *string                   `json:"created_by_bot_id,omitempty"`
+	CreatedByBotName *string                   `json:"created_by_bot_name,omitempty"`
 	// Icon is the stored write-canonical value clients must echo on updates;
 	// IconURL is the resolved display URL (presigned when Icon is an object key).
 	Icon             string          `json:"icon,omitempty"`
@@ -157,35 +196,41 @@ type pluginResponse struct {
 // listItemResponse is the list-page projection: it carries the manifest for
 // display but never the full plugin_json package.
 type listItemResponse struct {
-	PluginID         string                 `json:"plugin_id"`
-	PluginName       string                 `json:"plugin_name"`
-	PluginType       model.PluginType       `json:"plugin_type"`
-	IsEmbedded       bool                   `json:"is_embedded"`
-	CategoryID       *string                `json:"category_id,omitempty"`
-	Tags             []string               `json:"tags"`
-	Publisher        string                 `json:"publisher,omitempty"`
-	OwnerID          string                 `json:"owner_id"`
-	SpaceID          *string                `json:"space_id,omitempty"`
-	Visibility       model.PluginVisibility `json:"visibility"`
-	CreatorName      string                 `json:"creator_name"`
-	CreatedByType    string                 `json:"created_by_type"`
-	CreatedByBotID   *string                `json:"created_by_bot_id,omitempty"`
-	CreatedByBotName *string                `json:"created_by_bot_name,omitempty"`
-	Icon             string                 `json:"icon,omitempty"`
-	IconURL          string                 `json:"icon_url,omitempty"`
-	ToolCount        *int                   `json:"tool_count,omitempty"`
-	MemberCount      *int                   `json:"member_count,omitempty"`
-	ViewCount        int                    `json:"view_count"`
-	InstallCount     int                    `json:"install_count"`
-	DownloadCount    int                    `json:"download_count"`
-	ManifestJSON     json.RawMessage        `json:"manifest_json" swaggertype:"object"`
-	ManifestHash     string                 `json:"manifest_hash"`
-	PluginHash       string                 `json:"plugin_hash"`
-	CurrentVersionID *string                `json:"current_version_id,omitempty"`
-	CurrentVersion   *string                `json:"current_version,omitempty"`
-	Status           int                    `json:"status"`
-	CreatedAt        time.Time              `json:"created_at" swaggertype:"string,date-time"`
-	UpdatedAt        time.Time              `json:"updated_at" swaggertype:"string,date-time"`
+	PluginID   string           `json:"plugin_id"`
+	PluginName string           `json:"plugin_name"`
+	PluginType model.PluginType `json:"plugin_type"`
+	IsEmbedded bool             `json:"is_embedded"`
+	CategoryID *string          `json:"category_id,omitempty"`
+	Tags       []string         `json:"tags"`
+	Publisher  string           `json:"publisher,omitempty"`
+	// ListingState / Status / ReviewID are populated for mode=mine only. On the
+	// marketplace grid every row is published by construction, so the status would
+	// be a constant and the extra per-row lookups buy nothing.
+	ListingState     model.PluginListingState  `json:"listing_state"`
+	DisplayStatus    model.PluginDisplayStatus `json:"display_status"`
+	ReviewID         *string                   `json:"review_id,omitempty"`
+	OwnerID          string                    `json:"owner_id"`
+	SpaceID          *string                   `json:"space_id,omitempty"`
+	Visibility       model.PluginVisibility    `json:"visibility"`
+	CreatorName      string                    `json:"creator_name"`
+	CreatedByType    string                    `json:"created_by_type"`
+	CreatedByBotID   *string                   `json:"created_by_bot_id,omitempty"`
+	CreatedByBotName *string                   `json:"created_by_bot_name,omitempty"`
+	Icon             string                    `json:"icon,omitempty"`
+	IconURL          string                    `json:"icon_url,omitempty"`
+	ToolCount        *int                      `json:"tool_count,omitempty"`
+	MemberCount      *int                      `json:"member_count,omitempty"`
+	ViewCount        int                       `json:"view_count"`
+	InstallCount     int                       `json:"install_count"`
+	DownloadCount    int                       `json:"download_count"`
+	ManifestJSON     json.RawMessage           `json:"manifest_json" swaggertype:"object"`
+	ManifestHash     string                    `json:"manifest_hash"`
+	PluginHash       string                    `json:"plugin_hash"`
+	CurrentVersionID *string                   `json:"current_version_id,omitempty"`
+	CurrentVersion   *string                   `json:"current_version,omitempty"`
+	Status           int                       `json:"status"`
+	CreatedAt        time.Time                 `json:"created_at" swaggertype:"string,date-time"`
+	UpdatedAt        time.Time                 `json:"updated_at" swaggertype:"string,date-time"`
 }
 
 type relationResponse struct {
@@ -253,7 +298,7 @@ type categoryResponse struct {
 // @Produce json
 // @Security Bearer
 // @Param scene_code query string true "Marketplace scene code"
-// @Param plugin_type query string true "Plugin type" Enums(expert,expert_team,skill,connector)
+// @Param plugin_type query string false "Plugin type. Required unless mode=mine, where omitting it lists every type the caller owns." Enums(expert,expert_team,skill,connector)
 // @Param category_id query string false "Category ID (matches the plugin placement category in this scene)"
 // @Param tag query []string false "Tag filters; repeatable or comma-separated, a plugin must carry every tag" collectionFormat(multi)
 // @Param mode query string false "List mode; mine restricts to plugins owned by the caller" Enums(mine)
@@ -284,14 +329,20 @@ func (h *Handler) List(c *gin.Context) {
 		validation(c, "scene_code")
 		return
 	}
-	pluginType := model.PluginType(c.Query("plugin_type"))
-	if pluginType == "" {
-		validation(c, "plugin_type")
-		return
-	}
+	// mode is parsed before plugin_type because it decides whether plugin_type is
+	// required at all.
 	mode := c.Query("mode")
 	if mode != "" && mode != "mine" {
 		validation(c, "mode")
+		return
+	}
+	// plugin_type is required for the marketplace grid, where a page mixing four
+	// kinds of card has no coherent layout. It is OPTIONAL for mode=mine, which
+	// backs 我的发布 and needs an 全部 tab listing every kind the caller owns in one
+	// table. The service and repository already tolerate an empty type.
+	pluginType := model.PluginType(c.Query("plugin_type"))
+	if pluginType == "" && mode != "mine" {
+		validation(c, "plugin_type")
 		return
 	}
 	items, total, err := h.svc.List(c.Request.Context(), caller, pluginsvc.ListParams{PlacementCode: sceneCode, Type: pluginType, CategoryID: c.Query("category_id"), Tags: splitQuery(c.QueryArray("tag")), Keyword: c.Query("q"), Mine: mode == "mine", Sort: c.Query("sort"), Limit: pageSize, Offset: (page - 1) * pageSize})
@@ -611,6 +662,14 @@ func caller(c *gin.Context) (pluginsvc.Caller, bool) {
 		return pluginsvc.Caller{}, false
 	}
 	out := pluginsvc.Caller{UID: identity.UID, Name: identity.Name, SpaceID: spaceID, RequestID: logging.RequestIDFromGin(c), IsSystemAdmin: identity.Role == marketmiddleware.RoleSuperAdmin}
+	// The caller's role IN THE SPACE THIS REQUEST IS FOR. Reading it by spaceID
+	// rather than taking any single value out of the map is what stops an admin of
+	// Space B from acting as a reviewer while operating in Space A. A missing entry
+	// is a plain member. A system admin outranks any Space role.
+	out.SpaceRole = identity.SpaceRole(spaceID)
+	if out.IsSystemAdmin && out.SpaceRole < pluginsvc.SpaceRoleOwner {
+		out.SpaceRole = pluginsvc.SpaceRoleOwner
+	}
 	if bot, ok := marketmiddleware.BotIdentity(c); ok {
 		out.BotUID, out.BotName = bot.BotUID, bot.BotName
 	}
@@ -673,10 +732,76 @@ func splitQuery(values []string) []string {
 	}
 	return result
 }
+
+// writeServiceError maps a service sentinel onto the wire shape.
+//
+// Every 409 arm below MUST set a distinct conflict_reason, and the set is
+// documented in the spec (cmd/marketplace-api/main.go's @description) because the
+// status code alone cannot tell a client whether to cancel a pending request, pick
+// a new version label, or simply retry. `state` is the residual for a raced state
+// change with no more specific reading — adding a sentinel to that arm rather than
+// giving it its own reason is how an actionable failure ends up unactionable, which
+// is what happened to the single-pending refusal and to label collisions. Keep the
+// three in sync: the sentinel, the reason string, and the @description list.
 func writeServiceError(c *gin.Context, err error, operation string) {
+	var fieldErr *pluginsvc.ReviewFieldError
 	switch {
+	case errors.As(err, &fieldErr):
+		// Structured field error from the review path: surface the exact field
+		// and reason so the browser can show the user which input to fix,
+		// instead of collapsing every cause into {"field":"body","reason":"invalid"}.
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, "Correct the request and try again.")
 	case errors.Is(err, pluginsvc.ErrInvalidRequest):
 		validation(c, "body")
+	case errors.Is(err, pluginsvc.ErrReviewInvalid):
+		validation(c, "body")
+	// A named field error from legacy paths (ErrReasonRequired) still works.
+	case errors.Is(err, pluginsvc.ErrReasonRequired):
+		validation(c, "reason")
+	// Invalid parse task for review submission: name the field.
+	case errors.Is(err, pluginsvc.ErrInvalidParseTask):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "parse task is invalid or already consumed", map[string]any{"field": "parse_task_id", "reason": "invalid_or_consumed"}, "Upload a new package and try again.")
+	// An upgrade submission with no content: name the field so the client knows
+	// what to send rather than guessing at a generic "body".
+	case errors.Is(err, pluginsvc.ErrReviewContentRequired):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "a listed plugin must be submitted with the reviewed content", map[string]any{"field": "manifest_json", "reason": "required"}, "Send manifest_json and plugin_json, or parse_task_id, with the submission.")
+	// Parse task against a non-skill plugin.
+	case errors.Is(err, pluginsvc.ErrReviewParseTaskType):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "parse_task_id is only valid for skill plugins", map[string]any{"field": "parse_task_id", "reason": "only_valid_for_skill_plugins"}, "Use manifest_json/plugin_json for non-skill plugins.")
+	// Zip package name mismatch.
+	case errors.Is(err, pluginsvc.ErrReviewNameMismatch):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "the uploaded package name does not match the plugin", map[string]any{"field": "parse_task_id", "reason": "name_mismatch"}, "Upload a package whose name matches the existing plugin.")
+	// Names the field so the form can mark the version input rather than
+	// reporting a generic bad body.
+	case errors.Is(err, pluginsvc.ErrVersionRegressed):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "version must not go backwards", map[string]any{"field": "version", "reason": "must_not_decrease"}, "Use the current version or a higher one.")
+	// Label already in the published set. Same shape as ErrVersionRegressed
+	// from the client's perspective (fix the version field); surfaced at approve
+	// time when a concurrent writer published the same label while the request
+	// sat pending, so it is a 409 Conflict rather than a 400 — the label was
+	// valid at submit but is no longer available.
+	case errors.Is(err, pluginsvc.ErrLabelTaken):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "version label is already published", map[string]any{"field": "version", "conflict_reason": "label_taken"}, "Use a different version label; the applicant must resubmit.")
+	// A state conflict, not a permission problem: the owner may change this
+	// plugin, but only through a review request. Self-delisting is no longer an
+	// option, so the hint points at the two things that actually work.
+	case errors.Is(err, pluginsvc.ErrListedRequiresReview):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a plugin listed to the organization cannot be edited directly", map[string]any{"conflict_reason": "listed_requires_review"}, "Publish a new version through review, or ask a Space admin to delist it first.")
+	// Also a state conflict: the pending request has to be resolved or canceled
+	// before this particular change is coherent.
+	case errors.Is(err, pluginsvc.ErrReviewPending):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a review request is pending on this plugin", map[string]any{"conflict_reason": "review_pending"}, "Cancel the pending review request first.")
+	// Publish/delist state conflicts. Reported as conflicts rather than silently
+	// succeeding so a second button press tells the client its view is stale.
+	case errors.Is(err, pluginsvc.ErrAlreadyPublished):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is already published", map[string]any{"conflict_reason": "already_published"}, "Refresh the plugin and try again.")
+	case errors.Is(err, pluginsvc.ErrNotPublished):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is not published", map[string]any{"conflict_reason": "not_published"}, "Only a published plugin can be delisted.")
+	// Authorization refusal, distinct from "not found": the caller is in the right
+	// Space and may know the resource exists, they simply lack the reviewer role.
+	// Without this branch a permission error falls through to 500.
+	case errors.Is(err, pluginsvc.ErrReviewForbidden):
+		apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "operation requires the Space owner or admin role", map[string]any{"required_role": "space_admin"}, "Ask a Space owner or admin to perform this action.")
 	case errors.Is(err, pluginsvc.ErrNotFound):
 		apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "plugin not found", map[string]any{"resource": "plugin"}, "Verify the plugin_id and try again.")
 	case errors.Is(err, pluginsvc.ErrTooLarge):
@@ -685,6 +810,16 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin graph exceeds the size cap", map[string]any{"max_nodes": pluginsvc.MaxGraphNodes(), "max_edges": pluginsvc.MaxGraphEdges()}, "The plugin references too many related plugins; contact the publisher to reduce the graph size.")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin state conflicts with an existing resource", map[string]any{"conflict_reason": "state"}, "Refresh the resource and try again.")
+	// Transient InnoDB lock contention (a deadlock victim, or a lock-wait timeout)
+	// between two writers on the same plugin that take the plugin row and its
+	// review request in opposite orders — a submit or a decision racing a save,
+	// delete, publish or delist. Nothing committed, so it is safe — and expected —
+	// to retry. Reported as a retryable conflict rather than a 500 so the client
+	// re-issues the request instead of surfacing an internal error. The
+	// conflict_reason stays "deadlock" for both server errors: it is one retry
+	// instruction to a client, and splitting it would move the wire contract.
+	case errors.Is(err, pluginsvc.ErrDeadlock):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "the request conflicted with a concurrent change", map[string]any{"conflict_reason": "deadlock", "retryable": true}, "Please retry the request.")
 	default:
 		apiresponse.Internal(c, err, operation)
 	}
@@ -693,13 +828,13 @@ func pluginDTO(p *model.Plugin) pluginResponse {
 	if p == nil {
 		return pluginResponse{}
 	}
-	return pluginResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return pluginResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 func listItemDTO(p *model.Plugin) listItemResponse {
 	if p == nil {
 		return listItemResponse{}
 	}
-	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 // connectorCount and teamMemberCount emit typed counts only for the plugin
@@ -837,4 +972,12 @@ func versionRelationSlice(raw json.RawMessage) []map[string]any {
 		})
 	}
 	return out
+}
+
+// optionalID omits an empty derived id from the response rather than sending "".
+func optionalID(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/id"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/notify"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
@@ -22,6 +23,15 @@ var (
 	ErrConflict       = errors.New("plugin conflict")
 	ErrInvalidRequest = errors.New("invalid plugin request")
 	ErrTooLarge       = errors.New("plugin artifact exceeds size limit")
+	// ErrDeadlock is returned when a review transaction was chosen as the InnoDB
+	// deadlock victim (submit and the decision paths take the plugin/request rows
+	// in opposite orders). It is TRANSIENT — the aborted transaction did not
+	// commit and a retry succeeds — and deliberately distinct from ErrConflict so
+	// the IM card path does not treat it as a settled decision and silently
+	// discard a real admin's click. Web decision handlers surface it as a
+	// retryable 409; the card path lets it fall through to a 503 so octo-server
+	// redelivers.
+	ErrDeadlock = errors.New("plugin transaction deadlock, retry")
 	// ErrDependencyHidden is returned when an install cannot see every declared
 	// relation target, so the full published topology cannot be reproduced —
 	// refused loudly rather than provisioning a partial expert/squad (P1-1).
@@ -51,6 +61,11 @@ type Caller struct {
 	BotName       string
 	RequestID     string
 	IsSystemAdmin bool
+	// SpaceRole is the caller's role in SpaceID using octo-server's
+	// space_member.role encoding (0=member, 1=admin, 2=owner). Populated by the
+	// HTTP layer from the verified identity's space_roles map, never from request
+	// data. Reviewer-side review operations require >= SpaceRoleAdmin.
+	SpaceRole int
 }
 
 // Store is the transactional persistence boundary required by Service.
@@ -69,6 +84,29 @@ type Store interface {
 	CountDeclaredRelations(context.Context, string) (int, error)
 	ListTags(context.Context, pluginrepo.Scope, pluginrepo.TagListFilter) ([]model.TagFilter, error)
 	GetGraphClosure(context.Context, pluginrepo.Scope, string) (*model.Plugin, []model.PluginRelation, []*model.Plugin, error)
+
+	// Space review requests. Every method carries the caller Scope; the
+	// AnySpace variant is the single deliberate exception and is documented at
+	// its definition.
+	InsertReviewRequest(context.Context, pluginrepo.Scope, *model.PluginReviewRequest, pluginrepo.FrozenSnapshot) error
+	GetReviewRequest(context.Context, pluginrepo.Scope, string, bool) (*model.PluginReviewRequest, error)
+	LoadReviewSnapshot(context.Context, pluginrepo.Scope, string, bool) (*model.PluginReviewRequest, error)
+	ListReviewRequests(context.Context, pluginrepo.Scope, pluginrepo.ReviewListFilter) ([]*model.PluginReviewRequest, int64, error)
+	HasPendingReview(context.Context, pluginrepo.Scope, string) (bool, error)
+	LatestReviewForPlugin(context.Context, pluginrepo.Scope, string) (string, model.ReviewStatus, error)
+
+	// Listing lifecycle. These are the only two writers of listing_state besides
+	// insertPlugin and ApproveReview.
+	PublishPlugin(context.Context, pluginrepo.Scope, pluginrepo.PublishParams) (*model.Plugin, error)
+	DelistPlugin(context.Context, pluginrepo.Scope, pluginrepo.DelistParams) (*model.Plugin, error)
+	ApproveReview(context.Context, pluginrepo.Scope, pluginrepo.ApproveReviewParams) (*model.Plugin, error)
+	RejectReview(context.Context, pluginrepo.Scope, pluginrepo.RejectReviewParams) (json.RawMessage, map[string]struct{}, error)
+	CancelReview(context.Context, pluginrepo.Scope, string, string) (json.RawMessage, map[string]struct{}, error)
+	GetReviewRequestAnySpace(context.Context, string) (*model.PluginReviewRequest, error)
+
+	// Card-action receipts (IM decision idempotency).
+	GetCardActionReceipt(context.Context, string) (*model.CardActionReceipt, error)
+	InsertCardActionReceipt(context.Context, *model.CardActionReceipt) error
 }
 
 var _ Store = (*pluginrepo.Repo)(nil)
@@ -83,6 +121,14 @@ type Service struct {
 	now                func() time.Time
 	maxAttachmentBytes int64
 	maxArchiveBytes    int64
+
+	// Review IM notification wiring. Both are optional and are used ONLY by the
+	// IM surface: a nil notifier means no approval card is dispatched, and the
+	// card-action callback cannot verify an operator (it faults rather than
+	// granting). Web-path review authorization never consults either of these —
+	// it reads Caller.SpaceRole — so review works whether or not IM is wired.
+	notify     ReviewNotifier
+	bestEffort func(string, func(ctx context.Context) error)
 }
 
 func New(repo Store, stores ...storage.Storage) *Service {
@@ -96,6 +142,34 @@ func New(repo Store, stores ...storage.Storage) *Service {
 	if len(stores) > 0 {
 		s.storage = stores[0]
 	}
+	return s
+}
+
+// ReviewNotifier is the subset of *notify.Client the review workflow uses. The
+// compile-time assertion keeps it honest: the interface exists for test
+// substitution, not to re-abstract the client.
+type ReviewNotifier interface {
+	Enabled() bool
+	// MemberRole reports uid's role in spaceID. A nil role means "not an active
+	// member of an active Space" — non-member, removed member, unknown Space and
+	// disbanded Space are deliberately indistinguishable. An error means the
+	// lookup could not be performed and must NEVER be treated as a refusal.
+	MemberRole(ctx context.Context, spaceID, uid string) (*int, error)
+	NotifySpaceAdmins(ctx context.Context, req notify.NotifyRequest) (*notify.NotifyResponse, error)
+}
+
+var _ ReviewNotifier = (*notify.Client)(nil)
+
+// WithNotify wires the octo-server client used for IM approval cards and the
+// post-commit dispatcher that runs them. Both are optional; leaving them unset
+// disables IM dispatch and makes the card-action callback report a fault rather
+// than authorizing anyone.
+//
+// This deliberately does NOT govern web-path authorization: that reads
+// Caller.SpaceRole, so approving from the web works with IM entirely unwired.
+func (s *Service) WithNotify(n ReviewNotifier, bestEffort func(string, func(ctx context.Context) error)) *Service {
+	s.notify = n
+	s.bestEffort = bestEffort
 	return s
 }
 
@@ -166,6 +240,14 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
+	// grandfatheredVersion is the plugin's STORED version label, set only by
+	// Service.update. A label minted before the format was tightened (v999,
+	// 1.0.0lll) no longer passes validVersion, and every save re-sends the stored
+	// value — so without this exemption tightening the format would retroactively
+	// make those rows permanently unsavable. Unexported on purpose: a request body
+	// must never be able to claim its own value is grandfathered.
+	grandfatheredVersion string
+
 	Name       string
 	Type       model.PluginType
 	CategoryID *string
@@ -235,7 +317,7 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) ([]mode
 	if err != nil {
 		return nil, 0, err
 	}
-	items, total, err := s.repo.List(ctx, scope(caller), pluginrepo.ListFilter{PlacementCode: strings.TrimSpace(p.PlacementCode), Type: p.Type, CategoryID: strings.TrimSpace(p.CategoryID), Tags: tags, Keyword: strings.TrimSpace(p.Keyword), Mine: p.Mine, Sort: strings.TrimSpace(p.Sort), Limit: p.Limit, Offset: p.Offset})
+	items, total, err := s.repo.List(ctx, scope(caller), pluginrepo.ListFilter{PlacementCode: strings.TrimSpace(p.PlacementCode), Type: p.Type, CategoryID: strings.TrimSpace(p.CategoryID), Tags: tags, Keyword: strings.TrimSpace(p.Keyword), Mine: p.Mine, Sort: strings.TrimSpace(p.Sort), Limit: p.Limit, Offset: p.Offset, IncludeReviewState: p.Mine})
 	if err != nil {
 		return nil, 0, mapStoreError(err)
 	}
@@ -380,6 +462,21 @@ func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, in
 		return nil, mapStoreError(err)
 	}
 	p.IconURL = s.resolveIcon(ctx, p.Icon)
+	// The detail read carries the same derived status as the mine listing, or a card
+	// would show 审核中 and the detail page it opens would show nothing.
+	//
+	// Owner-only, deliberately. Everyone in the Space can read a listed plugin, but
+	// only its author has any business knowing that an update is sitting in the
+	// review queue. LatestReviewForPlugin orders pending first, so one lookup
+	// answers both "is there an open request" and "what happened last".
+	if p.OwnerUID == caller.UID {
+		reviewID, status, err := s.repo.LatestReviewForPlugin(ctx, scope(caller), p.ID)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		p.LatestReviewID, p.LatestReviewStatus = reviewID, status
+		p.HasPendingReview = status == model.ReviewStatusPending
+	}
 	if !includeRelations {
 		rels = []model.PluginRelation{}
 	} else {
@@ -448,6 +545,19 @@ func (s *Service) createWithID(ctx context.Context, caller Caller, req WriteRequ
 	if err := validateCaller(caller); err != nil {
 		return nil, err
 	}
+	// A fresh tenant plugin is always a DRAFT, whatever visibility it declares.
+	// visibility is an intent ("who should see this once it is listed"), and
+	// listing_state is what actually lists it — so there is no longer anything to
+	// clamp here: declaring 仅本组织可见 on a draft is legal and lists nothing until
+	// Publish routes it through review and ApproveReview stamps published.
+	//
+	// The value is still validated, so `public` and garbage stay 400s rather than
+	// being silently rewritten. buildWrite stamps listing_state=draft; a system
+	// admin is left alone because `system` rows are not tenant-owned and not
+	// subject to Space review.
+	if !caller.IsSystemAdmin && !validVisibility(req.Visibility, false) {
+		return nil, ErrInvalidRequest
+	}
 	now := s.now()
 	p, rels, err := s.buildWrite(ctx, caller, "", req, now, false)
 	if err != nil {
@@ -513,6 +623,66 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if req.Type != old.Type {
 		return nil, ErrInvalidRequest
 	}
+	// A LISTED, org-visible plugin may not be modified through this path at all.
+	// Every field a tenant can change here is org-visible — the documents, and
+	// through the manifest the name/description/labels, plus category, publisher
+	// and icon — so an edit that lands here is an unreviewed change to what the
+	// whole Space is reading. Reviewed content arrives through SubmitReview.
+	//
+	// The gate is (published AND space), not published alone. A PRIVATE published
+	// plugin has no review channel by design — Publish lists it directly — so
+	// refusing edits there would leave it permanently uneditable, and the
+	// justification for the refusal does not hold anyway: nobody else can read it.
+	// A DRAFT or DELISTED row is freely editable, which is what makes "edit and
+	// publish again" work after a takedown.
+	//
+	// Self-delisting by lowering visibility to private is NO LONGER a way out:
+	// taking a listed plugin down is a Space-admin action (Delist). visibility is
+	// otherwise free to change on an unlisted row, since it only declares intent.
+	//
+	// A system admin is exempt from the two tenant gates below. The residual that
+	// buys is narrower than it looks, and worth naming exactly: a super-admin
+	// cannot LIST anything through this path (listing_state is not settable on the
+	// write path, and changing visibility on a published row still drops it to
+	// draft below), and AdminUpdate stamps old.Visibility via adminEffectiveWrite
+	// rather than taking it from the request. What they CAN do is edit the live
+	// content of an ALREADY-LISTED row with no review request and no
+	// `review_approve` audit row — only the ordinary `update` audit records it.
+	// That is the platform-operator escape hatch, deliberately kept.
+	//
+	// The version label may go up or stay put, never back. Checked against the
+	// STORED label rather than the request's own history, because a client that
+	// forgets to send the field would otherwise silently reset it.
+	if old.CurrentVersion != nil {
+		if strings.TrimSpace(req.Version) != "" && !versionNotRegressed(*old.CurrentVersion, req.Version) {
+			return nil, ErrVersionRegressed
+		}
+		// Lets buildWrite accept an unchanged pre-tightening label; see the field.
+		req.grandfatheredVersion = *old.CurrentVersion
+	}
+
+	if !caller.IsSystemAdmin {
+		if !validVisibility(req.Visibility, false) {
+			return nil, ErrInvalidRequest
+		}
+		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace {
+			return nil, ErrListedRequiresReview
+		}
+		// While a review is pending, the frozen snapshot is what the reviewer will
+		// act on, so content edits stay allowed (that is the whole point of freezing
+		// it). Changing VISIBILITY is different: ApproveReview stamps
+		// visibility=space, so approving a request whose author has since switched to
+		// 仅自己可见 would publish a row against the author's last stated intent.
+		if req.Visibility != old.Visibility {
+			pending, err := s.repo.HasPendingReview(ctx, scope(caller), old.ID)
+			if err != nil {
+				return nil, mapStoreError(err)
+			}
+			if pending {
+				return nil, ErrReviewPending
+			}
+		}
+	}
 	now := s.now()
 	// A fetch-edit-save client echoes back the GET package, whose storage
 	// attachments no longer carry an inline key (it lives in the host sidecar).
@@ -537,10 +707,57 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	for i := range rels {
 		rels[i].SourcePluginID = storageID
 	}
+	// The saved row keeps the listing state it already had — buildWrite mints the
+	// create-time default (draft), which would otherwise be reported back as the
+	// plugin's state even though the UPDATE never writes the column.
+	p.ListingState = old.ListingState
+
 	audit := s.audit(caller, storageID, "update", old, p, now)
 	m := mutation(*p, rels, audit)
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
+	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
+	// restate it against the row it locks, for the same reason the two listing
+	// decisions below are re-derived: an approval that publishes a frozen label can
+	// advance current_version between that read and the write, after which this save
+	// would snapshot a label the row has already moved past.
+	m.EnforceForwardOnlyVersion = true
+	// The unlocked pending guard above (non-admin visibility change) is a fast
+	// pre-check; make it authoritative by re-checking under the plugin row lock in
+	// the write transaction. Same condition as that guard so a content-only save
+	// and the exempt system admin skip the extra read.
+	if !caller.IsSystemAdmin && req.Visibility != old.Visibility {
+		m.RefusePendingReview = true
+	}
+	// The listed_requires_review gate and the un-list-on-widen decision above were
+	// both computed from the UNLOCKED `old` read. An approval or a publish can
+	// commit between that read and Repo.Update's row lock, so let the repo be
+	// authoritative: EnforceListingGate makes it re-derive both facts from the row
+	// it locks (refuse a locked published+space edit; reset-to-draft on a widen of
+	// a locked-published row). The exempt system admin keeps the platform-operator
+	// escape hatch and is not gated.
+	if !caller.IsSystemAdmin {
+		m.EnforceListingGate = true
+	}
+	// Widening the declared audience of a LISTED plugin un-lists it.
+	//
+	// The refusal above only covers a published plugin that is already `space`.
+	// A published PRIVATE one is editable by design — nobody else can read it —
+	// but writing `space` onto it while it stays published would list it to the
+	// whole organization with no review, which is the single thing this workflow
+	// exists to prevent. Dropping to draft costs the author nothing (the plugin
+	// was visible only to them) and puts it back on the normal 发布 path, where
+	// the new visibility routes it through review.
+	//
+	// Any content-only edit leaves the listing alone. The condition is "the
+	// visibility changed", not "it widened": for a tenant the only change that can
+	// reach here IS the widening one (published+space is refused above with
+	// ErrListedRequiresReview), and for the exempt system admin dropping a listed
+	// row back to draft on a narrowing is the safe direction anyway.
+	if old.ListingState == model.PluginListingStatePublished && req.Visibility != old.Visibility {
+		m.ResetListingToDraft = true
+		p.ListingState = model.PluginListingStateDraft
+	}
 	sync, err := s.repo.Update(ctx, scope(caller), m)
 	if err != nil {
 		return nil, mapStoreError(err)
@@ -585,6 +802,26 @@ func (s *Service) Delete(ctx context.Context, caller Caller, pluginID string) er
 	}
 	if old.OwnerUID != caller.UID || (old.SpaceID != nil && *old.SpaceID != caller.SpaceID) {
 		return ErrNotFound
+	}
+	// A LISTED, org-visible plugin may not be deleted through this path. Delist
+	// enforces the listing.go:141-148 invariant: "Space admins only… the author
+	// deliberately cannot do this — self-delisting through the write path was
+	// removed — so that a plugin the org depends on cannot vanish at its author's
+	// discretion." Delete is the same write path and would let the author bypass
+	// that takedown gate entirely, irreversibly (there is no undelete, and a
+	// manual deleted_at=NULL drops the row back to draft per the listing-state
+	// backfill migration). An admin must Delist first; once the row leaves
+	// `published` (draft, delisted, or a private-published row nobody else can
+	// read), the author can delete it again. Symmetric with the ErrListedRequiresReview
+	// gate in Service.update, and checked BEFORE the expert/expert_team type switch
+	// so DeleteGraph (the more exposed shape — graph roots almost never carry
+	// incoming live relations) is covered by the same gate.
+	//
+	// A system admin keeps the platform-operator escape hatch, matching update.
+	if !caller.IsSystemAdmin {
+		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace {
+			return ErrListedRequiresReview
+		}
 	}
 	audit := s.audit(caller, storageID, "delete", old, nil, s.now())
 	// An expert/expert_team top owns embedded children (an expert's bundled skills;
@@ -636,11 +873,13 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 		return nil, nil, ErrInvalidRequest
 	}
 	// current_version is caller-declared: use the submitted version, defaulting to
-	// "1.0.0" when none is passed. Reject a malformed non-empty label.
+	// "1.0.0" when none is passed. Reject a malformed non-empty label — unless it
+	// is byte-for-byte the label already stored, which is how an edit to a plugin
+	// carrying a pre-tightening label stays possible.
 	currentVersion := strings.TrimSpace(req.Version)
 	if currentVersion == "" {
 		currentVersion = defaultCurrentVersion
-	} else if !validVersion(currentVersion) {
+	} else if !validVersion(currentVersion) && currentVersion != strings.TrimSpace(req.grandfatheredVersion) {
 		return nil, nil, ErrInvalidRequest
 	}
 	toolCount := 0
@@ -649,7 +888,7 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	}
 	spaceID := c.SpaceID
 	createdBy, botUID, botName := provenance(c)
-	p := &model.Plugin{ID: pluginID, Name: name, Type: req.Type, CategoryID: trimOptional(req.CategoryID), Tags: docs.Tags, Publisher: strings.TrimSpace(req.Publisher), OwnerUID: c.UID, SpaceID: &spaceID, Visibility: req.Visibility, CreatorName: c.Name, CreatedByType: createdBy, CreatedByBotUID: botUID, CreatedByBotName: botName, Icon: icon, IconURL: s.resolveIcon(ctx, icon), ToolCount: toolCount, Manifest: docs.Manifest, Package: docs.Package, AttachmentKeys: docs.AttachmentKeys, ManifestHash: docs.ManifestHash, PluginHash: docs.PluginHash, CurrentVersion: &currentVersion, Status: 1, CreatedAt: now, UpdatedAt: now}
+	p := &model.Plugin{ID: pluginID, Name: name, Type: req.Type, CategoryID: trimOptional(req.CategoryID), Tags: docs.Tags, Publisher: strings.TrimSpace(req.Publisher), OwnerUID: c.UID, SpaceID: &spaceID, Visibility: req.Visibility, ListingState: model.PluginListingStateDraft, CreatorName: c.Name, CreatedByType: createdBy, CreatedByBotUID: botUID, CreatedByBotName: botName, Icon: icon, IconURL: s.resolveIcon(ctx, icon), ToolCount: toolCount, Manifest: docs.Manifest, Package: docs.Package, AttachmentKeys: docs.AttachmentKeys, ManifestHash: docs.ManifestHash, PluginHash: docs.PluginHash, CurrentVersion: &currentVersion, Status: 1, CreatedAt: now, UpdatedAt: now}
 	rels, err := s.buildRelations(ctx, c, admin, p, req.Relations, now)
 	if err != nil {
 		return nil, nil, err
@@ -748,6 +987,18 @@ func mapStoreError(err error) error {
 		return ErrConflict
 	case errors.Is(err, pluginrepo.ErrGraphTooLarge):
 		return ErrGraphTooLarge
+	case errors.Is(err, pluginrepo.ErrDeadlock):
+		return ErrDeadlock
+	case errors.Is(err, pluginrepo.ErrReviewPending):
+		return ErrReviewPending
+	case errors.Is(err, pluginrepo.ErrListedRequiresReview):
+		return ErrListedRequiresReview
+	case errors.Is(err, pluginrepo.ErrVersionRegressed):
+		return ErrVersionRegressed
+	case errors.Is(err, pluginrepo.ErrLabelTaken):
+		return ErrLabelTaken
+	case errors.Is(err, pluginrepo.ErrReviewContentRequired):
+		return ErrReviewContentRequired
 	case errors.Is(err, pluginrepo.ErrInvalidRelation), errors.Is(err, pluginrepo.ErrInvalidCategory), errors.Is(err, pluginrepo.ErrInvalidPlacement):
 		return ErrInvalidRequest
 	default:

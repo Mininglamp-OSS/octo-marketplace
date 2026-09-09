@@ -80,6 +80,16 @@ func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p
 	if err != nil {
 		return nil, err
 	}
+	// An embedded child (a bundled skill, a squad member expert) is installed only
+	// as part of its container graph, never on its own — every other write verb
+	// refuses it the same way (service.update, container reupload, admin, review
+	// submit, delist). Install was the one path with no such guard, so after a
+	// container was delisted a colleague could still install the child's full
+	// content directly by its id. ErrNotFound keeps the answer identical to a read
+	// the caller could not make.
+	if detail.Plugin.IsEmbedded {
+		return nil, ErrNotFound
+	}
 	in := expertsvc.InstallInput{WorkspaceID: strings.TrimSpace(p.WorkspaceID), RuntimeID: strings.TrimSpace(p.RuntimeID), SpaceID: caller.SpaceID, Token: p.Token}
 	// One aggregate byte budget for the whole install, threaded through every
 	// skill of every member, so an expert_team fanning out to many members ×

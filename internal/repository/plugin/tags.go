@@ -19,8 +19,10 @@ type TagListFilter struct {
 }
 
 // ListTags aggregates tag names from Plugins visible to the caller, ordered by
-// descending plugin count with alphabetical tie-break, mirroring the visible
-// set of List so callers only see tags on rows they could open.
+// descending plugin count with alphabetical tie-break, mirroring the visible set
+// of List: the same scope predicate, plus the same listing gate on the grid path
+// (listedSQL) so a chip can never filter to an empty grid. Mine mirrors 我的发布
+// instead and therefore keeps tags from the caller's own drafts.
 func (r *Repo) ListTags(ctx context.Context, scope Scope, f TagListFilter) ([]model.TagFilter, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -45,6 +47,8 @@ func (r *Repo) ListTags(ctx context.Context, scope Scope, f TagListFilter) ([]mo
 	if f.Mine {
 		where += ` AND p.owner_uid=? AND p.space_id=?`
 		args = append(args, scope.CallerUID, scope.SpaceID)
+	} else {
+		where += listedSQL
 	}
 	where += ` AND jt.tag IS NOT NULL AND jt.tag <> ''`
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {

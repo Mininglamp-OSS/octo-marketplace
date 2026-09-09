@@ -210,12 +210,14 @@ func (s *Service) ReuploadContainer(ctx context.Context, caller Caller, pluginID
 		return nil, err
 	}
 	// Preserve the row's identity: a rebuild replaces content, never the plugin_id,
-	// visibility, Space, owner, publisher, creator provenance, or created_at. The
-	// container carries no icon/publisher, so keep the existing ones rather than
-	// clearing them (RebuildGraph re-derives visibility/Space/owner from the locked
-	// row — normalizing a preserved legacy `public` to `system` there — while
-	// publisher/icon/category keep this unlocked read — content, not identity).
+	// visibility, listing state, Space, owner, publisher, creator provenance, or
+	// created_at. The container carries no icon/publisher, so keep the existing ones
+	// rather than clearing them (RebuildGraph re-derives visibility/listing_state/
+	// Space/owner from the locked row — normalizing a preserved legacy `public` to
+	// `system` there — while publisher/icon/category keep this unlocked read —
+	// content, not identity).
 	top.Visibility = old.Visibility
+	top.ListingState = old.ListingState
 	top.SpaceID = old.SpaceID
 	top.OwnerUID = old.OwnerUID
 	top.Publisher = old.Publisher
@@ -237,8 +239,19 @@ func (s *Service) ReuploadContainer(ctx context.Context, caller Caller, pluginID
 	// reuploading a space/private container would silently promote its parts to
 	// platform-global. The IMPORT path keeps minting `system` because its top is
 	// `system`; only the reupload path re-stamps, mirroring how the top is preserved.
+	//
+	// listing_state travels with visibility for the same reason and one more: a
+	// child left `published` under a draft top would be independently readable, and
+	// a child left `draft` under a published top makes every non-owner install fail
+	// with ErrDependencyHidden (resolveInstallDetail sees fewer visible targets than
+	// CountDeclaredRelations).
+	//
+	// All four fields are stamped again inside RebuildGraph from the FOR
+	// UPDATE-locked row; the values read here are the pre-parse ones and lose to a
+	// concurrent edit/delist/approve, which is the intended precedence.
 	for i := range childNodes {
 		childNodes[i].Plugin.Visibility = old.Visibility
+		childNodes[i].Plugin.ListingState = old.ListingState
 		childNodes[i].Plugin.SpaceID = old.SpaceID
 		childNodes[i].Plugin.OwnerUID = old.OwnerUID
 	}
@@ -548,6 +561,11 @@ func (s *Service) buildGraphPlugin(ctx context.Context, eff Caller, typ model.Pl
 	if p.ID == "" {
 		p.ID = s.id()
 	}
+	// A container graph minted here is `system`-visible and immediately live: the
+	// admin import IS the publish. buildWrite mints the tenant default (draft), so
+	// re-stamp it, exactly as the ID is re-stamped above. The reupload path
+	// overrides both visibility and listing state again from the locked row.
+	p.ListingState = model.PluginListingStatePublished
 	return p, nil
 }
 

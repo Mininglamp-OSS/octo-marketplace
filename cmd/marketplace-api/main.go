@@ -32,6 +32,17 @@ import (
 // @title Octo Marketplace API
 // @version 1.0.0
 // @description Skill and MCP marketplace API for OCTO.
+// @description
+// @description A 409 CONFLICT carries `error.details.conflict_reason`, which is what a
+// @description client should branch on — the status code alone does not distinguish these:
+// @description `review_pending` (a request is already open on this plugin; cancel it first),
+// @description `listed_requires_review` (the plugin is listed to the organization, so the
+// @description change must go through review or an admin must delist it first),
+// @description `label_taken` (the submitted version label is already published; pick another
+// @description and resubmit), `already_published` / `not_published` (the listing transition
+// @description does not apply in the plugin's current state), `deadlock` (transient lock
+// @description contention; also sets `retryable: true`, so retry the request unchanged), and
+// @description `state` (a generic raced state change; refresh and retry).
 // @contact.name OCTO API Team
 // @contact.url https://github.com/Mininglamp-OSS/octo-marketplace
 // @BasePath /v1
@@ -99,6 +110,14 @@ func main() {
 	}
 	var resolver auth.Resolver
 	var botResolver auth.BotResolver
+	// devIdentity is only consulted when AUTH_ENABLED=false. The Space role is
+	// keyed on DEV_SPACE_ID; the authenticator rebinds it onto whichever Space
+	// an actual request names (see middleware.Authenticator.devIdentityFor).
+	devIdentity := model.Identity{
+		UID:        cfg.DevAuthUID,
+		Name:       cfg.DevAuthName,
+		SpaceRoles: map[string]int{cfg.DevSpaceID: cfg.DevAuthSpaceRole},
+	}
 	if cfg.AuthEnabled {
 		resolver = auth.NewCachedResolver(
 			auth.NewHTTPResolver(cfg.OctoAPIURL),
@@ -108,16 +127,21 @@ func main() {
 		botResolver = auth.NewHTTPBotResolver(cfg.OctoAPIURL)
 		log.Printf("[auth] enabled")
 	} else {
-		log.Printf("[auth] disabled; using development identity %q in Space %q", cfg.DevAuthUID, cfg.DevSpaceID)
+		// The effective dev Space role is printed so a misconfiguration is
+		// visible in the boot line rather than only as an unexplained 403 on
+		// the review endpoints.
+		log.Printf("[auth] disabled; using development identity %q in Space %q with space role %d (%s)",
+			cfg.DevAuthUID, cfg.DevSpaceID, cfg.DevAuthSpaceRole, devSpaceRoleName(cfg.DevAuthSpaceRole))
 	}
 	authenticator := middleware.NewAuthenticator(
 		cfg.AuthEnabled,
 		resolver,
-		model.Identity{UID: cfg.DevAuthUID, Name: cfg.DevAuthName},
+		devIdentity,
 		cfg.DevSpaceID,
 		botResolver,
 	)
 
+	// Admin routes carry no Space, so the admin dev identity gets no role map.
 	adminAuth := middleware.NewAdminAuthenticator(
 		cfg.AuthEnabled,
 		resolver,
@@ -214,7 +238,15 @@ func main() {
 			WorkerPoolSize:    cfg.SkillParseWorkerPoolSize,
 			BotPublishTimeout: cfg.BotPublishTimeout,
 			DevBotMode:        devBotMode,
-		}, fleetClient, router.RedisConfig{Client: metricsRDB}),
+		}, fleetClient, router.ReviewConfig{
+			// Blank InternalToken / CardActionSecret disable the card dispatch
+			// and the callback endpoint respectively; see the config fields.
+			OctoAPIURL:        cfg.OctoAPIURL,
+			InternalToken:     cfg.OctoInternalToken,
+			CardActionSecret:  cfg.OctoCardActionSecret,
+			NotifyTimeout:     cfg.OctoNotifyTimeout,
+			CardActionMaxSkew: cfg.OctoCardActionMaxSkew,
+		}, router.RedisConfig{Client: metricsRDB}),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
@@ -229,6 +261,21 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = publicServer.Shutdown(ctx)
+}
+
+// devSpaceRoleName labels the dev Space role in the boot line. ValidateAPI has
+// already rejected anything outside 0..2 by the time this runs.
+func devSpaceRoleName(role int) string {
+	switch role {
+	case model.SpaceRoleOwner:
+		return "owner"
+	case model.SpaceRoleAdmin:
+		return "admin"
+	case model.SpaceRoleMember:
+		return "member, cannot review"
+	default:
+		return "unknown"
+	}
 }
 
 func publicBaseURL(cfg config.Config) string {

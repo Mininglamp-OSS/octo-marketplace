@@ -25,6 +25,81 @@ const (
 	PluginVisibilitySystem  PluginVisibility = "system"
 )
 
+// PluginListingState is the listing lifecycle axis, independent of review state.
+//
+// visibility says WHO should see a Plugin once it is listed (a declared intent);
+// listing_state says WHETHER it is listed. Splitting them is what makes a draft
+// expressible: before this type `private` doubled as "draft", so saving and
+// publishing were the same act.
+//
+// It is deliberately NOT a review-status field. Review state stays on
+// plugin_review_requests so a listed v1 and an in-review v2 coexist
+// (.octospec/tasks/plugin-space-review/brief.md item 26). Never add a review
+// value here — "审核中" is derived by DisplayStatus from a pending request.
+type PluginListingState string
+
+const (
+	// PluginListingStateDraft is never discoverable by anyone but the owner, and
+	// is excluded even from the owner's marketplace grid — that exclusion is the
+	// only thing distinguishing a private draft from a published private Plugin.
+	PluginListingStateDraft PluginListingState = "draft"
+	// PluginListingStatePublished is listed, subject to visibility.
+	PluginListingStatePublished PluginListingState = "published"
+	// PluginListingStateDelisted was published and was taken down by a Space
+	// admin. It leaves the marketplace but stays editable and re-publishable by
+	// its owner, and its current_version label stays spent.
+	PluginListingStateDelisted PluginListingState = "delisted"
+)
+
+// PluginDisplayStatus is the single status a client shows for a Plugin. It is
+// DERIVED, never stored: it folds the listing axis (listing_state, on the plugin)
+// together with the review axis (plugin_review_requests, a separate entity).
+//
+// Storing it would be the collapse brief item 26 forbids — a listed v1 with an
+// in-review v2 is two simultaneous facts, and one column cannot hold both. These
+// values are also a marketplace-only vocabulary and must never be handed to
+// cardState, which translates model.ReviewStatus to octo-server's card protocol.
+type PluginDisplayStatus string
+
+const (
+	PluginDisplayStatusDraft         PluginDisplayStatus = "draft"          // 草稿
+	PluginDisplayStatusPendingReview PluginDisplayStatus = "pending_review" // 审核中
+	PluginDisplayStatusPublished     PluginDisplayStatus = "published"      // 已发布
+	PluginDisplayStatusRejected      PluginDisplayStatus = "rejected"       // 驳回
+	PluginDisplayStatusDelisted      PluginDisplayStatus = "delisted"       // 已下架
+)
+
+// DisplayStatus resolves the status to show for this Plugin.
+//
+// Precedence, in order:
+//
+//  1. An open review request wins outright, including for an already-published
+//     plugin whose NEW version is under review. Showing 已发布 there would hide the
+//     fact that the author is waiting on somebody.
+//  2. delisted, then published — what the listing axis actually says.
+//  3. A rejected latest review, so an author sees why their draft is not live.
+//  4. Otherwise a plain draft. A CANCELED latest review lands here on purpose:
+//     withdrawing a request returns the plugin to 草稿, it does not leave a
+//     lingering "withdrawn" state.
+//
+// A delisted plugin cannot also carry a pending request in practice — DelistPlugin
+// cancels any open one in the same transaction — so rule 1 winning over rule 2 is
+// not reachable for that pair.
+func (p *Plugin) DisplayStatus(hasPendingReview bool, latestReview ReviewStatus) PluginDisplayStatus {
+	switch {
+	case hasPendingReview:
+		return PluginDisplayStatusPendingReview
+	case p.ListingState == PluginListingStateDelisted:
+		return PluginDisplayStatusDelisted
+	case p.ListingState == PluginListingStatePublished:
+		return PluginDisplayStatusPublished
+	case latestReview == ReviewStatusRejected:
+		return PluginDisplayStatusRejected
+	default:
+		return PluginDisplayStatusDraft
+	}
+}
+
 // NormalizeLegacyVisibility maps a row's PRESERVED legacy `public` visibility to
 // the unified `system` global value, passing every current enum value through
 // unchanged. Write paths that carry an existing row's visibility forward — an
@@ -41,16 +116,34 @@ func NormalizeLegacyVisibility(v PluginVisibility) PluginVisibility {
 
 // Plugin is the authoritative mutable current state of a unified Plugin.
 type Plugin struct {
-	ID               string
-	Name             string
-	Type             PluginType
-	IsEmbedded       bool
-	CategoryID       *string
-	Tags             json.RawMessage
-	Publisher        string
-	OwnerUID         string
-	SpaceID          *string
-	Visibility       PluginVisibility
+	ID         string
+	Name       string
+	Type       PluginType
+	IsEmbedded bool
+	CategoryID *string
+	Tags       json.RawMessage
+	Publisher  string
+	OwnerUID   string
+	SpaceID    *string
+	Visibility PluginVisibility
+	// ListingState is written by exactly seven SQL sites: insertPlugin (every row
+	// creation, including the fresh embedded children a container reupload
+	// inserts — RebuildGraph re-stamps each child's ListingState from the locked
+	// top and that value flows through this same INSERT, so it is not a separate
+	// site), the conditional `listing_state='draft'` branch of Repo.Update,
+	// PublishPlugin, DelistPlugin, the first-listing branch of ApproveReview,
+	// promoteEmbeddedChildren (which lists an approved container's embedded rows
+	// alongside their top), and demoteEmbeddedChildren (which delists them when
+	// the container is delisted).
+	//
+	// The narrower invariant does hold: a CONTENT-ONLY save cannot change it.
+	// Repo.Update names the column only when Mutation.ResetListingToDraft is set,
+	// and the sole caller setting that flag is Service.update, for an already
+	// published row whose declared visibility DIFFERS from the persisted one — the
+	// condition is "visibility changed", not "visibility widened". Every other
+	// UPDATE omits the column entirely, which is also how a container reupload
+	// preserves its top's listing state.
+	ListingState     PluginListingState
 	CreatorName      string
 	CreatedByType    string
 	CreatedByBotUID  *string
@@ -72,8 +165,16 @@ type Plugin struct {
 	ViewCount     int
 	InstallCount  int
 	DownloadCount int
-	Manifest      json.RawMessage
-	Package       json.RawMessage
+	// HasPendingReview / LatestReviewID / LatestReviewStatus are the review half of
+	// the displayed status. They are DERIVED at read time and never persisted on
+	// this row — review state lives on plugin_review_requests so a listed v1 and an
+	// in-review v2 can coexist. Populated only where a client needs a status badge
+	// (the mine listing and the detail read); zero elsewhere.
+	HasPendingReview   bool
+	LatestReviewID     string
+	LatestReviewStatus ReviewStatus
+	Manifest           json.RawMessage
+	Package            json.RawMessage
 	// AttachmentKeys is the host-private sidecar for storage attachments: a JSON
 	// object mapping a package attachment path to its managed object key. The
 	// octo-plugin-lib 2.0 package forbids host fields inside attachments, so the

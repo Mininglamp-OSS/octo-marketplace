@@ -1,8 +1,30 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
+)
+
+// buildValid is the baseline for validation tests: every required field at a
+// valid value, so a single mutation is what the test case asserts against.
+func buildValid() Config {
+	return Config{
+		MySQLDSN: "dsn", APIPort: "8092",
+		SkillParseTimeout: time.Minute, SkillParseStaleTimeout: 5 * time.Minute,
+		// Default max skew (5m) is within the 15m ceiling; explicit so tests
+		// that don't mutate it don't accidentally depend on the const.
+		OctoCardActionMaxSkew: 5 * time.Minute,
+	}
+}
+
+// Deterministic hex fixtures — not real credentials.
+const (
+	tokA = "0123456789abcdef0123456789abcdef" // gitleaks:allow
+	tokB = "fedcba9876543210fedcba9876543210" // gitleaks:allow
+	// tokShort is below the 32-byte minimum and must be rejected with a named
+	// error, never silently accepted.
+	tokShort = "0123456789abcdef"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -73,27 +95,34 @@ func TestCORSAllowedOriginsFromEnv(t *testing.T) {
 }
 
 func TestValidateAPI(t *testing.T) {
-	validParse := func(c Config) Config {
-		c.SkillParseTimeout = time.Minute
-		c.SkillParseStaleTimeout = 5 * time.Minute
-		return c
-	}
 	tests := []struct {
 		name    string
 		cfg     Config
 		wantErr bool
 	}{
-		{name: "valid", cfg: validParse(Config{MySQLDSN: "dsn", APIPort: "8092"})},
-		{name: "missing dsn", cfg: validParse(Config{APIPort: "8092"}), wantErr: true},
-		{name: "invalid port", cfg: validParse(Config{MySQLDSN: "dsn", APIPort: "0"}), wantErr: true},
-		{name: "staleTimeout <= parseTimeout", cfg: Config{
-			MySQLDSN: "dsn", APIPort: "8092",
-			SkillParseTimeout: 5 * time.Minute, SkillParseStaleTimeout: 5 * time.Minute,
-		}, wantErr: true},
-		{name: "writeTimeout <= botPublishTimeout", cfg: validParse(Config{
-			MySQLDSN: "dsn", APIPort: "8092",
-			WriteTimeout: 30 * time.Second, BotPublishTimeout: 2 * time.Minute,
-		}), wantErr: true},
+		{name: "valid", cfg: buildValid()},
+		{name: "missing dsn", cfg: func() Config {
+			c := buildValid()
+			c.MySQLDSN = ""
+			return c
+		}(), wantErr: true},
+		{name: "invalid port", cfg: func() Config {
+			c := buildValid()
+			c.APIPort = "0"
+			return c
+		}(), wantErr: true},
+		{name: "staleTimeout <= parseTimeout", cfg: func() Config {
+			c := buildValid()
+			c.SkillParseTimeout = 5 * time.Minute
+			c.SkillParseStaleTimeout = 5 * time.Minute
+			return c
+		}(), wantErr: true},
+		{name: "writeTimeout <= botPublishTimeout", cfg: func() Config {
+			c := buildValid()
+			c.WriteTimeout = 30 * time.Second
+			c.BotPublishTimeout = 2 * time.Minute
+			return c
+		}(), wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -127,8 +156,9 @@ func TestProbeAllowPrivateFromEnv(t *testing.T) {
 }
 
 func TestAuthEnabledRequiresOctoAPIURL(t *testing.T) {
-	cfg := Config{MySQLDSN: "dsn", APIPort: "8092", AuthEnabled: true,
-		SkillParseTimeout: time.Minute, SkillParseStaleTimeout: 5 * time.Minute}
+	cfg := buildValid()
+	cfg.AuthEnabled = true
+	cfg.OctoAPIURL = ""
 	if err := cfg.ValidateAPI(); err == nil {
 		t.Fatal("ValidateAPI() error=nil want OCTO_API_URL error")
 	}
@@ -207,5 +237,171 @@ func TestOSSConfigFromEnv(t *testing.T) {
 	}
 	if cfg.MaxUploadMB != 50 {
 		t.Fatalf("MaxUploadMB=%d want=50", cfg.MaxUploadMB)
+	}
+}
+
+// TestDevAuthSpaceRoleZeroSurvives is the whole reason DEV_AUTH_SPACE_ROLE is
+// not parsed by envInt: that helper treats <= 0 as unset and would promote a
+// deliberately-configured plain member to the owner default, silently making
+// the non-reviewer path unreachable in local development.
+func TestDevAuthSpaceRoleZeroSurvives(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "test-dsn")
+	t.Setenv("DEV_AUTH_SPACE_ROLE", "0")
+	if got := Load().DevAuthSpaceRole; got != 0 {
+		t.Fatalf("DevAuthSpaceRole=%d want=0 (an explicit member must not be promoted)", got)
+	}
+}
+
+func TestDevAuthSpaceRoleDefaults(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "test-dsn")
+	t.Setenv("DEV_AUTH_SPACE_ROLE", "")
+	if got := Load().DevAuthSpaceRole; got != DefaultDevAuthSpaceRole {
+		t.Fatalf("DevAuthSpaceRole=%d want=%d", got, DefaultDevAuthSpaceRole)
+	}
+}
+
+func TestDevAuthSpaceRoleFromEnv(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "test-dsn")
+	t.Setenv("DEV_AUTH_SPACE_ROLE", "1")
+	if got := Load().DevAuthSpaceRole; got != 1 {
+		t.Fatalf("DevAuthSpaceRole=%d want=1", got)
+	}
+}
+
+// An unparseable value must not resolve to the owner default. It loads as an
+// out-of-range sentinel so ValidateAPI fails the boot.
+func TestDevAuthSpaceRoleUnparseableFailsValidation(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "test-dsn")
+	t.Setenv("DEV_AUTH_SPACE_ROLE", "admin")
+	cfg := Load()
+	if cfg.DevAuthSpaceRole == DefaultDevAuthSpaceRole {
+		t.Fatal("DevAuthSpaceRole silently fell back to the owner default on an unparseable value")
+	}
+	if err := cfg.ValidateAPI(); err == nil {
+		t.Fatal("ValidateAPI() error=nil want DEV_AUTH_SPACE_ROLE error")
+	}
+}
+
+func TestOctoNotifyDefaults(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "test-dsn")
+	t.Setenv("OCTO_NOTIFY_TIMEOUT", "")
+	t.Setenv("OCTO_CARD_ACTION_MAX_SKEW", "")
+	t.Setenv("OCTO_MARKETPLACE_INTERNAL_TOKEN", "")
+	t.Setenv("OCTO_MARKETPLACE_CARD_ACTION_SECRET", "")
+	cfg := Load()
+	if cfg.OctoNotifyTimeout != 3*time.Second {
+		t.Fatalf("OctoNotifyTimeout=%v want=3s", cfg.OctoNotifyTimeout)
+	}
+	if cfg.OctoCardActionMaxSkew != 5*time.Minute {
+		t.Fatalf("OctoCardActionMaxSkew=%v want=5m", cfg.OctoCardActionMaxSkew)
+	}
+	if cfg.OctoInternalToken != "" || cfg.OctoCardActionSecret != "" {
+		t.Fatal("octo secrets must default to blank (surface disabled), never to a built-in value")
+	}
+}
+
+func TestValidateAPIOctoSecrets(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+		wantSub string // non-empty: wantErr=true and error must contain this substring
+	}{
+		{name: "fully unconfigured is the safe rollout baseline (both surfaces closed, boot OK)",
+			mutate: func(*Config) {}},
+		{name: "fully configured boots",
+			mutate: func(c *Config) {
+				c.OctoAPIURL = "https://octo.example.com"
+				c.OctoInternalToken = tokA
+				c.OctoCardActionSecret = tokB
+			}},
+		// (a) OCTO_API_URL without INTERNAL_TOKEN: review endpoints return 200
+		// but approval cards never dispatch. Warned at router startup, NOT a
+		// boot error (there is a legitimate window where the URL is provisioned
+		// ahead of the credential rollout).
+		{name: "url without internal token warns but does not fail boot",
+			mutate: func(c *Config) {
+				c.OctoAPIURL = "https://octo.example.com"
+			}},
+		// (c) INTERNAL_TOKEN without CARD_ACTION_SECRET: cards go out but every
+		// admin click 401s. Warned at router startup, NOT a boot error (rolling
+		// out dispatch before the callback secret is the documented "safe"
+		// phased rollout: it keeps the endpoint closed rather than open).
+		{name: "internal token without card secret warns but does not fail boot",
+			mutate: func(c *Config) {
+				c.OctoInternalToken = tokA
+			}},
+		// (b) CARD_ACTION_SECRET without INTERNAL_TOKEN: signatures verify, then
+		// operator-role lookup 503s on every click → DLQ death spiral. Fail boot.
+		{name: "card secret without internal token fails boot",
+			mutate: func(c *Config) {
+				c.OctoCardActionSecret = tokB
+			}, wantErr: true, wantSub: "OCTO_MARKETPLACE_CARD_ACTION_SECRET requires OCTO_MARKETPLACE_INTERNAL_TOKEN"},
+		// (b') CARD_ACTION_SECRET without OCTO_API_URL: signature verifies but
+		// role lookup has no endpoint → 503 forever. Fail boot (same DLQ class).
+		{name: "card secret without URL fails boot",
+			mutate: func(c *Config) {
+				c.OctoCardActionSecret = tokB
+				c.OctoInternalToken = tokA
+				c.OctoAPIURL = ""
+			}, wantErr: true, wantSub: "OCTO_MARKETPLACE_CARD_ACTION_SECRET requires OCTO_API_URL"},
+		{name: "only internal token configured (no url, no card secret) boots",
+			mutate: func(c *Config) {
+				c.OctoInternalToken = tokA
+			}},
+		{name: "short internal token", mutate: func(c *Config) {
+			c.OctoInternalToken = tokShort
+		}, wantErr: true, wantSub: "at least 32 bytes"},
+		{name: "short card action secret", mutate: func(c *Config) {
+			c.OctoInternalToken = tokA
+			c.OctoCardActionSecret = tokShort
+		}, wantErr: true, wantSub: "at least 32 bytes"},
+		{name: "reused secret across surfaces", mutate: func(c *Config) {
+			c.OctoInternalToken = tokA
+			c.OctoCardActionSecret = tokA
+		}, wantErr: true, wantSub: "must not reuse"},
+		{name: "dev space role above range", mutate: func(c *Config) {
+			c.DevAuthSpaceRole = 3
+		}, wantErr: true},
+		{name: "dev space role below range", mutate: func(c *Config) {
+			c.DevAuthSpaceRole = -1
+		}, wantErr: true},
+		{name: "dev space role member", mutate: func(c *Config) {
+			c.DevAuthSpaceRole = 0
+		}},
+		{name: "dev space role owner", mutate: func(c *Config) {
+			c.DevAuthSpaceRole = 2
+		}},
+		// Skew upper bound: anything over 15m is rejected to keep the replay
+		// window bounded. The default 5m is well within the ceiling; 15m itself
+		// is the hard cap (chosen to absorb a badly-skewed node clock after
+		// restart without allowing multi-hour replay).
+		{name: "skew at hard cap (15m) boots", mutate: func(c *Config) {
+			c.OctoCardActionMaxSkew = 15 * time.Minute
+		}},
+		{name: "skew over hard cap (16m) fails boot", mutate: func(c *Config) {
+			c.OctoCardActionMaxSkew = 16 * time.Minute
+		}, wantErr: true, wantSub: "OCTO_CARD_ACTION_MAX_SKEW"},
+		{name: "skew far over cap (720h) fails boot", mutate: func(c *Config) {
+			c.OctoCardActionMaxSkew = 720 * time.Hour
+		}, wantErr: true, wantSub: "OCTO_CARD_ACTION_MAX_SKEW"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := buildValid()
+			tt.mutate(&cfg)
+			err := cfg.ValidateAPI()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateAPI() error=%v wantErr=%v", err, tt.wantErr)
+			}
+			if err != nil {
+				if tt.wantSub != "" && !strings.Contains(err.Error(), tt.wantSub) {
+					t.Fatalf("ValidateAPI() error=%v want substring %q", err, tt.wantSub)
+				}
+				if strings.Contains(err.Error(), tokA) || strings.Contains(err.Error(), tokShort) {
+					t.Fatalf("ValidateAPI() error leaks a secret value: %v", err)
+				}
+			}
+		})
 	}
 }

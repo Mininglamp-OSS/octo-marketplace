@@ -3,8 +3,10 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -157,5 +159,110 @@ func TestBotIdentityContext(t *testing.T) {
 	r.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "b1" {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+// spaceRoleRouter reports the effective Space and the identity's role in that
+// Space, so dev-role assertions run through the real Handler() wiring rather
+// than through devIdentityFor directly.
+func spaceRoleRouter(authenticator *Authenticator) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(authenticator.Handler())
+	r.GET("/", func(c *gin.Context) {
+		identity, _ := Identity(c)
+		spaceID := SpaceID(c)
+		c.String(http.StatusOK, "%s:%d:%t", spaceID, identity.SpaceRole(spaceID), identity.CanReviewSpace(spaceID))
+	})
+	return r
+}
+
+func devAuthenticator(role int) *Authenticator {
+	return NewAuthenticator(false, nil, model.Identity{
+		UID:        "dev-user",
+		SpaceRoles: map[string]int{"dev-space": role},
+	}, "dev-space")
+}
+
+// The dev Space role must follow the Space the request is actually in. A
+// browser signed in to a real octo-server sends its own X-Space-Id while
+// DEV_SPACE_ID names something else; binding the role to DEV_SPACE_ID alone
+// would silently degrade the developer to role 0 on every real Space.
+func TestAuthDisabledBindsDevRoleToRequestedSpace(t *testing.T) {
+	tests := []struct {
+		name    string
+		role    int
+		spaceID string
+		want    string
+	}{
+		{name: "header space inherits owner", role: model.SpaceRoleOwner, spaceID: "real-space", want: "real-space:2:true"},
+		{name: "header space inherits admin", role: model.SpaceRoleAdmin, spaceID: "real-space", want: "real-space:1:true"},
+		{name: "header space inherits member", role: model.SpaceRoleMember, spaceID: "real-space", want: "real-space:0:false"},
+		{name: "falls back to dev space", role: model.SpaceRoleOwner, want: "dev-space:2:true"},
+		{name: "falls back to dev space as member", role: model.SpaceRoleMember, want: "dev-space:0:false"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tt.spaceID != "" {
+				req.Header.Set("X-Space-Id", tt.spaceID)
+			}
+			recorder := httptest.NewRecorder()
+			spaceRoleRouter(devAuthenticator(tt.role)).ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK || recorder.Body.String() != tt.want {
+				t.Fatalf("status=%d body=%q want=%q", recorder.Code, recorder.Body.String(), tt.want)
+			}
+		})
+	}
+}
+
+// Rebinding must copy the role map. Mutating the shared one would race across
+// concurrent requests and leak one request's Space into another's identity.
+func TestAuthDisabledDoesNotMutateSharedDevIdentity(t *testing.T) {
+	authenticator := devAuthenticator(model.SpaceRoleOwner)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Space-Id", "real-space")
+	spaceRoleRouter(authenticator).ServeHTTP(httptest.NewRecorder(), req)
+
+	if len(authenticator.devIdentity.SpaceRoles) != 1 {
+		t.Fatalf("shared dev identity was mutated: %v", authenticator.devIdentity.SpaceRoles)
+	}
+	if _, leaked := authenticator.devIdentity.SpaceRoles["real-space"]; leaked {
+		t.Fatal("request Space leaked into the shared dev identity role map")
+	}
+}
+
+// The concurrent form of the same property, meaningful under -race.
+func TestAuthDisabledConcurrentSpacesAreIsolated(t *testing.T) {
+	authenticator := devAuthenticator(model.SpaceRoleAdmin)
+	router := spaceRoleRouter(authenticator)
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			spaceID := fmt.Sprintf("space-%d", i)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("X-Space-Id", spaceID)
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, req)
+			if want := spaceID + ":1:true"; recorder.Body.String() != want {
+				t.Errorf("body=%q want=%q", recorder.Body.String(), want)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// A dev identity with no role map keeps working exactly as before — no role,
+// no reviewer rights — which is what every pre-existing call site passes.
+func TestAuthDisabledWithoutRoleMap(t *testing.T) {
+	authenticator := NewAuthenticator(false, nil, model.Identity{UID: "dev"}, "dev-space")
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Space-Id", "real-space")
+	recorder := httptest.NewRecorder()
+	spaceRoleRouter(authenticator).ServeHTTP(recorder, req)
+	if recorder.Body.String() != "real-space:0:false" {
+		t.Fatalf("body=%q want=%q", recorder.Body.String(), "real-space:0:false")
 	}
 }
