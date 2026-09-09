@@ -13,11 +13,19 @@ submissions are approved automatically. The effective default is enabled, so
 Spaces without a stored override publish immediately while retaining an
 approval audit record.
 
+The requester reconfirmed on 2026-09-09 that automatic approval is the intended
+default for both existing and new Spaces. Applying that default to existing
+Spaces on deployment is part of the requested behavior. See the
+[confirmed decision and rollout procedure](../../../docs/releases/space-review-auto-approval.md)
+for operator responsibilities, client behavior, and explicit manual-review overrides.
+
 ## Load-bearing behavior
 
 - The policy is owned and persisted by marketplace and scoped by authenticated
   `space_id`; request bodies never carry a Space identifier.
-- A missing policy row resolves to `is_auto_approve_enabled=true`.
+- A missing policy row resolves to `is_auto_approve_enabled=true` for both
+  existing and new Spaces. Deployment intentionally creates no disabled-policy
+  backfill and introduces no fleet-level switch that changes this default.
 - Any authenticated Space member may read the effective policy; Space admins
   and owners (`space_member.role>=1`) may update the one shared Space policy.
 - When enabled, publishing a Space-visible plugin still freezes a review request
