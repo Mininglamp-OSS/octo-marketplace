@@ -38,6 +38,12 @@ change, no admin surface change in this task.
   } }
   ```
   No `graph`/`node_count`/`is_partial`/`truncated` meta object is emitted.
+- Root and related-node projections include the same owner-only review state as
+  `/plugins/detail`: pending first, otherwise the latest non-deleted review.
+  Review metadata is selected only when both the row's owner and Space match
+  the authoritative caller. Other authors' and other Spaces' review IDs/statuses
+  remain absent, including on globally visible nodes. The root and batch-node
+  SELECTs carry these correlated projections, so enrichment adds no round-trips.
 - Traversal depth is fixed by the relation matrix and derived from the root
   plugin's type — no `depth` query param:
   - `skill` / `connector` (leaves): zero edge queries beyond the root fetch.
@@ -124,13 +130,14 @@ change, no admin surface change in this task.
 - Any new migration, model field, plugin type, or relation type.
 - Changing `/plugins/detail` shape or behavior.
 - Re-adding any backend-side secret value scanning.
-- **A byte budget on the response.** Both caps count rows, so the theoretical
-  worst case is bounded only by `maxJSONBytes` (1 MiB) per manifest and per
-  relation payload. Deferred deliberately rather than overlooked: `List` with
-  `maxListLimit = 100` already permits ~100 MB by the identical mechanism today
-  with no setup at all, so a byte ceiling belongs in one change covering both
-  read surfaces — accumulating scanned bytes and failing closed at a fixed
-  budget — not bolted onto this endpoint's row caps. Follow-up.
+- **A byte budget on the response.** Both caps count rows. Summing the caps at
+  `maxJSONBytes` (1 MiB) per manifest/relation yields a loose bound of 630 + 2000
+  = 2630 MiB (about 2.6 GiB), before the root package and JSON overhead. Decoding
+  and re-encoding each blob can increase peak memory further. This is much
+  larger than List's roughly 100 MiB bound; its existence does not make the
+  graph's memory cost acceptable. A shared byte-budget follow-up must cover
+  both read surfaces before broad production adoption. This PR does not claim
+  a byte limit and therefore does not return a fictitious `details.max_bytes`.
 - **Reconciling the four relation-count constants.** `maxGraphNodes` (630),
   `maxInstallRelationTargets` (500), `maxRelations` (200 per plugin), and the
   backfill's `validateGraph(..., 16, 500)` do not agree, so a maximum-size
@@ -149,6 +156,11 @@ change, no admin surface change in this task.
 - Root plugin byte-matches `/plugins/detail`'s plugin projection (including
   `plugin_json`). Related plugins do not carry `plugin_json` (verified by
   wire-JSON assertion in handler tests).
+- Real-MySQL HTTP regression tests use the actual handlers, service and
+  repository: root JSON matches detail for pending, rejected, canceled,
+  approved and absent reviews; related nodes carry the same owner review
+  state; pending takes precedence over newer terminal reviews. Non-owners,
+  foreign-Space rows and hidden roots cannot disclose review metadata.
 - For a system team in the local dev DB, the endpoint returns its 4 embedded
   members plus reachable embedded skills with a single HTTP call; children do
   not carry `plugin_json`.

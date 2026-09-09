@@ -399,7 +399,7 @@ func (h *Handler) Get(c *gin.Context) {
 
 // GetGraph godoc
 // @Summary Get plugin relation graph
-// @Description Return one Plugin (full projection identical to GET /plugins/detail) together with the flat, deduplicated transitive closure of its relation graph and every edge in that closure, up to the fixed depth enforced by the relation matrix. Every related plugin — bundled (embedded) children included — is filtered by the same per-row visibility predicate GET /plugins/detail applies; hidden ones are silently omitted, edge and node. related_plugins is a lookup table keyed by plugin_id rather than a tree: an entry is not guaranteed to be referenced by an edge.
+// @Description Return one Plugin (full projection identical to GET /plugins/detail, including owner-only review state in the current Space) together with the flat, deduplicated transitive closure of its relation graph and every edge in that closure, up to the fixed depth enforced by the relation matrix. Every related plugin — bundled (embedded) children included — is filtered by the same per-row visibility predicate GET /plugins/detail applies; hidden ones are silently omitted, edge and node. Related plugins include review state only for the caller's own nodes in the current Space. related_plugins is a lookup table keyed by plugin_id rather than a tree: an entry is not guaranteed to be referenced by an edge.
 // @Tags plugin
 // @ID plugin.graph.get
 // @Accept json

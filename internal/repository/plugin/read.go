@@ -413,7 +413,7 @@ func stringSliceAsAny(in []string) []any {
 // visibility check independently — remain. Consumers must treat nodes as a
 // lookup table keyed by plugin_id, not as a tree derived from relations.
 func (r *Repo) GetGraphClosure(ctx context.Context, scope Scope, rootID string) (*model.Plugin, []model.PluginRelation, []*model.Plugin, error) {
-	root, err := r.Get(ctx, scope, rootID)
+	root, err := r.getGraphRoot(ctx, scope, rootID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -474,9 +474,10 @@ LIMIT ` + graphEdgeLimit
 
 	// ---- Batch node payloads (light projection) ---------------------------
 	nodeWhere, nodeArgs := graphNodeWhere(scope)
-	nodeQ := `SELECT ` + pluginSummaryColumns + pluginMetricColumns + ` FROM plugins p
+	nodeQ := `SELECT ` + pluginSummaryColumns + pluginMetricColumns + graphOwnerReviewColumns + ` FROM plugins p
 WHERE p.status=1 AND p.deleted_at IS NULL AND p.plugin_id IN (` + placeholders(len(targetIDs)) + `) AND ` + nodeWhere
-	fullArgs := append(append([]any(nil), stringSliceAsAny(targetIDs)...), nodeArgs...)
+	fullArgs := append(graphOwnerReviewArgs(scope), stringSliceAsAny(targetIDs)...)
+	fullArgs = append(fullArgs, nodeArgs...)
 	nRows, err := r.db.QueryContext(ctx, nodeQ, fullArgs...)
 	if err != nil {
 		return nil, nil, nil, wrapped("graph nodes", err)
@@ -484,7 +485,7 @@ WHERE p.status=1 AND p.deleted_at IS NULL AND p.plugin_id IN (` + placeholders(l
 	defer nRows.Close()
 	present := map[string]*model.Plugin{}
 	for nRows.Next() {
-		p, err := scanPluginSummary(nRows)
+		p, err := scanPluginRow(nRows, false, true, true)
 		if err != nil {
 			return nil, nil, nil, wrapped("graph node scan", err)
 		}
@@ -585,12 +586,6 @@ func scanPlugin(s interface{ Scan(...any) error }) (*model.Plugin, error) {
 // correlated metric counters appended by pluginMetricColumns.
 func scanPluginWithMetrics(s interface{ Scan(...any) error }) (*model.Plugin, error) {
 	return scanPluginRow(s, true, true, false)
-}
-
-// scanPluginSummary scans a row selected with pluginSummaryColumns plus metric
-// counters; the package stays nil so list pages never materialize it.
-func scanPluginSummary(s interface{ Scan(...any) error }) (*model.Plugin, error) {
-	return scanPluginRow(s, false, true, false)
 }
 
 func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMetrics, includeReviewState bool) (*model.Plugin, error) {
