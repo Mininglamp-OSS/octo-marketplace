@@ -22,6 +22,11 @@ approval audit record.
   and owners (`space_member.role>=1`) may update the one shared Space policy.
 - When enabled, publishing a Space-visible plugin still freezes a review request
   and then approves it with `decision_source=policy`; no approval card is sent.
+- Review submission, list, and detail responses identify policy approvals with
+  `is_auto_approved=true` and omit human `reviewer_id`/`reviewer_name` fields.
+  The legacy wire `decision_source=web` value stays compatible; persisted reviewer
+  fields retain the triggering actor for internal audit. Manual and pending
+  responses omit `is_auto_approved` (absence means false).
 - When disabled, the existing pending-review and notification-card flow is used.
 - Policy lookup failures fail closed and do not publish.
 - Changing the policy does not mutate existing pending review requests.
@@ -39,4 +44,6 @@ approval audit record.
   `FORBIDDEN`.
 - Default-enabled, disabled, lookup-failure, and automatic audit-source paths
   have tests.
+- Handler tests cover automatic, manual web/IM, and pending review attribution
+  on submission, list, and detail responses without mutating persisted records.
 - OpenAPI validation and compatibility checks pass.

@@ -1986,6 +1986,10 @@ components:
             $ref: '#/components/schemas/internal_api_handler_plugin.reviewRelationResponse'
           type: array
           uniqueItems: false
+        is_auto_approved:
+          description: IsAutoApproved is true for policy approvals. Otherwise omitted;
+            absence means false.
+          type: boolean
         kind:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.ReviewKind'
         manifest_hash:
@@ -2022,6 +2026,8 @@ components:
         reviewed_at:
           type: string
         reviewer_id:
+          description: ReviewerID and ReviewerName identify a human reviewer and are
+            omitted for policy decisions.
           type: string
         reviewer_name:
           type: string

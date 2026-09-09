@@ -48,6 +48,16 @@ func decodeReviewBody(c *gin.Context, dst any) bool {
 	return true
 }
 
+// reviewDecisionSourceResponse preserves the existing web|im enum for clients
+// that exhaustively decode it. Policy decisions retain the legacy "web" value;
+// is_auto_approved distinguishes them and their human reviewer fields are omitted.
+type reviewDecisionSourceResponse string
+
+const (
+	reviewDecisionSourceWeb reviewDecisionSourceResponse = "web"
+	reviewDecisionSourceIM  reviewDecisionSourceResponse = "im"
+)
+
 // reviewRequestResponse is the wire form of a review request.
 //
 // The LIST shape is deliberately lean: it omits the frozen manifest, package,
@@ -64,40 +74,30 @@ func decodeReviewBody(c *gin.Context, dst any) bool {
 // would defeat the purpose of the freeze. frozen_relations is populated only on
 // the detail read and is parsed defensively: a missing or malformed snapshot
 // degrades to an empty array rather than 500ing the endpoint.
-// reviewDecisionSourceResponse preserves the existing web contract. The
-// marketplace persists "policy" internally for audit attribution, but current
-// web clients treat every non-IM decision as the web/manual branch and some
-// generated clients exhaustively decode the original web|im enum. Auto-policy
-// decisions therefore serialize as "web" until a versioned/extensible wire
-// contract is coordinated with those consumers.
-type reviewDecisionSourceResponse string
-
-const (
-	reviewDecisionSourceWeb reviewDecisionSourceResponse = "web"
-	reviewDecisionSourceIM  reviewDecisionSourceResponse = "im"
-)
-
 type reviewRequestResponse struct {
-	ReviewID       string                        `json:"review_id"`
-	PluginID       string                        `json:"plugin_id"`
-	SpaceID        string                        `json:"space_id"`
-	TargetScope    string                        `json:"target_scope"`
-	Status         model.ReviewStatus            `json:"status"`
-	Kind           model.ReviewKind              `json:"kind"`
-	Version        string                        `json:"version"`
-	Changelog      *string                       `json:"changelog,omitempty"`
-	ManifestHash   string                        `json:"manifest_hash"`
-	PluginHash     string                        `json:"plugin_hash"`
-	ApplicantID    string                        `json:"applicant_id"`
-	ApplicantName  string                        `json:"applicant_name"`
+	ReviewID      string             `json:"review_id"`
+	PluginID      string             `json:"plugin_id"`
+	SpaceID       string             `json:"space_id"`
+	TargetScope   string             `json:"target_scope"`
+	Status        model.ReviewStatus `json:"status"`
+	Kind          model.ReviewKind   `json:"kind"`
+	Version       string             `json:"version"`
+	Changelog     *string            `json:"changelog,omitempty"`
+	ManifestHash  string             `json:"manifest_hash"`
+	PluginHash    string             `json:"plugin_hash"`
+	ApplicantID   string             `json:"applicant_id"`
+	ApplicantName string             `json:"applicant_name"`
+	// ReviewerID and ReviewerName identify a human reviewer and are omitted for policy decisions.
 	ReviewerID     *string                       `json:"reviewer_id,omitempty"`
 	ReviewerName   *string                       `json:"reviewer_name,omitempty"`
 	Reason         *string                       `json:"reason,omitempty"`
 	DecisionSource *reviewDecisionSourceResponse `json:"decision_source,omitempty"`
-	SubmittedAt    time.Time                     `json:"submitted_at" swaggertype:"string,date-time"`
-	ReviewedAt     *time.Time                    `json:"reviewed_at,omitempty" swaggertype:"string,date-time"`
-	PluginName     string                        `json:"plugin_name,omitempty"`
-	PluginType     model.PluginType              `json:"plugin_type,omitempty"`
+	// IsAutoApproved is true for policy approvals. Otherwise omitted; absence means false.
+	IsAutoApproved bool             `json:"is_auto_approved,omitempty"`
+	SubmittedAt    time.Time        `json:"submitted_at" swaggertype:"string,date-time"`
+	ReviewedAt     *time.Time       `json:"reviewed_at,omitempty" swaggertype:"string,date-time"`
+	PluginName     string           `json:"plugin_name,omitempty"`
+	PluginType     model.PluginType `json:"plugin_type,omitempty"`
 	// PluginIcon is a display URL (an uploaded icon is stored as an object key and
 	// must be presigned), resolved by the service through the same path the plugin
 	// list uses.
@@ -277,6 +277,11 @@ func reviewDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 		CurrentVersion:     r.CurrentVersion,
 		PluginListingState: r.PluginListingState,
 		ReadmeContent:      r.ReadmeContent,
+	}
+	if r.DecisionSource != nil && *r.DecisionSource == model.ReviewDecisionSourcePolicy {
+		out.IsAutoApproved = true
+		// Persisted reviewer fields record the triggering actor, not a human approval.
+		out.ReviewerID, out.ReviewerName = nil, nil
 	}
 	// decodeFrozenRelations returns:
 	//   - nil           when RelationsJSON is nil/empty/NULL (list path, which

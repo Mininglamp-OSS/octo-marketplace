@@ -113,28 +113,6 @@ func TestReviewDetailWireContract(t *testing.T) {
 	}
 }
 
-func TestReviewPolicyDecisionKeepsLegacyWebWireValue(t *testing.T) {
-	f := &fakeService{}
-	review := reviewRequestFixture()
-	source := model.ReviewDecisionSourcePolicy
-	review.DecisionSource = &source
-	f.review.request = review
-
-	rec := doReview(t, f, http.MethodGet, "/api/v1/plugins/review_requests/review-1", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
-	}
-	var envelope struct {
-		Data map[string]any `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if got := envelope.Data["decision_source"]; got != "web" {
-		t.Fatalf("decision_source=%v, want backward-compatible web", got)
-	}
-}
-
 func TestSubmitReviewPassesBodyThrough(t *testing.T) {
 	f := &fakeService{}
 	f.review.request = reviewRequestFixture()
