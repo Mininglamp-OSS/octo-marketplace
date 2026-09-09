@@ -49,8 +49,8 @@ func decodeReviewBody(c *gin.Context, dst any) bool {
 }
 
 // reviewDecisionSourceResponse preserves the existing web|im enum for clients
-// that exhaustively decode it. Policy decisions retain the legacy "web" value;
-// is_auto_approved distinguishes them and their human reviewer fields are omitted.
+// that exhaustively decode it. Policy decisions omit this human decision source;
+// is_auto_approved identifies them and their human reviewer fields are omitted.
 type reviewDecisionSourceResponse string
 
 const (
@@ -88,9 +88,10 @@ type reviewRequestResponse struct {
 	ApplicantID   string             `json:"applicant_id"`
 	ApplicantName string             `json:"applicant_name"`
 	// ReviewerID and ReviewerName identify a human reviewer and are omitted for policy decisions.
-	ReviewerID     *string                       `json:"reviewer_id,omitempty"`
-	ReviewerName   *string                       `json:"reviewer_name,omitempty"`
-	Reason         *string                       `json:"reason,omitempty"`
+	ReviewerID   *string `json:"reviewer_id,omitempty"`
+	ReviewerName *string `json:"reviewer_name,omitempty"`
+	Reason       *string `json:"reason,omitempty"`
+	// DecisionSource identifies the human decision channel; omitted for policy approvals and undecided requests.
 	DecisionSource *reviewDecisionSourceResponse `json:"decision_source,omitempty"`
 	// IsAutoApproved is true for policy approvals. Otherwise omitted; absence means false.
 	IsAutoApproved bool             `json:"is_auto_approved,omitempty"`
@@ -237,7 +238,7 @@ type reviewRejectRequest struct {
 }
 
 func reviewDecisionSourceDTO(source *model.ReviewDecisionSource) *reviewDecisionSourceResponse {
-	if source == nil {
+	if source == nil || *source == model.ReviewDecisionSourcePolicy {
 		return nil
 	}
 	out := reviewDecisionSourceWeb

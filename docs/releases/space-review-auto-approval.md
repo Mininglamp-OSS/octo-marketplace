@@ -53,10 +53,10 @@ The release operator:
    Space without a stored override. Expect `is_auto_approve_enabled=true`.
 3. Publishes an owned test plugin with Space visibility and a valid version.
    Expect immediate publication and an approved audit request with
-   `is_auto_approved=true`, no `reviewer_id`/`reviewer_name`, and legacy
-   `decision_source=web`. Read the request via the submit response or the review
-   list/detail API; the publish response does not contain a `review_id` for an
-   automatic approval.
+   `is_auto_approved=true`, a decision timestamp, and no
+   `decision_source`/`reviewer_id`/`reviewer_name`. Read the request via the submit
+   response or the review list/detail API; the publish response does not contain
+   a `review_id` for an automatic approval.
 4. In the test Space, saves `false`, verifies it with GET, and submits a different
    valid test plugin/version. Expect a pending request and the normal review-card
    flow. Saves `true` again and verifies that the pending request stays pending;
@@ -76,9 +76,12 @@ prerequisite for that confirmed default.
   this field identifies pending review, not whether an audit record was created.
 - Submit, review-list, and review-detail responses use `is_auto_approved=true`
   for automatic decisions. Show an automatic-approval label for these records.
-  Absence means false. Keep support for the existing `web|im` source values and
-  optional reviewer fields; `decision_source=web` alone does not imply a human
-  approval.
+  Absence means false. Automatic decisions omit `decision_source` and human
+  reviewer fields while retaining `reviewed_at`; manual decisions keep the
+  existing `web|im` source values. Pending requests also omit `decision_source`,
+  so use `status` and `is_auto_approved` to distinguish them from automatic
+  approvals. Persisted policy decisions retain `decision_source=policy` and
+  the triggering actor for internal audit.
 - When providing policy settings, show the server's effective value, allow only
   owners/admins to save it, and re-read after saving. The server enforces the role
   check. The authenticated API described below is the operator path while a

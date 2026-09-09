@@ -17,7 +17,7 @@ func TestReviewDecisionAttributionWireContract(t *testing.T) {
 		source     model.ReviewDecisionSource
 		wireSource string
 	}{
-		{name: "policy", source: model.ReviewDecisionSourcePolicy, wireSource: "web"},
+		{name: "policy", source: model.ReviewDecisionSourcePolicy},
 		{name: "manual web", source: model.ReviewDecisionSourceWeb, wireSource: "web"},
 		{name: "manual im", source: model.ReviewDecisionSourceIM, wireSource: "im"},
 		{name: "pending"},
@@ -84,9 +84,13 @@ func TestReviewDecisionAttributionWireContract(t *testing.T) {
 				var absent []string
 				if decision.wireSource != "" {
 					want["decision_source"] = decision.wireSource
+				} else {
+					absent = append(absent, "decision_source")
+				}
+				if decision.source != "" {
 					want["reviewed_at"] = review.ReviewedAt.Format(time.RFC3339)
 				} else {
-					absent = append(absent, "decision_source", "reviewed_at")
+					absent = append(absent, "reviewed_at")
 				}
 				if isPolicy {
 					want["is_auto_approved"] = true

@@ -31,10 +31,11 @@ for operator responsibilities, client behavior, and explicit manual-review overr
 - When enabled, publishing a Space-visible plugin still freezes a review request
   and then approves it with `decision_source=policy`; no approval card is sent.
 - Review submission, list, and detail responses identify policy approvals with
-  `is_auto_approved=true` and omit human `reviewer_id`/`reviewer_name` fields.
-  The legacy wire `decision_source=web` value stays compatible; persisted reviewer
-  fields retain the triggering actor for internal audit. Manual and pending
-  responses omit `is_auto_approved` (absence means false).
+  `is_auto_approved=true` and omit `decision_source` and human
+  `reviewer_id`/`reviewer_name` fields. Manual decisions retain the existing
+  `decision_source=web|im` enum; persisted policy decisions keep
+  `decision_source=policy` and the triggering actor for internal audit. Manual
+  and pending responses omit `is_auto_approved` (absence means false).
 - When disabled, the existing pending-review and notification-card flow is used.
 - Policy lookup failures fail closed and do not publish.
 - Changing the policy does not mutate existing pending review requests.

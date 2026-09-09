@@ -1902,6 +1902,8 @@ components:
           uniqueItems: false
       type: object
     internal_api_handler_plugin.reviewDecisionSourceResponse:
+      description: DecisionSource identifies the human decision channel; omitted for
+        policy approvals and undecided requests.
       enum:
       - web
       - im
