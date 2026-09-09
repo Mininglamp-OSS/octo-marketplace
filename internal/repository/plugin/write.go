@@ -28,12 +28,9 @@ type Mutation struct {
 	// Changelog is the optional note stored on that snapshot.
 	SnapshotVersion bool
 	Changelog       *string
-	// ResetListingToDraft un-lists the plugin as part of this save. The ONLY
-	// caller is Service.update, for a published row whose declared visibility
-	// CHANGED (not merely widened); see the comment at the UPDATE statement for
-	// why that case cannot leave the row published. When EnforceListingGate is
-	// set this flag is IGNORED and the reset is re-derived from the locked row
-	// instead — the service value is a hint the locked truth overrides.
+	// ResetListingToDraft un-lists the plugin as part of this save. Retained for
+	// the review rollout; Service.update temporarily leaves it unset. When
+	// EnforceListingGate is set, the reset is re-derived from the locked row.
 	ResetListingToDraft bool
 	// RefusePendingReview aborts the update with ErrReviewPending if an open
 	// review request exists on the plugin, checked under the plugin row's lock.
@@ -49,8 +46,9 @@ type Mutation struct {
 	// read: (a) a locked (published AND space) row is refused with
 	// ErrListedRequiresReview, and (b) ResetListingToDraft is recomputed as
 	// "locked row is published AND the declared visibility differs from the
-	// locked visibility". Set by Service.update for every non-admin caller. This
-	// closes the window where an approval (or a publish) commits between the
+	// locked visibility". Service.update temporarily leaves this unset while the
+	// review rollout is deferred. When enabled, it closes the window where an
+	// approval (or a publish) commits between the
 	// service's read and this write and turns an edit that looked legal on the
 	// stale value into unreviewed content on a live org row (or a gate bypass).
 	EnforceListingGate bool
@@ -571,8 +569,8 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	//       publish that committed after the service's read (turning a draft row
 	//       published under the lock) still un-lists on the same save.
 	//
-	// The service passes EnforceListingGate for every non-admin caller; the exempt
-	// system admin keeps the platform-operator escape hatch and is not gated here.
+	// Retained for the review rollout; Service.update currently leaves both flags
+	// unset for temporary compatibility.
 	resetListing := m.ResetListingToDraft
 	if m.EnforceListingGate {
 		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
@@ -629,13 +627,9 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	// published PRIVATE plugin was visible only to them) and puts the row back on
 	// the normal 发布 path, where the new visibility routes it through review.
 	//
-	// Set by Service.update, which is the only place that can compare the declared
-	// visibility against the persisted one. Its condition is any CHANGE, not a
-	// widening: for a tenant the only change reaching here is the widening one
-	// (published+space is refused earlier), and for the exempt system admin a
-	// narrowing drops the row to draft too, which is the safe direction. For a
-	// non-admin caller the decision above (resetListing) overrides the service's
-	// hint with the value derived from the LOCKED row.
+	// This reset is opt-in; Service.update currently leaves both listing flags
+	// unset. When EnforceListingGate is enabled, the decision above overrides any
+	// caller hint with the value derived from the locked row.
 	listingReset := ``
 	if resetListing {
 		listingReset = `listing_state='draft',`
@@ -707,19 +701,8 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	if err != nil {
 		return err
 	}
-	// Re-derive the listed-plugin gate against the LOCKED row. The service refuses
-	// published+space from an unlocked read taken several round trips earlier; an
-	// ApproveReview that commits between that read and this FOR UPDATE lock can
-	// promote the draft to space+published, and without this re-check the soft
-	// delete below takes out a plugin the org just listed — exactly what the
-	// service-level comment ("the author deliberately cannot do this") promises
-	// cannot happen. This is the same locked re-derivation Repo.Update performs via
-	// EnforceListingGate for edits (write.go:554-557). System admins are exempt
-	// (they are the Delist actor themselves and can remove abusive listed content).
-	if !scope.Admin &&
-		before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
-		return ErrListedRequiresReview
-	}
+	// Temporary compatibility permits owner deletion regardless of listing state.
+	// Restore the locked listing check here with the service gate at review rollout.
 	if err = rejectLiveIncomingRelations(ctx, tx, pluginID); err != nil {
 		return err
 	}
@@ -818,16 +801,8 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	if err != nil {
 		return err
 	}
-	// Same locked re-derivation as Repo.Delete: a concurrent ApproveReview can
-	// promote a draft container to space+published between the service's unlocked
-	// read and this FOR UPDATE lock. Graph roots essentially never carry incoming
-	// live relations, so rejectLiveIncomingRelations cannot protect them; the
-	// listing-gate check is what prevents a published org container from vanishing
-	// at its author's discretion.
-	if !scope.Admin &&
-		before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
-		return ErrListedRequiresReview
-	}
+	// Temporary compatibility permits owner deletion regardless of listing state.
+	// Restore this locked listing check alongside Repo.Delete at review rollout.
 	if err = rejectLiveIncomingRelations(ctx, tx, topID); err != nil {
 		return err
 	}
