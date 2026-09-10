@@ -181,6 +181,7 @@ type pluginResponse struct {
 	Icon             string          `json:"icon,omitempty"`
 	IconURL          string          `json:"icon_url,omitempty"`
 	ToolCount        *int            `json:"tool_count,omitempty"`
+	Rating           *int            `json:"rating" minimum:"1" maximum:"5" extensions:"x-nullable"`
 	ViewCount        int             `json:"view_count"`
 	InstallCount     int             `json:"install_count"`
 	DownloadCount    int             `json:"download_count"`
@@ -222,6 +223,7 @@ type listItemResponse struct {
 	IconURL          string                    `json:"icon_url,omitempty"`
 	ToolCount        *int                      `json:"tool_count,omitempty"`
 	MemberCount      *int                      `json:"member_count,omitempty"`
+	Rating           *int                      `json:"rating" minimum:"1" maximum:"5" extensions:"x-nullable"`
 	ViewCount        int                       `json:"view_count"`
 	InstallCount     int                       `json:"install_count"`
 	DownloadCount    int                       `json:"download_count"`
@@ -786,13 +788,13 @@ func pluginDTO(p *model.Plugin) pluginResponse {
 	if p == nil {
 		return pluginResponse{}
 	}
-	return pluginResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return pluginResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 func listItemDTO(p *model.Plugin) listItemResponse {
 	if p == nil {
 		return listItemResponse{}
 	}
-	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 // connectorCount and teamMemberCount emit typed counts only for the plugin

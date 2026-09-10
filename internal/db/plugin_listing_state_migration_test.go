@@ -23,8 +23,9 @@ import (
 //
 // listing_state ships as FOUR files (add-column / backfill / reindex /
 // review-submitted-index, see 20260902-00's header for why). One newer review-
-// policy migration now follows them, so Down must take 5 steps to reach the
-// listing files; Up then reapplies those same 5 tail migrations.
+// policy migration and plugin-rating migration now follow them, so Down must
+// take 6 steps to reach the listing files; Up then reapplies those same 6 tail
+// migrations.
 func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 	database := isolatedTestDB(t)
 	source := &migrate.EmbedFileSystemMigrationSource{
@@ -36,11 +37,11 @@ func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 		t.Fatalf("migrate Up: %v", err)
 	}
 
-	// Roll back the newer policy migration plus the four listing_state migrations.
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 5); err != nil {
+	// Roll back rating + policy plus the four listing_state migrations.
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 6); err != nil {
 		t.Fatalf("migrate Down: %v", err)
-	} else if n != 5 {
-		t.Fatalf("migrate Down applied %d migrations, want 5", n)
+	} else if n != 6 {
+		t.Fatalf("migrate Down applied %d migrations, want 6", n)
 	}
 	if got := columnCount(t, database, "plugins", "listing_state"); got != 0 {
 		t.Fatal("listing_state column still exists after Down")
@@ -77,10 +78,10 @@ func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 		}
 	}
 
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Up, 5); err != nil {
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Up, 6); err != nil {
 		t.Fatalf("re-apply migrate Up after Down: %v", err)
-	} else if n != 5 {
-		t.Fatalf("re-apply applied %d migrations, want 5", n)
+	} else if n != 6 {
+		t.Fatalf("re-apply applied %d migrations, want 6", n)
 	}
 
 	// Grandfathering: a live row keeps the reach it had, a soft-deleted row stays

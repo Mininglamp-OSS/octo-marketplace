@@ -345,10 +345,11 @@ func scanPluginSummary(s interface{ Scan(...any) error }) (*model.Plugin, error)
 func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMetrics, includeReviewState bool) (*model.Plugin, error) {
 	var p model.Plugin
 	var category, space, botUID, botName, version, versionName sql.NullString
+	var rating sql.NullInt64
 	var reviewID, reviewStatus sql.NullString
 	var tags, manifest, pkg, attachKeys []byte
 	var deleted sql.NullTime
-	dest := []any{&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &category, &tags, &p.Publisher, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &p.CreatorName, &p.CreatedByType, &botUID, &botName, &p.Icon, &p.ToolCount, &manifest}
+	dest := []any{&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &category, &tags, &p.Publisher, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &p.CreatorName, &p.CreatedByType, &botUID, &botName, &p.Icon, &p.ToolCount, &rating, &manifest}
 	if includePackage {
 		dest = append(dest, &pkg, &attachKeys)
 	}
@@ -374,6 +375,10 @@ func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMet
 	p.CreatedByBotName = nullString(botName)
 	p.CurrentVersionID = nullString(version)
 	p.CurrentVersion = nullString(versionName)
+	if rating.Valid {
+		value := int(rating.Int64)
+		p.Rating = &value
+	}
 	if deleted.Valid {
 		p.DeletedAt = &deleted.Time
 	}

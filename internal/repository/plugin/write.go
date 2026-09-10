@@ -693,6 +693,54 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	return sync, nil
 }
 
+// RatingParams carries the trusted operator attribution for a rating-only write.
+type RatingParams struct {
+	PluginID     string
+	Rating       *int
+	OperatorID   string
+	OperatorName string
+	RequestID    string
+}
+
+// UpdateRating atomically updates only the nullable administrator rating and
+// updated_at, then appends the standard plugin audit event. Content, version
+// pointers, manifests, packages, attachment keys, and hashes are never written.
+func (r *Repo) UpdateRating(ctx context.Context, scope Scope, p RatingParams) (_ *model.Plugin, err error) {
+	defer func() { err = classifyDeadlock(err) }()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	current, err := getOwnedForUpdate(ctx, tx, scope, p.PluginID)
+	if err != nil {
+		return nil, err
+	}
+	now := r.now()
+	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET rating=?,updated_at=? WHERE plugin_id=? AND deleted_at IS NULL`, p.Rating, now, p.PluginID); err != nil {
+		return nil, wrapped("update rating", err)
+	}
+	beforeRating := ratingAuditValue(current.Rating)
+	current.Rating = p.Rating
+	current.UpdatedAt = now
+	remark := "rating:" + beforeRating + "->" + ratingAuditValue(p.Rating)
+	m := Mutation{OperatorID: p.OperatorID, OperatorName: p.OperatorName, RequestID: p.RequestID, Remark: &remark}
+	if err = insertAudit(ctx, tx, r.id(), now, *current, "rate", m, current.PluginHash, current.PluginHash); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
+func ratingAuditValue(rating *int) string {
+	if rating == nil {
+		return "null"
+	}
+	return strconv.Itoa(*rating)
+}
+
 // Delete soft-deletes an owned Plugin, invalidates its outgoing relation edges,
 // and appends an audit event. A live Plugin cannot be deleted while another
 // live, active Plugin has a live, active incoming relation to it.

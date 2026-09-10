@@ -175,6 +175,11 @@ components:
         data:
           $ref: '#/components/schemas/internal_api_handler_plugin.publishResponse'
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_ratingUpdateResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.ratingUpdateResponse'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_reviewPolicyResponse:
       properties:
         data:
@@ -1687,6 +1692,12 @@ components:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
         publisher:
           type: string
+        rating:
+          maximum: 5
+          minimum: 1
+          type:
+          - integer
+          - 'null'
         review_id:
           type: string
         space_id:
@@ -1762,6 +1773,12 @@ components:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
         publisher:
           type: string
+        rating:
+          maximum: 5
+          minimum: 1
+          type:
+          - integer
+          - 'null'
         review_id:
           type: string
         space_id:
@@ -1847,6 +1864,28 @@ components:
 
             how the client knows which branch fired without a second call.'
           type: string
+      type: object
+    internal_api_handler_plugin.ratingUpdateRequest:
+      properties:
+        rating:
+          maximum: 5
+          minimum: 1
+          type:
+          - integer
+          - 'null'
+      required:
+      - rating
+      type: object
+    internal_api_handler_plugin.ratingUpdateResponse:
+      properties:
+        plugin_id:
+          type: string
+        rating:
+          maximum: 5
+          minimum: 1
+          type:
+          - integer
+          - 'null'
       type: object
     internal_api_handler_plugin.relationRequest:
       properties:
@@ -2995,6 +3034,73 @@ paths:
       security:
       - Bearer: []
       summary: Download skill plugin package (admin)
+      tags:
+      - admin_plugin
+  /admin/plugins/{plugin_id}/rating:
+    patch:
+      description: Set or clear any plugin's administrator rating without changing
+        plugin content or versions. Admin only.
+      operationId: admin_plugin.rating.update
+      parameters:
+      - description: Plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_api_handler_plugin.ratingUpdateRequest'
+        description: Nullable administrator rating (1-5)
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_ratingUpdateResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Update plugin rating (admin)
       tags:
       - admin_plugin
   /admin/plugins/{plugin_id}/skill_md:

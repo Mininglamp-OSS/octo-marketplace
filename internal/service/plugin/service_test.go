@@ -37,6 +37,8 @@ type fakeStore struct {
 	updateRels     []model.PluginRelation
 	updateSnapshot bool
 	updateErr      error
+	ratingParams   pluginrepo.RatingParams
+	ratingScope    pluginrepo.Scope
 	deleteScope    pluginrepo.Scope
 	deleteID       string
 	deleteGraphID  string
@@ -148,6 +150,22 @@ func (f *fakeStore) Update(_ context.Context, _ pluginrepo.Scope, m pluginrepo.M
 		sync.NewVersionID = "ver-snap"
 	}
 	return sync, nil
+}
+func (f *fakeStore) UpdateRating(_ context.Context, s pluginrepo.Scope, p pluginrepo.RatingParams) (*model.Plugin, error) {
+	f.ratingScope, f.ratingParams = s, p
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	plugin := f.plugins[p.PluginID]
+	if plugin == nil {
+		return nil, pluginrepo.ErrNotFound
+	}
+	copy := *plugin
+	copy.Rating = p.Rating
+	return &copy, nil
 }
 func (f *fakeStore) CreateGraph(_ context.Context, s pluginrepo.Scope, nodes []pluginrepo.Mutation) ([]*pluginrepo.RelationSync, error) {
 	f.graphNodes, f.graphScope = nodes, s

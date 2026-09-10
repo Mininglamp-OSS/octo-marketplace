@@ -157,6 +157,10 @@ type Plugin struct {
 	// ToolCount is materialized from the connector/tools.json attachment on the
 	// write path because list queries never load plugin_json.
 	ToolCount int
+	// Rating is an optional 1–5 marketplace-admin assessment. It is metadata on
+	// the current plugin row, deliberately outside manifests, packages, hashes,
+	// and immutable version snapshots.
+	Rating *int
 	// MemberCount is derived from live expert_team_expert relations for list
 	// responses; it is never persisted.
 	MemberCount int

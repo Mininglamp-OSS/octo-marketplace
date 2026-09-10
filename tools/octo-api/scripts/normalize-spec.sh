@@ -60,20 +60,46 @@ if os.path.exists(yaml_path):
         spec = yaml.safe_load(f)
     # swag v2 also wraps body parameters in an unconstrained `oneOf: [object,
     # $ref]`. That makes `{}` valid even when the referenced request schema has
-    # required fields. Collapse this known generator artifact for the review
-    # policy PATCH so the published contract matches runtime validation.
-    policy_patch = spec.get('paths', {}).get('/plugin_review_policies', {}).get('patch')
-    if policy_patch:
-        schema = (policy_patch.get('requestBody', {}).get('content', {})
+    # required fields. Collapse this known generator artifact for strict PATCH
+    # bodies so the published contract matches runtime validation.
+    strict_patch_paths = (
+        '/plugin_review_policies',
+        '/admin/plugins/{plugin_id}/rating',
+    )
+    for path_name in strict_patch_paths:
+        operation = spec.get('paths', {}).get(path_name, {}).get('patch')
+        if not operation:
+            continue
+        schema = (operation.get('requestBody', {}).get('content', {})
                   .get('application/json', {}).get('schema', {}))
         choices = schema.get('oneOf') if isinstance(schema, dict) else None
         if (isinstance(choices, list) and len(choices) == 2
                 and choices[0] == {'type': 'object'}
                 and isinstance(choices[1], dict)
                 and '$ref' in choices[1]):
-            policy_patch['requestBody']['content']['application/json']['schema'] = {
+            operation['requestBody']['content']['application/json']['schema'] = {
                 '$ref': choices[1]['$ref']
             }
+
+    # OpenAPI 3.1 uses JSON Schema nullability. swag emits the legacy vendor
+    # extension for pointer scalars, which strict clients ignore. Convert every
+    # x-nullable schema mechanically so request and response contracts accept
+    # the null values the runtime reads and writes.
+    def normalize_nullable(node):
+        if isinstance(node, dict):
+            if node.pop('x-nullable', False):
+                value_type = node.get('type')
+                if isinstance(value_type, str):
+                    node['type'] = [value_type, 'null']
+                elif isinstance(value_type, list) and 'null' not in value_type:
+                    node['type'] = value_type + ['null']
+            for value in node.values():
+                normalize_nullable(value)
+        elif isinstance(node, list):
+            for value in node:
+                normalize_nullable(value)
+
+    normalize_nullable(spec)
 
     streams = {
         '/plugins/download': 'application/zip',

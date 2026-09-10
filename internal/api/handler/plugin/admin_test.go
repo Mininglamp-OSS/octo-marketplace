@@ -34,6 +34,8 @@ type fakeAdminService struct {
 	skillMD         string
 	download        *pluginsvc.SkillPackageStream
 	artifactID      string
+	ratingID        string
+	rating          *int
 	maxArchiveBytes int64
 	err             error
 }
@@ -65,6 +67,13 @@ func (f *fakeAdminService) AdminImport(_ context.Context, c pluginsvc.Caller, p 
 func (f *fakeAdminService) AdminUpdate(_ context.Context, c pluginsvc.Caller, _ string, r pluginsvc.WriteRequest) (*pluginsvc.Detail, error) {
 	f.caller, f.write = c, r
 	return f.detail, f.err
+}
+func (f *fakeAdminService) AdminUpdateRating(_ context.Context, c pluginsvc.Caller, id string, rating *int) (*model.Plugin, error) {
+	f.caller, f.ratingID, f.rating = c, id, rating
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.detail.Plugin, nil
 }
 func (f *fakeAdminService) AdminDelete(_ context.Context, c pluginsvc.Caller, id string) error {
 	f.caller, f.deletedID = c, id

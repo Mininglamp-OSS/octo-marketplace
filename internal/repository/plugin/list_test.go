@@ -64,13 +64,13 @@ func TestGetScansMetricCounters(t *testing.T) {
 	columns := append(pluginTestColumns(), "view_count", "install_count", "download_count")
 	mock.ExpectQuery(`SELECT .*COALESCE\(\(SELECT rm.view_count.*resource_type='plugin'.* FROM plugins p`).
 		WithArgs("plugin-a", "space", "caller").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("plugin-a", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "caller", "space", model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "icons/a.png", 0, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil, 7, 3, 5))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("plugin-a", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "caller", "space", model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "icons/a.png", 0, 4, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil, 7, 3, 5))
 	p, err := New(db).Get(context.Background(), Scope{CallerUID: "caller", SpaceID: "space"}, "plugin-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ViewCount != 7 || p.InstallCount != 3 || p.DownloadCount != 5 || p.Icon != "icons/a.png" {
-		t.Fatalf("counters = %d,%d,%d icon=%q", p.ViewCount, p.InstallCount, p.DownloadCount, p.Icon)
+	if p.ViewCount != 7 || p.InstallCount != 3 || p.DownloadCount != 5 || p.Icon != "icons/a.png" || p.Rating == nil || *p.Rating != 4 {
+		t.Fatalf("counters = %d,%d,%d icon=%q rating=%v", p.ViewCount, p.InstallCount, p.DownloadCount, p.Icon, p.Rating)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

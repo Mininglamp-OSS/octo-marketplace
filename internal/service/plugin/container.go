@@ -224,6 +224,7 @@ func (s *Service) ReuploadContainer(ctx context.Context, caller Caller, pluginID
 	top.CreatedAt = old.CreatedAt
 	top.CurrentVersionID = old.CurrentVersionID
 	top.CurrentVersion = old.CurrentVersion
+	top.Rating = old.Rating // container content rebuild preserves operator rating
 	top.CreatorName, top.CreatedByType = old.CreatorName, old.CreatedByType
 	top.CreatedByBotUID, top.CreatedByBotName = old.CreatedByBotUID, old.CreatedByBotName
 	top.Icon = old.Icon

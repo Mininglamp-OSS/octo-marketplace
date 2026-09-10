@@ -302,6 +302,7 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 		return nil, err
 	}
 	p.CreatedAt, p.CurrentVersionID = old.CreatedAt, old.CurrentVersionID
+	p.Rating = old.Rating // rating is preserved by the content-only SQL update
 	// Keep the stored version label only when the admin edit omits a version; a
 	// submitted version is applied (buildWrite already set it), mirroring the
 	// tenant update — otherwise an admin edit that sends a new version returns 200
@@ -341,6 +342,37 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 		p.CurrentVersionID = &sync.NewVersionID
 	}
 	return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
+}
+
+// AdminUpdateRating applies or clears the administrator rating without entering
+// the content update pipeline. The repository performs the metadata write and
+// audit append in one transaction, and returns the unchanged plugin projection.
+func (s *Service) AdminUpdateRating(ctx context.Context, caller Caller, pluginID string, rating *int) (*model.Plugin, error) {
+	storageID, err := parseStorageID(pluginID)
+	if err != nil {
+		return nil, err
+	}
+	if rating != nil && (*rating < 1 || *rating > 5) {
+		return nil, ErrInvalidRequest
+	}
+	old, _, err := s.repo.GetWithRelations(ctx, adminScope(caller), storageID)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	// Embedded children are owned by their container graph and are not standalone
+	// admin mutation targets. Match the other mutators and conceal them as missing.
+	if old.IsEmbedded {
+		return nil, ErrNotFound
+	}
+	p, err := s.repo.UpdateRating(ctx, adminScope(caller), pluginrepo.RatingParams{
+		PluginID: storageID, Rating: rating, OperatorID: caller.UID,
+		OperatorName: caller.Name, RequestID: caller.RequestID,
+	})
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	p.IconURL = s.resolveIcon(ctx, p.Icon)
+	return p, nil
 }
 
 // AdminImportContainer ingests an uploaded expert/expert_team container archive

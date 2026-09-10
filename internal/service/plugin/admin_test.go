@@ -124,6 +124,20 @@ func TestAdminCreateNullCategoryStillPlaces(t *testing.T) {
 // TestAdminUpdatePreservesPublisherWhenOmitted confirms an admin metadata edit
 // that carries no publisher falls back to the row's existing one rather than
 // blanking a backfilled skill's publisher (Octo-Q P1).
+func TestAdminUpdatePreservesRatingInResponse(t *testing.T) {
+	space := adminGlobalSpace
+	rating := 4
+	existing := &model.Plugin{ID: "skill-1", Name: "Ops Skill", Type: model.PluginTypeSkill, SpaceID: &space, Visibility: model.PluginVisibilitySystem, Rating: &rating, Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{}`)}
+	f := &fakeStore{plugins: map[string]*model.Plugin{"skill-1": existing}}
+	detail, err := fixedService(f).AdminUpdate(context.Background(), adminCaller, "skill-1", adminSkillRequest())
+	if err != nil {
+		t.Fatalf("AdminUpdate: %v", err)
+	}
+	if detail.Plugin.Rating == nil || *detail.Plugin.Rating != rating {
+		t.Fatalf("rating not preserved in response: %#v", detail.Plugin.Rating)
+	}
+}
+
 func TestAdminUpdatePreservesPublisherWhenOmitted(t *testing.T) {
 	space := adminGlobalSpace
 	existing := &model.Plugin{ID: "skill-1", Name: "Ops Skill", Type: model.PluginTypeSkill, SpaceID: &space, Visibility: model.PluginVisibilitySystem, Publisher: "Mininglamp", Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{}`)}

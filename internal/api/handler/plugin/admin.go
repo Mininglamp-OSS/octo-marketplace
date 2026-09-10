@@ -3,6 +3,7 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -28,6 +29,7 @@ type AdminService interface {
 	AdminReuploadContainer(context.Context, pluginsvc.Caller, string, pluginsvc.ContainerImportParams) (*pluginsvc.Detail, error)
 	AdminImport(context.Context, pluginsvc.Caller, pluginsvc.ImportParams) (*pluginsvc.Detail, error)
 	AdminUpdate(context.Context, pluginsvc.Caller, string, pluginsvc.WriteRequest) (*pluginsvc.Detail, error)
+	AdminUpdateRating(context.Context, pluginsvc.Caller, string, *int) (*model.Plugin, error)
 	AdminDelete(context.Context, pluginsvc.Caller, string) error
 	AdminSkillMarkdown(context.Context, pluginsvc.Caller, string) (string, error)
 	AdminOpenSkillPackage(context.Context, pluginsvc.Caller, string) (*pluginsvc.SkillPackageStream, error)
@@ -77,6 +79,7 @@ func (h *AdminHandler) RegisterAdmin(r *gin.Engine, adminAuth *marketmiddleware.
 	plugins.GET("/:plugin_id/skill_md", h.SkillMarkdown)
 	plugins.GET("/:plugin_id/download", h.DownloadSkillPackage)
 	plugins.PATCH("/:plugin_id", h.Update)
+	plugins.PATCH("/:plugin_id/rating", h.UpdateRating)
 	plugins.DELETE("/:plugin_id", h.Delete)
 
 	admin := r.Group("/api/v1/admin", adminAuth.Handler(marketmiddleware.RoleMarketAdmin))
@@ -552,6 +555,65 @@ func (h *AdminHandler) Update(c *gin.Context) {
 		return
 	}
 	apiresponse.OK(c, detailDTO(v))
+}
+
+type ratingUpdateRequest struct {
+	Rating *int `json:"rating" binding:"required" minimum:"1" maximum:"5" extensions:"x-nullable"`
+}
+
+type ratingUpdateResponse struct {
+	PluginID string `json:"plugin_id"`
+	Rating   *int   `json:"rating" minimum:"1" maximum:"5" extensions:"x-nullable"`
+}
+
+// UpdateRating godoc
+// @Summary Update plugin rating (admin)
+// @Description Set or clear any plugin's administrator rating without changing plugin content or versions. Admin only.
+// @Tags admin_plugin
+// @ID admin_plugin.rating.update
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param plugin_id path string true "Plugin ID"
+// @Param body body ratingUpdateRequest true "Nullable administrator rating (1-5)"
+// @Success 200 {object} apiresponse.Data[ratingUpdateResponse]
+// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
+// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
+// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
+// @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
+// @Router /admin/plugins/{plugin_id}/rating [patch]
+func (h *AdminHandler) UpdateRating(c *gin.Context) {
+	caller, ok := adminCaller(c)
+	if !ok {
+		unauthorized(c)
+		return
+	}
+	var raw map[string]json.RawMessage
+	if !decode(c, &raw) {
+		return
+	}
+	value, present := raw["rating"]
+	if !present || len(raw) != 1 {
+		validation(c, "rating")
+		return
+	}
+	var rating *int
+	if string(value) != "null" {
+		var parsed int
+		if err := json.Unmarshal(value, &parsed); err != nil {
+			validation(c, "rating")
+			return
+		}
+		rating = &parsed
+	}
+	p, err := h.svc.AdminUpdateRating(c.Request.Context(), caller, c.Param("plugin_id"), rating)
+	if err != nil {
+		writeServiceError(c, err, "plugin.admin.rating.update")
+		return
+	}
+	apiresponse.OK(c, ratingUpdateResponse{PluginID: p.ID, Rating: p.Rating})
 }
 
 // Delete godoc

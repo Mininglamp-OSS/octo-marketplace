@@ -67,6 +67,7 @@ type Store interface {
 	CreateGraph(context.Context, pluginrepo.Scope, []pluginrepo.Mutation) ([]*pluginrepo.RelationSync, error)
 	RebuildGraph(context.Context, pluginrepo.Scope, pluginrepo.Mutation, []pluginrepo.Mutation) (*pluginrepo.RelationSync, error)
 	Update(context.Context, pluginrepo.Scope, pluginrepo.Mutation) (*pluginrepo.RelationSync, error)
+	UpdateRating(context.Context, pluginrepo.Scope, pluginrepo.RatingParams) (*model.Plugin, error)
 	Delete(context.Context, pluginrepo.Scope, string, string, string, string, *string) error
 	DeleteGraph(context.Context, pluginrepo.Scope, string, string, string, string, *string) error
 	ListVersions(context.Context, pluginrepo.Scope, string, int, int) ([]model.PluginVersion, int64, error)
@@ -631,6 +632,9 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 		return nil, err
 	}
 	p.CreatedAt, p.CurrentVersionID = old.CreatedAt, old.CurrentVersionID
+	// Rating is operator metadata outside the content write contract. Preserve it
+	// in the response just as the repository preserves the column in SQL.
+	p.Rating = old.Rating
 	// A metadata edit that omits `version` must keep the existing current-version
 	// label — buildWrite otherwise defaults an omitted version to "1.0.0", which
 	// would silently reset a plugin imported as e.g. "2.4.0" on its first save.
