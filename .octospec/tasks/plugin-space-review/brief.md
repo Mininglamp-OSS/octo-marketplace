@@ -10,6 +10,17 @@ source: self
 
 # Task: plugin space review
 
+## Temporary compatibility amendment (2026-09-09)
+
+Until the frontend review flow is rolled out, tenant create/import publishes
+immediately and owners may edit, reupload, or delete listed plugins directly.
+This temporarily overrides the mandatory-review write gates described below.
+Keep the review endpoints, pending-review safeguards, repository update gates,
+and their tests for the later rollout. Restore the create-time draft default and
+the service/repository listing gates together when review becomes required.
+Frontend visibility switching and embedded-graph visibility synchronization are
+outside this temporary fix and must be addressed before exposing that feature.
+
 ## Goal
 
 Introduce an organization (Space) level review workflow on the unified plugin

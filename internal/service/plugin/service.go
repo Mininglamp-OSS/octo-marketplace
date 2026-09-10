@@ -548,16 +548,8 @@ func (s *Service) createWithID(ctx context.Context, caller Caller, req WriteRequ
 	if err := validateCaller(caller); err != nil {
 		return nil, err
 	}
-	// A fresh tenant plugin is always a DRAFT, whatever visibility it declares.
-	// visibility is an intent ("who should see this once it is listed"), and
-	// listing_state is what actually lists it — so there is no longer anything to
-	// clamp here: declaring 仅本组织可见 on a draft is legal and lists nothing until
-	// Publish routes it through review and ApproveReview stamps published.
-	//
-	// The value is still validated, so `public` and garbage stay 400s rather than
-	// being silently rewritten. buildWrite stamps listing_state=draft; a system
-	// admin is left alone because `system` rows are not tenant-owned and not
-	// subject to Space review.
+	// Keep the declared audience, but reject visibility values unavailable to
+	// tenants. System-admin visibility is validated separately by buildWrite.
 	if !caller.IsSystemAdmin && !validVisibility(req.Visibility, false) {
 		return nil, ErrInvalidRequest
 	}
@@ -566,6 +558,11 @@ func (s *Service) createWithID(ctx context.Context, caller Caller, req WriteRequ
 	if err != nil {
 		return nil, err
 	}
+	// Temporary compatibility while the frontend review flow is deferred: create
+	// publishes immediately. Keep buildWrite's draft default and the review paths
+	// for the later rollout. Restore this default together with the update/delete
+	// listing gates when review becomes required again (plugin-space-review brief).
+	p.ListingState = model.PluginListingStatePublished
 	p.ID = reservedID
 	if p.ID == "" {
 		p.ID = s.id()
@@ -579,8 +576,7 @@ func (s *Service) createWithID(ctx context.Context, caller Caller, req WriteRequ
 	m.Changelog = req.Changelog
 	// Every create auto-attaches the default visible placement so the new plugin
 	// surfaces in scene-scoped market lists (including "mine") without a separate
-	// publish call — the same auto-placement AdminCreate uses. This is what lets
-	// the publish endpoint go away: create is now self-sufficient for visibility.
+	// publish call — the same auto-placement AdminCreate uses.
 	m.Placements = []model.PluginPlacement{defaultMarketPlacement(p.CategoryID)}
 	sync, err := s.repo.Create(ctx, scope(caller), m)
 	if err != nil {
@@ -626,33 +622,6 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if req.Type != old.Type {
 		return nil, ErrInvalidRequest
 	}
-	// A LISTED, org-visible plugin may not be modified through this path at all.
-	// Every field a tenant can change here is org-visible — the documents, and
-	// through the manifest the name/description/labels, plus category, publisher
-	// and icon — so an edit that lands here is an unreviewed change to what the
-	// whole Space is reading. Reviewed content arrives through SubmitReview.
-	//
-	// The gate is (published AND space), not published alone. A PRIVATE published
-	// plugin has no review channel by design — Publish lists it directly — so
-	// refusing edits there would leave it permanently uneditable, and the
-	// justification for the refusal does not hold anyway: nobody else can read it.
-	// A DRAFT or DELISTED row is freely editable, which is what makes "edit and
-	// publish again" work after a takedown.
-	//
-	// Self-delisting by lowering visibility to private is NO LONGER a way out:
-	// taking a listed plugin down is a Space-admin action (Delist). visibility is
-	// otherwise free to change on an unlisted row, since it only declares intent.
-	//
-	// A system admin is exempt from the two tenant gates below. The residual that
-	// buys is narrower than it looks, and worth naming exactly: a super-admin
-	// cannot LIST anything through this path (listing_state is not settable on the
-	// write path, and changing visibility on a published row still drops it to
-	// draft below), and AdminUpdate stamps old.Visibility via adminEffectiveWrite
-	// rather than taking it from the request. What they CAN do is edit the live
-	// content of an ALREADY-LISTED row with no review request and no
-	// `review_approve` audit row — only the ordinary `update` audit records it.
-	// That is the platform-operator escape hatch, deliberately kept.
-	//
 	// The version label may go up or stay put, never back. Checked against the
 	// STORED label rather than the request's own history, because a client that
 	// forgets to send the field would otherwise silently reset it.
@@ -668,9 +637,8 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 		if !validVisibility(req.Visibility, false) {
 			return nil, ErrInvalidRequest
 		}
-		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace {
-			return nil, ErrListedRequiresReview
-		}
+		// Temporarily allow owners to edit listed plugins directly while the
+		// frontend review flow is deferred.
 		// While a review is pending, the frozen snapshot is what the reviewer will
 		// act on, so content edits stay allowed (that is the whole point of freezing
 		// it). Changing VISIBILITY is different: ApproveReview stamps
@@ -723,10 +691,9 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
-	// restate it against the row it locks, for the same reason the two listing
-	// decisions below are re-derived: an approval that publishes a frozen label can
-	// advance current_version between that read and the write, after which this save
-	// would snapshot a label the row has already moved past.
+	// restate it against the row it locks: an approval or another save can advance
+	// current_version between that read and the write, after which this save would
+	// snapshot a label the row has already moved past.
 	m.EnforceForwardOnlyVersion = true
 	// The unlocked pending guard above (non-admin visibility change) is a fast
 	// pre-check; make it authoritative by re-checking under the plugin row lock in
@@ -735,35 +702,9 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if !caller.IsSystemAdmin && req.Visibility != old.Visibility {
 		m.RefusePendingReview = true
 	}
-	// The listed_requires_review gate and the un-list-on-widen decision above were
-	// both computed from the UNLOCKED `old` read. An approval or a publish can
-	// commit between that read and Repo.Update's row lock, so let the repo be
-	// authoritative: EnforceListingGate makes it re-derive both facts from the row
-	// it locks (refuse a locked published+space edit; reset-to-draft on a widen of
-	// a locked-published row). The exempt system admin keeps the platform-operator
-	// escape hatch and is not gated.
-	if !caller.IsSystemAdmin {
-		m.EnforceListingGate = true
-	}
-	// Widening the declared audience of a LISTED plugin un-lists it.
-	//
-	// The refusal above only covers a published plugin that is already `space`.
-	// A published PRIVATE one is editable by design — nobody else can read it —
-	// but writing `space` onto it while it stays published would list it to the
-	// whole organization with no review, which is the single thing this workflow
-	// exists to prevent. Dropping to draft costs the author nothing (the plugin
-	// was visible only to them) and puts it back on the normal 发布 path, where
-	// the new visibility routes it through review.
-	//
-	// Any content-only edit leaves the listing alone. The condition is "the
-	// visibility changed", not "it widened": for a tenant the only change that can
-	// reach here IS the widening one (published+space is refused above with
-	// ErrListedRequiresReview), and for the exempt system admin dropping a listed
-	// row back to draft on a narrowing is the safe direction anyway.
-	if old.ListingState == model.PluginListingStatePublished && req.Visibility != old.Visibility {
-		m.ResetListingToDraft = true
-		p.ListingState = model.PluginListingStateDraft
-	}
+	// Temporary compatibility: leave EnforceListingGate and ResetListingToDraft
+	// unset so a save keeps the current listing state. Retain the repository gates
+	// and their tests for the later review rollout.
 	sync, err := s.repo.Update(ctx, scope(caller), m)
 	if err != nil {
 		return nil, mapStoreError(err)
@@ -809,26 +750,8 @@ func (s *Service) Delete(ctx context.Context, caller Caller, pluginID string) er
 	if old.OwnerUID != caller.UID || (old.SpaceID != nil && *old.SpaceID != caller.SpaceID) {
 		return ErrNotFound
 	}
-	// A LISTED, org-visible plugin may not be deleted through this path. Delist
-	// enforces the listing.go:141-148 invariant: "Space admins only… the author
-	// deliberately cannot do this — self-delisting through the write path was
-	// removed — so that a plugin the org depends on cannot vanish at its author's
-	// discretion." Delete is the same write path and would let the author bypass
-	// that takedown gate entirely, irreversibly (there is no undelete, and a
-	// manual deleted_at=NULL drops the row back to draft per the listing-state
-	// backfill migration). An admin must Delist first; once the row leaves
-	// `published` (draft, delisted, or a private-published row nobody else can
-	// read), the author can delete it again. Symmetric with the ErrListedRequiresReview
-	// gate in Service.update, and checked BEFORE the expert/expert_team type switch
-	// so DeleteGraph (the more exposed shape — graph roots almost never carry
-	// incoming live relations) is covered by the same gate.
-	//
-	// A system admin keeps the platform-operator escape hatch, matching update.
-	if !caller.IsSystemAdmin {
-		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace {
-			return ErrListedRequiresReview
-		}
-	}
+	// Temporary compatibility: owners may delete listed plugins directly. Restore
+	// the listing gate here and in Repo.Delete/DeleteGraph with the review rollout.
 	audit := s.audit(caller, storageID, "delete", old, nil, s.now())
 	// An expert/expert_team top owns embedded children (an expert's bundled skills;
 	// a squad's member experts and their skills) — the population backfilled tenant
