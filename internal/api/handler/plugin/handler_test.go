@@ -25,7 +25,9 @@ type fakeService struct {
 	listParams       pluginsvc.ListParams
 	list             []model.Plugin
 	detail           *pluginsvc.Detail
+	detailGraph      *pluginsvc.DetailGraph
 	includeRelations bool
+	getGraphID       string
 	err              error
 	download         *pluginsvc.SkillPackageStream
 	versions         []model.PluginVersion
@@ -63,6 +65,10 @@ func (f *fakeService) List(_ context.Context, c pluginsvc.Caller, p pluginsvc.Li
 func (f *fakeService) Detail(_ context.Context, c pluginsvc.Caller, _ string, includeRelations bool) (*pluginsvc.Detail, error) {
 	f.caller, f.includeRelations = c, includeRelations
 	return f.detail, f.err
+}
+func (f *fakeService) DetailGraph(_ context.Context, c pluginsvc.Caller, id string) (*pluginsvc.DetailGraph, error) {
+	f.caller, f.getGraphID = c, id
+	return f.detailGraph, f.err
 }
 func (f *fakeService) Create(_ context.Context, c pluginsvc.Caller, r pluginsvc.WriteRequest) (*pluginsvc.Detail, error) {
 	f.caller, f.write = c, r
@@ -485,5 +491,84 @@ func TestVersionsRouteUsesOffsetEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"version":"1.0.0"`) || !strings.Contains(rec.Body.String(), `"pagination"`) {
 		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestGetGraphReturnsEnvelopeWithRelatedPlugins(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	root := &model.Plugin{ID: "team-1", Name: "Team", Type: model.PluginTypeExpertTeam, Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[]}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
+	member := &model.Plugin{ID: "m1", Name: "Member", Type: model.PluginTypeExpert, IsEmbedded: true, Manifest: json.RawMessage(`{}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
+	skill := &model.Plugin{ID: "s1", Name: "Skill", Type: model.PluginTypeSkill, IsEmbedded: true, Manifest: json.RawMessage(`{}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
+	rels := []model.PluginRelation{
+		{ID: "r-m", SourcePluginID: "team-1", TargetPluginID: "m1", Type: "expert_team_expert", SortOrder: 0, Data: json.RawMessage(`{"is_leader":true,"role":"leader","member_key":"lead"}`), SourcePluginType: model.PluginTypeExpertTeam, TargetPluginType: model.PluginTypeExpert},
+		{ID: "r-s", SourcePluginID: "m1", TargetPluginID: "s1", Type: "expert_skill", SortOrder: 0, Data: json.RawMessage(`{"source_index":0}`), SourcePluginType: model.PluginTypeExpert, TargetPluginType: model.PluginTypeSkill},
+	}
+	f := &fakeService{detailGraph: &pluginsvc.DetailGraph{Plugin: root, Relations: rels, Related: []*model.Plugin{member, skill}}}
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/detail_graph?plugin_id=team-1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if f.getGraphID != "team-1" {
+		t.Fatalf("forwarded plugin_id = %q", f.getGraphID)
+	}
+	// Root carries plugin_json; related must NOT carry plugin_json.
+	if !strings.Contains(body, `"plugin_json"`) {
+		t.Fatalf("root plugin_json missing: %s", body)
+	}
+	// Two plugin_json occurrences = only on the root pluginResponse. Children are listItemResponse which lacks plugin_json.
+	if n := strings.Count(body, `"plugin_json"`); n != 1 {
+		t.Fatalf("want exactly one plugin_json (root only), got %d: %s", n, body)
+	}
+	if !strings.Contains(body, `"related_plugins"`) {
+		t.Fatalf("related_plugins missing: %s", body)
+	}
+	if !strings.Contains(body, `"is_leader":true`) {
+		t.Fatalf("edge data (is_leader) lost: %s", body)
+	}
+	// No meta fields.
+	for _, forbidden := range []string{`"graph"`, `"node_count"`, `"is_partial"`, `"truncated"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("unexpected meta field %s: %s", forbidden, body)
+		}
+	}
+}
+
+func TestGetGraphRequiresPluginID(t *testing.T) {
+	f := &fakeService{}
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/detail_graph", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetGraphReturns404(t *testing.T) {
+	f := &fakeService{err: pluginsvc.ErrNotFound}
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/detail_graph?plugin_id=missing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetGraphReturns413WhenTooLarge(t *testing.T) {
+	f := &fakeService{err: pluginsvc.ErrGraphTooLarge}
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/detail_graph?plugin_id=team-1", nil))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"PAYLOAD_TOO_LARGE"`) {
+		t.Fatalf("want PAYLOAD_TOO_LARGE code: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"max_nodes"`) {
+		t.Fatalf("want max_nodes in details: %s", rec.Body.String())
+	}
+	// Both caps are reported: a caller that trips the edge cap while staying
+	// under the node cap otherwise gets a payload that only mentions max_nodes.
+	if !strings.Contains(rec.Body.String(), `"max_edges"`) {
+		t.Fatalf("want max_edges in details: %s", rec.Body.String())
 	}
 }

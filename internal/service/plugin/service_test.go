@@ -53,10 +53,13 @@ type fakeStore struct {
 	// declaredCounts overrides the unfiltered declared-relation count per plugin;
 	// unset entries default to len(relations[id]) so declared==visible and the
 	// install dependency-visibility guard stays inert for existing tests.
-	declaredCounts map[string]int
-	tags           []model.TagFilter
-	tagFilter      pluginrepo.TagListFilter
-	err            error
+	declaredCounts     map[string]int
+	tags               []model.TagFilter
+	tagFilter          pluginrepo.TagListFilter
+	detailGraphRoot    *model.Plugin
+	detailGraphRels    []model.PluginRelation
+	detailGraphRelated []*model.Plugin
+	err                error
 	// review carries the review-request half of the fake (see review_fake_test.go).
 	review reviewFake
 	// listing carries the publish/delist half (see review_fake_test.go).
@@ -320,6 +323,16 @@ func (f *fakeStore) CountDeclaredRelations(_ context.Context, id string) (int, e
 		return n, nil
 	}
 	return len(f.relations[id]), nil
+}
+func (f *fakeStore) GetGraphClosure(_ context.Context, _ pluginrepo.Scope, id string) (*model.Plugin, []model.PluginRelation, []*model.Plugin, error) {
+	f.getIDs = append(f.getIDs, id)
+	if f.err != nil {
+		return nil, nil, nil, f.err
+	}
+	if f.detailGraphRoot != nil {
+		return f.detailGraphRoot, f.detailGraphRels, f.detailGraphRelated, nil
+	}
+	return nil, nil, nil, pluginrepo.ErrNotFound
 }
 
 func fixedService(f *fakeStore) *Service {

@@ -40,7 +40,17 @@ var (
 	// content_hash/content_size recorded for it at publish time — a
 	// content-addressed object must never be served under a mismatched digest.
 	ErrIntegrity = errors.New("plugin artifact integrity check failed")
+	// ErrGraphTooLarge is returned when a plugin's transitive relation closure
+	// exceeds the per-request node or edge cap; the detail_graph endpoint fails
+	// closed so a caller never renders a partially-missing squad or agent.
+	ErrGraphTooLarge = errors.New("plugin graph exceeds size cap")
 )
+
+// MaxGraphNodes and MaxGraphEdges re-export the repository's detail_graph caps
+// so HTTP handlers can report them in an error payload without importing the
+// repository package.
+func MaxGraphNodes() int { return pluginrepo.MaxGraphNodes() }
+func MaxGraphEdges() int { return pluginrepo.MaxGraphEdges() }
 
 // Caller is populated from verified authentication context, never request JSON.
 type Caller struct {
@@ -74,6 +84,7 @@ type Store interface {
 	CountMemberRelations(context.Context, []string) (map[string]int, error)
 	CountDeclaredRelations(context.Context, string) (int, error)
 	ListTags(context.Context, pluginrepo.Scope, pluginrepo.TagListFilter) ([]model.TagFilter, error)
+	GetGraphClosure(context.Context, pluginrepo.Scope, string) (*model.Plugin, []model.PluginRelation, []*model.Plugin, error)
 
 	// Space review requests. Every method carries the caller Scope; the
 	// AnySpace variant is the single deliberate exception and is documented at
@@ -210,6 +221,16 @@ type Detail struct {
 	Relations []model.PluginRelation
 	// RelationResult reports upsert relation synchronization; nil on reads.
 	RelationResult *RelationResult
+}
+
+// DetailGraph is the flat transitive closure returned by DetailGraph: the
+// root plugin in full projection (carrying plugin_json), every edge in the
+// closure, and related plugins in light projection (manifest only, no
+// plugin_json), deduplicated by plugin_id.
+type DetailGraph struct {
+	Plugin    *model.Plugin
+	Relations []model.PluginRelation
+	Related   []*model.Plugin
 }
 
 // RelationResult mirrors the target-state relation sync outcome on the wire:
@@ -467,6 +488,50 @@ func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, in
 		}
 	}
 	return &Detail{Plugin: p, Relations: rels}, nil
+}
+
+// DetailGraph returns a plugin together with the flat, deduplicated transitive
+// closure of its relation graph. The root carries the full projection
+// (plugin_json included); related plugins carry the light list projection
+// (manifest only, no plugin_json). Icons are resolved once per unique key.
+//
+// Related nodes deliberately carry no member_count: the relation matrix never
+// admits an expert_team as a relation target, so no related node is ever a
+// team, and the root's response projection has no member_count field. A client
+// that needs a team's member count can count expert_team_expert edges in the
+// returned relation slice, which is also the only count consistent with the
+// caller's visibility.
+func (s *Service) DetailGraph(ctx context.Context, caller Caller, pluginID string) (*DetailGraph, error) {
+	if err := validateCaller(caller); err != nil {
+		return nil, ErrInvalidRequest
+	}
+	storageID, err := parseStorageID(pluginID)
+	if err != nil {
+		return nil, err
+	}
+	root, rels, nodes, err := s.repo.GetGraphClosure(ctx, scope(caller), storageID)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	// Resolve icons once per unique raw icon key across root and related so a
+	// shared icon does not trigger repeated presign work.
+	iconCache := map[string]string{}
+	resolve := func(icon string) string {
+		if icon == "" {
+			return ""
+		}
+		if u, ok := iconCache[icon]; ok {
+			return u
+		}
+		u := s.resolveIcon(ctx, icon)
+		iconCache[icon] = u
+		return u
+	}
+	root.IconURL = resolve(root.Icon)
+	for _, n := range nodes {
+		n.IconURL = resolve(n.Icon)
+	}
+	return &DetailGraph{Plugin: root, Relations: rels, Related: nodes}, nil
 }
 
 func (s *Service) Create(ctx context.Context, caller Caller, req WriteRequest) (*Detail, error) {
@@ -926,6 +991,8 @@ func mapStoreError(err error) error {
 		return ErrNotFound
 	case errors.Is(err, pluginrepo.ErrConflict):
 		return ErrConflict
+	case errors.Is(err, pluginrepo.ErrGraphTooLarge):
+		return ErrGraphTooLarge
 	case errors.Is(err, pluginrepo.ErrDeadlock):
 		return ErrDeadlock
 	case errors.Is(err, pluginrepo.ErrReviewPending):

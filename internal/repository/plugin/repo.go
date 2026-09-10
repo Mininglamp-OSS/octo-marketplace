@@ -4,6 +4,7 @@ package plugin
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/id"
@@ -72,7 +73,66 @@ var (
 	ErrInvalidCategory = errors.New("invalid plugin category")
 	// ErrInvalidPlacement indicates a category not enabled for the Plugin type and placement.
 	ErrInvalidPlacement = errors.New("invalid plugin placement")
+	// ErrGraphTooLarge indicates a plugin's transitive relation closure exceeds the
+	// per-request node or edge cap. The read path fails closed (rather than
+	// truncating) so callers never render a partially-missing squad/agent.
+	ErrGraphTooLarge = errors.New("plugin graph exceeds node or edge cap")
 )
+
+// containerImportMaxMembers and containerImportMaxSkillsPerMember mirror
+// containerMaxMembers / containerMaxSkills in internal/service/plugin/container.go.
+// Container import is the writer that mints squad graphs, so its ceiling — not
+// the install budget — is what the read caps below must clear.
+// TestGraphCapsClearContainerImportCeiling (internal/service/plugin) fails if
+// the two ever drift apart.
+const (
+	containerImportMaxMembers         = 30
+	containerImportMaxSkillsPerMember = 20
+)
+
+// maxGraphNodes caps the total number of related (non-root) plugins returned by
+// a single detail_graph response. A maximum-size legal container import mints
+// containerImportMaxMembers members plus containerImportMaxSkillsPerMember
+// embedded skills each (skills dedupe only by (file,name), so distinct names
+// mint distinct nodes), and that squad's detail page must render rather than
+// 413 forever. Note this sits above maxInstallRelationTargets (500): a
+// maximum-size container is currently importable and readable but not
+// installable — a pre-existing mismatch on the install side, not a read cap to
+// reconcile downward.
+const maxGraphNodes = containerImportMaxMembers * (1 + containerImportMaxSkillsPerMember) // 630
+
+// maxGraphEdges caps the total number of edges (across both levels) returned by
+// a single detail_graph response, as a defense against graphs that stay well
+// under the node cap by sharing many nodes while still fanning out a huge edge
+// set against pre-existing standalone catalog plugins.
+//
+// The container ceiling above produces exactly one edge per child (630), since
+// every embedded child has a single parent. Sharing targets is what decouples
+// the two counts, and only the upsert API can build that shape — where
+// maxRelations (200 per plugin) would otherwise admit ~40k edges in a two-hop
+// closure, far past what one detail page should render. This allows ~3x the
+// container ceiling for member-shared-target squads and fails closed above it.
+const maxGraphEdges = 2000
+
+// graphEdgeLimit bounds each edge query server-side at one row past the cap.
+// The mid-scan check in graphEdges.drain still decides the outcome; the LIMIT
+// bounds what an abandoned result set costs. It does not remove the sort — the
+// join is still fully evaluated, and the L2 ORDER BY cannot be served from
+// idx_plugin_relations_source_type_order because relation_type is
+// unconstrained — but it lets the optimizer keep a bounded priority-queue
+// filesort instead of spilling, and it stops the driver from draining tens of
+// thousands of rows off the wire (readUntilEOF) to return the connection to the
+// pool. One extra row is enough for drain to observe the overflow, because a
+// query returning exactly the limit can only exceed the cap on the row after
+// it; a limit at or below the cap would silently truncate an exact overflow
+// into a successful partial response instead of a 413.
+var graphEdgeLimit = strconv.Itoa(maxGraphEdges + 1)
+
+// MaxGraphNodes returns the per-response child-node cap for the graph endpoint.
+func MaxGraphNodes() int { return maxGraphNodes }
+
+// MaxGraphEdges returns the per-response edge cap for the graph endpoint.
+func MaxGraphEdges() int { return maxGraphEdges }
 
 // Scope is authoritative caller context; it must never come from request data.
 type Scope struct {

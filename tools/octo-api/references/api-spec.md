@@ -262,7 +262,7 @@ type MatterResp struct {
 | 409 | `CONFLICT` | 状态/版本冲突 | `details.conflict_reason` / `details.current_state` |
 | 409 | `DUPLICATE` | 重复创建 | `details.existing_id` |
 | 400 | `VALIDATION_ERROR` | 入参校验失败 | `details.field` / `details.reason` |
-| 413 | `PAYLOAD_TOO_LARGE` | body / 文件过大 | `details.max_bytes` / `details.actual_bytes` |
+| 413 | `PAYLOAD_TOO_LARGE` | 请求／响应数据过大（含文件或有界关系图） | 字节限制：`details.max_bytes` / `details.actual_bytes`；图数量限制：`details.max_nodes` / `details.max_edges` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Content-Type 不支持 | `details.expected` / `details.actual` |
 | 426 | `CLIENT_VERSION_TOO_OLD` | 客户端版本低 | `details.min_version` |
 | 429 | `RATE_LIMITED` | 频控 | `details.retry_after_seconds` |
@@ -270,6 +270,10 @@ type MatterResp struct {
 | 503 | `UPSTREAM_UNAVAILABLE` | 上游故障 | `details.upstream` / `details.upstream_status` |
 
 ### 响应结构
+
+`GET /plugins/detail_graph` 的 413 表示返回图超出节点／边数量上限，
+`max_nodes` / `max_edges` 的单位是数量。该接口尚未实施字节预算，
+不返回 `max_bytes`；客户端应按实际存在的限制字段解释错误。
 
 ```json
 {

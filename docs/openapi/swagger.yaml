@@ -160,6 +160,11 @@ components:
         data:
           $ref: '#/components/schemas/internal_api_handler_plugin.delistResponse'
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailGraphResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.detailGraphResponse'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailResponse:
       properties:
         data:
@@ -1585,6 +1590,21 @@ components:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginListingState'
         plugin_id:
           type: string
+      type: object
+    internal_api_handler_plugin.detailGraphResponse:
+      properties:
+        plugin:
+          $ref: '#/components/schemas/internal_api_handler_plugin.pluginResponse'
+        related_plugins:
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.listItemResponse'
+          type: array
+          uniqueItems: false
+        relations:
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.relationResponse'
+          type: array
+          uniqueItems: false
       type: object
     internal_api_handler_plugin.detailResponse:
       properties:
@@ -5868,6 +5888,79 @@ paths:
       security:
       - Bearer: []
       summary: Get plugin
+      tags:
+      - plugin
+  /plugins/detail_graph:
+    get:
+      description: 'Return one Plugin (full projection identical to GET /plugins/detail,
+        including owner-only review state in the current Space) together with the
+        flat, deduplicated transitive closure of its relation graph and every edge
+        in that closure, up to the fixed depth enforced by the relation matrix. Every
+        related plugin — bundled (embedded) children included — is filtered by the
+        same per-row visibility predicate GET /plugins/detail applies; hidden ones
+        are silently omitted, edge and node. Related plugins include review state
+        only for the caller''s own nodes in the current Space. related_plugins is
+        a lookup table keyed by plugin_id rather than a tree: an entry is not guaranteed
+        to be referenced by an edge.'
+      operationId: plugin.graph.get
+      parameters:
+      - description: Plugin ID
+        in: query
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailGraphResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Get plugin relation graph
       tags:
       - plugin
   /plugins/download:
