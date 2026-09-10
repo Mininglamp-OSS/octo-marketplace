@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
@@ -28,6 +29,9 @@ func listingFixture(t *testing.T, visibility model.PluginVisibility, listing mod
 			},
 		},
 	}
+	// Existing routing tests exercise the explicit manual-review branch.
+	now := time.Now()
+	store.reviewPolicy = model.PluginReviewPolicy{IsAutoApproveEnabled: false, UpdatedAt: &now}
 	// SubmitReview reads the request back after inserting it, so the fake needs
 	// something to hand back or the review branch looks like it produced nothing.
 	store.review.stored = &model.PluginReviewRequest{
@@ -36,6 +40,36 @@ func listingFixture(t *testing.T, visibility model.PluginVisibility, listing mod
 		ApplicantUID: "user-1",
 	}
 	return store, fixedService(store)
+}
+
+func TestPublishAutoApprovesSpacePluginByDefault(t *testing.T) {
+	store, svc := listingFixture(t, model.PluginVisibilitySpace, model.PluginListingStateDraft)
+	store.reviewPolicy = model.PluginReviewPolicy{IsAutoApproveEnabled: true}
+	published := *store.plugins["plugin-1"]
+	published.ListingState = model.PluginListingStatePublished
+	store.review.approved = &published
+
+	result, err := svc.Publish(context.Background(), testCaller, PublishParams{PluginID: "plugin-1"})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if result.Review != nil || result.Plugin.Plugin.ListingState != model.PluginListingStatePublished {
+		t.Fatalf("result=%#v, want immediately published with no pending review", result)
+	}
+	if got := store.review.approveParams.DecisionSource; got != model.ReviewDecisionSourcePolicy {
+		t.Fatalf("decision_source=%q, want policy", got)
+	}
+}
+
+func TestPublishPolicyLookupFailureDoesNotSubmitOrApprove(t *testing.T) {
+	store, svc := listingFixture(t, model.PluginVisibilitySpace, model.PluginListingStateDraft)
+	store.reviewPolicyErr = errors.New("database unavailable")
+	if _, err := svc.Publish(context.Background(), testCaller, PublishParams{PluginID: "plugin-1"}); err == nil {
+		t.Fatal("Publish succeeded when policy lookup failed")
+	}
+	if store.review.insertReq != nil || store.review.approveParams.ReviewID != "" {
+		t.Fatal("policy lookup failure changed review state")
+	}
 }
 
 // The whole reason Publish exists as one endpoint: the BACKEND decides whether

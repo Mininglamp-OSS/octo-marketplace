@@ -58,6 +58,23 @@ if os.path.exists(yaml_path):
     import yaml
     with open(yaml_path) as f:
         spec = yaml.safe_load(f)
+    # swag v2 also wraps body parameters in an unconstrained `oneOf: [object,
+    # $ref]`. That makes `{}` valid even when the referenced request schema has
+    # required fields. Collapse this known generator artifact for the review
+    # policy PATCH so the published contract matches runtime validation.
+    policy_patch = spec.get('paths', {}).get('/plugin_review_policies', {}).get('patch')
+    if policy_patch:
+        schema = (policy_patch.get('requestBody', {}).get('content', {})
+                  .get('application/json', {}).get('schema', {}))
+        choices = schema.get('oneOf') if isinstance(schema, dict) else None
+        if (isinstance(choices, list) and len(choices) == 2
+                and choices[0] == {'type': 'object'}
+                and isinstance(choices[1], dict)
+                and '$ref' in choices[1]):
+            policy_patch['requestBody']['content']['application/json']['schema'] = {
+                '$ref': choices[1]['$ref']
+            }
+
     streams = {
         '/plugins/download': 'application/zip',
         '/admin/plugins/{plugin_id}/download': 'application/zip',

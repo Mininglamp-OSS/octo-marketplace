@@ -48,6 +48,16 @@ func decodeReviewBody(c *gin.Context, dst any) bool {
 	return true
 }
 
+// reviewDecisionSourceResponse preserves the existing web|im enum for clients
+// that exhaustively decode it. Policy decisions omit this human decision source;
+// is_auto_approved identifies them and their human reviewer fields are omitted.
+type reviewDecisionSourceResponse string
+
+const (
+	reviewDecisionSourceWeb reviewDecisionSourceResponse = "web"
+	reviewDecisionSourceIM  reviewDecisionSourceResponse = "im"
+)
+
 // reviewRequestResponse is the wire form of a review request.
 //
 // The LIST shape is deliberately lean: it omits the frozen manifest, package,
@@ -65,26 +75,30 @@ func decodeReviewBody(c *gin.Context, dst any) bool {
 // the detail read and is parsed defensively: a missing or malformed snapshot
 // degrades to an empty array rather than 500ing the endpoint.
 type reviewRequestResponse struct {
-	ReviewID       string                      `json:"review_id"`
-	PluginID       string                      `json:"plugin_id"`
-	SpaceID        string                      `json:"space_id"`
-	TargetScope    string                      `json:"target_scope"`
-	Status         model.ReviewStatus          `json:"status"`
-	Kind           model.ReviewKind            `json:"kind"`
-	Version        string                      `json:"version"`
-	Changelog      *string                     `json:"changelog,omitempty"`
-	ManifestHash   string                      `json:"manifest_hash"`
-	PluginHash     string                      `json:"plugin_hash"`
-	ApplicantID    string                      `json:"applicant_id"`
-	ApplicantName  string                      `json:"applicant_name"`
-	ReviewerID     *string                     `json:"reviewer_id,omitempty"`
-	ReviewerName   *string                     `json:"reviewer_name,omitempty"`
-	Reason         *string                     `json:"reason,omitempty"`
-	DecisionSource *model.ReviewDecisionSource `json:"decision_source,omitempty"`
-	SubmittedAt    time.Time                   `json:"submitted_at" swaggertype:"string,date-time"`
-	ReviewedAt     *time.Time                  `json:"reviewed_at,omitempty" swaggertype:"string,date-time"`
-	PluginName     string                      `json:"plugin_name,omitempty"`
-	PluginType     model.PluginType            `json:"plugin_type,omitempty"`
+	ReviewID      string             `json:"review_id"`
+	PluginID      string             `json:"plugin_id"`
+	SpaceID       string             `json:"space_id"`
+	TargetScope   string             `json:"target_scope"`
+	Status        model.ReviewStatus `json:"status"`
+	Kind          model.ReviewKind   `json:"kind"`
+	Version       string             `json:"version"`
+	Changelog     *string            `json:"changelog,omitempty"`
+	ManifestHash  string             `json:"manifest_hash"`
+	PluginHash    string             `json:"plugin_hash"`
+	ApplicantID   string             `json:"applicant_id"`
+	ApplicantName string             `json:"applicant_name"`
+	// ReviewerID and ReviewerName identify a human reviewer and are omitted for policy decisions.
+	ReviewerID   *string `json:"reviewer_id,omitempty"`
+	ReviewerName *string `json:"reviewer_name,omitempty"`
+	Reason       *string `json:"reason,omitempty"`
+	// DecisionSource identifies the human decision channel; omitted for policy approvals and undecided requests.
+	DecisionSource *reviewDecisionSourceResponse `json:"decision_source,omitempty"`
+	// IsAutoApproved is true for policy approvals. Otherwise omitted; absence means false.
+	IsAutoApproved bool             `json:"is_auto_approved,omitempty"`
+	SubmittedAt    time.Time        `json:"submitted_at" swaggertype:"string,date-time"`
+	ReviewedAt     *time.Time       `json:"reviewed_at,omitempty" swaggertype:"string,date-time"`
+	PluginName     string           `json:"plugin_name,omitempty"`
+	PluginType     model.PluginType `json:"plugin_type,omitempty"`
 	// PluginIcon is a display URL (an uploaded icon is stored as an object key and
 	// must be presigned), resolved by the service through the same path the plugin
 	// list uses.
@@ -223,6 +237,17 @@ type reviewRejectRequest struct {
 	Reason string `json:"reason"`
 }
 
+func reviewDecisionSourceDTO(source *model.ReviewDecisionSource) *reviewDecisionSourceResponse {
+	if source == nil || *source == model.ReviewDecisionSourcePolicy {
+		return nil
+	}
+	out := reviewDecisionSourceWeb
+	if *source == model.ReviewDecisionSourceIM {
+		out = reviewDecisionSourceIM
+	}
+	return &out
+}
+
 func reviewDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 	if r == nil {
 		empty := []reviewRelationResponse{}
@@ -244,7 +269,7 @@ func reviewDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 		ReviewerID:         r.ReviewerUID,
 		ReviewerName:       r.ReviewerName,
 		Reason:             r.Reason,
-		DecisionSource:     r.DecisionSource,
+		DecisionSource:     reviewDecisionSourceDTO(r.DecisionSource),
 		SubmittedAt:        r.SubmittedAt,
 		ReviewedAt:         r.ReviewedAt,
 		PluginName:         r.PluginName,
@@ -253,6 +278,11 @@ func reviewDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 		CurrentVersion:     r.CurrentVersion,
 		PluginListingState: r.PluginListingState,
 		ReadmeContent:      r.ReadmeContent,
+	}
+	if r.DecisionSource != nil && *r.DecisionSource == model.ReviewDecisionSourcePolicy {
+		out.IsAutoApproved = true
+		// Persisted reviewer fields record the triggering actor, not a human approval.
+		out.ReviewerID, out.ReviewerName = nil, nil
 	}
 	// decodeFrozenRelations returns:
 	//   - nil           when RelationsJSON is nil/empty/NULL (list path, which
@@ -285,7 +315,7 @@ func reviewListDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 // SubmitReview submits a plugin for Space visibility review.
 //
 // @Summary Submit a plugin for Space review
-// @Description Freezes the reviewed content under a caller-supplied version label and queues it for Space owner/admin approval. Content is supplied one of three ways: (1) parse_task_id for a skill zip upload processed server-side, materializing the package exactly as /plugins/import does; (2) manifest_json and plugin_json together for declared JSON documents (connectors, experts, expert teams, or a skill text edit without reupload); (3) neither, which snapshots the live draft row and is valid only while the plugin is private. Submitting NEVER changes the plugin row — the listed content only changes when a reviewer approves. Only the plugin owner may submit, only one request per plugin may be pending, and a version label already published for that plugin is refused.
+// @Description Freezes the reviewed content under a caller-supplied version label. When the authenticated Space's automatic-review policy is enabled (the default), the request is approved immediately and the published Plugin is updated; otherwise it remains pending for a Space owner/admin. Content is supplied one of three ways: (1) parse_task_id for a skill zip upload processed server-side; (2) manifest_json and plugin_json together for declared JSON documents; (3) neither, which snapshots the live draft row and is valid only while the plugin is private. Only the plugin owner may submit, only one request per plugin may be pending, and a version label already published for that plugin is refused.
 // @Tags plugin
 // @ID plugin.review_request.create
 // @Accept json

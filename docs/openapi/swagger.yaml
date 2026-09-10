@@ -175,6 +175,11 @@ components:
         data:
           $ref: '#/components/schemas/internal_api_handler_plugin.publishResponse'
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_reviewPolicyResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.reviewPolicyResponse'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_reviewRequestResponse:
       properties:
         data:
@@ -858,14 +863,6 @@ components:
         url:
           type: string
       type: object
-    github_com_Mininglamp-OSS_octo-marketplace_internal_model.ReviewDecisionSource:
-      enum:
-      - web
-      - im
-      type: string
-      x-enum-varnames:
-      - ReviewDecisionSourceWeb
-      - ReviewDecisionSourceIM
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.ReviewKind:
       enum:
       - first
@@ -1904,6 +1901,23 @@ components:
           type: array
           uniqueItems: false
       type: object
+    internal_api_handler_plugin.reviewDecisionSourceResponse:
+      description: DecisionSource identifies the human decision channel; omitted for
+        policy approvals and undecided requests.
+      enum:
+      - web
+      - im
+      type: string
+      x-enum-varnames:
+      - reviewDecisionSourceWeb
+      - reviewDecisionSourceIM
+    internal_api_handler_plugin.reviewPolicyResponse:
+      properties:
+        is_auto_approve_enabled:
+          type: boolean
+        updated_at:
+          type: string
+      type: object
     internal_api_handler_plugin.reviewRejectRequest:
       properties:
         reason:
@@ -1935,7 +1949,7 @@ components:
         current_version:
           type: string
         decision_source:
-          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.ReviewDecisionSource'
+          $ref: '#/components/schemas/internal_api_handler_plugin.reviewDecisionSourceResponse'
         frozen_relations:
           description: 'FrozenRelations is the FROZEN relation graph the reviewer
             is approving.
@@ -1974,6 +1988,10 @@ components:
             $ref: '#/components/schemas/internal_api_handler_plugin.reviewRelationResponse'
           type: array
           uniqueItems: false
+        is_auto_approved:
+          description: IsAutoApproved is true for policy approvals. Otherwise omitted;
+            absence means false.
+          type: boolean
         kind:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.ReviewKind'
         manifest_hash:
@@ -2010,6 +2028,8 @@ components:
         reviewed_at:
           type: string
         reviewer_id:
+          description: ReviewerID and ReviewerName identify a human reviewer and are
+            omitted for policy decisions.
           type: string
         reviewer_name:
           type: string
@@ -2053,6 +2073,13 @@ components:
       properties:
         content:
           type: string
+      type: object
+    internal_api_handler_plugin.updateReviewPolicyRequest:
+      properties:
+        is_auto_approve_enabled:
+          type: boolean
+      required:
+      - is_auto_approve_enabled
       type: object
     internal_api_handler_plugin.upsertRequest:
       properties:
@@ -5247,6 +5274,100 @@ paths:
       summary: List plugin categories
       tags:
       - plugin
+  /plugin_review_policies:
+    get:
+      description: Returns the effective policy for the authenticated Space. A Space
+        without a stored override has automatic approval enabled.
+      operationId: plugin_review_policy.get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_reviewPolicyResponse'
+          description: OK
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Get the authenticated Space plugin review policy
+      tags:
+      - plugin
+    patch:
+      description: Space owners and admins may update the one shared policy for their
+        Space. Existing pending requests are unchanged.
+      operationId: plugin_review_policy.update
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_api_handler_plugin.updateReviewPolicyRequest'
+        description: Effective automatic approval setting
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_reviewPolicyResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: 'FORBIDDEN: Space owner or admin required'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Update the authenticated Space plugin review policy
+      tags:
+      - plugin
   /plugin_tags:
     get:
       description: Aggregate free-form tags from Plugins visible to the caller (same
@@ -5859,10 +5980,10 @@ paths:
       - plugin
   /plugins/publish:
     post:
-      description: 'Publish a caller-owned Plugin. The Plugin''s visibility decides
-        what that means: a private Plugin is listed immediately, while an organization-visible
-        Plugin opens a review request and stays a draft until a Space admin approves
-        it. There is no separate submit-for-review endpoint.'
+      description: Publish a caller-owned Plugin. A private Plugin is listed immediately.
+        An organization-visible Plugin is approved immediately when the authenticated
+        Space's automatic-review policy is enabled (the default), or opens a pending
+        review when the policy is disabled.
       operationId: plugin.publish
       requestBody:
         content:
@@ -6009,14 +6130,13 @@ paths:
       tags:
       - plugin
     post:
-      description: 'Freezes the reviewed content under a caller-supplied version label
-        and queues it for Space owner/admin approval. Content is supplied one of three
-        ways: (1) parse_task_id for a skill zip upload processed server-side, materializing
-        the package exactly as /plugins/import does; (2) manifest_json and plugin_json
-        together for declared JSON documents (connectors, experts, expert teams, or
-        a skill text edit without reupload); (3) neither, which snapshots the live
-        draft row and is valid only while the plugin is private. Submitting NEVER
-        changes the plugin row — the listed content only changes when a reviewer approves.
+      description: 'Freezes the reviewed content under a caller-supplied version label.
+        When the authenticated Space''s automatic-review policy is enabled (the default),
+        the request is approved immediately and the published Plugin is updated; otherwise
+        it remains pending for a Space owner/admin. Content is supplied one of three
+        ways: (1) parse_task_id for a skill zip upload processed server-side; (2)
+        manifest_json and plugin_json together for declared JSON documents; (3) neither,
+        which snapshots the live draft row and is valid only while the plugin is private.
         Only the plugin owner may submit, only one request per plugin may be pending,
         and a version label already published for that plugin is refused.'
       operationId: plugin.review_request.create

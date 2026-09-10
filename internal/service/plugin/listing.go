@@ -89,6 +89,10 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	}
 
 	if detail.Plugin.Visibility == model.PluginVisibilitySpace {
+		policy, err := s.repo.GetReviewPolicy(ctx, scope(caller))
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
 		// The review branch. Content fields are left empty on purpose: the draft row
 		// IS the content, and freezeSubmission snapshots it — which is honest here
 		// precisely because the plugin is not yet listed, so there is no live version
@@ -100,13 +104,21 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		if version == "" {
 			version = defaultCurrentVersion
 		}
-		review, err := s.SubmitReview(ctx, caller, ReviewSubmitParams{
+		review, err := s.submitReview(ctx, caller, ReviewSubmitParams{
 			PluginID:  detail.Plugin.ID,
 			Version:   version,
 			Changelog: params.Changelog,
-		})
+		}, !policy.IsAutoApproveEnabled)
 		if err != nil {
 			return nil, err
+		}
+		if policy.IsAutoApproveEnabled {
+			published, err := s.autoApproveReview(ctx, caller, review, "")
+			if err != nil {
+				return nil, err
+			}
+			published.IconURL = s.resolveIcon(ctx, published.Icon)
+			return &PublishResult{Plugin: &Detail{Plugin: published, Relations: detail.Relations}}, nil
 		}
 		// The plugin is unchanged — still a draft — so re-read nothing and return the
 		// detail already in hand alongside the request that will decide it.

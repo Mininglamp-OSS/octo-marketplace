@@ -48,6 +48,8 @@ type Service interface {
 	ApproveReview(context.Context, pluginsvc.Caller, string) (*model.Plugin, error)
 	RejectReview(context.Context, pluginsvc.Caller, string, string) error
 	CancelReview(context.Context, pluginsvc.Caller, string) error
+	GetReviewPolicy(context.Context, pluginsvc.Caller) (model.PluginReviewPolicy, error)
+	UpdateReviewPolicy(context.Context, pluginsvc.Caller, bool) (model.PluginReviewPolicy, error)
 
 	// Listing lifecycle (see listing.go). Publish is the single 发布 door: it
 	// routes to an immediate listing or a review request based on the Plugin's
@@ -100,6 +102,8 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	reviews.POST("/:review_id/approve", h.ApproveReview)
 	reviews.POST("/:review_id/reject", h.RejectReview)
 	reviews.POST("/:review_id/cancel", h.CancelReview)
+	rg.GET("/plugin_review_policies", h.GetReviewPolicy)
+	rg.PATCH("/plugin_review_policies", h.UpdateReviewPolicy)
 }
 
 type relationRequest struct {
@@ -749,6 +753,10 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is already published", map[string]any{"conflict_reason": "already_published"}, "Refresh the plugin and try again.")
 	case errors.Is(err, pluginsvc.ErrNotPublished):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is not published", map[string]any{"conflict_reason": "not_published"}, "Only a published plugin can be delisted.")
+	// Changing the Space-wide policy requires the same reviewer role as handling
+	// individual requests: Space owner or admin.
+	case errors.Is(err, pluginsvc.ErrReviewPolicyForbidden):
+		apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "operation requires the Space owner or admin role", map[string]any{"required_role": "space_admin"}, "Ask a Space owner or admin to perform this action.")
 	// Authorization refusal, distinct from "not found": the caller is in the right
 	// Space and may know the resource exists, they simply lack the reviewer role.
 	// Without this branch a permission error falls through to 500.

@@ -37,10 +37,23 @@ type fakeService struct {
 	skillMarkdown    string
 	tagParams        pluginsvc.TagListParams
 	tags             []model.TagFilter
+	reviewPolicy     model.PluginReviewPolicy
+	reviewPolicySet  *bool
 	// review carries the review half of the fake (see review_fake_test.go).
 	review reviewServiceFake
 	// listing carries the publish/delist half (see listing_fake_test.go).
 	listing listingServiceFake
+}
+
+func (f *fakeService) GetReviewPolicy(_ context.Context, c pluginsvc.Caller) (model.PluginReviewPolicy, error) {
+	f.caller = c
+	return f.reviewPolicy, f.err
+}
+
+func (f *fakeService) UpdateReviewPolicy(_ context.Context, c pluginsvc.Caller, enabled bool) (model.PluginReviewPolicy, error) {
+	f.caller = c
+	f.reviewPolicySet = &enabled
+	return model.PluginReviewPolicy{IsAutoApproveEnabled: enabled}, f.err
 }
 
 func (f *fakeService) List(_ context.Context, c pluginsvc.Caller, p pluginsvc.ListParams) ([]model.Plugin, int64, error) {

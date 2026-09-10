@@ -22,6 +22,7 @@ import (
 type importStorage struct {
 	objects map[string][]byte
 	deletes []string
+	events  *[]string
 }
 
 func (s *importStorage) PresignPut(context.Context, string, string, time.Duration) (string, http.Header, error) {
@@ -57,6 +58,9 @@ func (s *importStorage) PutObject(_ context.Context, key string, reader io.Reade
 }
 func (s *importStorage) DeleteObject(_ context.Context, key string) error {
 	s.deletes = append(s.deletes, key)
+	if s.events != nil {
+		*s.events = append(*s.events, "delete:"+key)
+	}
 	delete(s.objects, key)
 	return nil
 }
@@ -69,6 +73,7 @@ type fakeParseTasks struct {
 	consumed   []string
 	released   []string
 	consumeErr error
+	events     *[]string
 }
 
 func (f *fakeParseTasks) GetParseTask(_ context.Context, id string) (*skillrepo.ParseTaskRow, error) {
@@ -83,6 +88,9 @@ func (f *fakeParseTasks) MarkParseTaskConsumed(_ context.Context, id, ownerID, s
 }
 func (f *fakeParseTasks) ReleaseConsumedParseTask(_ context.Context, id string) error {
 	f.released = append(f.released, id)
+	if f.events != nil {
+		*f.events = append(*f.events, "release:"+id)
+	}
 	return nil
 }
 

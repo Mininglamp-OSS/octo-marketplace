@@ -28,6 +28,15 @@ such as `octo-cli`. User and User Bot identities are verified through
 - Embedded, ordered MySQL migrations applied at service startup
 - OpenAPI generation, drift detection, and linting in the development workflow
 
+## Space review policy rollout
+
+Space-visible plugin submissions are automatically approved by default in both
+existing and new Spaces. This also applies to later upgrade submissions; existing
+pending requests retain their status. A Space owner or admin can explicitly
+disable automatic approval for their Space through the review-policy API.
+See the [release decision and operator/client procedure](docs/releases/space-review-auto-approval.md)
+for the deployment behavior, verification steps, and manual-review override.
+
 ## Quickstart
 
 ### Docker Compose

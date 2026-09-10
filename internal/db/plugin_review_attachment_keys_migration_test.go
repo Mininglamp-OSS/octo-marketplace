@@ -59,13 +59,13 @@ func TestPluginReviewAttachmentKeysMigrationUpDownMySQL(t *testing.T) {
 	}
 
 	// Roll back until THIS migration is undone. ExecMax counts from the newest
-	// applied migration, and the listing_state step is now split into four tail
-	// files (20260902-00/-01/-02/-03), so reaching 20260901-01 takes 5 steps.
-	// Appending a later migration means bumping this count.
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 5); err != nil {
+	// applied migration. Four listing_state files and the newer review-policy
+	// migration follow 20260901-01, so reaching it takes 6 steps. Appending a later
+	// migration means bumping this count.
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 6); err != nil {
 		t.Fatalf("migrate Down: %v", err)
-	} else if n != 5 {
-		t.Fatalf("migrate Down applied %d migrations, want 5", n)
+	} else if n != 6 {
+		t.Fatalf("migrate Down applied %d migrations, want 6", n)
 	}
 
 	// The column must be gone.

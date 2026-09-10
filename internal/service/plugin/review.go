@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
@@ -42,7 +43,11 @@ var (
 	// the caller may know the resource exists (it is in their Space) but lacks the
 	// reviewer role. writeServiceError maps it to 403.
 	ErrReviewForbidden = errors.New("review operation not permitted")
-	ErrReasonRequired  = errors.New("reject reason is required")
+	// ErrReviewPolicyForbidden is returned when an ordinary Space member tries
+	// to change the Space-wide automatic-review policy. Owners and admins share
+	// the same per-Space policy and may both update it.
+	ErrReviewPolicyForbidden = errors.New("review policy operation requires a Space owner or admin")
+	ErrReasonRequired        = errors.New("reject reason is required")
 	// ErrReviewContentRequired is returned when an upgrade submission carries no
 	// content. Freezing the live row for an already-listed plugin would make the
 	// review theatre: the content is already visible org-wide, and approval would
@@ -125,8 +130,48 @@ type ReviewSubmitParams struct {
 }
 
 // SubmitReview freezes the plugin's current draft content under the applicant's
-// version label and queues it for Space review.
+// version label, then either approves it under the Space policy or queues it for
+// manual review.
 func (s *Service) SubmitReview(ctx context.Context, caller Caller, params ReviewSubmitParams) (*model.PluginReviewRequest, error) {
+	if err := validateCaller(caller); err != nil {
+		return nil, err
+	}
+	policy, err := s.repo.GetReviewPolicy(ctx, scope(caller))
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	stored, err := s.submitReview(ctx, caller, params, !policy.IsAutoApproveEnabled)
+	if err != nil || !policy.IsAutoApproveEnabled {
+		return stored, err
+	}
+	published, err := s.autoApproveReview(ctx, caller, stored, params.ParseTaskID)
+	if err != nil {
+		return nil, err
+	}
+	// Prefer the committed request projection, which carries the repository's
+	// decision timestamp and joined plugin state. A transient post-commit read must
+	// not turn a successful approval into an error, so fall back to a consistent
+	// projection built from the plugin returned by the approve transaction.
+	approved, readErr := s.repo.GetReviewRequest(ctx, scope(caller), stored.ID, false)
+	if readErr == nil {
+		s.decorateReview(ctx, approved)
+		return approved, nil
+	}
+	now := s.now()
+	source := model.ReviewDecisionSourcePolicy
+	stored.Status = model.ReviewStatusApproved
+	stored.ReviewerUID = &caller.UID
+	stored.ReviewerName = &caller.Name
+	stored.DecisionSource = &source
+	stored.ReviewedAt = &now
+	if published != nil {
+		stored.CurrentVersion = published.CurrentVersion
+		stored.PluginListingState = published.ListingState
+	}
+	return stored, nil
+}
+
+func (s *Service) submitReview(ctx context.Context, caller Caller, params ReviewSubmitParams, dispatchCard bool) (*model.PluginReviewRequest, error) {
 	if err := validateCaller(caller); err != nil {
 		return nil, err
 	}
@@ -264,16 +309,68 @@ func (s *Service) SubmitReview(ctx context.Context, caller Caller, params Review
 		}
 		return nil, mapStoreError(err)
 	}
-	stored, err := s.repo.GetReviewRequest(ctx, sc, req.ID, false)
-	if err != nil {
-		// Request was committed but the read-back failed. Do NOT release the parse
-		// task or delete objects — the row is already persisted. The caller will
-		// see a 500 but the data is intact.
-		return nil, mapStoreError(err)
+	// InsertReviewRequest assigns ID/kind/timestamps on req. Build the remaining
+	// response projection from the frozen snapshot and the already-authorized
+	// plugin detail instead of doing a fallible post-commit read. In auto mode a
+	// read failure here previously returned before approval or compensation,
+	// stranding an unnotified pending request in the single-pending slot.
+	req.ManifestHash = snap.ManifestHash
+	req.PluginHash = snap.PluginHash
+	req.PluginName = detail.Plugin.Name
+	req.PluginType = detail.Plugin.Type
+	req.PluginIcon = detail.Plugin.Icon
+	req.CurrentVersion = detail.Plugin.CurrentVersion
+	req.PluginListingState = detail.Plugin.ListingState
+	s.decorateReview(ctx, req)
+	if dispatchCard {
+		s.dispatchReviewCard(caller, req, detail.Plugin)
 	}
-	s.decorateReview(ctx, stored)
-	s.dispatchReviewCard(caller, stored, detail.Plugin)
-	return stored, nil
+	return req, nil
+}
+
+// autoApproveReview applies an auto-policy decision and compensates if the
+// second transaction fails. InsertReviewRequest and ApproveReview are separate
+// repository operations, so without this cancellation a transient approve
+// failure leaves a pending request for which no approval card was dispatched.
+// Canceling restores the single-pending slot and cleans up snapshot-only objects,
+// allowing the caller to retry the original operation.
+func (s *Service) autoApproveReview(ctx context.Context, caller Caller, review *model.PluginReviewRequest, parseTaskID string) (*model.Plugin, error) {
+	published, approveErr := s.repo.ApproveReview(ctx, scope(caller), pluginrepo.ApproveReviewParams{
+		ReviewID: review.ID, ReviewerUID: caller.UID, ReviewerName: caller.Name,
+		DecisionSource: model.ReviewDecisionSourcePolicy, RequestID: caller.RequestID,
+	})
+	if approveErr == nil {
+		return published, nil
+	}
+
+	compensationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	frozenKeys, retained, cancelErr := s.repo.CancelReview(compensationCtx, scope(caller), review.ID, caller.UID)
+	if cancelErr != nil {
+		// Compensation lost a decision race or the store is unavailable. Dispatch a
+		// card so a request that may still be pending is never left unnotified.
+		s.dispatchReviewCard(caller, review, nil)
+		return nil, fmt.Errorf("auto-approve review: %w (cancel compensation: %v)", mapStoreError(approveErr), mapStoreError(cancelErr))
+	}
+	// CancelReview returns the frozen and retained sidecars from its transaction;
+	// use the normal cancel/reject GC so shared and version-owned objects survive.
+	// Cleanup MUST finish before the consumed parse task becomes retryable. Object
+	// keys are content-addressed: a concurrent retry could otherwise observe and
+	// reuse a key that this failed attempt is about to delete.
+	s.cleanupOrphanedReviewObjects(compensationCtx, frozenKeys, retained)
+	// Unlike a user cancellation, this rollback represents a failed submit. A
+	// consumed parse task therefore becomes retryable after its orphaned objects
+	// have been removed.
+	parseTaskID = strings.TrimSpace(parseTaskID)
+	if parseTaskID != "" && s.parseTasks != nil {
+		if releaseErr := s.parseTasks.ReleaseConsumedParseTask(compensationCtx, parseTaskID); releaseErr != nil {
+			logging.Warn("review: failed to release parse task after auto-approve rollback",
+				zap.String("review_id", review.ID),
+				zap.String("parse_task_id", parseTaskID),
+				zap.Error(releaseErr))
+		}
+	}
+	return nil, mapStoreError(approveErr)
 }
 
 // freezeSubmission builds the frozen snapshot a reviewer will decide on.

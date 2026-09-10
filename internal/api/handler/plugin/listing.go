@@ -39,7 +39,7 @@ type delistResponse struct {
 
 // Publish godoc
 // @Summary Publish plugin
-// @Description Publish a caller-owned Plugin. The Plugin's visibility decides what that means: a private Plugin is listed immediately, while an organization-visible Plugin opens a review request and stays a draft until a Space admin approves it. There is no separate submit-for-review endpoint.
+// @Description Publish a caller-owned Plugin. A private Plugin is listed immediately. An organization-visible Plugin is approved immediately when the authenticated Space's automatic-review policy is enabled (the default), or opens a pending review when the policy is disabled.
 // @Tags plugin
 // @ID plugin.publish
 // @Accept json

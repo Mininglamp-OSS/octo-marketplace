@@ -92,6 +92,8 @@ type Store interface {
 	RejectReview(context.Context, pluginrepo.Scope, pluginrepo.RejectReviewParams) (json.RawMessage, map[string]struct{}, error)
 	CancelReview(context.Context, pluginrepo.Scope, string, string) (json.RawMessage, map[string]struct{}, error)
 	GetReviewRequestAnySpace(context.Context, string) (*model.PluginReviewRequest, error)
+	GetReviewPolicy(context.Context, pluginrepo.Scope) (model.PluginReviewPolicy, error)
+	UpsertReviewPolicy(context.Context, pluginrepo.Scope, bool, string, string) (model.PluginReviewPolicy, error)
 
 	// Card-action receipts (IM decision idempotency).
 	GetCardActionReceipt(context.Context, string) (*model.CardActionReceipt, error)

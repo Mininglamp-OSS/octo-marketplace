@@ -31,9 +31,17 @@ const (
 type ReviewDecisionSource string
 
 const (
-	ReviewDecisionSourceWeb ReviewDecisionSource = "web"
-	ReviewDecisionSourceIM  ReviewDecisionSource = "im"
+	ReviewDecisionSourceWeb    ReviewDecisionSource = "web"
+	ReviewDecisionSourceIM     ReviewDecisionSource = "im"
+	ReviewDecisionSourcePolicy ReviewDecisionSource = "policy"
 )
+
+// PluginReviewPolicy is the effective policy for the authenticated Space.
+// A missing persistence row is represented as the default Enabled=true value.
+type PluginReviewPolicy struct {
+	IsAutoApproveEnabled bool       `json:"is_auto_approve_enabled"`
+	UpdatedAt            *time.Time `json:"updated_at,omitempty"`
+}
 
 // DefaultIMDenyReason is the reason persisted when an admin clicks the deny
 // button on the notification card. The generic approval-card template only

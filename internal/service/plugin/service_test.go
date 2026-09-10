@@ -58,7 +58,25 @@ type fakeStore struct {
 	// review carries the review-request half of the fake (see review_fake_test.go).
 	review reviewFake
 	// listing carries the publish/delist half (see review_fake_test.go).
-	listing listingFake
+	listing         listingFake
+	reviewPolicy    model.PluginReviewPolicy
+	reviewPolicyErr error
+	reviewPolicySet *bool
+}
+
+func (f *fakeStore) GetReviewPolicy(_ context.Context, _ pluginrepo.Scope) (model.PluginReviewPolicy, error) {
+	if f.reviewPolicyErr != nil {
+		return model.PluginReviewPolicy{}, f.reviewPolicyErr
+	}
+	return f.reviewPolicy, nil
+}
+
+func (f *fakeStore) UpsertReviewPolicy(_ context.Context, _ pluginrepo.Scope, enabled bool, _, _ string) (model.PluginReviewPolicy, error) {
+	f.reviewPolicySet = &enabled
+	if f.reviewPolicyErr != nil {
+		return model.PluginReviewPolicy{}, f.reviewPolicyErr
+	}
+	return model.PluginReviewPolicy{IsAutoApproveEnabled: enabled}, nil
 }
 
 func (f *fakeStore) List(_ context.Context, s pluginrepo.Scope, filter pluginrepo.ListFilter) ([]model.Plugin, int64, error) {
