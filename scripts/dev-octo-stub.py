@@ -66,6 +66,16 @@ ROLE_PATH = re.compile(r"^/v1/internal/spaces/([^/]+)/members/([^/]+)/role/?$")
 TARGET_ROLE = "space_admin"
 
 
+def validate_tokens():
+    if bool(ROLE_TOKEN) != bool(NOTIFY_TOKEN):
+        raise SystemExit(
+            "[stub] configure both OCTO_MARKETPLACE_INTERNAL_TOKEN and "
+            "OCTO_MARKETPLACE_NOTIFY_TOKEN, or leave both unset"
+        )
+    if ROLE_TOKEN and ROLE_TOKEN == NOTIFY_TOKEN:
+        raise SystemExit("[stub] role and notify tokens must be different")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -134,5 +144,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"[stub] listening on :{PORT}  roles={ROLES}  token={'set' if TOKEN else 'OFF'}", flush=True)
+    validate_tokens()
+    print(
+        f"[stub] listening on :{PORT}  roles={ROLES}  "
+        f"role_token={'set' if ROLE_TOKEN else 'OFF'}  "
+        f"notify_token={'set' if NOTIFY_TOKEN else 'OFF'}",
+        flush=True,
+    )
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

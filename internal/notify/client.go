@@ -395,6 +395,9 @@ func (c *Client) NotifySpaceAdmins(ctx context.Context, req NotifyRequest) (*Not
 // body on 2xx or an *APIError otherwise. A refused redirect surfaces here as a
 // 3xx *APIError rather than a followed request.
 func (c *Client) do(ctx context.Context, method, path string, body []byte, token string) ([]byte, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, errDisabled
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

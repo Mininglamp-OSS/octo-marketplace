@@ -16,9 +16,7 @@ func testClient(t *testing.T, h http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	// Both tokens equal "test-token" so the existing per-endpoint header
-	// assertions hold; TestTokenSplit covers that the two are sent independently.
-	return New(srv.URL, "test-token", "test-token", 2*time.Second)
+	return New(srv.URL, "test-role-token", "test-notify-token", 2*time.Second)
 }
 
 func TestNotifyEnabledAndRoleEnabled(t *testing.T) {
@@ -128,7 +126,7 @@ func TestMemberRole_Roles(t *testing.T) {
 				if got := r.URL.Path; got != "/v1/internal/spaces/sp_1/members/u_1/role" {
 					t.Errorf("path = %s", got)
 				}
-				if got := r.Header.Get("X-Internal-Token"); got != "test-token" {
+				if got := r.Header.Get("X-Internal-Token"); got != "test-role-token" {
 					t.Errorf("X-Internal-Token = %q", got)
 				}
 				_, _ = w.Write([]byte(tc.body))
@@ -264,7 +262,7 @@ func TestNotifySpaceAdmins_SendsTargetRoleAndNeverTargets(t *testing.T) {
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Errorf("Content-Type = %q", got)
 		}
-		if got := r.Header.Get("X-Internal-Token"); got != "test-token" {
+		if got := r.Header.Get("X-Internal-Token"); got != "test-notify-token" {
 			t.Errorf("X-Internal-Token = %q", got)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -321,6 +319,13 @@ func TestNotifySpaceAdmins_SendsTargetRoleAndNeverTargets(t *testing.T) {
 	}
 	if resp.Filtered["u3"] != "send_failed" {
 		t.Fatalf("filtered = %v", resp.Filtered)
+	}
+}
+
+func TestDoRejectsEmptyCapabilityToken(t *testing.T) {
+	c := New("http://octo-server.invalid", "role-token", "notify-token", time.Second)
+	if _, err := c.do(context.Background(), http.MethodGet, "/v1/internal/test", nil, "  "); !errors.Is(err, errDisabled) {
+		t.Fatalf("do() with an empty capability token error = %v, want errDisabled", err)
 	}
 }
 
