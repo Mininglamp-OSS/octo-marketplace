@@ -152,7 +152,11 @@ func New(repo Store, stores ...storage.Storage) *Service {
 // compile-time assertion keeps it honest: the interface exists for test
 // substitution, not to re-abstract the client.
 type ReviewNotifier interface {
-	Enabled() bool
+	// NotifyEnabled gates approval-card dispatch; RoleEnabled gates the Space
+	// role lookup. They are independent because each is authenticated by a
+	// different token (notify token vs internal token).
+	NotifyEnabled() bool
+	RoleEnabled() bool
 	// MemberRole reports uid's role in spaceID. A nil role means "not an active
 	// member of an active Space" — non-member, removed member, unknown Space and
 	// disbanded Space are deliberately indistinguishable. An error means the

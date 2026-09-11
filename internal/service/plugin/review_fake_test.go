@@ -263,7 +263,11 @@ type fakeNotifier struct {
 	notifyErr error
 }
 
-func (f *fakeNotifier) Enabled() bool { return f.enabled }
+// enabled drives both NotifyEnabled and RoleEnabled: the existing tests toggle
+// the notifier as a whole, and splitting the flag would not exercise anything
+// these tests assert. The two-token distinction is covered in notify and config.
+func (f *fakeNotifier) NotifyEnabled() bool { return f.enabled }
+func (f *fakeNotifier) RoleEnabled() bool   { return f.enabled }
 
 func (f *fakeNotifier) MemberRole(context.Context, string, string) (*int, error) {
 	if f.roleErr != nil {

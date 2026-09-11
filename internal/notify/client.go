@@ -142,9 +142,20 @@ type NotifyResponse struct {
 // Client talks to one octo-server base URL (no trailing slash, no /v1 suffix —
 // paths are appended as "/v1/...", matching internal/auth.HTTPResolver).
 type Client struct {
-	baseURL       string
+	baseURL string
+	// internalToken authenticates the Space role lookup (GET .../members/:uid/role),
+	// carried as X-Internal-Token. octo-server validates it against its
+	// OCTO_MARKETPLACE_INTERNAL_TOKEN.
 	internalToken string
-	http          *http.Client
+	// notifyToken authenticates the approval-card dispatch (POST /v1/internal/notify),
+	// carried as X-Internal-Token. octo-server resolves it to the marketplace
+	// "action" notify capability via a route's notify_token_env
+	// (OCTO_MARKETPLACE_NOTIFY_TOKEN). It MUST differ from internalToken:
+	// octo-server's ValidateNotifyTokenExclusions refuses to boot when a route
+	// notify token equals the fixed marketplace internal token, so a single
+	// shared value cannot authorize both the notify send and the role lookup.
+	notifyToken string
+	http        *http.Client
 
 	// roleDriftOnce bounds the log flood when octo-server returns an out-of-
 	// range member role (e.g. it drifts onto the inverted octo-web encoding).
@@ -155,16 +166,20 @@ type Client struct {
 	driftMu       sync.Mutex
 }
 
-// New returns a Client. An empty baseURL or internalToken yields a disabled
-// client: Enabled reports false and both calls fail fast rather than dialing an
-// empty host. A non-positive timeout falls back to defaultTimeout.
-func New(baseURL, internalToken string, timeout time.Duration) *Client {
+// New returns a Client. The two tokens gate two independent capabilities:
+// notifyToken drives the approval-card dispatch, internalToken drives the Space
+// role lookup. An empty baseURL, or an empty token for a given capability,
+// disables just that capability (NotifyEnabled / RoleEnabled report false and
+// the corresponding call fails fast rather than dialing an empty host). A
+// non-positive timeout falls back to defaultTimeout.
+func New(baseURL, internalToken, notifyToken string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
 	return &Client{
 		baseURL:       strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		internalToken: strings.TrimSpace(internalToken),
+		notifyToken:   strings.TrimSpace(notifyToken),
 		http: &http.Client{
 			Timeout: timeout,
 			// Never follow redirects. We send a long-lived shared service
@@ -181,14 +196,21 @@ func New(baseURL, internalToken string, timeout time.Duration) *Client {
 	}
 }
 
-// Enabled reports whether the client is configured to reach octo-server. A nil
-// receiver is treated as disabled so call sites can hold an unwired *Client.
-func (c *Client) Enabled() bool {
+// NotifyEnabled reports whether the client can dispatch approval cards (base URL
+// + notify token present). A nil receiver is treated as disabled so call sites
+// can hold an unwired *Client.
+func (c *Client) NotifyEnabled() bool {
+	return c != nil && c.baseURL != "" && c.notifyToken != ""
+}
+
+// RoleEnabled reports whether the client can look up a Space member role (base
+// URL + internal token present). A nil receiver is treated as disabled.
+func (c *Client) RoleEnabled() bool {
 	return c != nil && c.baseURL != "" && c.internalToken != ""
 }
 
-// errDisabled is returned by both calls on an unconfigured client.
-var errDisabled = errors.New("notify: octo-server client not configured (missing base URL or internal token)")
+// errDisabled is returned by a call whose capability is not configured.
+var errDisabled = errors.New("notify: octo-server client not configured (missing base URL or token for this capability)")
 
 // memberRoleEnvelope decodes GET .../members/{uid}/role.
 //
@@ -224,7 +246,7 @@ type memberRoleEnvelope struct {
 // token, so this is how the callback handler independently confirms that the
 // operator is STILL an admin at decision time.
 func (c *Client) MemberRole(ctx context.Context, spaceID, uid string) (*int, error) {
-	if !c.Enabled() {
+	if !c.RoleEnabled() {
 		return nil, errDisabled
 	}
 	spaceID = strings.TrimSpace(spaceID)
@@ -234,7 +256,7 @@ func (c *Client) MemberRole(ctx context.Context, spaceID, uid string) (*int, err
 	}
 	path := "/v1/internal/spaces/" + url.PathEscape(spaceID) + "/members/" + url.PathEscape(uid) + "/role"
 
-	body, err := c.do(ctx, http.MethodGet, path, nil)
+	body, err := c.do(ctx, http.MethodGet, path, nil, c.internalToken)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +335,7 @@ type notifyEnvelope struct {
 // nil. An empty Delivered on success means the Space has no active human admin
 // (see NotifyResponse).
 func (c *Client) NotifySpaceAdmins(ctx context.Context, req NotifyRequest) (*NotifyResponse, error) {
-	if !c.Enabled() {
+	if !c.NotifyEnabled() {
 		return nil, errDisabled
 	}
 	spaceID := strings.TrimSpace(req.SpaceID)
@@ -347,7 +369,7 @@ func (c *Client) NotifySpaceAdmins(ctx context.Context, req NotifyRequest) (*Not
 		return nil, fmt.Errorf("notify: encode notify request: %w", err)
 	}
 
-	body, err := c.do(ctx, http.MethodPost, "/v1/internal/notify", encoded)
+	body, err := c.do(ctx, http.MethodPost, "/v1/internal/notify", encoded, c.notifyToken)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +393,7 @@ func (c *Client) NotifySpaceAdmins(ctx context.Context, req NotifyRequest) (*Not
 // do issues one request with the internal token, returning the bounded response
 // body on 2xx or an *APIError otherwise. A refused redirect surfaces here as a
 // 3xx *APIError rather than a followed request.
-func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+func (c *Client) do(ctx context.Context, method, path string, body []byte, token string) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -383,7 +405,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]by
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set(internalTokenHeader, c.internalToken)
+	req.Header.Set(internalTokenHeader, token)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
