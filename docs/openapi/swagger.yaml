@@ -5616,7 +5616,7 @@ paths:
           enum:
           - mine
           type: string
-      - description: Plugin name search query
+      - description: Plugin display name or manifest description search query
         in: query
         name: q
         schema:
