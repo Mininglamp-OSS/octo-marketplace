@@ -255,15 +255,20 @@ func (f *fakeStore) InsertCardActionReceipt(_ context.Context, rec *model.CardAc
 // fakeNotifier stands in for *notify.Client. `roleErr` models the case the
 // review path must never conflate with a refusal: the lookup itself failed.
 type fakeNotifier struct {
-	enabled   bool
-	role      *int
-	roleErr   error
-	notifyIn  []notify.NotifyRequest
-	resp      *notify.NotifyResponse
-	notifyErr error
+	// enabled remains the shorthand for tests that need both capabilities.
+	// The capability-specific flags exercise the split-token configurations.
+	enabled       bool
+	notifyEnabled bool
+	roleEnabled   bool
+	role          *int
+	roleErr       error
+	notifyIn      []notify.NotifyRequest
+	resp          *notify.NotifyResponse
+	notifyErr     error
 }
 
-func (f *fakeNotifier) Enabled() bool { return f.enabled }
+func (f *fakeNotifier) NotifyEnabled() bool { return f.enabled || f.notifyEnabled }
+func (f *fakeNotifier) RoleEnabled() bool   { return f.enabled || f.roleEnabled }
 
 func (f *fakeNotifier) MemberRole(context.Context, string, string) (*int, error) {
 	if f.roleErr != nil {

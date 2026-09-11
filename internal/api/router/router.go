@@ -88,9 +88,15 @@ type ReviewConfig struct {
 	// OctoAPIURL is the octo-server base URL used for the internal role lookup
 	// and notify dispatch. Empty disables both.
 	OctoAPIURL string
-	// InternalToken authenticates against octo-server /v1/internal/*
-	// (OCTO_MARKETPLACE_INTERNAL_TOKEN).
+	// InternalToken authenticates the Space role lookup against octo-server
+	// /v1/internal/spaces/:space_id/members/:uid/role
+	// (OCTO_MARKETPLACE_INTERNAL_TOKEN). Empty disables the card-action
+	// operator-role check.
 	InternalToken string
+	// NotifyToken authenticates approval-card dispatch to
+	// octo-server POST /v1/internal/notify (OCTO_MARKETPLACE_NOTIFY_TOKEN).
+	// Empty disables card dispatch. Distinct from InternalToken by design.
+	NotifyToken string
 	// CardActionSecret is the HMAC key octo-server signs card-action callbacks
 	// with (OCTO_MARKETPLACE_CARD_ACTION_SECRET). Empty leaves the callback
 	// endpoint permanently closed rather than open.
@@ -172,13 +178,13 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		pluginSvc.SetArtifactLimits(int64(storageCfg.MaxMB) << 20)
 		// Space review IM integration. A disabled notifier keeps the review
 		// endpoints fully functional and simply sends no approval card. Partial
-		// configurations (URL-without-token, token-without-card-secret) are
+		// configurations (URL-without-notify-token, notify-token-without-card-secret) are
 		// warned about at engine construction by logReviewConfigWarnings; a card
 		// secret without an internal token is rejected by config.ValidateAPI at
 		// boot because it would leave the callback mounted but unable to
 		// authorize anyone.
-		notifier := notify.New(reviewCfg.OctoAPIURL, reviewCfg.InternalToken, reviewCfg.NotifyTimeout)
-		if notifier.Enabled() {
+		notifier := notify.New(reviewCfg.OctoAPIURL, reviewCfg.InternalToken, reviewCfg.NotifyToken, reviewCfg.NotifyTimeout)
+		if notifier.NotifyEnabled() || notifier.RoleEnabled() {
 			pluginSvc.WithNotify(notifier, notify.BestEffort)
 		}
 		pluginCats := pluginsvc.NewCategories(pluginRepo, generateID)
@@ -351,30 +357,41 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 // config.ValidateAPI, so it does not reach here.
 func logReviewConfigWarnings(cfg ReviewConfig) {
 	hasURL := cfg.OctoAPIURL != ""
-	hasToken := cfg.InternalToken != ""
+	hasInternal := cfg.InternalToken != ""
+	hasNotify := cfg.NotifyToken != ""
 	hasSecret := cfg.CardActionSecret != ""
+
+	// Card dispatch needs URL + notify token.
+	if hasURL && !hasNotify {
+		logging.Warn("review_notify_disabled",
+			zap.String("operation", "plugin_review.config"),
+			zap.String("reason", "OCTO_API_URL set without OCTO_MARKETPLACE_NOTIFY_TOKEN; approval cards will not be dispatched"))
+	}
+	if hasNotify && !hasURL {
+		logging.Warn("review_notify_disabled",
+			zap.String("operation", "plugin_review.config"),
+			zap.String("reason", "OCTO_MARKETPLACE_NOTIFY_TOKEN set without OCTO_API_URL; approval cards cannot be dispatched (no octo-server endpoint)"))
+	}
+
+	// The approve/deny button needs three things together: a signature key
+	// (secret), an octo-server URL, and the internal token for the operator-role
+	// re-derivation. Any one missing means cards may still be sent but the click
+	// is rejected. A secret without an internal token is a boot failure
+	// (config.ValidateAPI), so it does not reach here.
 	if hasSecret && !hasURL {
 		logging.Warn("review_callback_misconfigured",
 			zap.String("operation", "plugin_review.config"),
-			zap.String("reason", "OCTO_MARKETPLACE_CARD_ACTION_SECRET set without OCTO_API_URL; the card callback will verify signatures but operator role lookups always fail (no notifier endpoint), so every real admin click returns 503 forever"))
+			zap.String("reason", "OCTO_MARKETPLACE_CARD_ACTION_SECRET set without OCTO_API_URL; the card callback will verify signatures but operator role lookups always fail, so every real admin click returns 503 forever"))
 	}
-	if hasURL && !hasToken {
-		logging.Warn("review_notify_disabled",
-			zap.String("operation", "plugin_review.config"),
-			zap.String("reason", "OCTO_API_URL set without OCTO_MARKETPLACE_INTERNAL_TOKEN; approval cards will not be dispatched"))
-	}
-	if hasToken && !hasSecret {
+	if hasNotify && !hasSecret {
 		logging.Warn("review_callback_disabled",
 			zap.String("operation", "plugin_review.config"),
-			zap.String("reason", "OCTO_MARKETPLACE_INTERNAL_TOKEN set without OCTO_MARKETPLACE_CARD_ACTION_SECRET; approval cards will be sent but every admin click will be rejected (401)"))
+			zap.String("reason", "OCTO_MARKETPLACE_NOTIFY_TOKEN set without OCTO_MARKETPLACE_CARD_ACTION_SECRET; approval cards will be sent but every admin click will be rejected (unsigned callback)"))
 	}
-	if hasSecret && !hasToken {
-		// This is a boot-failure (see Config.validateOctoSecrets); unreachable
-		// at runtime but kept as a belt-and-braces warning if anyone constructs
-		// ReviewConfig directly outside ValidateAPI.
-		logging.Warn("review_callback_misconfigured",
+	if hasSecret && hasURL && !hasInternal {
+		logging.Warn("review_callback_disabled",
 			zap.String("operation", "plugin_review.config"),
-			zap.String("reason", "OCTO_MARKETPLACE_CARD_ACTION_SECRET set without OCTO_MARKETPLACE_INTERNAL_TOKEN; card signatures verify but operator role lookups always 503"))
+			zap.String("reason", "OCTO_MARKETPLACE_CARD_ACTION_SECRET set without OCTO_MARKETPLACE_INTERNAL_TOKEN; card signatures verify but the operator-role lookup is unconfigured, so every admin click returns 503"))
 	}
 }
 

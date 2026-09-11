@@ -43,6 +43,8 @@ jobs:
           cache: true
       - name: Format check
         run: test -z "$(gofmt -l .)"
+      - name: Smoke test development Octo stub
+        run: python3 scripts/dev-octo-stub-smoke.py
       - name: Test
         run: go test -race -shuffle=on -count=1 ./...
       - name: Vet

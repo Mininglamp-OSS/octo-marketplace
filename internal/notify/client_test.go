@@ -16,36 +16,76 @@ func testClient(t *testing.T, h http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return New(srv.URL, "test-token", 2*time.Second)
+	return New(srv.URL, "test-role-token", "test-notify-token", 2*time.Second)
 }
 
-func TestEnabled(t *testing.T) {
+func TestNotifyEnabledAndRoleEnabled(t *testing.T) {
 	cases := []struct {
-		name, baseURL, token string
-		want                 bool
+		name                      string
+		baseURL, internal, notify string
+		wantNotify, wantRole      bool
 	}{
-		{"both set", "http://octo.example", "tok", true},
-		{"no token", "http://octo.example", "", false},
-		{"no base url", "", "tok", false},
-		{"neither", "", "", false},
-		{"whitespace only", "   ", "  ", false},
+		{"all set", "http://octo.example", "itok", "ntok", true, true},
+		{"only notify token", "http://octo.example", "", "ntok", true, false},
+		{"only internal token", "http://octo.example", "itok", "", false, true},
+		{"no base url", "", "itok", "ntok", false, false},
+		{"neither token", "http://octo.example", "", "", false, false},
+		{"whitespace only", "   ", "  ", "  ", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := New(tc.baseURL, tc.token, time.Second).Enabled(); got != tc.want {
-				t.Fatalf("Enabled() = %v, want %v", got, tc.want)
+			c := New(tc.baseURL, tc.internal, tc.notify, time.Second)
+			if got := c.NotifyEnabled(); got != tc.wantNotify {
+				t.Errorf("NotifyEnabled() = %v, want %v", got, tc.wantNotify)
+			}
+			if got := c.RoleEnabled(); got != tc.wantRole {
+				t.Errorf("RoleEnabled() = %v, want %v", got, tc.wantRole)
 			}
 		})
 	}
 	var nilClient *Client
-	if nilClient.Enabled() {
-		t.Fatal("nil client must report disabled")
+	if nilClient.NotifyEnabled() || nilClient.RoleEnabled() {
+		t.Fatal("nil client must report both capabilities disabled")
+	}
+}
+
+// TestTokenSplit is the regression guard for the whole change: the approval-card
+// dispatch must carry the notify token and the role lookup the internal token,
+// because octo-server refuses to boot when those two values are equal (a single
+// shared token could authorize both). See internal/notify.Client.
+func TestTokenSplit(t *testing.T) {
+	var notifyTok, roleTok string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/internal/notify" {
+			notifyTok = r.Header.Get("X-Internal-Token")
+			_, _ = w.Write([]byte(`{"data":{"delivered":["a"],"filtered":{}}}`))
+			return
+		}
+		roleTok = r.Header.Get("X-Internal-Token")
+		_, _ = w.Write([]byte(`{"data":{"role":2}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "role-token", "notify-token", 2*time.Second)
+
+	if _, err := c.NotifySpaceAdmins(context.Background(), NotifyRequest{
+		SpaceID: "sp", ApprovalCard: &ApprovalCard{ActionType: "a", Title: "t"},
+	}); err != nil {
+		t.Fatalf("NotifySpaceAdmins: %v", err)
+	}
+	if _, err := c.MemberRole(context.Background(), "sp", "u"); err != nil {
+		t.Fatalf("MemberRole: %v", err)
+	}
+	if notifyTok != "notify-token" {
+		t.Errorf("notify dispatch sent %q, want notify-token", notifyTok)
+	}
+	if roleTok != "role-token" {
+		t.Errorf("role lookup sent %q, want role-token", roleTok)
 	}
 }
 
 // A disabled client must fail fast rather than dialing an empty base URL.
 func TestDisabledClient_FailsFastWithoutDialing(t *testing.T) {
-	c := New("", "", time.Second)
+	c := New("", "", "", time.Second)
 	if _, err := c.MemberRole(context.Background(), "sp", "u"); err == nil {
 		t.Fatal("MemberRole on a disabled client must error")
 	} else if !strings.Contains(err.Error(), "not configured") {
@@ -86,7 +126,7 @@ func TestMemberRole_Roles(t *testing.T) {
 				if got := r.URL.Path; got != "/v1/internal/spaces/sp_1/members/u_1/role" {
 					t.Errorf("path = %s", got)
 				}
-				if got := r.Header.Get("X-Internal-Token"); got != "test-token" {
+				if got := r.Header.Get("X-Internal-Token"); got != "test-role-token" {
 					t.Errorf("X-Internal-Token = %q", got)
 				}
 				_, _ = w.Write([]byte(tc.body))
@@ -222,7 +262,7 @@ func TestNotifySpaceAdmins_SendsTargetRoleAndNeverTargets(t *testing.T) {
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Errorf("Content-Type = %q", got)
 		}
-		if got := r.Header.Get("X-Internal-Token"); got != "test-token" {
+		if got := r.Header.Get("X-Internal-Token"); got != "test-notify-token" {
 			t.Errorf("X-Internal-Token = %q", got)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -279,6 +319,13 @@ func TestNotifySpaceAdmins_SendsTargetRoleAndNeverTargets(t *testing.T) {
 	}
 	if resp.Filtered["u3"] != "send_failed" {
 		t.Fatalf("filtered = %v", resp.Filtered)
+	}
+}
+
+func TestDoRejectsEmptyCapabilityToken(t *testing.T) {
+	c := New("http://octo-server.invalid", "role-token", "notify-token", time.Second)
+	if _, err := c.do(context.Background(), http.MethodGet, "/v1/internal/test", nil, "  "); !errors.Is(err, errDisabled) {
+		t.Fatalf("do() with an empty capability token error = %v, want errDisabled", err)
 	}
 }
 

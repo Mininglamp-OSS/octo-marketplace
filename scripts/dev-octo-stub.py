@@ -16,7 +16,10 @@ every dispatch and the caller logs `notify_best_effort_failed` — a stub bug th
 reads exactly like a bug in the service. Likewise the request body carries the
 card under `approval_card`, not `card`.
 
-Both require the X-Internal-Token header from OCTO_MARKETPLACE_INTERNAL_TOKEN, so an
+Each endpoint authenticates with its own X-Internal-Token, mirroring the real
+token split: the role lookup expects OCTO_MARKETPLACE_INTERNAL_TOKEN, notify
+expects OCTO_MARKETPLACE_NOTIFY_TOKEN (the real server refuses to boot when
+these are equal — one token must not grant both capabilities). An
 unauthenticated caller sees the same 401 the real service returns.
 
 The role table is configurable, which is the point of the stub: the card-action
@@ -39,7 +42,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 
 PORT = int(os.environ.get("DEV_STUB_PORT", "18777"))
-TOKEN = os.environ.get("OCTO_MARKETPLACE_INTERNAL_TOKEN", "").strip()
+# Two-token model, mirroring the real octo-server contract: the role lookup
+# authenticates with OCTO_MARKETPLACE_INTERNAL_TOKEN and the approval-card
+# dispatch with OCTO_MARKETPLACE_NOTIFY_TOKEN (resolved via a
+# OCTO_CARD_ACTION_ROUTES entry's notify_token_env). The real server REFUSES TO
+# BOOT when these two values are equal (ValidateNotifyTokenExclusions), so the
+# stub keeps them separate: set both, with different values, to exercise the
+# production shape.
+ROLE_TOKEN = os.environ.get("OCTO_MARKETPLACE_INTERNAL_TOKEN", "").strip()
+NOTIFY_TOKEN = os.environ.get("OCTO_MARKETPLACE_NOTIFY_TOKEN", "").strip()
 
 ROLES = {}
 for entry in os.environ.get("DEV_STUB_ROLES", "dev-user:2").split(","):
@@ -53,6 +64,16 @@ ROLE_PATH = re.compile(r"^/v1/internal/spaces/([^/]+)/members/([^/]+)/role/?$")
 
 # The only target_role the real endpoint accepts (notify.targetRoleSpaceAdmin).
 TARGET_ROLE = "space_admin"
+
+
+def validate_tokens():
+    if bool(ROLE_TOKEN) != bool(NOTIFY_TOKEN):
+        raise SystemExit(
+            "[stub] configure both OCTO_MARKETPLACE_INTERNAL_TOKEN and "
+            "OCTO_MARKETPLACE_NOTIFY_TOKEN, or leave both unset"
+        )
+    if ROLE_TOKEN and ROLE_TOKEN == NOTIFY_TOKEN:
+        raise SystemExit("[stub] role and notify tokens must be different")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -69,11 +90,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _authorized(self):
-        # The real endpoints are gated by X-Internal-Token, not a bearer token.
-        if not TOKEN:
+    def _authorized(self, token):
+        # Per-capability X-Internal-Token check, mirroring the real endpoints:
+        # the role lookup expects the internal token, notify the notify token.
+        if not token:
             return True
-        if self.headers.get("X-Internal-Token", "") == TOKEN:
+        if self.headers.get("X-Internal-Token", "") == token:
             return True
         self._send(401, {"error": {"code": "AUTH_REQUIRED", "message": "bad internal token"}})
         return False
@@ -83,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
         if not match:
             self._send(404, {"error": {"code": "NOT_FOUND", "message": self.path}})
             return
-        if not self._authorized():
+        if not self._authorized(ROLE_TOKEN):
             return
         space_id, uid = unquote(match.group(1)), unquote(match.group(2))
         role = ROLES.get(uid)
@@ -94,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.path.rstrip("/").endswith("/v1/internal/notify"):
             self._send(404, {"error": {"code": "NOT_FOUND", "message": self.path}})
             return
-        if not self._authorized():
+        if not self._authorized(NOTIFY_TOKEN):
             return
         length = int(self.headers.get("Content-Length") or 0)
         req = json.loads(self.rfile.read(length) or b"{}")
@@ -122,5 +144,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"[stub] listening on :{PORT}  roles={ROLES}  token={'set' if TOKEN else 'OFF'}", flush=True)
+    validate_tokens()
+    print(
+        f"[stub] listening on :{PORT}  roles={ROLES}  "
+        f"role_token={'set' if ROLE_TOKEN else 'OFF'}  "
+        f"notify_token={'set' if NOTIFY_TOKEN else 'OFF'}",
+        flush=True,
+    )
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

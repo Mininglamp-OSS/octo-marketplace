@@ -239,10 +239,12 @@ func main() {
 			BotPublishTimeout: cfg.BotPublishTimeout,
 			DevBotMode:        devBotMode,
 		}, fleetClient, router.ReviewConfig{
-			// Blank InternalToken / CardActionSecret disable the card dispatch
-			// and the callback endpoint respectively; see the config fields.
+			// Blank NotifyToken / InternalToken / CardActionSecret disable the card
+			// dispatch, the operator-role lookup, and the callback endpoint
+			// respectively; see the config fields.
 			OctoAPIURL:        cfg.OctoAPIURL,
 			InternalToken:     cfg.OctoInternalToken,
+			NotifyToken:       cfg.OctoNotifyToken,
 			CardActionSecret:  cfg.OctoCardActionSecret,
 			NotifyTimeout:     cfg.OctoNotifyTimeout,
 			CardActionMaxSkew: cfg.OctoCardActionMaxSkew,

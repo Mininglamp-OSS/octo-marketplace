@@ -22,6 +22,7 @@ func buildValid() Config {
 const (
 	tokA = "0123456789abcdef0123456789abcdef" // gitleaks:allow
 	tokB = "fedcba9876543210fedcba9876543210" // gitleaks:allow
+	tokC = "abcdef0123456789abcdef0123456789" // gitleaks:allow
 	// tokShort is below the 32-byte minimum and must be rejected with a named
 	// error, never silently accepted.
 	tokShort = "0123456789abcdef"
@@ -287,6 +288,7 @@ func TestOctoNotifyDefaults(t *testing.T) {
 	t.Setenv("OCTO_NOTIFY_TIMEOUT", "")
 	t.Setenv("OCTO_CARD_ACTION_MAX_SKEW", "")
 	t.Setenv("OCTO_MARKETPLACE_INTERNAL_TOKEN", "")
+	t.Setenv("OCTO_MARKETPLACE_NOTIFY_TOKEN", "")
 	t.Setenv("OCTO_MARKETPLACE_CARD_ACTION_SECRET", "")
 	cfg := Load()
 	if cfg.OctoNotifyTimeout != 3*time.Second {
@@ -295,8 +297,15 @@ func TestOctoNotifyDefaults(t *testing.T) {
 	if cfg.OctoCardActionMaxSkew != 5*time.Minute {
 		t.Fatalf("OctoCardActionMaxSkew=%v want=5m", cfg.OctoCardActionMaxSkew)
 	}
-	if cfg.OctoInternalToken != "" || cfg.OctoCardActionSecret != "" {
+	if cfg.OctoInternalToken != "" || cfg.OctoNotifyToken != "" || cfg.OctoCardActionSecret != "" {
 		t.Fatal("octo secrets must default to blank (surface disabled), never to a built-in value")
+	}
+}
+
+func TestOctoNotifyTokenFromEnv(t *testing.T) {
+	t.Setenv("OCTO_MARKETPLACE_NOTIFY_TOKEN", tokB)
+	if got := Load().OctoNotifyToken; got != tokB {
+		t.Fatalf("OctoNotifyToken=%q want configured value", got)
 	}
 }
 
@@ -313,23 +322,25 @@ func TestValidateAPIOctoSecrets(t *testing.T) {
 			mutate: func(c *Config) {
 				c.OctoAPIURL = "https://octo.example.com"
 				c.OctoInternalToken = tokA
-				c.OctoCardActionSecret = tokB
+				c.OctoNotifyToken = tokB
+				c.OctoCardActionSecret = tokC
 			}},
-		// (a) OCTO_API_URL without INTERNAL_TOKEN: review endpoints return 200
+		// (a) OCTO_API_URL without NOTIFY_TOKEN: review endpoints return 200
 		// but approval cards never dispatch. Warned at router startup, NOT a
 		// boot error (there is a legitimate window where the URL is provisioned
 		// ahead of the credential rollout).
-		{name: "url without internal token warns but does not fail boot",
+		{name: "url without notify token warns but does not fail boot",
 			mutate: func(c *Config) {
 				c.OctoAPIURL = "https://octo.example.com"
 			}},
-		// (c) INTERNAL_TOKEN without CARD_ACTION_SECRET: cards go out but every
+		// (c) NOTIFY_TOKEN without CARD_ACTION_SECRET: cards go out but every
 		// admin click 401s. Warned at router startup, NOT a boot error (rolling
 		// out dispatch before the callback secret is the documented "safe"
 		// phased rollout: it keeps the endpoint closed rather than open).
-		{name: "internal token without card secret warns but does not fail boot",
+		{name: "notify token without card secret warns but does not fail boot",
 			mutate: func(c *Config) {
-				c.OctoInternalToken = tokA
+				c.OctoAPIURL = "https://octo.example.com"
+				c.OctoNotifyToken = tokB
 			}},
 		// (b) CARD_ACTION_SECRET without INTERNAL_TOKEN: signatures verify, then
 		// operator-role lookup 503s on every click → DLQ death spiral. Fail boot.
@@ -352,6 +363,12 @@ func TestValidateAPIOctoSecrets(t *testing.T) {
 		{name: "short internal token", mutate: func(c *Config) {
 			c.OctoInternalToken = tokShort
 		}, wantErr: true, wantSub: "at least 32 bytes"},
+		{name: "short notify token", mutate: func(c *Config) {
+			c.OctoNotifyToken = tokShort
+		}, wantErr: true, wantSub: "at least 32 bytes"},
+		{name: "notify token without URL", mutate: func(c *Config) {
+			c.OctoNotifyToken = tokB
+		}, wantErr: true, wantSub: "OCTO_MARKETPLACE_NOTIFY_TOKEN requires OCTO_API_URL"},
 		{name: "short card action secret", mutate: func(c *Config) {
 			c.OctoInternalToken = tokA
 			c.OctoCardActionSecret = tokShort
@@ -359,6 +376,16 @@ func TestValidateAPIOctoSecrets(t *testing.T) {
 		{name: "reused secret across surfaces", mutate: func(c *Config) {
 			c.OctoInternalToken = tokA
 			c.OctoCardActionSecret = tokA
+		}, wantErr: true, wantSub: "must not reuse"},
+		{name: "notify token reuses internal token", mutate: func(c *Config) {
+			c.OctoInternalToken = tokA
+			c.OctoNotifyToken = tokA
+		}, wantErr: true, wantSub: "must not reuse"},
+		{name: "card secret reuses notify token", mutate: func(c *Config) {
+			c.OctoAPIURL = "https://octo.example.com"
+			c.OctoInternalToken = tokA
+			c.OctoNotifyToken = tokB
+			c.OctoCardActionSecret = tokB
 		}, wantErr: true, wantSub: "must not reuse"},
 		{name: "dev space role above range", mutate: func(c *Config) {
 			c.DevAuthSpaceRole = 3
@@ -398,8 +425,10 @@ func TestValidateAPIOctoSecrets(t *testing.T) {
 				if tt.wantSub != "" && !strings.Contains(err.Error(), tt.wantSub) {
 					t.Fatalf("ValidateAPI() error=%v want substring %q", err, tt.wantSub)
 				}
-				if strings.Contains(err.Error(), tokA) || strings.Contains(err.Error(), tokShort) {
-					t.Fatalf("ValidateAPI() error leaks a secret value: %v", err)
+				for _, secret := range []string{tokA, tokB, tokC, tokShort} {
+					if strings.Contains(err.Error(), secret) {
+						t.Fatalf("ValidateAPI() error leaks a secret value: %v", err)
+					}
 				}
 			}
 		})

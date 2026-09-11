@@ -68,12 +68,22 @@ type Config struct {
 	// parsed by envSpaceRole rather than envInt.
 	DevAuthSpaceRole int
 
-	// OctoInternalToken authenticates marketplace -> octo-server service calls
-	// that carry no end-user token (review card dispatch). BLANK DISABLES the
-	// surface: no card is sent, and the review workflow stays fully usable over
-	// HTTP. That is the correct default for a deployment that has not
-	// provisioned the credential — it must not be invented locally.
+	// OctoInternalToken authenticates the Space role lookup
+	// (GET .../members/:uid/role) on the card-action callback path, which
+	// carries no end-user token. BLANK DISABLES that lookup: approval-card
+	// buttons cannot authorize an operator, but the review workflow stays fully
+	// usable over HTTP. It must differ from OctoNotifyToken (octo-server refuses
+	// to boot when its marketplace internal token equals a route notify token).
 	OctoInternalToken string
+
+	// OctoNotifyToken authenticates the approval-card dispatch
+	// (POST /v1/internal/notify). octo-server resolves it to the marketplace
+	// "action" notify capability (a route's notify_token_env). BLANK DISABLES
+	// card dispatch: no card is sent, and the review workflow stays usable over
+	// HTTP. Distinct from OctoInternalToken by design — a single shared value
+	// cannot authorize both the notify send and the role lookup, and
+	// octo-server's ValidateNotifyTokenExclusions enforces the same split.
+	OctoNotifyToken string
 
 	// OctoCardActionSecret signs/verifies the octo-server card action callback.
 	// BLANK DISABLES the surface: the callback endpoint rejects everything,
@@ -182,6 +192,7 @@ func Load() Config {
 		DevAuthSpaceRole:   envSpaceRole("DEV_AUTH_SPACE_ROLE", DefaultDevAuthSpaceRole),
 
 		OctoInternalToken:     env("OCTO_MARKETPLACE_INTERNAL_TOKEN", ""),
+		OctoNotifyToken:       env("OCTO_MARKETPLACE_NOTIFY_TOKEN", ""),
 		OctoCardActionSecret:  env("OCTO_MARKETPLACE_CARD_ACTION_SECRET", ""),
 		OctoNotifyTimeout:     envDuration("OCTO_NOTIFY_TIMEOUT", 3*time.Second),
 		OctoCardActionMaxSkew: envDuration("OCTO_CARD_ACTION_MAX_SKEW", 5*time.Minute),
@@ -300,6 +311,7 @@ func (c Config) validateCardActionSkew() error {
 func (c Config) validateOctoSecrets() error {
 	secrets := []struct{ name, value string }{
 		{"OCTO_MARKETPLACE_INTERNAL_TOKEN", c.OctoInternalToken},
+		{"OCTO_MARKETPLACE_NOTIFY_TOKEN", c.OctoNotifyToken},
 		{"OCTO_MARKETPLACE_CARD_ACTION_SECRET", c.OctoCardActionSecret},
 	}
 	seen := make(map[string]string, len(secrets))
@@ -320,6 +332,9 @@ func (c Config) validateOctoSecrets() error {
 	}
 	if c.OctoCardActionSecret != "" && c.OctoAPIURL == "" {
 		return fmt.Errorf("OCTO_MARKETPLACE_CARD_ACTION_SECRET requires OCTO_API_URL: the callback re-derives operator roles against octo-server at that URL; without it every valid admin click fails role lookup and returns 503")
+	}
+	if c.OctoNotifyToken != "" && c.OctoAPIURL == "" {
+		return fmt.Errorf("OCTO_MARKETPLACE_NOTIFY_TOKEN requires OCTO_API_URL: approval cards are dispatched to octo-server at that URL; without it no card can be sent")
 	}
 	return nil
 }

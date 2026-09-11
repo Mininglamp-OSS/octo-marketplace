@@ -594,7 +594,7 @@ func sameAttachmentSidecar(a, b json.RawMessage) bool {
 // is logged below in the meantime. See divergence item 27 in
 // .octospec/tasks/plugin-space-review/brief.md.
 func (s *Service) dispatchReviewCard(caller Caller, stored *model.PluginReviewRequest, plugin *model.Plugin) {
-	if s.notify == nil || !s.notify.Enabled() || s.bestEffort == nil || stored == nil {
+	if s.notify == nil || !s.notify.NotifyEnabled() || s.bestEffort == nil || stored == nil {
 		return
 	}
 	pluginName := stored.PluginName
@@ -1208,7 +1208,7 @@ func (s *Service) cardConflict(ctx context.Context, req *model.PluginReviewReque
 // "not a member" and an error for "could not find out" — the caller must keep
 // those apart.
 func (s *Service) operatorRole(ctx context.Context, spaceID, uid string) (*int, error) {
-	if s.notify == nil || !s.notify.Enabled() {
+	if s.notify == nil || !s.notify.RoleEnabled() {
 		// Not a refusal: a deployment that mounted the callback without the internal
 		// token cannot authorize anyone, and answering "forbidden" would burn the
 		// event. Surface it as a fault so the operator sees it and a redelivery
