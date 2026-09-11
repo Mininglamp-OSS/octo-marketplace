@@ -308,7 +308,7 @@ type categoryResponse struct {
 // @Param category_id query string false "Category ID (matches the plugin placement category in this scene)"
 // @Param tag query []string false "Tag filters; repeatable or comma-separated, a plugin must carry every tag" collectionFormat(multi)
 // @Param mode query string false "List mode; mine restricts to plugins owned by the caller" Enums(mine)
-// @Param q query string false "Plugin name search query"
+// @Param q query string false "Plugin display name or manifest description search query"
 // @Param sort query string false "Sort order" Enums(newest,oldest,updated,name,placement,views,installs,downloads,comprehensive)
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"

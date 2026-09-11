@@ -15,8 +15,8 @@ func TestListReturnsTotalAndAppliesConfirmedFilters(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	defer db.Close()
 	scope := Scope{CallerUID: "caller", SpaceID: "space"}
-	args := []driver.Value{"home", "space", "caller", model.PluginTypeSkill, "cat", "100%_done!", "mine", "%100!%!_done!!%", "caller", "space"}
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT p.plugin_id\).*JOIN plugin_placements.*pp.placement_code=\?.*p.status=1.*JSON_CONTAINS.*JSON_CONTAINS.*p.plugin_name LIKE \? ESCAPE '!'.*p.owner_uid=\? AND p.space_id=\?`).WithArgs(args...).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(7))
+	args := []driver.Value{"home", "space", "caller", model.PluginTypeSkill, "cat", "100%_done!", "mine", "%100!%!_done!!%", "%100!%!_done!!%", "caller", "space"}
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT p.plugin_id\).*JOIN plugin_placements.*pp.placement_code=\?.*p.status=1.*JSON_CONTAINS.*JSON_CONTAINS.*\(p.plugin_name LIKE \? ESCAPE '!' OR JSON_UNQUOTE\(JSON_EXTRACT\(p.manifest_json, '\$\.description'\)\) COLLATE utf8mb4_unicode_ci LIKE \? ESCAPE '!'\).*p.owner_uid=\? AND p.space_id=\?`).WithArgs(args...).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(7))
 	mock.ExpectQuery(`SELECT .*JOIN plugin_placements.*p.status=1.*GROUP BY p.plugin_id ORDER BY MIN\(pp.sort_order\) ASC,p.plugin_id ASC LIMIT \? OFFSET \?`).WithArgs(append(args, 20, 0)...).WillReturnRows(sqlmock.NewRows(pluginTestColumns()))
 	items, total, err := New(db).List(context.Background(), scope, ListFilter{PlacementCode: "home", Type: model.PluginTypeSkill, CategoryID: "cat", Tags: []string{"100%_done!", "mine"}, Keyword: "100%_done!", Mine: true, Sort: "placement"})
 	if err != nil {
@@ -33,6 +33,17 @@ func TestListReturnsTotalAndAppliesConfirmedFilters(t *testing.T) {
 func TestEscapeLike(t *testing.T) {
 	if got := escapeLike(`a!b%c_d`); got != `a!!b!%c!_d` {
 		t.Fatalf("escapeLike=%q", got)
+	}
+}
+
+func TestBuildListQueryKeywordSearchesNameAndManifestDescription(t *testing.T) {
+	_, where, args := buildListQuery(Scope{CallerUID: "caller", SpaceID: "space"}, ListFilter{Keyword: `a!b%c_d`})
+	wantClause := `(p.plugin_name LIKE ? ESCAPE '!' OR JSON_UNQUOTE(JSON_EXTRACT(p.manifest_json, '$.description')) COLLATE utf8mb4_unicode_ci LIKE ? ESCAPE '!')`
+	if !strings.Contains(where, wantClause) {
+		t.Fatalf("keyword clause = %q, want name and manifest description", where)
+	}
+	if len(args) != 4 || args[2] != `%a!!b!%c!_d%` || args[3] != `%a!!b!%c!_d%` {
+		t.Fatalf("keyword args = %#v, want the same escaped pattern for name and description", args)
 	}
 }
 
