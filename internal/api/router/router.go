@@ -178,7 +178,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		pluginSvc.SetArtifactLimits(int64(storageCfg.MaxMB) << 20)
 		// Space review IM integration. A disabled notifier keeps the review
 		// endpoints fully functional and simply sends no approval card. Partial
-		// configurations (URL-without-token, token-without-card-secret) are
+		// configurations (URL-without-notify-token, notify-token-without-card-secret) are
 		// warned about at engine construction by logReviewConfigWarnings; a card
 		// secret without an internal token is rejected by config.ValidateAPI at
 		// boot because it would leave the callback mounted but unable to

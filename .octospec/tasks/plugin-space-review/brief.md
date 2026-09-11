@@ -718,9 +718,12 @@ oracle). Marketplace therefore makes **no roster call at all**:
   `GET /v1/internal/spaces/{space_id}/members/{uid}/role`, whose `role` is a
   nullable int (0 is a real role) and whose "absent" answer is byte-identical for
   non-member, removed member, unknown Space and disbanded Space.
-- The shared token env is **`OCTO_MARKETPLACE_INTERNAL_TOKEN`** (renamed from
-  `OCTO_MARKETPLACE_ADMIN_LIST_TOKEN`). The brief's three-secret list is now two:
-  the internal token and `OCTO_MARKETPLACE_CARD_ACTION_SECRET`.
+- The role lookup token env is **`OCTO_MARKETPLACE_INTERNAL_TOKEN`** (renamed
+  from `OCTO_MARKETPLACE_ADMIN_LIST_TOKEN`). Card dispatch separately uses
+  **`OCTO_MARKETPLACE_NOTIFY_TOKEN`**, because octo-server rejects a route
+  notify token that equals the fixed marketplace internal token. The current
+  three-secret set is therefore the internal token, notify token, and
+  `OCTO_MARKETPLACE_CARD_ACTION_SECRET`; all three are pairwise distinct.
 
 ### 12. Card dispatch is entirely post-commit. Nothing runs before the response.
 

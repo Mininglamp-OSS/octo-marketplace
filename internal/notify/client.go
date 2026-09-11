@@ -56,7 +56,8 @@ const maxRespBytes = 1 << 20
 const defaultTimeout = 3 * time.Second
 
 // internalTokenHeader authenticates marketplace to octo-server's /v1/internal
-// routes. It carries OCTO_MARKETPLACE_INTERNAL_TOKEN and is never logged.
+// routes. Depending on the capability, it carries OCTO_MARKETPLACE_INTERNAL_TOKEN
+// or OCTO_MARKETPLACE_NOTIFY_TOKEN; neither value is ever logged.
 const internalTokenHeader = "X-Internal-Token"
 
 // targetRoleSpaceAdmin is the only target_role octo-server accepts: the
@@ -390,7 +391,7 @@ func (c *Client) NotifySpaceAdmins(ctx context.Context, req NotifyRequest) (*Not
 	return &out, nil
 }
 
-// do issues one request with the internal token, returning the bounded response
+// do issues one request with the capability-specific token, returning the bounded response
 // body on 2xx or an *APIError otherwise. A refused redirect surfaces here as a
 // 3xx *APIError rather than a followed request.
 func (c *Client) do(ctx context.Context, method, path string, body []byte, token string) ([]byte, error) {

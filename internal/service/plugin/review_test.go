@@ -180,7 +180,9 @@ func TestSubmitReviewMapsRepositoryConflict(t *testing.T) {
 // remote timeout in front of every submit.
 func TestSubmitReviewDispatchesCardOnlyThroughTheBestEffortHook(t *testing.T) {
 	store, svc := reviewFixture(t)
-	notifier := &fakeNotifier{enabled: true}
+	// Card dispatch must depend only on the notify capability; the role token is
+	// intentionally absent in this split-token regression case.
+	notifier := &fakeNotifier{notifyEnabled: true}
 	var deferred []func(context.Context) error
 	var descs []string
 	svc = svc.WithNotify(notifier, func(desc string, fn func(context.Context) error) {
@@ -582,7 +584,9 @@ func TestDecideReviewFromCardRefusesNonAdminOperator(t *testing.T) {
 				ID: "review-1", PluginID: "plugin-1", SpaceID: "space-a",
 				Status: model.ReviewStatusPending, ApplicantUID: "user-1", PluginName: "Demo",
 			}
-			svc = svc.WithNotify(&fakeNotifier{enabled: true, role: tt.role}, nil)
+			// IM authorization must depend only on the role capability; a deployment
+			// may process queued callbacks while card dispatch is disabled.
+			svc = svc.WithNotify(&fakeNotifier{roleEnabled: true, role: tt.role}, nil)
 			out, err := svc.DecideReviewFromCard(context.Background(), "42", "stranger", "approve", "review-1")
 			if err != nil {
 				t.Fatal(err)
