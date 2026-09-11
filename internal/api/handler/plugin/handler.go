@@ -258,9 +258,19 @@ type detailResponse struct {
 }
 
 type detailGraphResponse struct {
-	Plugin         pluginResponse     `json:"plugin"`
-	Relations      []relationResponse `json:"relations"`
-	RelatedPlugins []listItemResponse `json:"related_plugins"`
+	Plugin         pluginResponse              `json:"plugin"`
+	Relations      []relationResponse          `json:"relations"`
+	RelatedPlugins []detailGraphPluginResponse `json:"related_plugins"`
+}
+
+// detailGraphPluginResponse preserves the graph endpoint's original optional
+// member_count field while adding the full detail projection required by
+// installation clients. The relation matrix currently prevents teams from
+// appearing as descendants, but retaining the field keeps the wire schema
+// backward compatible if that matrix evolves.
+type detailGraphPluginResponse struct {
+	pluginResponse
+	MemberCount *int `json:"member_count,omitempty"`
 }
 
 type relationResultResponse struct {
@@ -405,7 +415,7 @@ func (h *Handler) Get(c *gin.Context) {
 
 // GetGraph godoc
 // @Summary Get plugin relation graph
-// @Description Return one Plugin (full projection identical to GET /plugins/detail, including owner-only review state in the current Space) together with the flat, deduplicated transitive closure of its relation graph and every edge in that closure, up to the fixed depth enforced by the relation matrix. Every related plugin — bundled (embedded) children included — is filtered by the same per-row visibility predicate GET /plugins/detail applies; hidden ones are silently omitted, edge and node. Related plugins include review state only for the caller's own nodes in the current Space. related_plugins is a lookup table keyed by plugin_id rather than a tree: an entry is not guaranteed to be referenced by an edge.
+// @Description Return one Plugin together with the flat, deduplicated transitive closure of its relation graph and every edge in that closure, up to the fixed depth enforced by the relation matrix. The root and every related plugin use the full GET /plugins/detail plugin projection, including plugin_json, so authenticated clients can resolve dependency metadata and inline package content in one request; storage-backed files still use the download endpoint. Every related plugin — bundled (embedded) children included — is filtered by the same per-row visibility predicate GET /plugins/detail applies; hidden ones are silently omitted, edge and node. Related plugins include review state only for the caller's own nodes in the current Space. related_plugins is a lookup table keyed by plugin_id rather than a tree: an entry is not guaranteed to be referenced by an edge.
 // @Tags plugin
 // @ID plugin.graph.get
 // @Accept json
@@ -817,7 +827,7 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 	case errors.Is(err, pluginsvc.ErrTooLarge):
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin artifact exceeds the size limit", nil, "Reduce the attachment size and try again.")
 	case errors.Is(err, pluginsvc.ErrGraphTooLarge):
-		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin graph exceeds the size cap", map[string]any{"max_nodes": pluginsvc.MaxGraphNodes(), "max_edges": pluginsvc.MaxGraphEdges()}, "The plugin references too many related plugins; contact the publisher to reduce the graph size.")
+		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin graph exceeds the size cap", map[string]any{"max_nodes": pluginsvc.MaxGraphNodes(), "max_edges": pluginsvc.MaxGraphEdges(), "max_bytes": pluginsvc.MaxGraphPayloadBytes()}, "The plugin graph is too large; contact the publisher to reduce its dependencies or content size.")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin state conflicts with an existing resource", map[string]any{"conflict_reason": "state"}, "Refresh the resource and try again.")
 	// Transient InnoDB lock contention (a deadlock victim, or a lock-wait timeout)
@@ -883,15 +893,15 @@ func detailDTO(d *pluginsvc.Detail) detailResponse {
 }
 func detailGraphDTO(d *pluginsvc.DetailGraph) detailGraphResponse {
 	if d == nil {
-		return detailGraphResponse{Relations: []relationResponse{}, RelatedPlugins: []listItemResponse{}}
+		return detailGraphResponse{Relations: []relationResponse{}, RelatedPlugins: []detailGraphPluginResponse{}}
 	}
 	rels := make([]relationResponse, len(d.Relations))
 	for i, x := range d.Relations {
 		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
 	}
-	related := make([]listItemResponse, len(d.Related))
+	related := make([]detailGraphPluginResponse, len(d.Related))
 	for i, p := range d.Related {
-		related[i] = listItemDTO(p)
+		related[i] = detailGraphPluginResponse{pluginResponse: pluginDTO(p), MemberCount: teamMemberCount(p)}
 	}
 	return detailGraphResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, RelatedPlugins: related}
 }

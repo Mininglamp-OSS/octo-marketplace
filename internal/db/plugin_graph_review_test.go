@@ -82,8 +82,8 @@ func TestDetailGraphReviewStateMatchesDetail(t *testing.T) {
 				if err := json.Unmarshal(raw, &fields); err != nil {
 					t.Fatal(err)
 				}
-				if _, exists := fields["plugin_json"]; exists {
-					t.Fatal("related node carries the full package")
+				if _, exists := fields["plugin_json"]; !exists {
+					t.Fatal("related node is missing the full package")
 				}
 			}
 			// An author-only draft must still be absent to another Space member.

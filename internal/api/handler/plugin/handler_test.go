@@ -497,8 +497,8 @@ func TestVersionsRouteUsesOffsetEnvelope(t *testing.T) {
 func TestGetGraphReturnsEnvelopeWithRelatedPlugins(t *testing.T) {
 	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	root := &model.Plugin{ID: "team-1", Name: "Team", Type: model.PluginTypeExpertTeam, Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[]}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
-	member := &model.Plugin{ID: "m1", Name: "Member", Type: model.PluginTypeExpert, IsEmbedded: true, Manifest: json.RawMessage(`{}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
-	skill := &model.Plugin{ID: "s1", Name: "Skill", Type: model.PluginTypeSkill, IsEmbedded: true, Manifest: json.RawMessage(`{}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
+	member := &model.Plugin{ID: "m1", Name: "Member", Type: model.PluginTypeExpert, IsEmbedded: true, Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[{"path":"AGENTS.md","raw_content":"member"}]}`), AttachmentKeys: json.RawMessage(`{"private.bin":"plugins/space/attachments/private"}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
+	skill := &model.Plugin{ID: "s1", Name: "Skill", Type: model.PluginTypeSkill, IsEmbedded: true, Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[{"path":"SKILL.md","raw_content":"skill"}]}`), Tags: json.RawMessage(`[]`), Status: 1, CreatedAt: now, UpdatedAt: now}
 	rels := []model.PluginRelation{
 		{ID: "r-m", SourcePluginID: "team-1", TargetPluginID: "m1", Type: "expert_team_expert", SortOrder: 0, Data: json.RawMessage(`{"is_leader":true,"role":"leader","member_key":"lead"}`), SourcePluginType: model.PluginTypeExpertTeam, TargetPluginType: model.PluginTypeExpert},
 		{ID: "r-s", SourcePluginID: "m1", TargetPluginID: "s1", Type: "expert_skill", SortOrder: 0, Data: json.RawMessage(`{"source_index":0}`), SourcePluginType: model.PluginTypeExpert, TargetPluginType: model.PluginTypeSkill},
@@ -513,13 +513,18 @@ func TestGetGraphReturnsEnvelopeWithRelatedPlugins(t *testing.T) {
 	if f.getGraphID != "team-1" {
 		t.Fatalf("forwarded plugin_id = %q", f.getGraphID)
 	}
-	// Root carries plugin_json; related must NOT carry plugin_json.
+	// Root and both related plugins carry installable plugin_json content.
 	if !strings.Contains(body, `"plugin_json"`) {
 		t.Fatalf("root plugin_json missing: %s", body)
 	}
-	// Two plugin_json occurrences = only on the root pluginResponse. Children are listItemResponse which lacks plugin_json.
-	if n := strings.Count(body, `"plugin_json"`); n != 1 {
-		t.Fatalf("want exactly one plugin_json (root only), got %d: %s", n, body)
+	if n := strings.Count(body, `"plugin_json"`); n != 3 {
+		t.Fatalf("want plugin_json for root and both related plugins, got %d: %s", n, body)
+	}
+	if !strings.Contains(body, `"raw_content":"member"`) || !strings.Contains(body, `"raw_content":"skill"`) {
+		t.Fatalf("related plugin content missing: %s", body)
+	}
+	if strings.Contains(body, "plugins/space/attachments/private") {
+		t.Fatalf("host-private attachment sidecar leaked: %s", body)
 	}
 	if !strings.Contains(body, `"related_plugins"`) {
 		t.Fatalf("related_plugins missing: %s", body)
@@ -570,5 +575,8 @@ func TestGetGraphReturns413WhenTooLarge(t *testing.T) {
 	// under the node cap otherwise gets a payload that only mentions max_nodes.
 	if !strings.Contains(rec.Body.String(), `"max_edges"`) {
 		t.Fatalf("want max_edges in details: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"max_bytes"`) {
+		t.Fatalf("want max_bytes in details: %s", rec.Body.String())
 	}
 }

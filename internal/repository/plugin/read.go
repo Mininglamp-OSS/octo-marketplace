@@ -324,7 +324,8 @@ func scanRelationRows(rows *sql.Rows) ([]model.PluginRelation, error) {
 }
 
 // graphEdges accumulates graph edges and their deduplicated target IDs across
-// both traversal levels while enforcing the node and edge caps mid-scan.
+// both traversal levels while enforcing the node, edge, and JSON-document byte
+// caps mid-scan.
 //
 // The node cap alone does not bound cost: a graph whose members share targets
 // (the common case for system skills) keeps the unique-node count low while the
@@ -332,17 +333,18 @@ func scanRelationRows(rows *sql.Rows) ([]model.PluginRelation, error) {
 // checking both while draining rather than after, means an over-cap graph is
 // never fully materialized.
 type graphEdges struct {
-	rels       []model.PluginRelation
-	targetIDs  []string
-	targetSeen map[string]bool
+	rels         []model.PluginRelation
+	targetIDs    []string
+	targetSeen   map[string]bool
+	payloadBytes int64
 }
 
-func newGraphEdges() *graphEdges {
-	return &graphEdges{targetSeen: map[string]bool{}}
+func newGraphEdges(payloadBytes int64) *graphEdges {
+	return &graphEdges{targetSeen: map[string]bool{}, payloadBytes: payloadBytes}
 }
 
 // drain consumes rows, appending each edge and recording first-seen targets.
-// It returns ErrGraphTooLarge the moment either cap would be exceeded.
+// It returns ErrGraphTooLarge the moment any cap would be exceeded.
 func (g *graphEdges) drain(rows *sql.Rows) error {
 	defer rows.Close()
 	for rows.Next() {
@@ -353,6 +355,11 @@ func (g *graphEdges) drain(rows *sql.Rows) error {
 		if err != nil {
 			return err
 		}
+		payloadBytes, ok := addGraphPayloadBytes(g.payloadBytes, x.Data)
+		if !ok {
+			return ErrGraphTooLarge
+		}
+		g.payloadBytes = payloadBytes
 		g.rels = append(g.rels, x)
 		if !g.targetSeen[x.TargetPluginID] {
 			if len(g.targetIDs) >= maxGraphNodes {
@@ -386,6 +393,16 @@ func stringSliceAsAny(in []string) []any {
 	return out
 }
 
+func addGraphPayloadBytes(current int64, parts ...[]byte) (int64, bool) {
+	for _, part := range parts {
+		if int64(len(part)) > maxGraphPayloadBytes-current {
+			return current, false
+		}
+		current += int64(len(part))
+	}
+	return current, true
+}
+
 // GetGraphClosure returns the transitive closure of the relation graph rooted
 // at rootID, with a fixed maximum depth of two hops (expert_team -> expert ->
 // skill/connector) enforced by the relation-type matrix.
@@ -400,12 +417,15 @@ func stringSliceAsAny(in []string) []any {
 //
 // The method performs at most four SQL round-trips regardless of fan-out (one
 // for a leaf root, two when no child is visible), and fails closed with
-// ErrGraphTooLarge when the deduplicated child count exceeds maxGraphNodes or
-// the edge count exceeds maxGraphEdges. Both caps are enforced while draining
-// each result set, so an over-cap graph is never fully materialized. On success
+// ErrGraphTooLarge when the deduplicated child count exceeds maxGraphNodes, the
+// edge count exceeds maxGraphEdges, or JSON documents exceed
+// maxGraphPayloadBytes. The caps are enforced while draining each result set,
+// so an over-cap graph is never fully materialized. On success
 // relations carries every visible edge in the closure (both levels, sorted by
 // source then sort_order), and nodes carries the deduplicated set of visible
-// child plugins (light projection: no package blob), in first-seen order.
+// child plugins in full projection (including package blobs), in first-seen
+// order. This graph is the client installation contract; ordinary list queries
+// continue to use pluginSummaryColumns.
 //
 // nodes is not guaranteed to be edge-reachable from the root: when an
 // intermediate ancestor vanishes between the edge scan and the node query, its
@@ -416,6 +436,10 @@ func (r *Repo) GetGraphClosure(ctx context.Context, scope Scope, rootID string) 
 	root, err := r.getGraphRoot(ctx, scope, rootID)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	payloadBytes, ok := addGraphPayloadBytes(0, root.Manifest, root.Package)
+	if !ok {
+		return nil, nil, nil, ErrGraphTooLarge
 	}
 
 	// Leaves (skill/connector) have no valid outgoing edges per the relation
@@ -435,7 +459,7 @@ LIMIT ` + graphEdgeLimit
 	if err != nil {
 		return nil, nil, nil, wrapped("graph l1 edges", err)
 	}
-	edges := newGraphEdges()
+	edges := newGraphEdges(payloadBytes)
 	if err := edges.drain(l1Rows); err != nil {
 		if errors.Is(err, ErrGraphTooLarge) {
 			return nil, nil, nil, err
@@ -468,13 +492,14 @@ LIMIT ` + graphEdgeLimit
 	}
 
 	allRels, targetIDs := edges.rels, edges.targetIDs
+	payloadBytes = edges.payloadBytes
 	if len(targetIDs) == 0 {
 		return root, allRels, nil, nil
 	}
 
-	// ---- Batch node payloads (light projection) ---------------------------
+	// ---- Batch node payloads (full projection) ----------------------------
 	nodeWhere, nodeArgs := graphNodeWhere(scope)
-	nodeQ := `SELECT ` + pluginSummaryColumns + pluginMetricColumns + graphOwnerReviewColumns + ` FROM plugins p
+	nodeQ := `SELECT ` + pluginColumns + pluginMetricColumns + graphOwnerReviewColumns + ` FROM plugins p
 WHERE p.status=1 AND p.deleted_at IS NULL AND p.plugin_id IN (` + placeholders(len(targetIDs)) + `) AND ` + nodeWhere
 	fullArgs := append(graphOwnerReviewArgs(scope), stringSliceAsAny(targetIDs)...)
 	fullArgs = append(fullArgs, nodeArgs...)
@@ -485,9 +510,13 @@ WHERE p.status=1 AND p.deleted_at IS NULL AND p.plugin_id IN (` + placeholders(l
 	defer nRows.Close()
 	present := map[string]*model.Plugin{}
 	for nRows.Next() {
-		p, err := scanPluginRow(nRows, false, true, true)
+		p, err := scanPluginRow(nRows, true, true, true)
 		if err != nil {
 			return nil, nil, nil, wrapped("graph node scan", err)
+		}
+		payloadBytes, ok = addGraphPayloadBytes(payloadBytes, p.Manifest, p.Package)
+		if !ok {
+			return nil, nil, nil, ErrGraphTooLarge
 		}
 		present[p.ID] = p
 	}

@@ -1591,13 +1591,96 @@ components:
         plugin_id:
           type: string
       type: object
+    internal_api_handler_plugin.detailGraphPluginResponse:
+      properties:
+        category_id:
+          type: string
+        created_at:
+          type: string
+        created_by_bot_id:
+          type: string
+        created_by_bot_name:
+          type: string
+        created_by_type:
+          type: string
+        creator_name:
+          type: string
+        current_version:
+          type: string
+        current_version_id:
+          type: string
+        display_status:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
+        download_count:
+          type: integer
+        icon:
+          description: 'Icon is the stored write-canonical value clients must echo
+            on updates;
+
+            IconURL is the resolved display URL (presigned when Icon is an object
+            key).'
+          type: string
+        icon_url:
+          type: string
+        install_count:
+          type: integer
+        is_embedded:
+          type: boolean
+        listing_state:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginListingState'
+        manifest_hash:
+          type: string
+        manifest_json:
+          type: object
+        member_count:
+          type: integer
+        owner_id:
+          type: string
+        plugin_hash:
+          type: string
+        plugin_id:
+          type: string
+        plugin_json:
+          type: object
+        plugin_name:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        publisher:
+          type: string
+        rating:
+          maximum: 5
+          minimum: 1
+          type:
+          - integer
+          - 'null'
+        review_id:
+          type: string
+        space_id:
+          type: string
+        status:
+          type: integer
+        tags:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+        tool_count:
+          type: integer
+        updated_at:
+          type: string
+        view_count:
+          type: integer
+        visibility:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
+      type: object
     internal_api_handler_plugin.detailGraphResponse:
       properties:
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginResponse'
         related_plugins:
           items:
-            $ref: '#/components/schemas/internal_api_handler_plugin.listItemResponse'
+            $ref: '#/components/schemas/internal_api_handler_plugin.detailGraphPluginResponse'
           type: array
           uniqueItems: false
         relations:
@@ -5892,10 +5975,12 @@ paths:
       - plugin
   /plugins/detail_graph:
     get:
-      description: 'Return one Plugin (full projection identical to GET /plugins/detail,
-        including owner-only review state in the current Space) together with the
-        flat, deduplicated transitive closure of its relation graph and every edge
-        in that closure, up to the fixed depth enforced by the relation matrix. Every
+      description: 'Return one Plugin together with the flat, deduplicated transitive
+        closure of its relation graph and every edge in that closure, up to the fixed
+        depth enforced by the relation matrix. The root and every related plugin use
+        the full GET /plugins/detail plugin projection, including plugin_json, so
+        authenticated clients can resolve dependency metadata and inline package content
+        in one request; storage-backed files still use the download endpoint. Every
         related plugin — bundled (embedded) children included — is filtered by the
         same per-row visibility predicate GET /plugins/detail applies; hidden ones
         are silently omitted, edge and node. Related plugins include review state

@@ -73,10 +73,10 @@ var (
 	ErrInvalidCategory = errors.New("invalid plugin category")
 	// ErrInvalidPlacement indicates a category not enabled for the Plugin type and placement.
 	ErrInvalidPlacement = errors.New("invalid plugin placement")
-	// ErrGraphTooLarge indicates a plugin's transitive relation closure exceeds the
-	// per-request node or edge cap. The read path fails closed (rather than
+	// ErrGraphTooLarge indicates a plugin's transitive relation closure exceeds a
+	// per-request node, edge, or document-byte cap. The read path fails closed (rather than
 	// truncating) so callers never render a partially-missing squad/agent.
-	ErrGraphTooLarge = errors.New("plugin graph exceeds node or edge cap")
+	ErrGraphTooLarge = errors.New("plugin graph exceeds size cap")
 )
 
 // containerImportMaxMembers and containerImportMaxSkillsPerMember mirror
@@ -114,6 +114,12 @@ const maxGraphNodes = containerImportMaxMembers * (1 + containerImportMaxSkillsP
 // container ceiling for member-shared-target squads and fails closed above it.
 const maxGraphEdges = 2000
 
+// maxGraphPayloadBytes caps the aggregate JSON document bytes retained for one
+// detail_graph response. Related nodes now carry plugin_json for installation,
+// so node/edge counts alone no longer provide a meaningful memory bound. The
+// limit matches the default aggregate archive budget accepted by the service.
+const maxGraphPayloadBytes int64 = 100 << 20
+
 // graphEdgeLimit bounds each edge query server-side at one row past the cap.
 // The mid-scan check in graphEdges.drain still decides the outcome; the LIMIT
 // bounds what an abandoned result set costs. It does not remove the sort — the
@@ -133,6 +139,10 @@ func MaxGraphNodes() int { return maxGraphNodes }
 
 // MaxGraphEdges returns the per-response edge cap for the graph endpoint.
 func MaxGraphEdges() int { return maxGraphEdges }
+
+// MaxGraphPayloadBytes exposes the detail_graph document-byte cap for the HTTP
+// 413 response without coupling handlers to repository internals.
+func MaxGraphPayloadBytes() int64 { return maxGraphPayloadBytes }
 
 // Scope is authoritative caller context; it must never come from request data.
 type Scope struct {

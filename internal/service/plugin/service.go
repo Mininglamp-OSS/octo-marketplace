@@ -41,16 +41,16 @@ var (
 	// content-addressed object must never be served under a mismatched digest.
 	ErrIntegrity = errors.New("plugin artifact integrity check failed")
 	// ErrGraphTooLarge is returned when a plugin's transitive relation closure
-	// exceeds the per-request node or edge cap; the detail_graph endpoint fails
+	// exceeds the per-request node, edge, or document-byte cap; detail_graph fails
 	// closed so a caller never renders a partially-missing squad or agent.
 	ErrGraphTooLarge = errors.New("plugin graph exceeds size cap")
 )
 
-// MaxGraphNodes and MaxGraphEdges re-export the repository's detail_graph caps
-// so HTTP handlers can report them in an error payload without importing the
-// repository package.
-func MaxGraphNodes() int { return pluginrepo.MaxGraphNodes() }
-func MaxGraphEdges() int { return pluginrepo.MaxGraphEdges() }
+// Detail graph caps are re-exported so HTTP handlers can report them in an
+// error payload without importing the repository package.
+func MaxGraphNodes() int          { return pluginrepo.MaxGraphNodes() }
+func MaxGraphEdges() int          { return pluginrepo.MaxGraphEdges() }
+func MaxGraphPayloadBytes() int64 { return pluginrepo.MaxGraphPayloadBytes() }
 
 // Caller is populated from verified authentication context, never request JSON.
 type Caller struct {
@@ -227,10 +227,9 @@ type Detail struct {
 	RelationResult *RelationResult
 }
 
-// DetailGraph is the flat transitive closure returned by DetailGraph: the
-// root plugin in full projection (carrying plugin_json), every edge in the
-// closure, and related plugins in light projection (manifest only, no
-// plugin_json), deduplicated by plugin_id.
+// DetailGraph is the flat transitive closure returned by DetailGraph: the root
+// plugin and every related plugin in full projection (carrying plugin_json),
+// plus every edge in the closure. Related plugins are deduplicated by plugin_id.
 type DetailGraph struct {
 	Plugin    *model.Plugin
 	Relations []model.PluginRelation
@@ -495,9 +494,8 @@ func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, in
 }
 
 // DetailGraph returns a plugin together with the flat, deduplicated transitive
-// closure of its relation graph. The root carries the full projection
-// (plugin_json included); related plugins carry the light list projection
-// (manifest only, no plugin_json). Icons are resolved once per unique key.
+// closure of its relation graph. The root and related plugins carry the full
+// projection, including plugin_json. Icons are resolved once per unique key.
 //
 // Related nodes deliberately carry no member_count: the relation matrix never
 // admits an expert_team as a relation target, so no related node is ever a
