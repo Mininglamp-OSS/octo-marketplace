@@ -182,8 +182,12 @@ func buildListQuery(scope Scope, f ListFilter) (string, string, []any) {
 		args = append(args, tag)
 	}
 	if f.Keyword != "" {
-		where += ` AND p.plugin_name LIKE ? ESCAPE '!'`
-		args = append(args, "%"+escapeLike(f.Keyword)+"%")
+		// JSON_UNQUOTE yields utf8mb4_bin, while plugin_name uses the table's
+		// case-insensitive collation. Align them so both searchable fields preserve
+		// the existing keyword semantics.
+		where += ` AND (p.plugin_name LIKE ? ESCAPE '!' OR JSON_UNQUOTE(JSON_EXTRACT(p.manifest_json, '$.description')) COLLATE utf8mb4_unicode_ci LIKE ? ESCAPE '!')`
+		pattern := "%" + escapeLike(f.Keyword) + "%"
+		args = append(args, pattern, pattern)
 	}
 	if f.Mine {
 		where += ` AND p.owner_uid=? AND p.space_id=?`
