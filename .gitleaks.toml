@@ -4,3 +4,11 @@ useDefault = true
 [[allowlists]]
 description = "Ignore placeholder values in the committed environment example"
 paths = ['''^\.env\.example$''']
+
+[[allowlists]]
+description = "Ignore verified test and local-compose placeholders in historical commits"
+commits = [
+  "216f405dda94eeb127ba7b0cfaa6e81be905a37e",
+  "024e237ba5d18d863b65feb9ece8a5fea139f9af",
+  "27b5681b6ce75a2d51f7f5fed096db2609b30620",
+]
