@@ -255,7 +255,9 @@ func TestInstallExpertHappyPathWithSkills(t *testing.T) {
 		{Name: "Format", ObjectKey: "k/1"},
 	})
 
-	res, err := svc.InstallExpert(context.Background(), caller, id, baseInput())
+	input := baseInput()
+	input.CustomEnv = map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-1"}
+	res, err := svc.InstallExpert(context.Background(), caller, id, input)
 	if err != nil {
 		t.Fatalf("InstallExpert: %v", err)
 	}
@@ -267,6 +269,9 @@ func TestInstallExpertHappyPathWithSkills(t *testing.T) {
 	}
 	if string(ff.agentSpec.MCPConfig) != `{"mcpServers":{}}` {
 		t.Fatalf("mcp_config = %q", ff.agentSpec.MCPConfig)
+	}
+	if ff.agentSpec.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" {
+		t.Fatalf("custom_env = %#v", ff.agentSpec.CustomEnv)
 	}
 	if len(ff.createdSkills) != 2 {
 		t.Fatalf("created %d skills, want 2", len(ff.createdSkills))

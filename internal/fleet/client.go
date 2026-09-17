@@ -59,6 +59,7 @@ type AgentSpec struct {
 	Description  string
 	Instructions string
 	RuntimeID    string
+	CustomEnv    map[string]string
 	// MCPConfig is the expert's verbatim mcp_config JSON; omitted when empty.
 	MCPConfig json.RawMessage
 }
@@ -97,6 +98,9 @@ func (c *Client) CreateAgent(ctx context.Context, token, spaceID, workspaceID st
 	}
 	if len(spec.MCPConfig) > 0 {
 		body["mcp_config"] = spec.MCPConfig
+	}
+	if len(spec.CustomEnv) > 0 {
+		body["custom_env"] = spec.CustomEnv
 	}
 	return c.doCreate(ctx, http.MethodPost, "/api/agents", token, spaceID, workspaceID, body)
 }
