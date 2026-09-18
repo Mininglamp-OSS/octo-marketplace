@@ -50,6 +50,7 @@ func TestCreateAgentForwardsCredentialsAndReturnsID(t *testing.T) {
 		Description:  "desc",
 		Instructions: "do things",
 		RuntimeID:    "rt-1",
+		CustomEnv:    map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-1"},
 		MCPConfig:    json.RawMessage(`{"mcpServers":{}}`),
 	})
 	if err != nil {
@@ -70,6 +71,10 @@ func TestCreateAgentForwardsCredentialsAndReturnsID(t *testing.T) {
 	if _, ok := cap.body["mcp_config"]; !ok {
 		t.Fatalf("mcp_config not forwarded: %#v", cap.body)
 	}
+	customEnv, ok := cap.body["custom_env"].(map[string]any)
+	if !ok || customEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" {
+		t.Fatalf("custom_env not forwarded: %#v", cap.body)
+	}
 }
 
 func TestCreateAgentOmitsEmptyMCPConfig(t *testing.T) {
@@ -85,6 +90,9 @@ func TestCreateAgentOmitsEmptyMCPConfig(t *testing.T) {
 	}
 	if _, ok := cap.body["mcp_config"]; ok {
 		t.Fatalf("mcp_config should be omitted when empty: %#v", cap.body)
+	}
+	if _, ok := cap.body["custom_env"]; ok {
+		t.Fatalf("custom_env should be omitted when empty: %#v", cap.body)
 	}
 	// Empty space id must not send the X-Space-Id header.
 	if cap.spaceID != "" {

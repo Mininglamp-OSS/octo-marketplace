@@ -82,7 +82,12 @@ func TestInstallExpertBuildsSpecFromAttachmentsAndRelations(t *testing.T) {
 	prov := &fakeProvisioner{}
 	tracker := &fakeTracker{}
 	svc := fixedService(f).WithProvisioner(prov).WithMetrics(tracker)
-	outcome, err := svc.Install(context.Background(), testCaller, "expert-1", InstallParams{WorkspaceID: " ws-1 ", RuntimeID: "rt-1", Token: "octo-token"})
+	outcome, err := svc.Install(context.Background(), testCaller, "expert-1", InstallParams{
+		WorkspaceID: " ws-1 ",
+		RuntimeID:   "rt-1",
+		CustomEnv:   map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-1"},
+		Token:       "octo-token",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +96,9 @@ func TestInstallExpertBuildsSpecFromAttachmentsAndRelations(t *testing.T) {
 	}
 	if prov.in.WorkspaceID != "ws-1" || prov.in.RuntimeID != "rt-1" || prov.in.SpaceID != "space-a" || prov.in.Token != "octo-token" {
 		t.Fatalf("install input = %#v", prov.in)
+	}
+	if prov.in.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" {
+		t.Fatalf("custom env = %#v", prov.in.CustomEnv)
 	}
 	spec := prov.agentSpec
 	if spec.Name != "Alice" || spec.Summary != "expert summary" || spec.Instruction != "do the work" || spec.MCPConfig != `{"mcpServers":{}}` {
@@ -108,12 +116,20 @@ func TestInstallTeamBuildsSquadModelFromAgentsDocAndMembers(t *testing.T) {
 	f := installFixture()
 	prov := &fakeProvisioner{}
 	svc := fixedService(f).WithProvisioner(prov)
-	outcome, err := svc.Install(context.Background(), testCaller, "team-1", InstallParams{WorkspaceID: "ws-1", RuntimeID: "rt-1", Token: "octo-token"})
+	outcome, err := svc.Install(context.Background(), testCaller, "team-1", InstallParams{
+		WorkspaceID: "ws-1",
+		RuntimeID:   "rt-1",
+		CustomEnv:   map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-1"},
+		Token:       "octo-token",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if outcome.SquadID != "squad-9" || outcome.AgentID != "" {
 		t.Fatalf("outcome = %#v", outcome)
+	}
+	if prov.in.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" {
+		t.Fatalf("custom env = %#v", prov.in.CustomEnv)
 	}
 	squad := prov.squad
 	// Contract layout: the AGENTS.md prose is the squad's dispatch document;

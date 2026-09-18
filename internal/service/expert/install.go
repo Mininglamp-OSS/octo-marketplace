@@ -140,6 +140,7 @@ func (s *Service) trackInstall(ctx context.Context, resourceType, resourceID str
 type InstallInput struct {
 	WorkspaceID string
 	RuntimeID   string
+	CustomEnv   map[string]string
 	SpaceID     string
 	Token       string
 }
@@ -237,6 +238,7 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 		Description:  spec.Summary,
 		Instructions: spec.Instruction,
 		RuntimeID:    in.RuntimeID,
+		CustomEnv:    in.CustomEnv,
 	}
 	if mc := strings.TrimSpace(spec.MCPConfig); mc != "" {
 		agentSpec.MCPConfig = json.RawMessage(mc)

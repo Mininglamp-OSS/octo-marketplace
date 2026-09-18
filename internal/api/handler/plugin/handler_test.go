@@ -286,7 +286,7 @@ func TestDetailDefaultsRelationsAndSupportsFalse(t *testing.T) {
 func TestInstallForwardsHeaderTokenAndReturnsTypedID(t *testing.T) {
 	f := &fakeService{installOutcome: &pluginsvc.InstallOutcome{AgentID: "agent-9"}}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/install", strings.NewReader(`{"plugin_id":"p1","workspace_id":"ws-1","runtime_id":"rt-1"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/install", strings.NewReader(`{"plugin_id":"p1","workspace_id":"ws-1","runtime_id":"rt-1","custom_env":{"OCTOBUDDY_PROVIDER_ID":"provider-1"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("token", "octo-token")
 	testEngine(f).ServeHTTP(rec, req)
@@ -295,6 +295,9 @@ func TestInstallForwardsHeaderTokenAndReturnsTypedID(t *testing.T) {
 	}
 	if f.installID != "p1" || f.installParams.WorkspaceID != "ws-1" || f.installParams.RuntimeID != "rt-1" || f.installParams.Token != "octo-token" {
 		t.Fatalf("install forwarded = %q %#v", f.installID, f.installParams)
+	}
+	if f.installParams.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" {
+		t.Fatalf("custom_env not forwarded: %#v", f.installParams.CustomEnv)
 	}
 	if !strings.Contains(rec.Body.String(), `"agent_id":"agent-9"`) || strings.Contains(rec.Body.String(), "squad_id") {
 		t.Fatalf("body=%s", rec.Body.String())

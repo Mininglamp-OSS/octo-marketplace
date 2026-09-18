@@ -54,6 +54,7 @@ func (s *Service) WithMetrics(m InstallTracker) *Service {
 type InstallParams struct {
 	WorkspaceID string
 	RuntimeID   string
+	CustomEnv   map[string]string
 	// Token is the caller's forwarded credential, re-read from the request
 	// header by the handler because middleware discards it.
 	Token string
@@ -90,7 +91,7 @@ func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p
 	if detail.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
-	in := expertsvc.InstallInput{WorkspaceID: strings.TrimSpace(p.WorkspaceID), RuntimeID: strings.TrimSpace(p.RuntimeID), SpaceID: caller.SpaceID, Token: p.Token}
+	in := expertsvc.InstallInput{WorkspaceID: strings.TrimSpace(p.WorkspaceID), RuntimeID: strings.TrimSpace(p.RuntimeID), CustomEnv: p.CustomEnv, SpaceID: caller.SpaceID, Token: p.Token}
 	// One aggregate byte budget for the whole install, threaded through every
 	// skill of every member, so an expert_team fanning out to many members ×
 	// skills cannot multiply the resident-memory bound (A4/P1-3). Mirrors the

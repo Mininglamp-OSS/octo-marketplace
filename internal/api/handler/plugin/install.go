@@ -16,9 +16,10 @@ import (
 )
 
 type installRequest struct {
-	PluginID    string `json:"plugin_id"`
-	WorkspaceID string `json:"workspace_id"`
-	RuntimeID   string `json:"runtime_id"`
+	PluginID    string            `json:"plugin_id"`
+	WorkspaceID string            `json:"workspace_id"`
+	RuntimeID   string            `json:"runtime_id"`
+	CustomEnv   map[string]string `json:"custom_env,omitempty"`
 }
 
 // installResponse carries exactly one created Loop resource id, matching the
@@ -60,6 +61,7 @@ func (h *Handler) Install(c *gin.Context) {
 	outcome, err := h.svc.Install(c.Request.Context(), caller, req.PluginID, pluginsvc.InstallParams{
 		WorkspaceID: strings.TrimSpace(req.WorkspaceID),
 		RuntimeID:   strings.TrimSpace(req.RuntimeID),
+		CustomEnv:   req.CustomEnv,
 		// The token is forwarded to fleet; middleware discarded it, so re-read it.
 		Token: marketmiddleware.Token(c),
 	})

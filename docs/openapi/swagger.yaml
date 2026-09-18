@@ -1648,6 +1648,10 @@ components:
       type: object
     internal_api_handler_plugin.installRequest:
       properties:
+        custom_env:
+          additionalProperties:
+            type: string
+          type: object
         plugin_id:
           type: string
         runtime_id:
