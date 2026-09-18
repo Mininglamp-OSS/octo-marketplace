@@ -70,7 +70,7 @@ func buildDownloadTestRouter(t *testing.T, db *sql.DB, metricsRedis *testableMet
 	skSvc := skillsvc.New(skRepo, nil, ls, func() string { return "id" })
 
 	parseRepo := parse.NewRepo(db)
-	worker := parse.NewWorker(ls, parseRepo, db, parse.WorkerConfig{})
+	worker := parse.NewWorker(ls, parseRepo, parse.WorkerConfig{})
 	pSvc := parse.NewService(ls, parseRepo, worker, func() string { return "id" }, 20, parse.ServiceConfig{})
 
 	mSvc := metricssvc.New(metricsRedis)

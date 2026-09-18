@@ -228,8 +228,8 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			expertSvc = expertSvc.WithFleet(fleetClient)
 		}
 		// The unified plugin install reuses the expert provisioning flow, accrues
-		// counters under resource_type "plugin", and imports skill uploads
-		// through the legacy parse pipeline.
+		// counters under resource_type "plugin", and imports Skill uploads
+		// through the shared parse pipeline.
 		pluginSvc.WithProvisioner(expertSvc).WithMetrics(mSvc).WithParseTasks(skRepo)
 		expertHandler := experthandler.New(expertSvc)
 		expertHandler.Register(v1)
@@ -241,7 +241,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		metricshandler.New(mSvc).Register(v1)
 
 		parseRepo := parsesvc.NewRepo(db)
-		worker := parsesvc.NewWorker(store, parseRepo, db, parsesvc.WorkerConfig{
+		worker := parsesvc.NewWorker(store, parseRepo, parsesvc.WorkerConfig{
 			PoolSize:     parseCfg.WorkerPoolSize,
 			ParseTimeout: parseCfg.ParseTimeout,
 		})

@@ -383,7 +383,7 @@ func TestGetParseStatusRecoversStaleParsing(t *testing.T) {
 	defer db.Close()
 
 	repo := NewRepo(db)
-	worker := NewWorker(blockingStorage{}, repo, db, WorkerConfig{PoolSize: 5, ParseTimeout: 10 * time.Millisecond})
+	worker := NewWorker(blockingStorage{}, repo, WorkerConfig{PoolSize: 5, ParseTimeout: 10 * time.Millisecond})
 	svc := NewService(stubStorage{}, repo, worker, func() string { return "u1" }, 20, ServiceConfig{
 		StaleTimeout: 2 * time.Minute,
 		MaxAttempts:  2,
@@ -440,7 +440,7 @@ func TestGetParseStatusConcurrentPollOnlyOneWins(t *testing.T) {
 	defer db.Close()
 
 	repo := NewRepo(db)
-	worker := NewWorker(blockingStorage{}, repo, db, WorkerConfig{PoolSize: 5, ParseTimeout: time.Minute})
+	worker := NewWorker(blockingStorage{}, repo, WorkerConfig{PoolSize: 5, ParseTimeout: time.Minute})
 	svc := NewService(stubStorage{}, repo, worker, func() string { return "u1" }, 20, ServiceConfig{
 		StaleTimeout: 2 * time.Minute,
 		MaxAttempts:  2,
