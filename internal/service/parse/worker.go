@@ -3,7 +3,6 @@ package parse
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -50,14 +49,13 @@ type parseJob struct {
 type Worker struct {
 	store        storage.Storage
 	repo         *Repo
-	db           *sql.DB
 	jobs         chan parseJob
 	jobWG        sync.WaitGroup
 	parseTimeout time.Duration
 }
 
 // NewWorker creates a parse worker with a bounded goroutine pool.
-func NewWorker(store storage.Storage, repo *Repo, db *sql.DB, cfg WorkerConfig) *Worker {
+func NewWorker(store storage.Storage, repo *Repo, cfg WorkerConfig) *Worker {
 	poolSize := cfg.PoolSize
 	if poolSize <= 0 {
 		poolSize = defaultWorkerPoolSize
@@ -73,7 +71,6 @@ func NewWorker(store storage.Storage, repo *Repo, db *sql.DB, cfg WorkerConfig) 
 	w := &Worker{
 		store:        store,
 		repo:         repo,
-		db:           db,
 		jobs:         make(chan parseJob, queueSize),
 		parseTimeout: parseTimeout,
 	}
@@ -236,21 +233,11 @@ func (w *Worker) process(parent context.Context, taskID, objectKey string, maxZi
 		return
 	}
 
-	// 4.3 Check reupload target name before global duplicate checks, so a wrong package
-	// reports mismatch instead of colliding with an unrelated Skill.
-	task, err := w.repo.GetByID(ctx, taskID)
-	if err != nil {
-		w.updateFailed(taskID, "INTERNAL_ERROR", "cannot fetch parse task")
-		return
-	}
-	if mismatchErr := w.checkReuploadNameMatch(ctx, fm.Name, task.SpaceID, task.OwnerID, task.SkillID); mismatchErr != "" {
-		w.updateFailed(taskID, "SKILL_NAME_MISMATCH", mismatchErr)
-		return
-	}
-	if dupErr := w.checkNameDuplicate(ctx, fm.Name, task.SpaceID, task.OwnerID, task.SkillID); dupErr != "" {
-		w.updateFailed(taskID, "DUPLICATE_NAME", dupErr)
-		return
-	}
+	// Parsing is catalog-agnostic. Target identity, name matching, and any
+	// uniqueness policy belong to the authoritative Plugin import/review
+	// transaction, where the operation context is available. Consulting the
+	// retired skills table here caused valid unified Skill upgrades to collide
+	// with their historical source rows.
 
 	// 5. Sanitize results
 	name := sanitizeString(fm.Name, 64)
@@ -448,61 +435,4 @@ func validateSkillDescription(desc string) string {
 		return "description 不能包含尖括号 < 或 >"
 	}
 	return ""
-}
-
-func (w *Worker) checkReuploadNameMatch(ctx context.Context, name, spaceID, ownerID, skillID string) string {
-	if skillID == "" {
-		return ""
-	}
-
-	var currentName string
-	err := w.db.QueryRowContext(ctx,
-		"SELECT name FROM skills WHERE id = ? AND space_id = ? AND owner_id = ? AND is_deleted = 0",
-		skillID, spaceID, ownerID,
-	).Scan(&currentName)
-	if err == sql.ErrNoRows {
-		return "目标 Skill 不存在或无权限"
-	}
-	if err != nil {
-		logging.Error("parse_worker_check_reupload_name_failed",
-			zap.String("operation", "parse.worker.check_reupload_name"),
-			logging.ErrorField(err),
-		)
-		return "internal error: unable to verify reuploaded Skill name"
-	}
-	if name != currentName {
-		return fmt.Sprintf("uploaded Skill name %q does not match target Skill name %q", name, currentName)
-	}
-	return ""
-}
-
-// checkNameDuplicate checks if a skill name already exists for the same owner in the same space.
-// excludeSkillID is used for re-upload (update) to skip self.
-func (w *Worker) checkNameDuplicate(ctx context.Context, name, spaceID, ownerID, excludeSkillID string) string {
-	query := `
-		SELECT id FROM skills
-		WHERE name = ? AND space_id = ? AND owner_id = ? AND is_deleted = 0
-	`
-	args := []interface{}{name, spaceID, ownerID}
-
-	if excludeSkillID != "" {
-		query += " AND id != ?"
-		args = append(args, excludeSkillID)
-	}
-
-	query += " LIMIT 1"
-
-	var existingID string
-	err := w.db.QueryRowContext(ctx, query, args...).Scan(&existingID)
-	if err == sql.ErrNoRows {
-		return ""
-	}
-	if err != nil {
-		logging.Error("parse_worker_check_name_duplicate_failed",
-			zap.String("operation", "parse.worker.check_name_duplicate"),
-			logging.ErrorField(err),
-		)
-		return "internal error: unable to verify Skill name uniqueness"
-	}
-	return fmt.Sprintf("skill name \"%s\" 已存在（ID: %s），请使用其他名称", name, existingID)
 }

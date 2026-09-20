@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"io"
@@ -274,7 +273,7 @@ func TestWorkerMarksTaskFailedAfterParseTimeout(t *testing.T) {
 		WithArgs("INTERNAL_ERROR", publicParseErrorMessage("INTERNAL_ERROR"), "task-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	worker := NewWorker(blockingStorage{}, NewRepo(db), db, WorkerConfig{
+	worker := NewWorker(blockingStorage{}, NewRepo(db), WorkerConfig{
 		PoolSize:     5,
 		ParseTimeout: 10 * time.Millisecond,
 	})
@@ -314,7 +313,7 @@ func TestWorkerProcessSyncReturnsErrorWhenTaskRemainsParsing(t *testing.T) {
 		WithArgs("INTERNAL_ERROR", publicParseErrorMessage("INTERNAL_ERROR"), "task-stuck").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	worker := NewWorker(objectReadErrorStorage{}, NewRepo(db), db, WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
+	worker := NewWorker(objectReadErrorStorage{}, NewRepo(db), WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
 	err = worker.ProcessSync(context.Background(), "task-stuck", "skills/upload-1/skill.zip", 1024)
 	if !errors.Is(err, ErrParseIncomplete) {
 		t.Fatalf("ProcessSync error = %v, want ErrParseIncomplete", err)
@@ -336,7 +335,7 @@ func TestWorkerDeletesOversizedObjectBeforeParsing(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	store := &oversizedStorage{size: 2048}
-	worker := NewWorker(store, NewRepo(db), db, WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
+	worker := NewWorker(store, NewRepo(db), WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
 	worker.process(context.Background(), "task-oversized", "skill-uploads/upload-1/skill.zip", 1024)
 
 	if len(store.deleteKeys) != 1 || store.deleteKeys[0] != "skill-uploads/upload-1/skill.zip" {
@@ -355,7 +354,7 @@ func TestWorkerSubmitBoundsRunningAndQueuedWork(t *testing.T) {
 	defer db.Close()
 
 	started := make(chan struct{})
-	worker := NewWorker(saturatingStorage{started: started}, NewRepo(db), db, WorkerConfig{
+	worker := NewWorker(saturatingStorage{started: started}, NewRepo(db), WorkerConfig{
 		PoolSize:     1,
 		QueueSize:    1,
 		ParseTimeout: time.Second,
@@ -397,7 +396,7 @@ func TestWorkerSubmitMasksPanicDetails(t *testing.T) {
 		WithArgs("INTERNAL_ERROR", publicParseErrorMessage("INTERNAL_ERROR"), "task-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	worker := NewWorker(panicStorage{}, NewRepo(db), db, WorkerConfig{PoolSize: 5, ParseTimeout: 30 * time.Second})
+	worker := NewWorker(panicStorage{}, NewRepo(db), WorkerConfig{PoolSize: 5, ParseTimeout: 30 * time.Second})
 	worker.Submit("task-1", "skills/upload-1/skill.zip", 1024)
 	worker.Wait()
 
@@ -414,7 +413,7 @@ func TestWorkerProcessSyncHonorsSemaphoreAndContext(t *testing.T) {
 	defer db.Close()
 
 	started := make(chan struct{})
-	worker := NewWorker(saturatingStorage{started: started}, NewRepo(db), db, WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
+	worker := NewWorker(saturatingStorage{started: started}, NewRepo(db), WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
 	if err := worker.Submit("task-running", "skills/upload-1/running.zip", 1024); err != nil {
 		t.Fatalf("Submit running job: %v", err)
 	}
@@ -464,26 +463,6 @@ func TestWorkerSanitizesReadmeBeforePersisting(t *testing.T) {
 	}
 	defer db.Close()
 
-	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
-	taskRows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status",
-		"error_code", "error_message",
-		"result_name", "result_description", "result_version", "result_tags", "result_readme",
-		"result_id", "result_forked_from", "result_metadata",
-		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
-	}).AddRow(
-		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing",
-		"", "", "", nil, "", []byte("[]"), nil,
-		"", "", nil,
-		"", 0, "user-1", "space-1", "", now, now,
-	)
-
-	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
-		WithArgs("task-1").
-		WillReturnRows(taskRows)
-	mock.ExpectQuery("SELECT id FROM skills").
-		WithArgs("safe-skill", "space-1", "user-1").
-		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE parse_tasks SET status = 'success',").
 		WithArgs(
 			"safe-skill",
@@ -499,7 +478,7 @@ func TestWorkerSanitizesReadmeBeforePersisting(t *testing.T) {
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), db, WorkerConfig{PoolSize: 5, ParseTimeout: 30 * time.Second})
+	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), WorkerConfig{PoolSize: 5, ParseTimeout: 30 * time.Second})
 	worker.process(context.Background(), "task-1", "skills/upload-1/skill.zip", int64(len(zipData)+1024))
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -528,31 +507,11 @@ func TestWorkerRejectsNonJSONMetadata(t *testing.T) {
 	}
 	defer db.Close()
 
-	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
-	taskRows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status",
-		"error_code", "error_message",
-		"result_name", "result_description", "result_version", "result_tags", "result_readme",
-		"result_id", "result_forked_from", "result_metadata",
-		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
-	}).AddRow(
-		"task-metadata", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing",
-		"", "", "", nil, "", []byte("[]"), nil,
-		"", "", nil,
-		"", 0, "user-1", "space-1", "", now, now,
-	)
-
-	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
-		WithArgs("task-metadata").
-		WillReturnRows(taskRows)
-	mock.ExpectQuery("SELECT id FROM skills").
-		WithArgs("metadata-skill", "space-1", "user-1").
-		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE parse_tasks SET status = 'failed', error_code = \\?, error_message = \\? WHERE id = \\?").
 		WithArgs("INVALID_SKILL_MD", publicParseErrorMessage("INVALID_SKILL_MD"), "task-metadata").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), db, WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
+	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
 	worker.process(context.Background(), "task-metadata", "skills/upload-1/skill.zip", int64(len(zipData)+1024))
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -560,36 +519,16 @@ func TestWorkerRejectsNonJSONMetadata(t *testing.T) {
 	}
 }
 
-func TestWorkerNameDuplicateIgnoresSoftDeletedRows(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	mock.ExpectQuery("SELECT id FROM skills").
-		WithArgs("recreated-skill", "space-1", "user-1").
-		WillReturnError(sql.ErrNoRows)
-
-	worker := NewWorker(zipStorage{}, NewRepo(db), db, WorkerConfig{PoolSize: 1, QueueSize: 1, ParseTimeout: time.Second})
-	if got := worker.checkNameDuplicate(context.Background(), "recreated-skill", "space-1", "user-1", ""); got != "" {
-		t.Fatalf("checkNameDuplicate returned %q, want no duplicate for deleted rows", got)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestWorkerReuploadNameMismatchFailsBeforeDuplicateCheck(t *testing.T) {
+func TestWorkerParseDoesNotConsultRetiredSkillCatalog(t *testing.T) {
 	zipData := createWorkerZip(t, map[string][]byte{
 		"SKILL.md": []byte(strings.Join([]string{
 			"---",
-			"name: gstack-guard",
+			"name: expense-system",
 			"description: demo description",
-			"version: 1.2.3",
+			"version: 1.2.0",
 			"---",
 			"",
-			"# Wrong Skill",
+			"# Expense System",
 		}, "\n")),
 	})
 
@@ -599,31 +538,23 @@ func TestWorkerReuploadNameMismatchFailsBeforeDuplicateCheck(t *testing.T) {
 	}
 	defer db.Close()
 
-	now := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
-	taskRows := sqlmock.NewRows([]string{
-		"id", "upload_id", "file_name", "file_size", "file_url", "status",
-		"error_code", "error_message",
-		"result_name", "result_description", "result_version", "result_tags", "result_readme",
-		"result_id", "result_forked_from", "result_metadata",
-		"file_sha256", "attempts", "owner_id", "space_id", "skill_id", "created_at", "updated_at",
-	}).AddRow(
-		"task-1", "upload-1", "skill.zip", int64(len(zipData)), "skills/upload-1/skill.zip", "parsing",
-		"", "", "", nil, "", []byte("[]"), nil,
-		"", "", nil,
-		"", 0, "user-1", "space-1", "skill-1", now, now,
-	)
-
-	mock.ExpectQuery("SELECT id, upload_id, file_name, file_size, file_url, status,").
-		WithArgs("task-1").
-		WillReturnRows(taskRows)
-	mock.ExpectQuery("SELECT name FROM skills WHERE id = \\? AND space_id = \\? AND owner_id = \\? AND is_deleted = 0").
-		WithArgs("skill-1", "space-1", "user-1").
-		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("ui-skill-case-1784277863"))
-	mock.ExpectExec("UPDATE parse_tasks SET status = 'failed', error_code = \\?, error_message = \\? WHERE id = \\?").
-		WithArgs("SKILL_NAME_MISMATCH", `Uploaded Skill does not match the target Skill.`, "task-1").
+	// Any SELECT from the retired skills table is unexpected and fails this test.
+	mock.ExpectExec("UPDATE parse_tasks SET status = 'success',").
+		WithArgs(
+			"expense-system",
+			stringArg("demo description"),
+			"1.2.0",
+			sqlmock.AnyArg(),
+			stringArg("# Expense System"),
+			sqlmock.AnyArg(),
+			"",
+			"",
+			sqlmock.AnyArg(),
+			"task-1",
+		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), db, WorkerConfig{PoolSize: 5, ParseTimeout: 30 * time.Second})
+	worker := NewWorker(zipStorage{data: zipData}, NewRepo(db), WorkerConfig{PoolSize: 5, ParseTimeout: 30 * time.Second})
 	worker.process(context.Background(), "task-1", "skills/upload-1/skill.zip", int64(len(zipData)+1024))
 
 	if err := mock.ExpectationsWereMet(); err != nil {

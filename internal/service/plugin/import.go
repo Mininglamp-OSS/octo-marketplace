@@ -1,4 +1,4 @@
-// Plugin import turns a completed legacy upload-parse task into a skill
+// Plugin import turns a completed upload-parse task into a Skill
 // Plugin: the rewritten package zip is expanded into a flat attachment tree
 // (one attachment per file — text inlined as raw, binary/oversize files
 // uploaded to the managed plugins/<space>/attachments/ prefix under

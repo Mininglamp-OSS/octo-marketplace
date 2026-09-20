@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
+	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
 )
 
 // reviewApplicant owns the plugin and is a plain Space member.
@@ -794,6 +795,34 @@ func TestSubmitReviewRequiresContentForAnUpgrade(t *testing.T) {
 	}
 	if store.review.insertReq != nil {
 		t.Error("a contentless upgrade reached the repository")
+	}
+}
+
+func TestSubmitReviewChecksParsedNameAgainstUnifiedPlugin(t *testing.T) {
+	store, svc := reviewFixture(t)
+	version := "1.1.0"
+	store.plugins["plugin-1"].Visibility = model.PluginVisibilitySpace
+	store.plugins["plugin-1"].ListingState = model.PluginListingStatePublished
+	store.plugins["plugin-1"].CurrentVersion = &version
+	store.plugins["plugin-1"].Manifest = json.RawMessage(`{"$schema":"cowork-plugin-manifest-2.0.json","plugin_name":"Demo","plugin_type":"skill","name":"expense-system","description":"demo","labels":[],"examples":[]}`)
+	tasks := &fakeParseTasks{task: &skillrepo.ParseTaskRow{
+		ID: "task-1", OwnerID: reviewApplicant.UID, SpaceID: reviewApplicant.SpaceID,
+		Status: "success", ResultName: "different-skill",
+	}}
+	svc.storage = &importStorage{objects: map[string][]byte{}}
+	svc.WithParseTasks(tasks)
+
+	_, err := svc.SubmitReview(context.Background(), reviewApplicant, ReviewSubmitParams{
+		PluginID: "plugin-1", ParseTaskID: "task-1", Version: "1.2.0",
+	})
+	if !errors.Is(err, ErrReviewNameMismatch) {
+		t.Fatalf("error = %v, want ErrReviewNameMismatch", err)
+	}
+	if len(tasks.released) != 1 || tasks.released[0] != "task-1" {
+		t.Fatalf("released parse tasks = %v, want [task-1]", tasks.released)
+	}
+	if store.review.insertReq != nil {
+		t.Fatal("name-mismatched parsed content reached the review repository")
 	}
 }
 
