@@ -187,6 +187,34 @@ func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
 	}
 }
 
+func TestProvisionSquadFromSpecBindsSharedSkillToEveryMember(t *testing.T) {
+	members := []model.SquadMember{
+		{MemberKey: "member_01", Name: "Planner", IsLeader: true, Skills: []model.SkillRef{{Name: "Shared Skill", Markdown: "# Shared"}}},
+		{MemberKey: "member_02", Name: "Coder", Skills: []model.SkillRef{{Name: "Shared Skill", Markdown: "# Shared"}}},
+	}
+	ff := &fakeFleet{
+		agentIDs:     []string{"a0", "a1"},
+		skillIDs:     []string{"shared"},
+		failAgentAt:  -1,
+		failSkillAt:  -1,
+		failMemberAt: -1,
+		squadID:      "squad-x",
+	}
+	svc := New(newFakeStore(), newMemObjectStore(), func() string { return "gen" }).WithFleet(ff)
+
+	if _, err := svc.ProvisionSquadFromSpec(context.Background(), baseInput(), &model.Squad{Name: "Team", Members: members}); err != nil {
+		t.Fatalf("ProvisionSquadFromSpec: %v", err)
+	}
+	if len(ff.createdSkills) != 1 {
+		t.Fatalf("created skills = %#v, want one shared Skill", ff.createdSkills)
+	}
+	for _, agentID := range []string{"a0", "a1"} {
+		if got := ff.bindings[agentID]; len(got) != 1 || got[0] != "shared" {
+			t.Fatalf("bindings[%s] = %#v, want [shared]", agentID, got)
+		}
+	}
+}
+
 // The squad's dispatch strategies must land in fleet as the squad's
 // instructions — one numbered line per rule, blank rules skipped.
 func TestInstallSquadKeepsCaseAndWhitespaceVariantSkillNames(t *testing.T) {

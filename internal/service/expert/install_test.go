@@ -14,17 +14,20 @@ import (
 // fakeFleet records the calls InstallExpert makes and lets a test inject
 // per-method errors and the ids CreateSkill hands back in sequence.
 type fakeFleet struct {
-	agentID     string
-	agentIDs    []string // when set, CreateAgent returns these in sequence (squad)
-	agentIdx    int
-	skillIDs    []string // returned by successive CreateSkill calls
-	skillIdx    int
-	agentErr    error
-	failAgentAt int   // when agentIDs is set, CreateAgent fails at this index (-1 = never)
-	skillErr    error // fails the CreateSkill at index failSkillAt
-	failSkillAt int
-	setErr      error
-	fileErr     error // fails UpsertSkillFile
+	agentID         string
+	agentIDs        []string // when set, CreateAgent returns these in sequence (squad)
+	agentIdx        int
+	skillIDs        []string // returned by successive CreateSkill calls
+	skillIdx        int
+	agentErr        error
+	failAgentAt     int   // when agentIDs is set, CreateAgent fails at this index (-1 = never)
+	skillErr        error // fails the CreateSkill at index failSkillAt
+	failSkillAt     int
+	existingSkills  []fleet.SkillSummary
+	listSkillsErr   error
+	listSkillsCalls int
+	setErr          error
+	fileErr         error // fails UpsertSkillFile
 
 	agentSpec     fleet.AgentSpec
 	createdSkills []fleet.SkillSpec
@@ -97,6 +100,11 @@ func (f *fakeFleet) CreateSkill(_ context.Context, _, _, _ string, spec fleet.Sk
 		return f.skillIDs[idx], nil
 	}
 	return "skill-extra", nil
+}
+
+func (f *fakeFleet) ListSkills(_ context.Context, _, _, _ string) ([]fleet.SkillSummary, error) {
+	f.listSkillsCalls++
+	return f.existingSkills, f.listSkillsErr
 }
 
 func (f *fakeFleet) UpsertSkillFile(_ context.Context, _, _, _, skillID, path, content string) error {
@@ -281,6 +289,122 @@ func TestInstallExpertHappyPathWithSkills(t *testing.T) {
 	}
 	if len(ff.deletedAgents) != 0 || len(ff.deletedSkills) != 0 {
 		t.Fatalf("unexpected rollback: agents=%#v skills=%#v", ff.deletedAgents, ff.deletedSkills)
+	}
+}
+
+func TestProvisionAgentFromSpecReusesExistingSkillName(t *testing.T) {
+	ff := &fakeFleet{
+		agentID:        "agent-1",
+		skillErr:       &fleet.APIError{Status: 409, Message: "a skill with this name already exists"},
+		failSkillAt:    0,
+		existingSkills: []fleet.SkillSummary{{ID: "existing-skill", Name: "browser-use"}},
+	}
+	svc := New(newFakeStore(), newMemObjectStore(), func() string { return "gen" }).WithFleet(ff)
+
+	agentID, err := svc.ProvisionAgentFromSpec(context.Background(), baseInput(), ProvisionAgentSpec{
+		Name: "Browser Expert",
+		Skills: []model.SkillRef{{
+			Name:            "browser-use",
+			Markdown:        "# Browser Use",
+			SupportingFiles: []model.SkillFile{{Path: "reference.md", Content: "new content"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ProvisionAgentFromSpec: %v", err)
+	}
+	if agentID != "agent-1" || ff.listSkillsCalls != 1 {
+		t.Fatalf("agentID=%q listSkillsCalls=%d", agentID, ff.listSkillsCalls)
+	}
+	if got := ff.bindings["agent-1"]; len(got) != 1 || got[0] != "existing-skill" {
+		t.Fatalf("bindings = %#v, want [existing-skill]", got)
+	}
+	if len(ff.deletedSkills) != 0 {
+		t.Fatalf("reused skill must not be deleted: %#v", ff.deletedSkills)
+	}
+	if len(ff.upsertedFiles) != 0 {
+		t.Fatalf("reused skill files must not be overwritten: %#v", ff.upsertedFiles)
+	}
+}
+
+func TestProvisionAgentFromSpecDoesNotDeleteReusedSkillOnBindFailure(t *testing.T) {
+	ff := &fakeFleet{
+		agentID:        "agent-1",
+		skillErr:       &fleet.APIError{Status: 409, Message: "a skill with this name already exists"},
+		failSkillAt:    0,
+		existingSkills: []fleet.SkillSummary{{ID: "existing-skill", Name: "browser-use"}},
+		setErr:         errors.New("bind failed"),
+	}
+	svc := New(newFakeStore(), newMemObjectStore(), func() string { return "gen" }).WithFleet(ff)
+
+	_, err := svc.ProvisionAgentFromSpec(context.Background(), baseInput(), ProvisionAgentSpec{
+		Name:   "Browser Expert",
+		Skills: []model.SkillRef{{Name: "browser-use", Markdown: "# Browser Use"}},
+	})
+	if err == nil {
+		t.Fatal("expected bind failure")
+	}
+	if len(ff.deletedSkills) != 0 {
+		t.Fatalf("rollback deleted reused skill: %#v", ff.deletedSkills)
+	}
+	if len(ff.deletedAgents) != 1 || ff.deletedAgents[0] != "agent-1" {
+		t.Fatalf("deleted agents = %#v, want [agent-1]", ff.deletedAgents)
+	}
+}
+
+func TestProvisionAgentFromSpecKeepsConflictWithoutExactNameMatch(t *testing.T) {
+	conflict := &fleet.APIError{Status: 409, Message: "a skill with this name already exists"}
+	ff := &fakeFleet{
+		agentID:        "agent-1",
+		skillErr:       conflict,
+		failSkillAt:    0,
+		existingSkills: []fleet.SkillSummary{{ID: "other-skill", Name: "Browser-Use"}},
+	}
+	svc := New(newFakeStore(), newMemObjectStore(), func() string { return "gen" }).WithFleet(ff)
+
+	_, err := svc.ProvisionAgentFromSpec(context.Background(), baseInput(), ProvisionAgentSpec{
+		Name:   "Browser Expert",
+		Skills: []model.SkillRef{{Name: "browser-use", Markdown: "# Browser Use"}},
+	})
+	if !errors.Is(err, conflict) {
+		t.Fatalf("error = %v, want original conflict", err)
+	}
+	if len(ff.deletedAgents) != 1 || len(ff.deletedSkills) != 0 {
+		t.Fatalf("rollback agents=%#v skills=%#v", ff.deletedAgents, ff.deletedSkills)
+	}
+}
+
+func TestProvisionAgentFromSpecDoesNotListSkillsForNonConflict(t *testing.T) {
+	createErr := &fleet.APIError{Status: 500, Message: "unavailable"}
+	ff := &fakeFleet{agentID: "agent-1", skillErr: createErr, failSkillAt: 0}
+	svc := New(newFakeStore(), newMemObjectStore(), func() string { return "gen" }).WithFleet(ff)
+
+	_, err := svc.ProvisionAgentFromSpec(context.Background(), baseInput(), ProvisionAgentSpec{
+		Name:   "Browser Expert",
+		Skills: []model.SkillRef{{Name: "browser-use", Markdown: "# Browser Use"}},
+	})
+	if !errors.Is(err, createErr) {
+		t.Fatalf("error = %v, want create error", err)
+	}
+	if ff.listSkillsCalls != 0 {
+		t.Fatalf("ListSkills calls = %d, want 0", ff.listSkillsCalls)
+	}
+}
+
+func TestInstallExpertKeepsSkillNameConflictForLegacyEndpoint(t *testing.T) {
+	conflict := &fleet.APIError{Status: 409, Message: "a skill with this name already exists"}
+	ff := &fakeFleet{
+		agentID:        "agent-1",
+		skillErr:       conflict,
+		failSkillAt:    0,
+		existingSkills: []fleet.SkillSummary{{ID: "existing-skill", Name: "browser-use"}},
+	}
+	svc, caller, id := installFixture(t, ff, []model.SkillRef{{Name: "browser-use", Markdown: "# Browser Use"}})
+
+	if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); !errors.Is(err, conflict) {
+		t.Fatalf("InstallExpert error = %v, want original conflict", err)
+	}
+	if ff.listSkillsCalls != 0 {
+		t.Fatalf("legacy install must not look up existing skills, calls=%d", ff.listSkillsCalls)
 	}
 }
 

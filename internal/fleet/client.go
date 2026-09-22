@@ -72,6 +72,12 @@ type SkillSpec struct {
 	Content     string
 }
 
+// SkillSummary is the identity returned by fleet's workspace skill list.
+type SkillSummary struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // APIError is a non-2xx fleet response. Status lets the caller distinguish a
 // client-fault 4xx (surface it) from a 5xx/transport failure (treat as
 // upstream-unavailable). Message is fleet's `{"error": "..."}` text.
@@ -114,6 +120,19 @@ func (c *Client) CreateSkill(ctx context.Context, token, spaceID, workspaceID st
 		"content":     spec.Content,
 	}
 	return c.doCreate(ctx, http.MethodPost, "/api/skills", token, spaceID, workspaceID, body)
+}
+
+// ListSkills returns the skills already available in the caller's workspace.
+func (c *Client) ListSkills(ctx context.Context, token, spaceID, workspaceID string) ([]SkillSummary, error) {
+	raw, err := c.do(ctx, http.MethodGet, "/api/skills", token, spaceID, workspaceID, nil)
+	if err != nil {
+		return nil, err
+	}
+	var skills []SkillSummary
+	if err := json.Unmarshal(raw, &skills); err != nil {
+		return nil, fmt.Errorf("fleet: decode /api/skills response: %w", err)
+	}
+	return skills, nil
 }
 
 // SetAgentSkills replaces the agent's bound skill set.

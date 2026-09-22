@@ -51,7 +51,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	if err != nil {
 		return InstallSquadResult{}, err
 	}
-	result, err := s.provisionSquad(ctx, in, m)
+	result, err := s.provisionSquad(ctx, in, m, false)
 	if err != nil {
 		return InstallSquadResult{}, err
 	}
@@ -63,9 +63,10 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 }
 
 // ProvisionSquadFromSpec provisions an externally built squad model (the
-// unified plugin install maps plugin_json + relations onto it) with
-// InstallSquad's exact semantics: aggregate timeout, shared file budget,
-// full rollback on partial failure. It bumps no metrics counter.
+// unified plugin install maps plugin_json + relations onto it) with aggregate
+// timeout, a shared file budget, exact-name reuse for existing workspace
+// skills, and rollback limited to resources created by this call. It bumps no
+// metrics counter.
 func (s *Service) ProvisionSquadFromSpec(ctx context.Context, in InstallInput, m *model.Squad) (InstallSquadResult, error) {
 	if s.fleet == nil {
 		return InstallSquadResult{}, ErrFleetNotConfigured
@@ -75,14 +76,14 @@ func (s *Service) ProvisionSquadFromSpec(ctx context.Context, in InstallInput, m
 	}
 	ctx, cancel := context.WithTimeout(ctx, installTimeout)
 	defer cancel()
-	return s.provisionSquad(ctx, in, m)
+	return s.provisionSquad(ctx, in, m, true)
 }
 
 // provisionSquad is the shared squad provisioning body: install each member as
 // a Loop agent, form the squad led by the leader member, write dispatch
 // strategies as instructions, attach the rest, rolling everything back on any
 // failure.
-func (s *Service) provisionSquad(ctx context.Context, in InstallInput, m *model.Squad) (InstallSquadResult, error) {
+func (s *Service) provisionSquad(ctx context.Context, in InstallInput, m *model.Squad, reuseExistingSkillsByName bool) (InstallSquadResult, error) {
 	if len(m.Members) == 0 {
 		return InstallSquadResult{}, ErrInvalidRequest
 	}
@@ -98,9 +99,9 @@ func (s *Service) provisionSquad(ctx context.Context, in InstallInput, m *model.
 	// failure here leaves only the *earlier* members to unwind.
 	created := make([]createdAgent, 0, len(m.Members))
 	memberAgentIDs := make([]string, len(m.Members))
-	// Fleet skill names are workspace-wide. Keep the first packaged skill with a
-	// given normalized name and skip later duplicates across squad members.
-	seenSkillNames := make(map[string]struct{})
+	// Fleet skill names are workspace-wide. Keep the first packaged skill with an
+	// exact name and reuse or skip later duplicates according to the install path.
+	seenSkillIDs := make(map[string]string)
 	for i := range m.Members {
 		agentID, skillIDs, err := s.provisionAgent(ctx, in, agentProvisionSpec{
 			Name:        m.Members[i].Name,
@@ -108,7 +109,7 @@ func (s *Service) provisionSquad(ctx context.Context, in InstallInput, m *model.
 			Instruction: m.Members[i].Instruction,
 			MCPConfig:   m.Members[i].MCPConfig,
 			Skills:      m.Members[i].Skills,
-		}, budget, seenSkillNames)
+		}, budget, seenSkillIDs, reuseExistingSkillsByName)
 		if err != nil {
 			s.rollbackSquad(ctx, in, "", created)
 			return InstallSquadResult{}, err
