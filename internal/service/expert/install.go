@@ -306,9 +306,26 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 		createdSkill := err == nil
 		if err != nil && reuseExistingSkillsByName && isFleetConflict(err) {
 			createErr := err
-			skillID, err = s.existingSkillIDByName(ctx, in, skills[i].Name)
-			if err == nil && skillID == "" {
+			existingID, lookupErr := s.existingSkillIDByName(ctx, in, skills[i].Name)
+			if lookupErr != nil {
+				logging.Warn("plugin_install_skill_reuse_lookup_failed",
+					zap.String("space_id", in.SpaceID),
+					zap.String("workspace_id", in.WorkspaceID),
+					zap.String("skill_name", skills[i].Name),
+					logging.ErrorField(lookupErr),
+				)
 				err = createErr
+			} else if existingID == "" {
+				err = createErr
+			} else {
+				skillID = existingID
+				err = nil
+				logging.Warn("plugin_install_skill_reused",
+					zap.String("space_id", in.SpaceID),
+					zap.String("workspace_id", in.WorkspaceID),
+					zap.String("skill_name", skills[i].Name),
+					zap.String("skill_id", skillID),
+				)
 			}
 		}
 		if err != nil {
@@ -343,8 +360,8 @@ func (s *Service) existingSkillIDByName(ctx context.Context, in InstallInput, na
 		return "", err
 	}
 	for _, skill := range skills {
-		if skill.Name == name && strings.TrimSpace(skill.ID) != "" {
-			return skill.ID, nil
+		if id := strings.TrimSpace(skill.ID); skill.Name == name && id != "" {
+			return id, nil
 		}
 	}
 	return "", nil

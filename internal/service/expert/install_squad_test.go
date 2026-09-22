@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
@@ -212,6 +213,33 @@ func TestProvisionSquadFromSpecBindsSharedSkillToEveryMember(t *testing.T) {
 		if got := ff.bindings[agentID]; len(got) != 1 || got[0] != "shared" {
 			t.Fatalf("bindings[%s] = %#v, want [shared]", agentID, got)
 		}
+	}
+}
+
+func TestProvisionSquadFromSpecPreservesReusedSkillWhenLaterMemberFails(t *testing.T) {
+	members := []model.SquadMember{
+		{MemberKey: "member_01", Name: "Planner", IsLeader: true, Skills: []model.SkillRef{{Name: "Shared Skill", Markdown: "# Shared"}}},
+		{MemberKey: "member_02", Name: "Coder"},
+	}
+	ff := &fakeFleet{
+		agentIDs:       []string{"a0", "a1"},
+		agentErr:       errors.New("second agent failed"),
+		failAgentAt:    1,
+		skillErr:       &fleet.APIError{Status: 409, Message: "a skill with this name already exists"},
+		failSkillAt:    0,
+		existingSkills: []fleet.SkillSummary{{ID: "existing-shared", Name: "Shared Skill"}},
+		failMemberAt:   -1,
+	}
+	svc := New(newFakeStore(), newMemObjectStore(), func() string { return "gen" }).WithFleet(ff)
+
+	if _, err := svc.ProvisionSquadFromSpec(context.Background(), baseInput(), &model.Squad{Name: "Team", Members: members}); err == nil {
+		t.Fatal("expected second member failure")
+	}
+	if len(ff.deletedSkills) != 0 {
+		t.Fatalf("rollback deleted reused skill: %#v", ff.deletedSkills)
+	}
+	if len(ff.deletedAgents) != 1 || ff.deletedAgents[0] != "a0" {
+		t.Fatalf("deleted agents = %#v, want [a0]", ff.deletedAgents)
 	}
 }
 

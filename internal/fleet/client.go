@@ -23,7 +23,7 @@ import (
 )
 
 // maxRespBytes bounds a fleet response body so a misbehaving upstream can't
-// balloon memory. Agent/skill responses are small JSON objects.
+// balloon memory. It applies to both object responses and skill-list summaries.
 const maxRespBytes = 1 << 20
 
 // Client talks to one octo-fleet base URL.
@@ -123,6 +123,7 @@ func (c *Client) CreateSkill(ctx context.Context, token, spaceID, workspaceID st
 }
 
 // ListSkills returns the skills already available in the caller's workspace.
+// Fleet's endpoint is an unpaginated bare JSON array of summary objects.
 func (c *Client) ListSkills(ctx context.Context, token, spaceID, workspaceID string) ([]SkillSummary, error) {
 	raw, err := c.do(ctx, http.MethodGet, "/api/skills", token, spaceID, workspaceID, nil)
 	if err != nil {

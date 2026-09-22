@@ -26,6 +26,9 @@ type fakeFleet struct {
 	existingSkills  []fleet.SkillSummary
 	listSkillsErr   error
 	listSkillsCalls int
+	listToken       string
+	listSpaceID     string
+	listWorkspaceID string
 	setErr          error
 	fileErr         error // fails UpsertSkillFile
 
@@ -102,8 +105,11 @@ func (f *fakeFleet) CreateSkill(_ context.Context, _, _, _ string, spec fleet.Sk
 	return "skill-extra", nil
 }
 
-func (f *fakeFleet) ListSkills(_ context.Context, _, _, _ string) ([]fleet.SkillSummary, error) {
+func (f *fakeFleet) ListSkills(_ context.Context, token, spaceID, workspaceID string) ([]fleet.SkillSummary, error) {
 	f.listSkillsCalls++
+	f.listToken = token
+	f.listSpaceID = spaceID
+	f.listWorkspaceID = workspaceID
 	return f.existingSkills, f.listSkillsErr
 }
 
@@ -315,6 +321,9 @@ func TestProvisionAgentFromSpecReusesExistingSkillName(t *testing.T) {
 	if agentID != "agent-1" || ff.listSkillsCalls != 1 {
 		t.Fatalf("agentID=%q listSkillsCalls=%d", agentID, ff.listSkillsCalls)
 	}
+	if ff.listToken != "tok" || ff.listSpaceID != "space-1" || ff.listWorkspaceID != "ws-1" {
+		t.Fatalf("lookup scope token=%q space=%q workspace=%q", ff.listToken, ff.listSpaceID, ff.listWorkspaceID)
+	}
 	if got := ff.bindings["agent-1"]; len(got) != 1 || got[0] != "existing-skill" {
 		t.Fatalf("bindings = %#v, want [existing-skill]", got)
 	}
@@ -387,6 +396,28 @@ func TestProvisionAgentFromSpecDoesNotListSkillsForNonConflict(t *testing.T) {
 	}
 	if ff.listSkillsCalls != 0 {
 		t.Fatalf("ListSkills calls = %d, want 0", ff.listSkillsCalls)
+	}
+}
+
+func TestProvisionAgentFromSpecPreservesConflictWhenSkillLookupFails(t *testing.T) {
+	conflict := &fleet.APIError{Status: 409, Message: "a skill with this name already exists"}
+	ff := &fakeFleet{
+		agentID:       "agent-1",
+		skillErr:      conflict,
+		failSkillAt:   0,
+		listSkillsErr: errors.New("list failed"),
+	}
+	svc := New(newFakeStore(), newMemObjectStore(), func() string { return "gen" }).WithFleet(ff)
+
+	_, err := svc.ProvisionAgentFromSpec(context.Background(), baseInput(), ProvisionAgentSpec{
+		Name:   "Browser Expert",
+		Skills: []model.SkillRef{{Name: "browser-use", Markdown: "# Browser Use"}},
+	})
+	if !errors.Is(err, conflict) {
+		t.Fatalf("error = %v, want original conflict", err)
+	}
+	if ff.listSkillsCalls != 1 {
+		t.Fatalf("ListSkills calls = %d, want 1", ff.listSkillsCalls)
 	}
 }
 

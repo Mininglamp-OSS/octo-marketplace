@@ -21,6 +21,10 @@ Skill name, bind the existing Skill and continue the install.
 - Reuse is limited to Fleet `409 Conflict` responses from Skill creation and an
   exact, byte-for-byte name match returned by `GET /api/skills` in the same
   caller-scoped workspace.
+- For this workflow, the workspace-local Skill name is the reuse identity and
+  the existing workspace content intentionally wins. This matches Fleet's own
+  agent-template materialization behavior; Marketplace does not compare Plugin
+  publisher, version, content, or digest before binding.
 - Reused Skills are bound by ID without changing their content or supporting
   files.
 - Rollback deletes only agents, squads, and Skills created by the current
