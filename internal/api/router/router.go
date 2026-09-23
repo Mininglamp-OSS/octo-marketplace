@@ -231,6 +231,9 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		// counters under resource_type "plugin", and imports Skill uploads
 		// through the shared parse pipeline.
 		pluginSvc.WithProvisioner(expertSvc).WithMetrics(mSvc).WithParseTasks(skRepo)
+		if installer, ok := fleetClient.(pluginsvc.CapabilityInstaller); ok {
+			pluginSvc.WithCapabilityInstaller(installer)
+		}
 		expertHandler := experthandler.New(expertSvc)
 		expertHandler.Register(v1)
 
@@ -332,7 +335,8 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 	}
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization,Token,X-Space-Id,X-Request-Id")
+		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization,Token,X-Space-Id,X-Request-Id,X-Workspace-Id,Idempotency-Key")
+		c.Header("Access-Control-Expose-Headers", "Idempotency-Replayed,Retry-After")
 		if origin := c.GetHeader("Origin"); origin != "" {
 			if _, ok := allowed[origin]; ok {
 				c.Header("Access-Control-Allow-Origin", origin)

@@ -1563,6 +1563,22 @@ components:
       required:
       - name
       type: object
+    internal_api_handler_plugin.createInstallationRequest:
+      properties:
+        custom_env:
+          additionalProperties:
+            type: string
+          type: object
+        resource_name:
+          maxLength: 200
+          type: string
+        runtime_id:
+          format: uuid
+          type: string
+      required:
+      - runtime_id
+      type: object
+      additionalProperties: false
     internal_api_handler_plugin.deleteRequest:
       properties:
         plugin_id:
@@ -5695,6 +5711,116 @@ paths:
       security:
       - Bearer: []
       summary: List plugins
+      tags:
+      - plugin
+  /plugins/{plugin_id}/installations:
+    post:
+      description: Resolves the visible expert or expert_team graph and installs it
+        atomically in Fleet. Requires a stable Idempotency-Key; retry uncertain outcomes
+        with the same key and input. Disabled by default pending the Fleet schema
+        extensions; the legacy /plugins/install remains available.
+      operationId: plugin.installation.create
+      parameters:
+      - description: Marketplace plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      - description: Target Workspace ID
+        in: header
+        name: X-Workspace-ID
+        required: true
+        schema:
+          type: string
+      - description: Stable key for this installation; 1-200 visible ASCII characters
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_api_handler_plugin.createInstallationRequest'
+        description: Resource name, local runtime, and environment bindings
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_installResponse'
+          description: OK
+          headers:
+            Idempotency-Replayed:
+              description: true when Fleet replayed the installation
+              schema:
+                type: string
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT or DUPLICATE
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: UNSUPPORTED_MEDIA_TYPE
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: RATE_LIMITED
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: UPSTREAM_UNAVAILABLE
+      security:
+      - Bearer: []
+      summary: Install a plugin through Fleet capability installation
       tags:
       - plugin
   /plugins/delete:

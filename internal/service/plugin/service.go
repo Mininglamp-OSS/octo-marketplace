@@ -115,15 +115,16 @@ type Store interface {
 var _ Store = (*pluginrepo.Repo)(nil)
 
 type Service struct {
-	repo               Store
-	storage            storage.Storage
-	provisioner        Provisioner
-	metrics            InstallTracker
-	parseTasks         ParseTaskStore
-	id                 func() string
-	now                func() time.Time
-	maxAttachmentBytes int64
-	maxArchiveBytes    int64
+	repo                Store
+	storage             storage.Storage
+	provisioner         Provisioner
+	capabilityInstaller CapabilityInstaller
+	metrics             InstallTracker
+	parseTasks          ParseTaskStore
+	id                  func() string
+	now                 func() time.Time
+	maxAttachmentBytes  int64
+	maxArchiveBytes     int64
 
 	// Review IM notification wiring. Both are optional and are used ONLY by the
 	// IM surface: a nil notifier means no approval card is dispatched, and the
