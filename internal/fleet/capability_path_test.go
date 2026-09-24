@@ -20,7 +20,7 @@ func TestCapabilityInstallUsesSharedFleetBaseURL(t *testing.T) {
 		{"nested_direct_path", "https://octo.example.test/fleet/internal", "https://octo.example.test/fleet/internal/v1/capabilities/install"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client := New(tc.baseURL).WithCapabilityInstall(true)
+			client := New(tc.baseURL)
 			var urls []string
 			client.http.Transport = capabilityRoundTripper(func(r *http.Request) (*http.Response, error) {
 				urls = append(urls, r.URL.String())

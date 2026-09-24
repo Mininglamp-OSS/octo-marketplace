@@ -10,7 +10,7 @@ import (
 )
 
 func TestCapabilityTimeoutDoesNotChangeLegacyClient(t *testing.T) {
-	client := New("https://fleet.example.test").WithCapabilityInstall(true)
+	client := New("https://fleet.example.test")
 	var deadlines []time.Duration
 	client.http.Transport = capabilityRoundTripper(func(r *http.Request) (*http.Response, error) {
 		deadline, ok := r.Context().Deadline()
@@ -50,7 +50,7 @@ func TestCapabilityTimeoutDoesNotChangeLegacyClient(t *testing.T) {
 }
 
 func TestCapabilityTimeoutHonorsCallerCancellation(t *testing.T) {
-	client := New("https://fleet.example.test").WithCapabilityInstall(true)
+	client := New("https://fleet.example.test")
 	calls := 0
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

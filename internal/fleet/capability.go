@@ -16,8 +16,6 @@ import (
 // changing the shared legacy client's 30-second timeout.
 const CapabilityInstallTimeout = 2 * time.Minute
 
-var ErrCapabilityInstallDisabled = errors.New("capability installation is disabled")
-
 // CapabilityAPIError retains Fleet's conflict message for direct display only.
 // Error deliberately excludes it because messages may contain submitted values.
 type CapabilityAPIError struct {
@@ -30,20 +28,10 @@ type CapabilityAPIError struct {
 
 func (e *CapabilityAPIError) Error() string { return "Fleet capability installation failed" }
 
-func (c *Client) WithCapabilityInstall(enabled bool) *Client {
-	c.capabilityInstallEnabled = enabled
-	return c
-}
-
-func (c *Client) CapabilityInstallEnabled() bool { return c.capabilityInstallEnabled }
-
 // InstallCapability makes exactly one mutation. The caller must reuse the key
 // and identical assembled bytes on retry; an uncertain result never falls back
 // to the legacy per-resource installer. c.http also disables redirects.
 func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspaceID, key string, in CapabilityInstallRequest) (*CapabilityInstallResult, error) {
-	if !c.CapabilityInstallEnabled() {
-		return nil, ErrCapabilityInstallDisabled
-	}
 	body, err := json.Marshal(in)
 	if err != nil {
 		return nil, errors.New("cannot encode capability installation")

@@ -21,7 +21,9 @@ Fleet on behalf of the authenticated user. The existing installer is unchanged.
   Other upstream/raw internal messages must not reach the response or logs.
 - Separate preparation failures from uncertain Fleet attempts, with safe
   phase/reason diagnostics and unchanged same-key retry rules.
-- Disabled by default until deployment/runtime integration is verified.
+- Available whenever the existing Fleet client is configured; no separate
+  capability-install enable flag (updated per the user's 2026-09-24 decision).
+  An unconfigured installer still fails before any Fleet call.
 - Reuse the legacy Fleet base URL: the known `/fleet` gateway mount uses
   `/api/v1/capabilities/install`; direct Fleet retains `/v1/capabilities/install`.
   Do not change legacy paths, add configuration or probe/retry alternate routes.
@@ -47,7 +49,10 @@ conflict; no historical Definition snapshot is stored by this endpoint.
 
 ## Acceptance
 
-- Old and new routes coexist; disabled mode cannot issue a Fleet mutation.
+- Old and new routes coexist; a configured Fleet client needs no opt-in flag.
+  Residual values of the removed enable variable have no effect. Without a
+  configured installer, return a Chinese 503 with reason `not_configured` and
+  do not issue a Fleet mutation. Keep authentication and validation unchanged.
 - Single expert and team installs preserve names, each expert's own description,
   team description, instructions, MCP, skills/files, shared runtime and custom_env.
   Installation names do not mutate catalog data.
