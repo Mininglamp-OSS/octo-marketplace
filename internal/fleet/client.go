@@ -28,9 +28,8 @@ const maxRespBytes = 1 << 20
 
 // Client talks to one octo-fleet base URL.
 type Client struct {
-	baseURL                  string
-	http                     *http.Client
-	capabilityInstallEnabled bool
+	baseURL string
+	http    *http.Client
 }
 
 // New returns a Client for the given fleet base URL (no trailing slash).

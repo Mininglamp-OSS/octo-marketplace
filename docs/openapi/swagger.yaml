@@ -5717,7 +5717,7 @@ paths:
     post:
       description: Resolves and installs the visible expert or expert_team graph atomically
         in Fleet; retry uncertain outcomes with the same Idempotency-Key and input
-        within Fleet's 24-hour retention window. Disabled by default until rollout;
+        within Fleet's 24-hour retention window. Uses the configured Fleet service;
         the legacy /plugins/install remains available. Generated error text is Chinese;
         409 preserves Fleet's conflict message.
       operationId: plugin.installation.create

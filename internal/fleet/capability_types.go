@@ -3,7 +3,6 @@ package fleet
 import "encoding/json"
 
 // CapabilityInstallRequest matches Fleet test commit 49a8266 (2026-09-24).
-// Production use is gated by OCTO_FLEET_CAPABILITY_INSTALL_ENABLED (default false).
 type CapabilityInstallRequest struct {
 	Definition CapabilityDefinition `json:"definition"`
 	Bindings   CapabilityBindings   `json:"bindings"`

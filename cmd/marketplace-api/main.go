@@ -153,7 +153,7 @@ func main() {
 	// UPSTREAM_UNAVAILABLE instead of dialing an empty base URL.
 	var fleetClient expertsvc.FleetProvisioner
 	if cfg.OctoFleetURL != "" {
-		fleetClient = fleet.New(cfg.OctoFleetURL).WithCapabilityInstall(cfg.FleetCapabilityInstallEnabled)
+		fleetClient = fleet.New(cfg.OctoFleetURL)
 		log.Printf("[fleet] expert install enabled (url=%q)", cfg.OctoFleetURL)
 	} else {
 		log.Printf("[fleet] expert install disabled: OCTO_FLEET_URL not set")

@@ -15,6 +15,7 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -32,7 +33,7 @@ type createInstallationRequest struct {
 
 // CreateInstallation godoc
 // @Summary Install a plugin through Fleet capability installation
-// @Description Resolves and installs the visible expert or expert_team graph atomically in Fleet; retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. Disabled by default until rollout; the legacy /plugins/install remains available. Generated error text is Chinese; 409 preserves Fleet's conflict message.
+// @Description Resolves and installs the visible expert or expert_team graph atomically in Fleet; retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; 409 preserves Fleet's conflict message.
 // @Tags plugin
 // @ID plugin.installation.create
 // @Accept json
@@ -95,7 +96,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	}
 	svc, ok := h.svc.(capabilityInstallationService)
 	if !ok {
-		writeInstallationError(c, fleet.ErrCapabilityInstallDisabled)
+		writeInstallationError(c, expertsvc.ErrFleetNotConfigured)
 		return
 	}
 	out, err := svc.CreateInstallation(c.Request.Context(), user, c.Param("plugin_id"), p)
@@ -147,8 +148,8 @@ func writeInstallationError(c *gin.Context, err error) {
 	switch {
 	case errors.As(err, &field):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "安装参数不正确。", map[string]any{"field": field.Field, "reason": field.Reason}, "请检查工作区、运行环境、名称和环境变量后重试。")
-	case errors.Is(err, fleet.ErrCapabilityInstallDisabled):
-		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "新的安装接口暂未开放。", map[string]any{"upstream": "fleet", "reason": "not_enabled"}, "请等待接口开放；新安装任务仍可使用原安装入口，结果未确认的任务请勿切换入口。")
+	case errors.Is(err, expertsvc.ErrFleetNotConfigured):
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装服务尚未配置，请联系管理员。", map[string]any{"upstream": "fleet", "reason": "not_configured"}, installationRetryHint)
 	case errors.Is(err, pluginsvc.ErrNotFound):
 		apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "插件不存在或不可访问。", nil, "请刷新插件列表后重试。")
 	case errors.Is(err, pluginsvc.ErrDependencyHidden):

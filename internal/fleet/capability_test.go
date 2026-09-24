@@ -83,7 +83,7 @@ func TestCapabilityInstallForwardsIdentityAndReplay(t *testing.T) {
 		io.WriteString(w, expertEnvelopeJSON)
 	}))
 	defer server.Close()
-	client := New(server.URL).WithCapabilityInstall(true)
+	client := New(server.URL)
 	for range 2 {
 		out, err := client.InstallCapability(context.Background(), "user-token", "space", "workspace", "operation-key", capabilityRequest())
 		if err != nil || out.ExpertID != "expert-1" || !out.Replayed || !out.ReplayKnown {
@@ -92,15 +92,6 @@ func TestCapabilityInstallForwardsIdentityAndReplay(t *testing.T) {
 	}
 	if bodies[0] != bodies[1] || !strings.Contains(bodies[0], `"custom_env":{"OCTOBUDDY_PROVIDER_ID":"provider"}`) {
 		t.Fatal("request is not stable or environment binding was lost")
-	}
-}
-
-func TestCapabilityInstallDisabledDoesNotContactFleet(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("disabled client contacted Fleet") }))
-	defer server.Close()
-	_, err := New(server.URL).InstallCapability(context.Background(), "", "", "", "", capabilityRequest())
-	if !errors.Is(err, ErrCapabilityInstallDisabled) {
-		t.Fatal(err)
 	}
 }
 
@@ -127,7 +118,7 @@ func TestCapabilityInstallReplayMetadataMustBeExplicit(t *testing.T) {
 				io.WriteString(w, expertEnvelopeJSON)
 			}))
 			defer server.Close()
-			out, err := New(server.URL).WithCapabilityInstall(true).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
+			out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
 			if err != nil || out == nil {
 				t.Fatalf("valid envelope failed: %v", err)
 			}
@@ -143,7 +134,7 @@ type capabilityRoundTripper func(*http.Request) (*http.Response, error)
 func (f capabilityRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestCapabilityTransportCannotReplayPostAutomatically(t *testing.T) {
-	client := New("https://fleet.example.test").WithCapabilityInstall(true)
+	client := New("https://fleet.example.test")
 	client.http.Transport = capabilityRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.GetBody != nil {
 			t.Fatal("POST exposes an automatic replay body")
@@ -180,7 +171,7 @@ func TestCapabilityInstallRejectsBadRepliesWithoutRetry(t *testing.T) {
 				io.WriteString(w, test.body)
 			}))
 			defer server.Close()
-			_, err := New(server.URL).WithCapabilityInstall(true).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
+			_, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
 			if err == nil || calls != 1 || strings.Contains(err.Error(), "secret-value") {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
@@ -217,7 +208,7 @@ func TestCapabilityInstallRetainsOnlyConflictMessage(t *testing.T) {
 				io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
-			_, err := New(server.URL).WithCapabilityInstall(true).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
+			_, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
 			var apiErr *CapabilityAPIError
 			if !errors.As(err, &apiErr) {
 				t.Fatalf("expected CapabilityAPIError, got %v", err)
@@ -254,7 +245,7 @@ func TestCapabilityInstallRecognizesIdempotencyConflictDetails(t *testing.T) {
 				io.WriteString(w, `{"error":{"code":"`+tc.code+`","message":"Fleet conflict message","details":`+tc.details+`}}`)
 			}))
 			defer server.Close()
-			_, err := New(server.URL).WithCapabilityInstall(true).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
+			_, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
 			var apiErr *CapabilityAPIError
 			if !errors.As(err, &apiErr) || apiErr.IdempotencyKeyReused != tc.want {
 				t.Fatalf("idempotency conflict classification mismatch: %v", err)
