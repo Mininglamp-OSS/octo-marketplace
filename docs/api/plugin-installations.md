@@ -95,6 +95,10 @@ its member experts, their deduplicated Skills, and `expert_team`. Bindings ident
 each expert by the assembled name. `definition.name` is the stable catalog
 identity `marketplace:<plugin_id>`, not the custom display name.
 
+Each expert uses its own manifest description, including team members; the
+team itself uses the team manifest description. This is intentional metadata
+improvement over the legacy team's shared summary; the legacy route is unchanged.
+
 The adapter preserves expert AGENTS.md/MCP and team AGENTS.md. These documents
 must be inline (`content_type: raw`); a declared storage-backed MCP is rejected
 before Fleet rather than omitted. Experts without MCP remain supported. Same-name
@@ -109,6 +113,11 @@ both; unknown fields, invalid transports and explicit null values are rejected.
 Command/URL/type are normalized as Fleet does, while environment, arguments and
 headers retain their values. Normalized JSON is capped at 64 KiB. No MCP process
 is started and no MCP URL is fetched by Marketplace.
+
+For stdio, `command` selects the transport: a non-empty `type` (including
+`"stdio"`) or non-empty `headers` is unsupported and returns 400
+`VALIDATION_ERROR` before Fleet. This restriction is intentional; Marketplace
+does not strip those fields or reinterpret them as environment variables.
 
 Team leadership uses the first explicitly flagged leader, otherwise the first
 member, matching the legacy selection rule. Tied display orders are resolved by
@@ -196,11 +205,16 @@ key/input and reconcile that earlier outcome before starting a new operation.
   adapter serialization between attempts can produce a safe 409 rather than a
   replay. Do not claim exact replay across such changes. Retain the original
   client input securely and reconcile before starting a replacement operation.
-- Only a confirmed non-replay may increment install metrics. With the current
-  Fleet implementation all success responses have unknown replay status, so this
-  new route skips Marketplace install counting rather than counting retries twice.
-  This does not affect installed resources or legacy metrics; no new deduplication
-  store is introduced. Restore counting only with a reliable upstream signal.
+- Installation metrics match `/plugins/install`: each successful invocation
+  increments the root plugin's counter once, including same-key receipt replays
+  and responses without replay metadata. Failures do not increment it. This
+  counts successful API calls, not distinct created resources; metrics remain
+  best-effort through the existing tracker. Fleet resource creation stays
+  idempotent and the replay response header keeps its original meaning.
+- The new route has a two-minute operation deadline, including asset preparation
+  and the Fleet HTTP call. Earlier caller cancellation still applies; legacy
+  Fleet requests retain their 30-second HTTP timeout. Timeout recovery always
+  uses the original idempotency key and never falls back to another installer.
 
 Before switching Client, verify single expert and multi-member team installs,
 custom naming, MCP, provider environment, complete Skill files, cross-Space and

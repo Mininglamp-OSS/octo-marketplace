@@ -81,7 +81,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 			if err != nil {
 				return nil, err
 			}
-			expert, err := b.expert(ctx, detail, strings.TrimSpace(detail.Plugin.Name), summary)
+			expert, err := b.expert(ctx, detail, strings.TrimSpace(detail.Plugin.Name), manifestDescription(detail.Plugin.Manifest))
 			if err != nil {
 				return nil, err
 			}

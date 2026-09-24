@@ -67,7 +67,7 @@ func TestCapabilityInstallationPreservesSingleExpertAndCustomName(t *testing.T) 
 		t.Fatalf("definition=%+v", def)
 	}
 	expert := def.Experts[0]
-	if expert.Name != "Custom name" || expert.Instructions != "do the work" || !strings.Contains(string(expert.MCPConfig), `"command":"uvx"`) || expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-current" {
+	if expert.Name != "Custom name" || expert.Description != "expert summary" || expert.Instructions != "do the work" || !strings.Contains(string(expert.MCPConfig), `"command":"uvx"`) || expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-current" {
 		t.Fatalf("expert=%+v", expert)
 	}
 	if len(def.Skills) != 1 || def.Skills[0].Content != "# Deploy" || def.Skills[0].Files[0].Source.Content != "check before deploy" {
@@ -91,6 +91,7 @@ func TestCapabilityTeamSharesSkillsAndBindsEveryMember(t *testing.T) {
 	svc, store, installer := capabilityFixture()
 	second := *store.plugins["expert-1"]
 	second.ID, second.Name = "expert-2", "Bob"
+	second.Manifest = json.RawMessage(`{"description":"reviewer summary"}`)
 	store.plugins[second.ID] = &second
 	store.relations[second.ID] = []model.PluginRelation{{Type: "expert_skill", TargetPluginID: "skill-1", Status: 1}}
 	store.relations["team-1"] = append(store.relations["team-1"], model.PluginRelation{Type: "expert_team_expert", TargetPluginID: second.ID, Status: 1, SortOrder: 1, Data: json.RawMessage(`{"role":"reviewer"}`)})
@@ -105,7 +106,11 @@ func TestCapabilityTeamSharesSkillsAndBindsEveryMember(t *testing.T) {
 	if def.ExpertTeam.Name != "Custom name" || def.ExpertTeam.Instructions != "# Team\n\n## 协作方式\n1. first\n2. second" || def.ExpertTeam.Description != "team summary" {
 		t.Fatalf("team=%+v", def.ExpertTeam)
 	}
+	wantDescriptions := map[string]string{"Alice": "expert summary", "Bob": "reviewer summary"}
 	for _, expert := range def.Experts {
+		if want, ok := wantDescriptions[expert.Name]; !ok || expert.Description != want {
+			t.Fatalf("expert %q description=%q, want %q", expert.Name, expert.Description, want)
+		}
 		if !reflect.DeepEqual(expert.SkillNames, []string{"Deploy"}) || expert.Name == "Custom name" {
 			t.Fatalf("expert=%+v", expert)
 		}
@@ -241,7 +246,7 @@ func TestCapabilityReplayAndDisabledMode(t *testing.T) {
 	installer.replay = true
 	installer.replayKnown = true
 	out, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
-	if err != nil || !out.Replayed || tracker.id != "" {
+	if err != nil || !out.Replayed || tracker.id != "expert-1" {
 		t.Fatalf("out=%+v err=%v metric=%s", out, err, tracker.id)
 	}
 }

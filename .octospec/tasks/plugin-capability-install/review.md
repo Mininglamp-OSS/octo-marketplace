@@ -3,16 +3,84 @@
 Updated: 2026-09-24 (initial audit: 2026-09-23). Repository: octo-marketplace.
 Branch: `codex/plugin-capability-install`.
 Base: `upstream/main` at `933ced9c62eb7e5a6153a46c8e4e0ca864b25add`
-(refetched during review). Candidate: `40c8c93` plus the current review fixes
-and Fleet test contract adaptation.
+(refetched during initial review). Current candidate: `ae7fb71` plus the
+post-PR fixes below; earlier sections retain their original verification history.
 
 This is a pre-PR self-audit, not formal approval. The initial two rounds included
 independent read-only passes over Definition/assets and Fleet/HTTP/auth, followed
 by primary review and regression tests. The 2026-09-24 adaptation received another
-independent final read-only review of the combined changes. No remaining confirmed
-P0/P1 was found. The contract is now source-verified against Fleet `origin/test`
-at `49a8266`; real deployment/runtime integration remains unverified, and the
-integration stays disabled by default.
+independent final read-only review of the combined changes. That initial audit
+missed the member-description and replacement-budget issues subsequently raised
+on the PR. The current post-PR review is recorded below. The contract is
+source-verified against Fleet `origin/test` at `49a8266`; the integration stays
+disabled by default.
+
+## Post-PR review response — 2026-09-24
+
+Current explicit user decisions supersede the earlier counting/compatibility
+assumptions. These changes are confined to the new route; no legacy installer,
+ingestion/backfill, Fleet code, database or deployment is modified.
+
+- **MCP support:** keep rejecting a command-based server with non-empty `type`
+  (including `"stdio"`) or headers before Fleet. This is intentional, not an
+  ingestion change or a silent normalization. Fleet `49a8266`
+  `pkg/capability/validation.go` also rejects these fields. Service regressions
+  pin both cases for single experts and team members, alongside the existing
+  parser tests; API documentation now explicitly states the restriction.
+- **Member descriptions:** retain the user-requested per-member own-manifest
+  behavior and the team/single-expert assertions plus 255/256-rune limits. The
+  reviewer's corrected legacy trace is right: `agentSpecFromPlugin` is only the
+  single-expert path, and legacy squad provisioning uses the team summary.
+  This is an intentional new-route metadata improvement, not a claimed legacy
+  regression and not authorization to alter the old route.
+- **Skill budget:** refund only the validated archived SKILL.md charge before
+  fetching its authoritative replacement. ZIP decompression, path safety,
+  object authorization, per-file and aggregate bounds remain enforced. New
+  regressions reproduce the old false 413, cover exact-budget success and a
+  one-byte excess, and assert the preserved supporting file and final budget.
+- **Counting:** call the existing best-effort tracker once for each successful
+  invocation, including explicit replays and missing replay metadata. This
+  counts API successes, not unique resources. Tests cover expert/team, two
+  repeated successes, fresh/replayed/unknown metadata, and no count on failure.
+  Resource idempotency and response replay-header semantics remain unchanged.
+- **Timeout:** the new operation and HTTP call share a two-minute upper bound.
+  Copy only the HTTP client policy for the capability call; keep shared
+  transport/redirect protection and the legacy 30-second timeout unchanged.
+  Tests check the actual request-context deadlines, shorter caller deadlines,
+  cancellation and single-send behavior without wall-clock sleeps.
+- **Bot guards:** add a real-authenticator handler test with an authenticated
+  Bot token and a direct-service test. Both prove rejection before the next
+  boundary; the service also asserts no Fleet mutation or metric increment.
+
+The counting and budget tests failed on the previous implementation; the
+timeout test observed the old 30-second deadline. All pass after the scoped
+fixes. Independent Definition/assets and Fleet/HTTP/auth reviewers found no
+remaining confirmed P0/P1 within these changes. This is not formal approval.
+
+Other review observations were checked, not blindly applied: empty team
+instructions are allowed by Fleet and retain current behavior; 409 display text
+stays verbatim by product requirement and its plain-text rendering contract was
+already documented. Non-nil unsupported installer wiring diagnostics and
+duplicate caller-supplied `custom_env` keys remain non-blocking hardening items;
+the concrete production Fleet client implements the installer and failure is
+closed. No unrelated parser or router refactor is included.
+
+Verification for this candidate: focused tests and independent race checks,
+`LOG_FORMAT=console go test -race -shuffle=on -count=1 ./...`, `go vet ./...`,
+`CGO_ENABLED=0 go build ./...`, and golangci-lint v2.12.2 (0 issues) passed.
+`make openapi-check` passed with 100% handler coverage, no generated drift and
+the same 10 pre-existing lint warnings. `make openapi-diff BASE_REF=upstream/main`
+passed with no breaking changes. The OpenAPI commands used the existing
+temporary PyYAML virtualenv and did not alter repository tool dependencies.
+
+Prior authorized live testing (not rerun for these review fixes) confirmed an
+MCP/environment expert and a two-member MCP/environment team, preserved member
+metadata and same-key IDs. Skill-bearing installs failed in Fleet with PostgreSQL
+42P10: its deployed skill uniqueness indexes do not match the ON CONFLICT target,
+despite migration 143 being recorded as applied. This is an external rollout
+blocker, not a Marketplace payload fix; Fleet requires a corrective migration.
+Test data was retained as requested. Negative Workspace/runtime authorization
+and timeout recovery still require live verification before enabling the gate.
 
 ## Fleet test adaptation — 2026-09-24
 
@@ -29,7 +97,7 @@ older capability-installation worktree are not the implementation contract.
 | MCP structure | Definition validation and `openapi/schemas/capability-definition.schema.json` | Omit known empty defaults; validate closed stdio/remote shapes and 64 KiB normalized limit; preserve env/header/argument values |
 | Skill entry document | Definition validation | Reject supporting files that case-insensitively alias `SKILL.md` |
 | Idempotency | Handler and `migrations/223_capability_installation_receipt.up.sql` | Normalized-request fingerprint, 24-hour retention; 409 `DUPLICATE` plus allowlisted idempotency conflict classification |
-| Replay metadata | No `Idempotency-Replayed` emitted by the verified implementation | Missing/invalid/ambiguous metadata is unknown, not a fresh install; do not increment new-route Marketplace metrics |
+| Replay metadata | No `Idempotency-Replayed` emitted by the verified implementation | Missing/invalid/ambiguous metadata remains unknown; the later explicit product decision counts every successful invocation independently |
 
 MCP parsing also rejects duplicate/unknown fields, null values, malformed UTF-8
 and unpaired surrogate escapes instead of silently changing configuration.
@@ -42,13 +110,33 @@ HTTP 409 still preserves Fleet's valid message verbatim. Only the fixed
 upstream details or the raw key. All other generated client-display errors stay
 Chinese; no raw upstream errors or submitted secrets enter logs.
 
-The current lack of replay metadata means the new route temporarily does not
-update Marketplace installation counts, even on first success. Installed resources
-and legacy counts are unaffected. This avoids duplicate counting on retries
-without adding out-of-scope receipt persistence. Restore counting only after a
-reliable upstream non-replay signal is available.
+The initial adaptation suppressed installation counts without reliable replay
+metadata. The explicit post-PR product decision above replaces that policy with
+the legacy successful-invocation count; no receipt persistence is introduced.
 
 ## Confirmed findings and scoped fixes
+
+### Post-PR B1 — member descriptions — 2026-09-24
+
+The PR review found a missed P1: team assembly passed the root team description
+to every member Expert Definition. The one-line fix reads each member's own
+manifest description; team-level and single-expert descriptions stay unchanged.
+No legacy installer, route, schema, error handling or Fleet code changed.
+
+Regressions failed before the fix: Alice received `team summary` instead of
+`expert summary`, and a 256-rune member description reached Fleet. They now pass
+with distinct team/Alice/Bob descriptions, the existing full-request JSON
+stability assertion after relation reordering, and 255/256-rune member limits.
+The single-expert test also explicitly checks its own description.
+
+Independent read-only review found no further blocker in this fix. Verification:
+focused regressions, `LOG_FORMAT=console go test -race -shuffle=on -count=1 ./...`,
+`go vet ./...`, `CGO_ENABLED=0 go build ./...`, and golangci-lint v2.12.2 all passed.
+`make openapi-check` and `make openapi-diff BASE_REF=upstream/main` passed with no
+schema drift or breaking change and the same 10 existing lint warnings. The
+initial OpenAPI attempt lacked PyYAML; rerunning in the existing temporary
+virtualenv resolved the environment failure without changing repository tools.
+This verification does not include a live team installation or formal approval.
 
 ### Post-PR gateway smoke fix — 2026-09-24
 
@@ -188,10 +276,11 @@ issue association; the repository's Sprint gate remains unsatisfied without it.
 
 Before enabling: verify real-service auth and runtime access, single-expert/team
 installation, result shape, atomic behavior, same-key replay, changed-input
-conflict and timeout recovery. Confirm the temporary installation-count limitation
-or obtain reliable replay metadata. Retry guidance uses the actual 24-hour window;
+conflict and timeout recovery. Successful retries intentionally count again per
+the updated product requirement. Retry guidance uses the actual 24-hour window;
 after expiry, reconcile the Workspace before starting a replacement operation.
 The text-only asset restriction, unsupported storage-backed MCP and lack of
 historical Definition snapshots are intentional and documented in
-`docs/api/plugin-installations.md`. No real-service installation, Client change,
-Fleet source change, deployment or default enablement was performed.
+`docs/api/plugin-installations.md`. Prior real-service results and the remaining
+Fleet Skill schema blocker are documented above. No Client change, Fleet source
+change, deployment or default enablement is included in this PR.

@@ -9,7 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// CapabilityInstallTimeout bounds the new installation operation without
+// changing the shared legacy client's 30-second timeout.
+const CapabilityInstallTimeout = 2 * time.Minute
 
 var ErrCapabilityInstallDisabled = errors.New("capability installation is disabled")
 
@@ -62,7 +67,12 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	req.Header.Set("X-Space-Id", spaceID)
 	req.Header.Set("X-Workspace-Id", workspaceID)
 	req.Header.Set("Idempotency-Key", key)
-	resp, err := c.http.Do(req)
+	// Copy the client policy, not its transport: concurrent legacy calls retain
+	// their timeout, redirect protection and connection pool. A shorter caller
+	// deadline still wins, including time already spent assembling the assets.
+	httpClient := *c.http
+	httpClient.Timeout = CapabilityInstallTimeout
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, errors.New("capability installation outcome is unknown; retry with the same idempotency key")
 	}

@@ -13,7 +13,8 @@ Fleet on behalf of the authenticated user. The existing installer is unchanged.
 - Deterministic Definition assembly, shared Skill deduplication, complete text
   files, per-member MCP configuration, team instructions, and environment binding.
 - One Fleet mutation, end-to-end Idempotency-Key, no fallback to the old installer
-  after an uncertain outcome, and no install count without reliable non-replay metadata.
+  after an uncertain outcome. Match legacy install metrics: increment the root
+  plugin once for every successful invocation, including receipt replays.
 - Backward-compatible agent_id / squad_id response envelope.
 - Chinese client-display errors on the new route (including authentication),
   with Fleet's 409 error.message preserved verbatim per the user's requirement.
@@ -31,9 +32,10 @@ Source verified against Fleet `origin/test` at `49a8266` on 2026-09-24. MCP and
 Team description/instructions are implemented; `custom_env` belongs to each
 Expert Definition, not runtime bindings. The public route wraps results in data.
 Normalized-request idempotency lasts 24 hours and conflicts use DUPLICATE with
-details.resource=idempotency_key. Fleet emits no replay header, so the new route
-skips Marketplace counting for unclassified success responses. The legacy count
-is unchanged. Local smoke testing is authorized; production enablement and
+details.resource=idempotency_key. Fleet emits no replay header; this remains
+unknown replay status but does not suppress successful-invocation metrics, per
+the user's 2026-09-24 decision. The legacy implementation is unchanged.
+Local smoke testing is authorized; production enablement and
 installation into an unconfirmed Workspace/runtime remain out of scope.
 
 ## Out of scope
@@ -46,19 +48,27 @@ conflict; no historical Definition snapshot is stored by this endpoint.
 ## Acceptance
 
 - Old and new routes coexist; disabled mode cannot issue a Fleet mutation.
-- Single expert and team installs preserve names, instructions, MCP, skills/files,
-  shared runtime and custom_env. Installation names do not mutate catalog data.
+- Single expert and team installs preserve names, each expert's own description,
+  team description, instructions, MCP, skills/files, shared runtime and custom_env.
+  Installation names do not mutate catalog data.
 - Hidden dependencies, unsafe/missing/corrupt/binary assets, duplicate names,
   invalid topology, and size-limit violations fail before the Fleet call.
 - Declared MCP configurations with unsupported sources cannot be silently omitted;
   null or malformed-Unicode environment values cannot become different strings.
 - Identical inputs and source content serialize identically; Fleet replays keep
-  their IDs. Unknown replay status never increments Marketplace install metrics.
+  their IDs. Each successful invocation increments Marketplace install metrics
+  once, regardless of replay metadata; failed invocations do not increment them.
 - Empty MCP defaults are omitted; non-empty MCP and text limits match Fleet's
   verified contract without silently dropping fields or truncating descriptions.
+  Explicit stdio `type` (including `"stdio"`) and non-empty stdio headers stay
+  unsupported and fail before Fleet; this is an explicit product decision.
 - Fleet failures/malformed replies never trigger a second installation path.
 - Legacy ZIP extraction enforces the remaining aggregate budget while reading,
   before materializing a full over-budget tree.
+  Replacing its SKILL.md with an authoritative object counts only the final
+  document once, without relaxing archive extraction or object/text validation.
+- The new operation and HTTP request share a two-minute upper bound, preserve
+  earlier caller deadlines and leave legacy HTTP timeouts unchanged.
 - 409 messages preserve upstream wording; other generated message/hint text is
   Chinese. Existing endpoints and their authentication messages remain unchanged.
 - Go tests/build/vet, generated OpenAPI, lint, and additive API diff are checked.

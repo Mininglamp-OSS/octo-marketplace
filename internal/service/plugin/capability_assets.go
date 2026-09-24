@@ -111,6 +111,9 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 		// Snapshot packages may have a stub SKILL.md; the authorized legacy
 		// object is the authoritative entry document when present.
 		if ref.ObjectKey != "" {
+			// The archive has already passed bounded extraction and validation.
+			// Replace the entry document's charge instead of counting both copies.
+			b.remaining += int64(len(files["SKILL.md"]))
 			data, err := b.object(ctx, p, ref.ObjectKey, min(b.remaining, 1<<20), 0, "")
 			if err != nil {
 				return nil, err

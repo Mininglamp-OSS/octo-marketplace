@@ -28,6 +28,9 @@ func TestCapabilityFleetTextLimitsBeforeMutation(t *testing.T) {
 		{"team_description", "team-1", 255, func(s *fakeStore, _ *InstallationParams, v string) {
 			s.plugins["team-1"].Manifest, _ = json.Marshal(map[string]string{"description": v})
 		}},
+		{"member_description", "team-1", 255, func(s *fakeStore, _ *InstallationParams, v string) {
+			s.plugins["expert-1"].Manifest, _ = json.Marshal(map[string]string{"description": v})
+		}},
 		{"skill_description", "expert-1", 512, func(s *fakeStore, _ *InstallationParams, v string) {
 			s.plugins["skill-1"].Manifest, _ = json.Marshal(map[string]string{"description": v})
 		}},
@@ -99,9 +102,9 @@ func TestCapabilityFleetDefinitionEnvironmentAndEmptyMCP(t *testing.T) {
 	}
 }
 
-func TestCapabilityUnknownReplayDoesNotCountRetries(t *testing.T) {
+func TestCapabilityUnknownReplayCountsSuccessfulInvocations(t *testing.T) {
 	svc, _, installer := capabilityFixture()
-	tracker := &fakeTracker{}
+	tracker := &capabilityCountingTracker{}
 	svc.WithMetrics(tracker)
 	for range 2 {
 		out, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
@@ -109,8 +112,8 @@ func TestCapabilityUnknownReplayDoesNotCountRetries(t *testing.T) {
 			t.Fatalf("out=%+v err=%v", out, err)
 		}
 	}
-	if installer.calls != 2 || tracker.id != "" {
-		t.Fatal("missing replay metadata caused an unconfirmed metric increment")
+	if installer.calls != 2 || tracker.calls != 2 || tracker.id != "expert-1" {
+		t.Fatal("successful invocations must count even without replay metadata")
 	}
 }
 

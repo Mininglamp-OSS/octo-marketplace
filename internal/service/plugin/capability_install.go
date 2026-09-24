@@ -6,7 +6,6 @@ import (
 	"errors"
 	"regexp"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -129,7 +128,7 @@ func (s *Service) CreateInstallation(ctx context.Context, caller Caller, pluginI
 	if s.capabilityInstaller == nil || !s.capabilityInstaller.CapabilityInstallEnabled() {
 		return nil, fleet.ErrCapabilityInstallDisabled
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, fleet.CapabilityInstallTimeout)
 	defer cancel()
 	in, err := s.buildCapabilityInstall(ctx, caller, pluginID, p)
 	if err != nil {
@@ -151,10 +150,8 @@ func (s *Service) CreateInstallation(ctx context.Context, caller Caller, pluginI
 	if result == nil {
 		return nil, &InstallationAttemptError{Err: errors.New("capability installation returned no result")}
 	}
-	// Fleet test currently omits replay metadata. Counting every 200 would
-	// count retries again, so only an explicit non-replay may increment metrics.
-	if result.ReplayKnown && !result.Replayed {
-		s.trackInstall(ctx, pluginID)
-	}
+	// Match legacy /plugins/install: count successful API invocations, including
+	// receipt replays. This is not a count of uniquely created Fleet resources.
+	s.trackInstall(ctx, pluginID)
 	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
 }
