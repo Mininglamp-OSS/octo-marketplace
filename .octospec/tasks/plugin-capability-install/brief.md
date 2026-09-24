@@ -21,6 +21,9 @@ Fleet on behalf of the authenticated user. The existing installer is unchanged.
 - Separate preparation failures from uncertain Fleet attempts, with safe
   phase/reason diagnostics and unchanged same-key retry rules.
 - Disabled by default until deployment/runtime integration is verified.
+- Reuse the legacy Fleet base URL: the known `/fleet` gateway mount uses
+  `/api/v1/capabilities/install`; direct Fleet retains `/v1/capabilities/install`.
+  Do not change legacy paths, add configuration or probe/retry alternate routes.
 
 ## Upstream contract
 
@@ -30,11 +33,12 @@ Expert Definition, not runtime bindings. The public route wraps results in data.
 Normalized-request idempotency lasts 24 hours and conflicts use DUPLICATE with
 details.resource=idempotency_key. Fleet emits no replay header, so the new route
 skips Marketplace counting for unclassified success responses. The legacy count
-is unchanged. No live installation or default enablement is authorized by this task.
+is unchanged. Local smoke testing is authorized; production enablement and
+installation into an unconfirmed Workspace/runtime remain out of scope.
 
 ## Out of scope
 
-Client changes, enabling/deploying the new route, deleting/deprecating the old
+Client changes, production enablement/deployment, deleting/deprecating the old
 route, modifying Fleet, binary Skill assets, and Marketplace installation-history
 persistence. Reusing a key after changing the source graph may produce a safe
 conflict; no historical Definition snapshot is stored by this endpoint.

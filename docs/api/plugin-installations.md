@@ -8,8 +8,14 @@ migration and enabling the new Fleet integration are separate work.
 
 `OCTO_FLEET_CAPABILITY_INSTALL_ENABLED` defaults to `false`. Until explicitly
 enabled, the new endpoint returns `503 UPSTREAM_UNAVAILABLE` without calling
-Fleet. `OCTO_FLEET_URL` is the direct service base URL used by both installers;
-the new adapter appends `/v1/capabilities/install`.
+Fleet. Both installers reuse `OCTO_FLEET_URL`, without an `/api` suffix. For a
+direct service base such as `http://fleet:8093`, the new adapter appends
+`/v1/capabilities/install`. When the base path ends in the OCTO gateway mount
+`/fleet`, it appends `/api/v1/capabilities/install` instead (for example,
+`https://octo.example.test/fleet/api/v1/capabilities/install`). Other base paths
+retain direct-service behavior; the hostname is not used to infer routing.
+Legacy `/api/agents`, `/api/skills` and `/api/squads` paths are unchanged. There
+is no extra configuration, route probing, retry or fallback between paths.
 
 The adapter is aligned with Fleet `origin/test` commit `49a8266`, fetched on
 2026-09-24, specifically `pkg/capability/{definition,validation}.go`, the published

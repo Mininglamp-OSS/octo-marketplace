@@ -50,6 +50,35 @@ reliable upstream non-replay signal is available.
 
 ## Confirmed findings and scoped fixes
 
+### Post-PR gateway smoke fix — 2026-09-24
+
+**P1 — The new path did not account for the existing OCTO gateway mount.**
+With the shared base ending in `/fleet`, the new adapter requested
+`/fleet/v1/capabilities/install` and received 405 HTML. The gateway exposes
+`/fleet/api/v1/capabilities/install`; the Fleet source still correctly registers
+`/v1/capabilities/install` for direct service access. Only the new adapter now
+adds `/api` when the parsed base path ends in `/fleet`. It does not mutate the
+shared base, add configuration, change legacy paths, probe routes or retry.
+
+The new regression failed for gateway/nested-gateway cases before the fix.
+It now passes alongside direct service, hostname `fleet`, non-matching paths,
+same-client legacy agent/skill/squad calls and forwarded identity/idempotency.
+Independent read-only review found no further confirmed issue.
+
+A temporary harness using the actual adapter and configured test gateway now
+receives canonical 401 `AUTH_REQUIRED`, rather than 405 HTML. It sends no
+credentials, Workspace/runtime or installable Definition, so no resource was
+created. The local service was rebuilt/restarted on port 8092 with the gate
+enabled only in that process; readiness and 10 local negative/CORS HTTP checks
+passed. Committed defaults remain disabled and full authenticated installation
+is still unverified.
+
+Full race tests, vet, build, golangci-lint v2.12.2 (0 issues), OpenAPI check and
+breaking-change diff were rerun successfully for this fix. OpenAPI remains
+unchanged, with the same 10 pre-existing lint warnings.
+
+### Earlier review fixes
+
 1. **P2 — Preparation failures were reported as uncertain Fleet outcomes.**
    Artifact/DB failures before the adapter call fell into the same 503 branch as
    transport failures after a potential commit, without safe cause diagnostics.
@@ -154,8 +183,8 @@ another independent read-only check; no additional confirmed findings remained.
 The user authorized PR creation on 2026-09-24. Review fixes and regenerated
 OpenAPI are committed together, and the baseline gate now passes. This record
 captures local PR preflight, not remote CI results or formal approval.
-Independent human review/CI is still required. No tracking issue was supplied;
-the repository's Sprint gate requires an appropriate issue/board assignment.
+Independent human review/CI is still required. The user explicitly requested no
+issue association; the repository's Sprint gate remains unsatisfied without it.
 
 Before enabling: verify real-service auth and runtime access, single-expert/team
 installation, result shape, atomic behavior, same-key replay, changed-input

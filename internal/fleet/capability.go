@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -42,7 +43,14 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	if err != nil {
 		return nil, errors.New("cannot encode capability installation")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/capabilities/install", bytes.NewReader(body))
+	path := "/v1/capabilities/install"
+	// Reuse the legacy Fleet base URL. OCTO's /fleet gateway mount exposes
+	// public v1 routes under /api/v1; a direct Fleet service exposes /v1.
+	// Select before sending: never probe or retry a mutation at another path.
+	if base, err := url.Parse(c.baseURL); err == nil && strings.HasSuffix(base.Path, "/fleet") {
+		path = "/api" + path
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.New("cannot create capability installation request")
 	}
