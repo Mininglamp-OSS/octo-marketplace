@@ -60,14 +60,15 @@ if os.path.exists(yaml_path):
         spec = yaml.safe_load(f)
     # swag v2 also wraps body parameters in an unconstrained `oneOf: [object,
     # $ref]`. That makes `{}` valid even when the referenced request schema has
-    # required fields. Collapse this known generator artifact for strict PATCH
+    # required fields. Collapse this known generator artifact for strict
     # bodies so the published contract matches runtime validation.
-    strict_patch_paths = (
-        '/plugin_review_policies',
-        '/admin/plugins/{plugin_id}/rating',
+    strict_body_operations = (
+        ('/plugin_review_policies', 'patch'),
+        ('/admin/plugins/{plugin_id}/rating', 'patch'),
+        ('/plugins/{plugin_id}/installations', 'post'),
     )
-    for path_name in strict_patch_paths:
-        operation = spec.get('paths', {}).get(path_name, {}).get('patch')
+    for path_name, method in strict_body_operations:
+        operation = spec.get('paths', {}).get(path_name, {}).get(method)
         if not operation:
             continue
         schema = (operation.get('requestBody', {}).get('content', {})
@@ -80,6 +81,12 @@ if os.path.exists(yaml_path):
             operation['requestBody']['content']['application/json']['schema'] = {
                 '$ref': choices[1]['$ref']
             }
+
+    # Only the new installation schema: the handler rejects unknown fields.
+    installation_schema = spec.get('components', {}).get('schemas', {}).get(
+        'internal_api_handler_plugin.createInstallationRequest')
+    if installation_schema is not None:
+        installation_schema['additionalProperties'] = False
 
     # OpenAPI 3.1 uses JSON Schema nullability. swag emits the legacy vendor
     # extension for pointer scalars, which strict clients ignore. Convert every

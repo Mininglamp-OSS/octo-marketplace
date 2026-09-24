@@ -49,16 +49,17 @@ type Config struct {
 	// OctoFleetURL is the base URL of the octo-fleet service the expert-install
 	// aggregation calls out to (POST /experts/{id}/install). Empty disables the
 	// install endpoint (it returns UPSTREAM_UNAVAILABLE). Mirrors OctoAPIURL.
-	OctoFleetURL       string
-	APIPort            string
-	PublicBaseURL      string
-	CORSAllowedOrigins []string
-	AuthEnabled        bool
-	AuthCacheTTL       time.Duration
-	AuthCacheCapacity  int
-	DevAuthUID         string
-	DevAuthName        string
-	DevSpaceID         string
+	OctoFleetURL                  string
+	FleetCapabilityInstallEnabled bool
+	APIPort                       string
+	PublicBaseURL                 string
+	CORSAllowedOrigins            []string
+	AuthEnabled                   bool
+	AuthCacheTTL                  time.Duration
+	AuthCacheCapacity             int
+	DevAuthUID                    string
+	DevAuthName                   string
+	DevSpaceID                    string
 
 	// DevAuthSpaceRole is the Space role (model.SpaceRole* encoding:
 	// 0=member, 1=admin, 2=owner) granted to the fixed dev identity when
@@ -176,20 +177,21 @@ func (s StorageConfig) Enabled() bool {
 
 func Load() Config {
 	return Config{
-		AppEnv:             strings.ToLower(env("APP_ENV", "")),
-		MySQLDSN:           env("MYSQL_DSN", ""),
-		OctoAPIURL:         strings.TrimRight(env("OCTO_API_URL", ""), "/"),
-		OctoFleetURL:       strings.TrimRight(env("OCTO_FLEET_URL", ""), "/"),
-		APIPort:            env("API_PORT", "8092"),
-		PublicBaseURL:      strings.TrimRight(env("PUBLIC_BASE_URL", ""), "/"),
-		CORSAllowedOrigins: envCSV("CORS_ALLOWED_ORIGINS"),
-		AuthEnabled:        envBool("AUTH_ENABLED", true),
-		AuthCacheTTL:       envDuration("AUTH_CACHE_TTL", 30*time.Second),
-		AuthCacheCapacity:  envInt("AUTH_CACHE_CAPACITY", 10000),
-		DevAuthUID:         env("DEV_AUTH_UID", "dev-user"),
-		DevAuthName:        env("DEV_AUTH_NAME", "Developer"),
-		DevSpaceID:         env("DEV_SPACE_ID", "dev-space"),
-		DevAuthSpaceRole:   envSpaceRole("DEV_AUTH_SPACE_ROLE", DefaultDevAuthSpaceRole),
+		AppEnv:                        strings.ToLower(env("APP_ENV", "")),
+		MySQLDSN:                      env("MYSQL_DSN", ""),
+		OctoAPIURL:                    strings.TrimRight(env("OCTO_API_URL", ""), "/"),
+		OctoFleetURL:                  strings.TrimRight(env("OCTO_FLEET_URL", ""), "/"),
+		FleetCapabilityInstallEnabled: envBool("OCTO_FLEET_CAPABILITY_INSTALL_ENABLED", false),
+		APIPort:                       env("API_PORT", "8092"),
+		PublicBaseURL:                 strings.TrimRight(env("PUBLIC_BASE_URL", ""), "/"),
+		CORSAllowedOrigins:            envCSV("CORS_ALLOWED_ORIGINS"),
+		AuthEnabled:                   envBool("AUTH_ENABLED", true),
+		AuthCacheTTL:                  envDuration("AUTH_CACHE_TTL", 30*time.Second),
+		AuthCacheCapacity:             envInt("AUTH_CACHE_CAPACITY", 10000),
+		DevAuthUID:                    env("DEV_AUTH_UID", "dev-user"),
+		DevAuthName:                   env("DEV_AUTH_NAME", "Developer"),
+		DevSpaceID:                    env("DEV_SPACE_ID", "dev-space"),
+		DevAuthSpaceRole:              envSpaceRole("DEV_AUTH_SPACE_ROLE", DefaultDevAuthSpaceRole),
 
 		OctoInternalToken:     env("OCTO_MARKETPLACE_INTERNAL_TOKEN", ""),
 		OctoNotifyToken:       env("OCTO_MARKETPLACE_NOTIFY_TOKEN", ""),

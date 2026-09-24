@@ -303,5 +303,10 @@ func contains(values []string, target string) bool {
 }
 
 func abortError(c *gin.Context, status int, code, message string) {
+	if value, ok := c.Get(authErrorMessagesKey); ok {
+		if messages, ok := value.(map[string]string); ok && messages[code] != "" {
+			message = messages[code]
+		}
+	}
 	apiresponse.Fail(c, status, code, message, nil, "")
 }

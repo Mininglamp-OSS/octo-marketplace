@@ -91,6 +91,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	plugins.POST("/delist", h.Delist)
 	plugins.GET("/versions", h.ListVersions)
 	plugins.POST("/install", h.Install)
+	plugins.POST("/:plugin_id/installations", h.CreateInstallation)
 	plugins.POST("/import", h.Import)
 	plugins.GET("/skill_md", h.SkillMarkdown)
 	plugins.GET("/download", h.DownloadSkillPackage)
