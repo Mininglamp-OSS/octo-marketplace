@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -49,6 +50,73 @@ func TestCapabilityUnresolvedManagedArchiveDoesNotInstallStub(t *testing.T) {
 	store.plugins["skill-1"].Package = packageWith(rawAtt("SKILL.md", "stub"), `{"path":"skill/package.zip","content_type":"storage"}`)
 	if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams()); err == nil || installer.calls != 0 {
 		t.Fatal("unresolved archive installed as stub")
+	}
+}
+
+func capabilityArchiveFixture(data []byte) (*Service, *fakeCapabilityInstaller) {
+	svc, store, installer := capabilityFixture()
+	key := "plugins/space-a/attachments/legacy.zip"
+	store.plugins["skill-1"].Package = packageWith(rawAtt("SKILL.md", "stub"), rawAtt("skill/ref.json", `{"zip_object_key":"`+key+`"}`))
+	svc.storage = &importStorage{objects: map[string][]byte{key: data}}
+	return svc, installer
+}
+
+func TestCapabilityLegacyArchiveEnforcesDecompressedBudgetBeforeTextValidation(t *testing.T) {
+	// Each entry fits the budget and the compressed ZIP is tiny, but their
+	// aggregate does not. NUL makes the old post-extraction check report
+	// text_only instead, proving that the extraction boundary rejects first.
+	data := zipWith(t, map[string][]byte{
+		"SKILL.md": []byte(strings.Repeat("\x00", 2048)),
+		"ref.md":   []byte(strings.Repeat("\x00", 2048)),
+	})
+	svc, installer := capabilityArchiveFixture(data)
+	svc.maxArchiveBytes = 3072
+	if len(data) >= 1024 {
+		t.Fatal("fixture must fit comfortably within the compressed-byte budget")
+	}
+	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
+	if !errors.Is(err, ErrTooLarge) || installer.calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, installer.calls)
+	}
+}
+
+func TestCapabilityLegacyArchiveRejectsInvalidEntryStructure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"missing_skill_md", zipWith(t, map[string][]byte{"ref.md": []byte("reference")})},
+		{"multiple_skill_md", zipWith(t, map[string][]byte{"SKILL.md": []byte("first"), "pkg/skill.md": []byte("second")})},
+		{"traversal", zipWith(t, map[string][]byte{"SKILL.md": []byte("skill"), "../ref.md": []byte("reference")})},
+		{"duplicate_entry", appendZipEntry(t, zipWith(t, map[string][]byte{"SKILL.md": []byte("skill"), "ref.md": []byte("first")}), "ref.md", []byte("second"))},
+		{"rooting_collision", zipWith(t, map[string][]byte{"pkg/SKILL.md": []byte("skill"), "pkg/ref.md": []byte("first"), "ref.md": []byte("second")})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, installer := capabilityArchiveFixture(tc.data)
+			if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams()); err == nil || installer.calls != 0 {
+				t.Fatalf("err=%v calls=%d", err, installer.calls)
+			}
+		})
+	}
+}
+
+func TestCapabilityLegacyArchiveSerializationIgnoresEntryOrder(t *testing.T) {
+	first := appendZipEntry(t, zipWith(t, map[string][]byte{"pkg/SKILL.md": []byte("skill")}), "pkg/ref.md", []byte("reference"))
+	second := appendZipEntry(t, zipWith(t, map[string][]byte{"pkg/ref.md": []byte("reference")}), "pkg/SKILL.md", []byte("skill"))
+	var previous []byte
+	for _, data := range [][]byte{first, second} {
+		svc, installer := capabilityArchiveFixture(data)
+		if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams()); err != nil {
+			t.Fatal(err)
+		}
+		serialized, err := json.Marshal(installer.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if previous != nil && string(previous) != string(serialized) {
+			t.Fatal("retry bytes depend on ZIP entry order")
+		}
+		previous = serialized
 	}
 }
 

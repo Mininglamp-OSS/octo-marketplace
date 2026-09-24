@@ -38,6 +38,14 @@ type InstallationOutcome struct {
 	Replayed bool
 }
 
+// InstallationAttemptError marks the boundary after the Fleet adapter was
+// invoked. Unknown errors here may follow a commit and require same-key retry.
+// Never log the wrapped error verbatim: an upstream may echo submitted secrets.
+type InstallationAttemptError struct{ Err error }
+
+func (e *InstallationAttemptError) Error() string { return "capability installation attempt failed" }
+func (e *InstallationAttemptError) Unwrap() error { return e.Err }
+
 // Field and Reason are fixed, developer-owned labels; never echo environment
 // values, plugin instructions, object keys, or credentials through an error.
 type InstallationValidationError struct{ Field, Reason string }
@@ -49,6 +57,8 @@ func installationInvalid(field, reason string) error {
 
 var runtimeUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+const maxInstallationNameRunes = 128
 
 func NormalizeInstallationParams(p InstallationParams) (InstallationParams, error) {
 	p.WorkspaceID = strings.TrimSpace(p.WorkspaceID)
@@ -63,7 +73,7 @@ func NormalizeInstallationParams(p InstallationParams) (InstallationParams, erro
 	if len(p.IdempotencyKey) < 1 || len(p.IdempotencyKey) > 200 || !printableHeader(p.IdempotencyKey) {
 		return p, installationInvalid("Idempotency-Key", "invalid")
 	}
-	if p.ResourceName != "" && !installationName(p.ResourceName, 200) {
+	if p.ResourceName != "" && !installationName(p.ResourceName, maxInstallationNameRunes) {
 		return p, installationInvalid("resource_name", "invalid")
 	}
 	if len(p.CustomEnv) > 100 {
@@ -136,13 +146,15 @@ func (s *Service) CreateInstallation(ctx context.Context, caller Caller, pluginI
 	}
 	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey, *in)
 	if err != nil {
-		return nil, err
+		return nil, &InstallationAttemptError{Err: err}
 	}
 	if result == nil {
-		return nil, errors.New("capability installation returned no result")
+		return nil, &InstallationAttemptError{Err: errors.New("capability installation returned no result")}
 	}
-	if !result.Replayed {
+	// Fleet test currently omits replay metadata. Counting every 200 would
+	// count retries again, so only an explicit non-replay may increment metrics.
+	if result.ReplayKnown && !result.Replayed {
 		s.trackInstall(ctx, pluginID)
 	}
-	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.Replayed}, nil
+	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
@@ -19,6 +20,7 @@ type fakeCapabilityInstaller struct {
 	token, space, workspace, key string
 	in                           fleet.CapabilityInstallRequest
 	replay                       bool
+	replayKnown                  bool
 	err                          error
 }
 
@@ -29,7 +31,7 @@ func (f *fakeCapabilityInstaller) InstallCapability(_ context.Context, token, sp
 	if f.err != nil {
 		return nil, f.err
 	}
-	out := &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "created-expert", Replayed: f.replay}
+	out := &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "created-expert", Replayed: f.replay, ReplayKnown: f.replayKnown}
 	if in.Definition.ExpertTeam != nil {
 		out.Type, out.ExpertID, out.ExpertTeamID = "expert_team", "", "created-team"
 	}
@@ -49,6 +51,8 @@ func capabilityFixture() (*Service, *fakeStore, *fakeCapabilityInstaller) {
 
 func TestCapabilityInstallationPreservesSingleExpertAndCustomName(t *testing.T) {
 	svc, store, installer := capabilityFixture()
+	installer.replayKnown = true
+	store.plugins["expert-1"].Package = packageWith(rawAtt("AGENTS.md", "do the work"), rawAtt("mcp.json", `{"mcpServers":{"repository":{"command":"uvx","args":["repository-mcp"]}}}`))
 	tracker := &fakeTracker{}
 	svc.WithMetrics(tracker)
 	out, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
@@ -63,13 +67,13 @@ func TestCapabilityInstallationPreservesSingleExpertAndCustomName(t *testing.T) 
 		t.Fatalf("definition=%+v", def)
 	}
 	expert := def.Experts[0]
-	if expert.Name != "Custom name" || expert.Instructions != "do the work" || string(expert.MCPConfig) != `{"mcpServers":{}}` {
+	if expert.Name != "Custom name" || expert.Instructions != "do the work" || !strings.Contains(string(expert.MCPConfig), `"command":"uvx"`) || expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-current" {
 		t.Fatalf("expert=%+v", expert)
 	}
 	if len(def.Skills) != 1 || def.Skills[0].Content != "# Deploy" || def.Skills[0].Files[0].Source.Content != "check before deploy" {
 		t.Fatalf("skills=%+v", def.Skills)
 	}
-	if binding := installer.in.Bindings.Experts[0]; binding.ExpertName != expert.Name || binding.RuntimeID != installationParams().RuntimeID || binding.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-current" {
+	if binding := installer.in.Bindings.Experts[0]; binding.ExpertName != expert.Name || binding.RuntimeID != installationParams().RuntimeID {
 		t.Fatalf("binding=%+v", binding)
 	}
 	if store.plugins["expert-1"].Name != "Alice" {
@@ -106,8 +110,8 @@ func TestCapabilityTeamSharesSkillsAndBindsEveryMember(t *testing.T) {
 			t.Fatalf("expert=%+v", expert)
 		}
 	}
-	for _, binding := range installer.in.Bindings.Experts {
-		if binding.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-current" {
+	for _, expert := range def.Experts {
+		if expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-current" {
 			t.Fatal("member environment lost")
 		}
 	}
@@ -163,6 +167,36 @@ func TestCapabilityInstallationRejectsInvalidGraphBeforeFleet(t *testing.T) {
 	}
 }
 
+func TestCapabilityInstallationRejectsStorageMCPBeforeFleet(t *testing.T) {
+	for _, pluginID := range []string{"expert-1", "team-1"} {
+		t.Run(pluginID, func(t *testing.T) {
+			svc, store, installer := capabilityFixture()
+			key := "plugins/space-a/attachments/mcp.json"
+			content := []byte(`{"mcpServers":{}}`)
+			sum := sha256.Sum256(content)
+			svc.storage = &importStorage{objects: map[string][]byte{key: content}}
+			store.plugins["expert-1"].Package = packageWith(rawAtt("AGENTS.md", "work"), `{"path":"mcp.json","content_type":"storage","mime_type":"application/json","content_size":17,"content_hash":"sha256:`+hex.EncodeToString(sum[:])+`"}`)
+			store.plugins["expert-1"].AttachmentKeys = json.RawMessage(`{"mcp.json":"` + key + `"}`)
+			_, err := svc.CreateInstallation(context.Background(), testCaller, pluginID, installationParams())
+			var invalid *InstallationValidationError
+			if !errors.As(err, &invalid) || invalid.Field != "definition.experts.mcp_config" || invalid.Reason != "unsupported_source" || installer.calls != 0 {
+				t.Fatalf("err=%v calls=%d", err, installer.calls)
+			}
+		})
+	}
+}
+
+func TestCapabilityInstallationAllowsExpertWithoutMCP(t *testing.T) {
+	svc, store, installer := capabilityFixture()
+	store.plugins["expert-1"].Package = packageWith(rawAtt("AGENTS.md", "work"))
+	if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams()); err != nil || installer.calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, installer.calls)
+	}
+	if len(installer.in.Definition.Experts[0].MCPConfig) != 0 {
+		t.Fatal("absent MCP configuration must stay absent")
+	}
+}
+
 func TestCapabilitySkillContentCollisionDoesNotReuseWrongSkill(t *testing.T) {
 	svc, store, installer := capabilityFixture()
 	second := *store.plugins["skill-1"]
@@ -205,8 +239,26 @@ func TestCapabilityReplayAndDisabledMode(t *testing.T) {
 	}
 	installer.enabled = true
 	installer.replay = true
+	installer.replayKnown = true
 	out, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
 	if err != nil || !out.Replayed || tracker.id != "" {
 		t.Fatalf("out=%+v err=%v metric=%s", out, err, tracker.id)
+	}
+}
+
+func TestCapabilityFailurePhaseMarksOnlyFleetAttempts(t *testing.T) {
+	svc, store, installer := capabilityFixture()
+	store.plugins["skill-1"].Package = packageWith(rawAtt("SKILL.md", "# skill"), `{"path":"ref.md","content_type":"storage","storage_uri":"plugins/space-a/attachments/missing.md"}`)
+	svc.storage = &importStorage{objects: map[string][]byte{}}
+	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
+	var attempt *InstallationAttemptError
+	if !errors.Is(err, ErrIntegrity) || errors.As(err, &attempt) || installer.calls != 0 {
+		t.Fatalf("preparation phase not preserved: %v", err)
+	}
+	store.plugins["skill-1"].Package = packageWith(rawAtt("SKILL.md", "# skill"))
+	installer.err = errors.New("unknown transport outcome")
+	_, err = svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
+	if !errors.As(err, &attempt) || !errors.Is(err, installer.err) || installer.calls != 1 {
+		t.Fatalf("attempt failure was not marked: %v", err)
 	}
 }

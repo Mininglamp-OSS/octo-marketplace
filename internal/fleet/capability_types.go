@@ -2,8 +2,7 @@ package fleet
 
 import "encoding/json"
 
-// CapabilityInstallRequest follows the 2026-09-23 Fleet proposal. The marked
-// extension fields are provisional until Fleet publishes its complete schema.
+// CapabilityInstallRequest matches Fleet test commit 49a8266 (2026-09-24).
 // Production use is gated by OCTO_FLEET_CAPABILITY_INSTALL_ENABLED (default false).
 type CapabilityInstallRequest struct {
 	Definition CapabilityDefinition `json:"definition"`
@@ -41,16 +40,16 @@ type CapabilityExpert struct {
 	Description  string   `json:"description"`
 	Instructions string   `json:"instructions"`
 	SkillNames   []string `json:"skill_names,omitempty"`
-	// Pending upstream: each expert/member retains its own mcp.json object.
-	MCPConfig json.RawMessage `json:"mcp_config,omitempty"`
+	// These transient values may contain secrets; never persist or log Definition.
+	CustomEnv map[string]string `json:"custom_env,omitempty"`
+	MCPConfig json.RawMessage   `json:"mcp_config,omitempty"`
 }
 
 type CapabilityExpertTeam struct {
-	Name    string                 `json:"name"`
-	Members []CapabilityTeamMember `json:"members"`
-	// Pending upstream: preserve the team's summary and AGENTS.md.
-	Description  string `json:"description"`
-	Instructions string `json:"instructions"`
+	Name         string                 `json:"name"`
+	Members      []CapabilityTeamMember `json:"members"`
+	Description  string                 `json:"description"`
+	Instructions string                 `json:"instructions"`
 }
 
 type CapabilityTeamMember struct {
@@ -66,8 +65,6 @@ type CapabilityBindings struct {
 type CapabilityExpertBinding struct {
 	ExpertName string `json:"expert_name"`
 	RuntimeID  string `json:"runtime_id"`
-	// Pending upstream: runtime-specific values must never enter Definition.
-	CustomEnv map[string]string `json:"custom_env,omitempty"`
 }
 
 type CapabilityInstallResult struct {
@@ -78,6 +75,7 @@ type CapabilityInstallResult struct {
 	Experts        []CapabilityExpertResult `json:"experts"`
 	Skills         []CapabilitySkillResult  `json:"skills"`
 	Replayed       bool                     `json:"-"`
+	ReplayKnown    bool                     `json:"-"` // Missing replay metadata is not proof of a new installation.
 }
 
 type CapabilityExpertResult struct {

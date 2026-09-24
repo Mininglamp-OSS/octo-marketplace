@@ -1570,7 +1570,7 @@ components:
             type: string
           type: object
         resource_name:
-          maxLength: 200
+          maxLength: 128
           type: string
         runtime_id:
           format: uuid
@@ -5715,10 +5715,11 @@ paths:
       - plugin
   /plugins/{plugin_id}/installations:
     post:
-      description: Resolves the visible expert or expert_team graph and installs it
-        atomically in Fleet. Requires a stable Idempotency-Key; retry uncertain outcomes
-        with the same key and input. Disabled by default pending the Fleet schema
-        extensions; the legacy /plugins/install remains available.
+      description: Resolves and installs the visible expert or expert_team graph atomically
+        in Fleet; retry uncertain outcomes with the same Idempotency-Key and input
+        within Fleet's 24-hour retention window. Disabled by default until rollout;
+        the legacy /plugins/install remains available. Generated error text is Chinese;
+        409 preserves Fleet's conflict message.
       operationId: plugin.installation.create
       parameters:
       - description: Marketplace plugin ID
@@ -5755,7 +5756,8 @@ paths:
           description: OK
           headers:
             Idempotency-Replayed:
-              description: true when Fleet replayed the installation
+              description: Only forwarded when Fleet explicitly marks a replay; absence
+                does not prove a new installation
               schema:
                 type: string
         '400':
@@ -5806,6 +5808,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: RATE_LIMITED
+          headers:
+            Retry-After:
+              description: Delay in seconds before retrying
+              schema:
+                type: string
         '500':
           content:
             application/json:

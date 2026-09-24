@@ -28,6 +28,13 @@ func TestCapabilityInstallationOpenAPIMatchesStrictRequest(t *testing.T) {
 			Schemas map[string]struct {
 				AdditionalProperties any      `yaml:"additionalProperties"`
 				Required             []string `yaml:"required"`
+				Properties           map[string]struct {
+					Type                 any `yaml:"type"`
+					MaxLength            int `yaml:"maxLength"`
+					AdditionalProperties struct {
+						Type any `yaml:"type"`
+					} `yaml:"additionalProperties"`
+				} `yaml:"properties"`
 			} `yaml:"schemas"`
 		} `yaml:"components"`
 	}
@@ -43,6 +50,12 @@ func TestCapabilityInstallationOpenAPIMatchesStrictRequest(t *testing.T) {
 	schema := spec.Components.Schemas[schemaName]
 	if schema.AdditionalProperties != false || len(schema.Required) != 1 || schema.Required[0] != "runtime_id" {
 		t.Fatal("installation schema must require runtime_id and reject unknown fields")
+	}
+	if env := schema.Properties["custom_env"]; env.Type != "object" || env.AdditionalProperties.Type != "string" {
+		t.Fatal("installation environment must remain a map of non-null strings")
+	}
+	if schema.Properties["resource_name"].MaxLength != 128 {
+		t.Fatal("installation name limit must match Fleet's 128 characters")
 	}
 	if _, ok := spec.Paths["/plugins/install"]["post"]; !ok {
 		t.Fatal("legacy route missing")

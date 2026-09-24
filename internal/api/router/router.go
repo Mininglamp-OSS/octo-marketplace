@@ -130,7 +130,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 	})
 
 	v1 := r.Group("/api/v1")
-	v1.Use(authenticator.Handler())
+	v1.Use(installationAuthMessages, authenticator.Handler())
 	handler.NewSession().Register(v1)
 
 	// Wire up skill marketplace handlers when we have a real *sql.DB.

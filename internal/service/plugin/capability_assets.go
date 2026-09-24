@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"io"
 	"path"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -31,6 +32,9 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 		clean, ok := normalizedArchivePath(name)
 		if !ok || len(clean) > 512 || strings.ContainsRune(clean, ':') {
 			return installationInvalid("definition.skills.files", "unsafe_path")
+		}
+		if clean != "SKILL.md" && strings.EqualFold(clean, "SKILL.md") {
+			return installationInvalid("definition.skills.files", "reserved_path")
 		}
 		for _, segment := range strings.Split(clean, "/") {
 			if strings.EqualFold(segment, ".git") {
@@ -71,23 +75,36 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 		if err != nil {
 			return nil, err
 		}
-		entries, code, _ := parse.ExtractSkillTree(bytes.NewReader(data), int64(len(data)), b.remaining, 1<<20, 51)
+		// Bound decompressed bytes while reading, not only after an entire ZIP
+		// has been materialized. ExtractSkillTree applies its supplied size
+		// limit only to compressed bytes, with a separate fixed expansion cap.
+		entries, code, _ := parse.ExtractArchive(bytes.NewReader(data), int64(len(data)), b.remaining, 1<<20, 51)
+		if code == "FILE_TOO_LARGE" {
+			return nil, ErrTooLarge
+		}
 		if code != "" {
 			return nil, installationInvalid("definition.skills.files", "invalid_archive")
 		}
 		dir := "."
-		for _, entry := range entries {
-			if parse.IsSkillMDCandidate(entry.Path) {
-				dir = path.Dir(entry.Path)
-				break
+		var paths []string
+		skillMDCount := 0
+		for entryPath := range entries {
+			paths = append(paths, entryPath)
+			if parse.IsSkillMDCandidate(entryPath) {
+				dir = path.Dir(entryPath)
+				skillMDCount++
 			}
 		}
-		for _, entry := range entries {
-			name := rootRelative(entry.Path, dir)
-			if parse.IsSkillMDCandidate(entry.Path) {
+		if skillMDCount != 1 {
+			return nil, installationInvalid("definition.skills.files", "invalid_archive")
+		}
+		sort.Strings(paths)
+		for _, entryPath := range paths {
+			name := rootRelative(entryPath, dir)
+			if parse.IsSkillMDCandidate(entryPath) {
 				name = "SKILL.md"
 			}
-			if err := add(name, string(entry.Bytes)); err != nil {
+			if err := add(name, string(entries[entryPath])); err != nil {
 				return nil, err
 			}
 		}

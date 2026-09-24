@@ -7,16 +7,19 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 )
 
-var ErrCapabilityInstallDisabled = errors.New("capability installation is disabled pending Fleet contract confirmation")
+var ErrCapabilityInstallDisabled = errors.New("capability installation is disabled")
 
-// CapabilityAPIError deliberately retains only machine-readable status/code.
-// Fleet messages can echo submitted content or environment values.
+// CapabilityAPIError retains Fleet's conflict message for direct display only.
+// Error deliberately excludes it because messages may contain submitted values.
 type CapabilityAPIError struct {
-	Status     int
-	Code       string
-	RetryAfter string
+	Status               int
+	Code                 string
+	Message              string // Only a nonblank error.message from an HTTP 409 response.
+	RetryAfter           string
+	IdempotencyKeyReused bool
 }
 
 func (e *CapabilityAPIError) Error() string { return "Fleet capability installation failed" }
@@ -67,14 +70,46 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(raw, &envelope)
-		return nil, &CapabilityAPIError{Status: resp.StatusCode, Code: envelope.Error.Code, RetryAfter: resp.Header.Get("Retry-After")}
+		apiErr := &CapabilityAPIError{Status: resp.StatusCode, Code: envelope.Error.Code, RetryAfter: resp.Header.Get("Retry-After")}
+		if resp.StatusCode == http.StatusConflict {
+			var conflict struct {
+				Error struct {
+					Message string          `json:"message"`
+					Details json.RawMessage `json:"details"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(raw, &conflict) == nil {
+				if strings.TrimSpace(conflict.Error.Message) != "" {
+					apiErr.Message = conflict.Error.Message
+				}
+				if apiErr.Code == "DUPLICATE" {
+					var details struct {
+						Resource string `json:"resource"`
+					}
+					apiErr.IdempotencyKeyReused = json.Unmarshal(conflict.Error.Details, &details) == nil && details.Resource == "idempotency_key"
+				}
+			}
+		}
+		return nil, apiErr
 	}
-	var out CapabilityInstallResult
-	if json.Unmarshal(raw, &out) != nil || !validCapabilityResult(in.Definition, out) {
+	var envelope struct {
+		Data *CapabilityInstallResult `json:"data"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil || !validCapabilityResult(in.Definition, *envelope.Data) {
 		return nil, errors.New("invalid capability installation result; retry with the same idempotency key")
 	}
-	out.Replayed = resp.Header.Get("Idempotency-Replayed") == "true"
-	return &out, nil
+	out := envelope.Data
+	// Fleet test currently omits this header even for receipt replays. Missing
+	// or ambiguous metadata must not be mistaken for a confirmed new install.
+	if values := resp.Header.Values("Idempotency-Replayed"); len(values) == 1 {
+		switch values[0] {
+		case "true":
+			out.ReplayKnown, out.Replayed = true, true
+		case "false":
+			out.ReplayKnown = true
+		}
+	}
+	return out, nil
 }
 
 func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult) bool {

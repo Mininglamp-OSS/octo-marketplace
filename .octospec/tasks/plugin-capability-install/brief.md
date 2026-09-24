@@ -13,17 +13,24 @@ Fleet on behalf of the authenticated user. The existing installer is unchanged.
 - Deterministic Definition assembly, shared Skill deduplication, complete text
   files, per-member MCP configuration, team instructions, and environment binding.
 - One Fleet mutation, end-to-end Idempotency-Key, no fallback to the old installer
-  after an uncertain outcome, and replay-aware best-effort metrics.
+  after an uncertain outcome, and no install count without reliable non-replay metadata.
 - Backward-compatible agent_id / squad_id response envelope.
-- Disabled by default until the upstream contract is confirmed.
+- Chinese client-display errors on the new route (including authentication),
+  with Fleet's 409 error.message preserved verbatim per the user's requirement.
+  Other upstream/raw internal messages must not reach the response or logs.
+- Separate preparation failures from uncertain Fleet attempts, with safe
+  phase/reason diagnostics and unchanged same-key retry rules.
+- Disabled by default until deployment/runtime integration is verified.
 
-## Pending upstream contract
+## Upstream contract
 
-The 2026-09-23 proposal does not yet define `experts[].mcp_config`,
-`expert_team.description/instructions`, or `bindings.experts[].custom_env`.
-Their proposed wire shape is isolated in `internal/fleet/capability_types.go`.
-Do not enable `OCTO_FLEET_CAPABILITY_INSTALL_ENABLED` before those fields and the
-direct service route `/v1/capabilities/install` are verified against Fleet.
+Source verified against Fleet `origin/test` at `49a8266` on 2026-09-24. MCP and
+Team description/instructions are implemented; `custom_env` belongs to each
+Expert Definition, not runtime bindings. The public route wraps results in data.
+Normalized-request idempotency lasts 24 hours and conflicts use DUPLICATE with
+details.resource=idempotency_key. Fleet emits no replay header, so the new route
+skips Marketplace counting for unclassified success responses. The legacy count
+is unchanged. No live installation or default enablement is authorized by this task.
 
 ## Out of scope
 
@@ -39,7 +46,15 @@ conflict; no historical Definition snapshot is stored by this endpoint.
   shared runtime and custom_env. Installation names do not mutate catalog data.
 - Hidden dependencies, unsafe/missing/corrupt/binary assets, duplicate names,
   invalid topology, and size-limit violations fail before the Fleet call.
+- Declared MCP configurations with unsupported sources cannot be silently omitted;
+  null or malformed-Unicode environment values cannot become different strings.
 - Identical inputs and source content serialize identically; Fleet replays keep
-  their IDs and do not increment Marketplace's metric again.
+  their IDs. Unknown replay status never increments Marketplace install metrics.
+- Empty MCP defaults are omitted; non-empty MCP and text limits match Fleet's
+  verified contract without silently dropping fields or truncating descriptions.
 - Fleet failures/malformed replies never trigger a second installation path.
+- Legacy ZIP extraction enforces the remaining aggregate budget while reading,
+  before materializing a full over-budget tree.
+- 409 messages preserve upstream wording; other generated message/hint text is
+  Chinese. Existing endpoints and their authentication messages remain unchanged.
 - Go tests/build/vet, generated OpenAPI, lint, and additive API diff are checked.

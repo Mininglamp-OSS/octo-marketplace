@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -32,11 +33,14 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 	}
 	b := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes), skillsByID: map[string]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
 	def := fleet.CapabilityDefinition{SchemaVersion: "1.0", Name: "marketplace:" + root.Plugin.ID}
+	if !installationName(def.Name, maxInstallationNameRunes) {
+		return nil, installationInvalid("definition.name", "invalid")
+	}
 	name := strings.TrimSpace(root.Plugin.Name)
 	if p.ResourceName != "" {
 		name = p.ResourceName
 	}
-	if !installationName(name, 200) {
+	if !installationName(name, maxInstallationNameRunes) {
 		return nil, installationInvalid("definition.name", "invalid")
 	}
 	summary := manifestDescription(root.Plugin.Manifest)
@@ -67,7 +71,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 		if err := b.text(instructions); err != nil {
 			return nil, err
 		}
-		if err := b.text(summary); err != nil {
+		if err := b.boundedText("definition.expert_team.description", summary, 255); err != nil {
 			return nil, err
 		}
 		team := &fleet.CapabilityExpertTeam{Name: name, Description: summary, Instructions: instructions}
@@ -116,6 +120,9 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 			if !member.IsLeader && member.Role == "leader" {
 				return nil, installationInvalid("definition.expert_team.members", "reserved_role")
 			}
+			if err := b.boundedText("definition.expert_team.members.role", member.Role, 500); err != nil {
+				return nil, err
+			}
 		}
 		sort.Slice(team.Members, func(i, j int) bool { return team.Members[i].ExpertName < team.Members[j].ExpertName })
 		def.ExpertTeam = team
@@ -128,8 +135,10 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 	sort.Slice(def.Skills, func(i, j int) bool { return def.Skills[i].Name < def.Skills[j].Name })
 	sort.Slice(def.Experts, func(i, j int) bool { return def.Experts[i].Name < def.Experts[j].Name })
 	in := &fleet.CapabilityInstallRequest{Definition: def}
-	for _, expert := range def.Experts {
-		in.Bindings.Experts = append(in.Bindings.Experts, fleet.CapabilityExpertBinding{ExpertName: expert.Name, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv})
+	for i := range in.Definition.Experts {
+		expert := &in.Definition.Experts[i]
+		expert.CustomEnv = p.CustomEnv
+		in.Bindings.Experts = append(in.Bindings.Experts, fleet.CapabilityExpertBinding{ExpertName: expert.Name, RuntimeID: p.RuntimeID})
 	}
 	return in, nil
 }
@@ -138,7 +147,7 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	if detail.Plugin.Type != model.PluginTypeExpert {
 		return nil, installationInvalid("definition.experts", "wrong_dependency_type")
 	}
-	if !installationName(name, 200) || b.expertNames[name] {
+	if !installationName(name, maxInstallationNameRunes) || b.expertNames[name] {
 		return nil, installationInvalid("definition.experts", "invalid_or_duplicate_name")
 	}
 	b.expertNames[name] = true
@@ -149,19 +158,25 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	if err := b.text(instructions); err != nil {
 		return nil, err
 	}
-	if err := b.text(summary); err != nil {
+	if err := b.boundedText("definition.experts.description", summary, 255); err != nil {
 		return nil, err
 	}
 	out := &fleet.CapabilityExpert{Name: name, Description: summary, Instructions: instructions}
-	if raw, ok := rawAttachmentContent(detail.Plugin.Package, "mcp.json"); ok {
-		var object map[string]json.RawMessage
-		if len(raw) > model.MaxMCPConfigBytes || json.Unmarshal([]byte(raw), &object) != nil || object == nil {
-			return nil, installationInvalid("definition.experts.mcp_config", "invalid_object")
+	for _, attachment := range decodePackageAttachments(detail.Plugin.Package) {
+		if attachment.Path != "mcp.json" {
+			continue
 		}
-		if err := b.text(raw); err != nil {
+		if attachment.ContentType != "raw" {
+			return nil, installationInvalid("definition.experts.mcp_config", "unsupported_source")
+		}
+		config, err := normalizeCapabilityMCP(attachment.RawContent)
+		if err != nil {
 			return nil, err
 		}
-		out.MCPConfig, _ = json.Marshal(object)
+		if err := b.text(string(config)); err != nil {
+			return nil, err
+		}
+		out.MCPConfig = config
 	}
 	relations := relationsOfType(detail.Relations, "expert_skill")
 	if len(relations) > 20 {
@@ -207,7 +222,7 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string) (string, error
 		return "", installationInvalid("definition.skills.content", "required")
 	}
 	skill := fleet.CapabilitySkill{Name: name, Description: manifestDescription(p.Manifest), Content: content, Config: map[string]any{}}
-	if err := b.text(skill.Description); err != nil {
+	if err := b.boundedText("definition.skills.description", skill.Description, 512); err != nil {
 		return "", err
 	}
 	for filePath, content := range files {
@@ -228,4 +243,11 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string) (string, error
 	}
 	b.skillsByID[id] = name
 	return name, nil
+}
+
+func (b *capabilityBuilder) boundedText(field, value string, maxRunes int) error {
+	if utf8.RuneCountInString(value) > maxRunes {
+		return installationInvalid(field, "too_long")
+	}
+	return b.text(value)
 }
