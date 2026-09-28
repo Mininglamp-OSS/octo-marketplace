@@ -10,10 +10,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 )
 
 type CapabilityInstaller interface {
-	CapabilityInstallEnabled() bool
 	InstallCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error)
 }
 
@@ -125,8 +125,8 @@ func (s *Service) CreateInstallation(ctx context.Context, caller Caller, pluginI
 	if p, err = NormalizeInstallationParams(p); err != nil {
 		return nil, err
 	}
-	if s.capabilityInstaller == nil || !s.capabilityInstaller.CapabilityInstallEnabled() {
-		return nil, fleet.ErrCapabilityInstallDisabled
+	if s.capabilityInstaller == nil {
+		return nil, expertsvc.ErrFleetNotConfigured
 	}
 	ctx, cancel := context.WithTimeout(ctx, fleet.CapabilityInstallTimeout)
 	defer cancel()

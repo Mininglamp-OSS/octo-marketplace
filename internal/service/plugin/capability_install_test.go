@@ -12,10 +12,10 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 )
 
 type fakeCapabilityInstaller struct {
-	enabled                      bool
 	calls                        int
 	token, space, workspace, key string
 	in                           fleet.CapabilityInstallRequest
@@ -24,7 +24,6 @@ type fakeCapabilityInstaller struct {
 	err                          error
 }
 
-func (f *fakeCapabilityInstaller) CapabilityInstallEnabled() bool { return f.enabled }
 func (f *fakeCapabilityInstaller) InstallCapability(_ context.Context, token, space, workspace, key string, in fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
 	f.calls++
 	f.token, f.space, f.workspace, f.key, f.in = token, space, workspace, key, in
@@ -45,7 +44,7 @@ func installationParams() InstallationParams {
 func capabilityFixture() (*Service, *fakeStore, *fakeCapabilityInstaller) {
 	store := installFixture()
 	store.plugins["skill-1"].Package = packageWith(rawAtt("SKILL.md", "# Deploy"), rawAtt("references/checklist.md", "check before deploy"))
-	installer := &fakeCapabilityInstaller{enabled: true}
+	installer := &fakeCapabilityInstaller{}
 	return fixedService(store).WithCapabilityInstaller(installer), store, installer
 }
 
@@ -234,15 +233,18 @@ func TestCapabilityStorageFilesVerifyChecksumAndScope(t *testing.T) {
 	}
 }
 
-func TestCapabilityReplayAndDisabledMode(t *testing.T) {
+func TestCapabilityInstallationRequiresConfiguredFleet(t *testing.T) {
+	svc, _, installer := capabilityFixture()
+	svc.WithCapabilityInstaller(nil)
+	if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams()); !errors.Is(err, expertsvc.ErrFleetNotConfigured) || installer.calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, installer.calls)
+	}
+}
+
+func TestCapabilityReplay(t *testing.T) {
 	svc, _, installer := capabilityFixture()
 	tracker := &fakeTracker{}
 	svc.WithMetrics(tracker)
-	installer.enabled = false
-	if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams()); !errors.Is(err, fleet.ErrCapabilityInstallDisabled) || installer.calls != 0 {
-		t.Fatalf("err=%v", err)
-	}
-	installer.enabled = true
 	installer.replay = true
 	installer.replayKnown = true
 	out, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())

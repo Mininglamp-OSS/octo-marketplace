@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -161,7 +162,7 @@ func TestInstallationErrorMappingAndSafeRetry(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"disabled", fleet.ErrCapabilityInstallDisabled, 503, "UPSTREAM_UNAVAILABLE"},
+		{"not_configured", expertsvc.ErrFleetNotConfigured, 503, "UPSTREAM_UNAVAILABLE"},
 		{"not_found", pluginsvc.ErrNotFound, 404, "NOT_FOUND"},
 		{"hidden", pluginsvc.ErrDependencyHidden, 403, "FORBIDDEN"},
 		{"size", pluginsvc.ErrTooLarge, 413, "PAYLOAD_TOO_LARGE"},
@@ -213,6 +214,9 @@ func TestInstallationErrorMappingAndSafeRetry(t *testing.T) {
 			}
 			if (tc.name == "preparation" || tc.name == "integrity") && out.Error.Details["phase"] != "preparation" {
 				t.Fatal("preparation failure mislabeled as an uncertain Fleet result")
+			}
+			if tc.name == "not_configured" && (out.Error.Details["reason"] != "not_configured" || !strings.Contains(out.Error.Hint, "不要切换安装接口")) {
+				t.Fatal("missing configuration must retain safe same-key retry guidance")
 			}
 		})
 	}
@@ -272,7 +276,7 @@ func TestInstallationFailureLogsOnlySafeClassification(t *testing.T) {
 func TestInstallationUnavailableWithoutNewService(t *testing.T) {
 	rec := httptest.NewRecorder()
 	testEngine(&fakeService{}).ServeHTTP(rec, installationRequest(installationBody))
-	if rec.Code != 503 {
-		t.Fatalf("code=%d", rec.Code)
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), `"reason":"not_configured"`) || !strings.Contains(rec.Body.String(), "安装服务尚未配置") {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

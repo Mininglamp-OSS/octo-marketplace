@@ -1,14 +1,17 @@
-# Plugin capability installations (gated integration)
+# Plugin capability installations
 
 This is an additive Marketplace endpoint for Workspace recruitment. The existing
 `POST /api/v1/plugins/install` remains unchanged and is not deprecated. Client
-migration and enabling the new Fleet integration are separate work.
+migration is separate work.
 
-## Rollout gate / verified source contract
+## Availability / verified source contract
 
-`OCTO_FLEET_CAPABILITY_INSTALL_ENABLED` defaults to `false`. Until explicitly
-enabled, the new endpoint returns `503 UPSTREAM_UNAVAILABLE` without calling
-Fleet. Both installers reuse `OCTO_FLEET_URL`, without an `/api` suffix. For a
+The new endpoint is available whenever the existing `OCTO_FLEET_URL` is configured;
+there is no additional enable flag. The removed
+`OCTO_FLEET_CAPABILITY_INSTALL_ENABLED` variable is ignored, even if an older
+deployment still sets it to `false`. Without a configured Fleet installer, the
+endpoint returns `503 UPSTREAM_UNAVAILABLE` with `details.reason = "not_configured"`
+without calling Fleet. Both installers reuse `OCTO_FLEET_URL`, without an `/api` suffix. For a
 direct service base such as `http://fleet:8093`, the new adapter appends
 `/v1/capabilities/install`. When the base path ends in the OCTO gateway mount
 `/fleet`, it appends `/api/v1/capabilities/install` instead (for example,
@@ -30,9 +33,8 @@ API facade. This supersedes the earlier draft's provisional field locations.
 
 These shapes are isolated in `internal/fleet/capability_types.go`. The public
 Fleet route responds with `{ "data": ... }`, not the internal handler's bare
-result. No live Fleet installation has been performed in this change; runtime
-access, deployment configuration, atomicity and replay still require integration
-verification before enabling the gate.
+result. Runtime access, deployment configuration, atomicity and replay still
+require integration verification in the target environment before switching clients.
 
 ## Request
 
