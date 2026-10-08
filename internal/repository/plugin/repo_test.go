@@ -826,7 +826,7 @@ func TestUpdateSyncsPlacementCategory(t *testing.T) {
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}))
 	mock.ExpectExec(`UPDATE plugins SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
-	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).
+	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\? AND placement_code='default'`).
 		WithArgs(category, now, "plugin-id").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT relation_id,target_plugin_id,relation_type,sort_order,relation_json,status FROM plugin_relations`).

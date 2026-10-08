@@ -18,12 +18,12 @@ type sceneStore interface {
 	ListScenes(context.Context) ([]model.PluginScene, error)
 	GetScene(context.Context, string) (*model.PluginScene, error)
 	CreateScene(context.Context, model.PluginScene) error
-	UpdateScene(context.Context, model.PluginScene) error
+	UpdateScene(context.Context, string, pluginrepo.SceneUpdate) error
 	DeleteScene(context.Context, string) error
 	ListPlacements(context.Context, pluginrepo.PlacementListFilter) ([]model.AdminPluginPlacement, int64, error)
 	GetPlacement(context.Context, string) (*model.AdminPluginPlacement, error)
 	CreatePlacement(context.Context, string, string, string, bool, int) error
-	UpdatePlacement(context.Context, string, bool, int) error
+	UpdatePlacement(context.Context, string, pluginrepo.PlacementUpdate) error
 	DeletePlacement(context.Context, string) error
 	BatchSetPlacements(context.Context, string, []pluginrepo.PlacementBatchItem, bool, bool, int) error
 }
@@ -114,23 +114,24 @@ func (s *Scenes) AdminUpdateScene(ctx context.Context, sceneID string, p SceneUp
 	if strings.TrimSpace(sceneID) == "" || p.Name == nil && p.Description == nil && p.SortOrder == nil {
 		return nil, ErrInvalidRequest
 	}
-	scene, err := s.repo.GetScene(ctx, sceneID)
-	if err != nil {
-		return nil, mapSceneStoreError(err)
-	}
 	if p.Name != nil {
-		scene.Name = strings.TrimSpace(*p.Name)
+		name := strings.TrimSpace(*p.Name)
+		p.Name = &name
+		if name == "" || utf8.RuneCountInString(name) > 128 {
+			return nil, ErrInvalidRequest
+		}
 	}
 	if p.Description != nil {
-		scene.Description = strings.TrimSpace(*p.Description)
+		description := strings.TrimSpace(*p.Description)
+		p.Description = &description
+		if utf8.RuneCountInString(description) > 1024 {
+			return nil, ErrInvalidRequest
+		}
 	}
-	if p.SortOrder != nil {
-		scene.SortOrder = *p.SortOrder
-	}
-	if !validSceneText(scene.Name, scene.Description) || scene.SortOrder < 0 {
+	if p.SortOrder != nil && *p.SortOrder < 0 {
 		return nil, ErrInvalidRequest
 	}
-	if err := s.repo.UpdateScene(ctx, *scene); err != nil {
+	if err := s.repo.UpdateScene(ctx, sceneID, pluginrepo.SceneUpdate{Name: p.Name, Description: p.Description, SortOrder: p.SortOrder}); err != nil {
 		return nil, mapSceneStoreError(err)
 	}
 	item, err := s.repo.GetScene(ctx, sceneID)
@@ -167,6 +168,9 @@ func (s *Scenes) AdminCreatePlacement(ctx context.Context, p PlacementCreatePara
 	if !validSceneCode(p.SceneCode) || p.PluginID == "" || p.SortOrder < 0 {
 		return nil, ErrInvalidRequest
 	}
+	if p.SceneCode == "default" && !p.IsVisible {
+		return nil, ErrConflict
+	}
 	id := s.id()
 	if err := s.repo.CreatePlacement(ctx, id, p.SceneCode, p.PluginID, p.IsVisible, p.SortOrder); err != nil {
 		return nil, mapSceneStoreError(err)
@@ -179,24 +183,13 @@ func (s *Scenes) AdminUpdatePlacement(ctx context.Context, placementID string, p
 	if strings.TrimSpace(placementID) == "" || p.IsVisible == nil && p.SortOrder == nil {
 		return nil, ErrInvalidRequest
 	}
-	item, err := s.repo.GetPlacement(ctx, placementID)
-	if err != nil {
-		return nil, mapSceneStoreError(err)
-	}
-	visible, sortOrder := item.IsVisible, item.SortOrder
-	if p.IsVisible != nil {
-		visible = *p.IsVisible
-	}
-	if p.SortOrder != nil {
-		sortOrder = *p.SortOrder
-	}
-	if sortOrder < 0 {
+	if p.SortOrder != nil && *p.SortOrder < 0 {
 		return nil, ErrInvalidRequest
 	}
-	if err := s.repo.UpdatePlacement(ctx, placementID, visible, sortOrder); err != nil {
+	if err := s.repo.UpdatePlacement(ctx, placementID, pluginrepo.PlacementUpdate{IsVisible: p.IsVisible, SortOrder: p.SortOrder}); err != nil {
 		return nil, mapSceneStoreError(err)
 	}
-	item, err = s.repo.GetPlacement(ctx, placementID)
+	item, err := s.repo.GetPlacement(ctx, placementID)
 	return item, mapSceneStoreError(err)
 }
 

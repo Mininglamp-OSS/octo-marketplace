@@ -230,7 +230,7 @@ type listItemResponse struct {
 	ViewCount        int                       `json:"view_count"`
 	InstallCount     int                       `json:"install_count"`
 	DownloadCount    int                       `json:"download_count"`
-	SceneCodes       []string                  `json:"scene_codes,omitempty"`
+	SceneCodes       []string                  `json:"scene_codes"`
 	ManifestJSON     json.RawMessage           `json:"manifest_json" swaggertype:"object"`
 	ManifestHash     string                    `json:"manifest_hash"`
 	PluginHash       string                    `json:"plugin_hash"`

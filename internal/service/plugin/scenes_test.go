@@ -17,6 +17,10 @@ type fakeSceneStore struct {
 	createdVisible   bool
 	createdSceneCode string
 	createdPluginID  string
+	updatedSceneID   string
+	sceneUpdate      pluginrepo.SceneUpdate
+	updatedPlacement string
+	placementUpdate  pluginrepo.PlacementUpdate
 	err              error
 	batchSceneCode   string
 	batchItems       []pluginrepo.PlacementBatchItem
@@ -47,11 +51,22 @@ func (f *fakeSceneStore) CreateScene(_ context.Context, scene model.PluginScene)
 	f.scenes[scene.ID] = scene
 	return nil
 }
-func (f *fakeSceneStore) UpdateScene(_ context.Context, scene model.PluginScene) error {
+func (f *fakeSceneStore) UpdateScene(_ context.Context, sceneID string, update pluginrepo.SceneUpdate) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.scenes[scene.ID] = scene
+	f.updatedSceneID, f.sceneUpdate = sceneID, update
+	scene := f.scenes[sceneID]
+	if update.Name != nil {
+		scene.Name = *update.Name
+	}
+	if update.Description != nil {
+		scene.Description = *update.Description
+	}
+	if update.SortOrder != nil {
+		scene.SortOrder = *update.SortOrder
+	}
+	f.scenes[sceneID] = scene
 	return nil
 }
 func (f *fakeSceneStore) DeleteScene(context.Context, string) error { return f.err }
@@ -80,8 +95,11 @@ func (f *fakeSceneStore) CreatePlacement(_ context.Context, id, sceneCode, plugi
 	f.placements[id] = model.AdminPluginPlacement{ID: id, SceneCode: sceneCode, PluginID: pluginID, IsVisible: visible, SortOrder: sortOrder}
 	return nil
 }
-func (f *fakeSceneStore) UpdatePlacement(context.Context, string, bool, int) error { return f.err }
-func (f *fakeSceneStore) DeletePlacement(context.Context, string) error            { return f.err }
+func (f *fakeSceneStore) UpdatePlacement(_ context.Context, placementID string, update pluginrepo.PlacementUpdate) error {
+	f.updatedPlacement, f.placementUpdate = placementID, update
+	return f.err
+}
+func (f *fakeSceneStore) DeletePlacement(context.Context, string) error { return f.err }
 func (f *fakeSceneStore) BatchSetPlacements(_ context.Context, sceneCode string, items []pluginrepo.PlacementBatchItem, isPlaced, _ bool, _ int) error {
 	f.batchSceneCode, f.batchItems, f.batchIsPlaced = sceneCode, items, isPlaced
 	return f.err
@@ -133,6 +151,49 @@ func TestAdminCreatePlacementPreservesVisibility(t *testing.T) {
 	}
 	if store.createdSceneCode != "featured" || store.createdPluginID != "skill-1" || store.createdVisible || item.SortOrder != 7 {
 		t.Fatalf("created scene=%q plugin=%q visible=%v item=%#v", store.createdSceneCode, store.createdPluginID, store.createdVisible, item)
+	}
+}
+
+func TestAdminCreatePlacementRejectsHiddenDefault(t *testing.T) {
+	store := &fakeSceneStore{}
+	svc := NewScenes(store, func() string { return "placement-1" })
+	_, err := svc.AdminCreatePlacement(context.Background(), PlacementCreateParams{
+		SceneCode: "default", PluginID: "skill-1", IsVisible: false,
+	})
+	if err != ErrConflict {
+		t.Fatalf("error=%v, want ErrConflict", err)
+	}
+	if store.createdPluginID != "" {
+		t.Fatal("hidden default placement reached the repository")
+	}
+}
+
+func TestAdminUpdatesOnlySuppliedFields(t *testing.T) {
+	store := &fakeSceneStore{
+		scenes: map[string]model.PluginScene{
+			"scene-1": {ID: "scene-1", Name: "Featured", Description: "Keep me", SortOrder: 10},
+		},
+		placements: map[string]model.AdminPluginPlacement{
+			"placement-1": {ID: "placement-1", IsVisible: false, SortOrder: 20},
+		},
+	}
+	svc := NewScenes(store, func() string { return "unused" })
+
+	sortOrder := 30
+	scene, err := svc.AdminUpdateScene(context.Background(), "scene-1", SceneUpdateParams{SortOrder: &sortOrder})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.sceneUpdate.Name != nil || store.sceneUpdate.Description != nil || store.sceneUpdate.SortOrder == nil || scene.Description != "Keep me" {
+		t.Fatalf("update=%#v scene=%#v", store.sceneUpdate, scene)
+	}
+
+	visible := true
+	if _, err := svc.AdminUpdatePlacement(context.Background(), "placement-1", PlacementUpdateParams{IsVisible: &visible}); err != nil {
+		t.Fatal(err)
+	}
+	if store.placementUpdate.IsVisible == nil || store.placementUpdate.SortOrder != nil {
+		t.Fatalf("placement update=%#v", store.placementUpdate)
 	}
 }
 

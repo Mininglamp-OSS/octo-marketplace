@@ -30,8 +30,9 @@ and Expert Team catalog lists continue to select a scene through `scene_code`.
 - Placement writes validate that both the scene and a live, non-embedded Plugin
   exist. Cross-Space Plugin administration remains restricted to the existing
   system-admin boundary.
-- Deleting a scene that still has Plugin or category placements fails closed
-  with `CONFLICT`.
+- Deleting a scene that still has visible/live Plugin or category placements
+  fails closed with `CONFLICT`; stale references that cannot appear in the
+  admin surface are cleaned up transactionally when the scene is deleted.
 - Catalog reads keep applying Space visibility and published-state rules in
   addition to the requested `scene_code`; scene selection never bypasses auth.
 - API success/error envelopes and field naming follow the OCTO OpenAPI rules.

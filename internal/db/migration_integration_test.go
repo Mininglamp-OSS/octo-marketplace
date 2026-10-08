@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,6 +173,64 @@ func TestRunMigrationsUpDown(t *testing.T) {
 	}
 	if databaseCollation != "utf8mb4_unicode_ci" {
 		t.Errorf("database collation=%s want=utf8mb4_unicode_ci", databaseCollation)
+	}
+}
+
+func TestPluginSceneMigrationDeduplicatesPlacements(t *testing.T) {
+	database := isolatedTestDB(t)
+	fullSource := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	migrations, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatalf("FindMigrations: %v", err)
+	}
+	const sceneMigrationID = "20261008-00-plugin-scenes.sql"
+	previous := make([]*migrate.Migration, 0, len(migrations)-1)
+	var target *migrate.Migration
+	for _, migration := range migrations {
+		if migration.Id == sceneMigrationID {
+			target = migration
+			continue
+		}
+		previous = append(previous, migration)
+	}
+	if target == nil {
+		t.Fatalf("migration %s not found", sceneMigrationID)
+	}
+	if _, err := migrate.Exec(database, "mysql", &migrate.MemoryMigrationSource{Migrations: previous}, migrate.Up); err != nil {
+		t.Fatalf("apply migrations before plugin scenes: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO plugins
+		(plugin_id,plugin_name,plugin_type,category_id,tags_json,owner_uid,space_id,visibility,
+		 manifest_json,plugin_json,manifest_hash,plugin_hash,created_at,updated_at)
+		VALUES ('plugin-scenes','Scene Test','skill','category-current',JSON_ARRAY(),'user-1','space-a','private',
+		        JSON_OBJECT(),JSON_OBJECT(),REPEAT('a',71),REPEAT('b',71),NOW(3),NOW(3))`); err != nil {
+		t.Fatalf("insert plugin: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO plugin_placements
+		(placement_id,placement_code,plugin_id,category_id,visible,sort_order,created_at,updated_at)
+		VALUES
+		('placement-a','featured','plugin-scenes','category-old-a',1,1,NOW(3),NOW(3)),
+		('placement-b','featured','plugin-scenes','category-old-b',1,2,NOW(3),NOW(3))`); err != nil {
+		t.Fatalf("insert legacy placements: %v", err)
+	}
+	n, err := migrate.Exec(database, "mysql", fullSource, migrate.Up)
+	if err != nil {
+		t.Fatalf("apply plugin scene migration: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("applied %d migrations, want 1", n)
+	}
+
+	var count int
+	var categoryID string
+	if err := database.QueryRow(`SELECT COUNT(*),MAX(category_id) FROM plugin_placements WHERE plugin_id='plugin-scenes' AND placement_code='featured'`).Scan(&count, &categoryID); err != nil {
+		t.Fatalf("read reconciled placements: %v", err)
+	}
+	if count != 1 || categoryID != "category-current" {
+		t.Fatalf("placement count=%d category_id=%q", count, categoryID)
+	}
+	if columns := indexColumns(t, database, "plugin_placements", "uq_plugin_placement"); strings.Join(columns, ",") != "placement_code,plugin_id" {
+		t.Fatalf("uq_plugin_placement columns=%v", columns)
 	}
 }
 

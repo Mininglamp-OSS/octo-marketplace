@@ -25,7 +25,8 @@ const RoleSuperAdmin = "superAdmin"
 // RoleSuperAdmin above. Grep both repos before changing either string.
 //
 // It is admitted on every live /api/v1/admin/* group: the unified plugin
-// admin surface (/admin/plugins* + /admin/plugin_categories), the retained MCP
+// admin surface (/admin/plugins*, /admin/plugin_categories,
+// /admin/plugin_scenes*, and /admin/plugin_placements*), the retained MCP
 // probe/icon routes (/admin/mcps/_probe, /admin/mcp_icon_uploads), and the
 // retained skill helper routes (skill_md, skill_uploads). The legacy per-type
 // admin CRUD (/admin/experts, /admin/squads, /admin/skill_categories, and the

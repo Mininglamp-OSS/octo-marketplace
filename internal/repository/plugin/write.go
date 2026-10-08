@@ -1315,8 +1315,8 @@ const defaultPlacementCode = "default"
 // next edit. Insert the default placement when the plugin has none (self-healing,
 // carrying the current category), otherwise sync the existing placement's
 // category to the current one (including clearing it to NULL). The id is consumed
-// only on the insert path. Only the default placement is managed; publish-era
-// multi-scene placements are gone.
+// only on the insert path. Only the default placement is managed; other scene
+// placements keep their own metadata.
 func syncDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, pluginID string, categoryID *string) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM plugin_placements WHERE plugin_id=? AND placement_code=?)`, pluginID, defaultPlacementCode).Scan(&exists); err != nil {
@@ -1329,7 +1329,7 @@ func syncDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func() string, 
 		}
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE plugin_placements SET category_id=?,updated_at=? WHERE plugin_id=?`, categoryID, now, pluginID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE plugin_placements SET category_id=?,updated_at=? WHERE plugin_id=? AND placement_code='default'`, categoryID, now, pluginID); err != nil {
 		return wrapped("update placements", err)
 	}
 	return nil

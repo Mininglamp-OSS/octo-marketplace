@@ -14,6 +14,25 @@ CREATE TABLE `plugin_scenes` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='Marketplace scene code registry';
 
+-- Older imports could retain more than one category-specific row for the same
+-- Plugin and scene. The admin contract is one placement per Plugin and scene,
+-- so retain one deterministic row and align it with the Plugin's current
+-- category before tightening the unique key.
+DELETE duplicate
+FROM plugin_placements duplicate
+JOIN plugin_placements keeper
+  ON keeper.placement_code = duplicate.placement_code
+ AND keeper.plugin_id = duplicate.plugin_id
+ AND keeper.placement_id < duplicate.placement_id;
+
+UPDATE plugin_placements pp
+JOIN plugins p ON p.plugin_id = pp.plugin_id
+SET pp.category_id = p.category_id;
+
+ALTER TABLE plugin_placements
+  DROP INDEX uq_plugin_placement,
+  ADD UNIQUE KEY uq_plugin_placement (placement_code, plugin_id);
+
 INSERT INTO `plugin_scenes`
   (`scene_id`, `scene_code`, `name`, `description`, `sort_order`, `created_at`, `updated_at`)
 SELECT
@@ -33,5 +52,9 @@ FROM (
 ) AS codes;
 
 -- +migrate Down
+
+ALTER TABLE plugin_placements
+  DROP INDEX uq_plugin_placement,
+  ADD UNIQUE KEY uq_plugin_placement (placement_code, plugin_id, category_key);
 
 DROP TABLE IF EXISTS `plugin_scenes`;
