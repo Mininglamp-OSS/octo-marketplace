@@ -235,19 +235,10 @@ func resolveImportFields(p ImportParams, task *skillrepo.ParseTaskRow, systemAdm
 	} else if !validVersion(f.version) {
 		f.version = defaultCurrentVersion
 	}
-	// An upload lands as a DRAFT whatever visibility it declares (buildWrite stamps
-	// listing_state), so the declared value is kept rather than clamped: an author
-	// who uploads intending 仅本组织可见 says so once, here, and Publish routes it
-	// through review.
-	//
-	// A re-import keeps whatever visibility the plugin already has, because
-	// silently rewriting the intent of a row mid-edit is surprising. It does NOT
-	// let the re-import through: `Service.update` refuses a PUBLISHED org-visible
-	// plugin outright with ErrListedRequiresReview (409), so re-importing a listed
-	// plugin never replaces live content — the author submits a review request
-	// (skills via `parse_task_id`) and approval is what swaps it. Re-importing a
-	// draft or delisted row still replaces it directly; nobody else can read it.
-	// Tests: TestReimportOfAListedPluginIsRefused,
+	// Temporary compatibility: createWithID publishes fresh uploads immediately,
+	// keeping the declared visibility. Re-imports replace live content directly
+	// through Service.update and preserve the existing audience.
+	// Tests: TestReimportOfAListedPluginReplacesItDirectly,
 	// TestReimportPreservesTheExistingVisibility.
 	if !systemAdmin && old != nil && old.Visibility != "" {
 		f.visibility = old.Visibility

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -71,13 +70,8 @@ func TestDeleteCancelsThePendingReviewRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Repo.Delete now restates the listed-plugin gate against the FOR UPDATE
-	// row (symmetric with Repo.Update's EnforceListingGate), so a non-admin
-	// owner-scope call refuses published+space at the repo layer too. AdminDelete
-	// must still be able to cascade-cancel pending requests on a listed row it
-	// is removing (system admins are the takedown actor), so drive this test
-	// through an admin scope — that is also the production shape for removing
-	// an abusive listed plugin.
+	// Admin deletion must still cancel pending requests when removing a listed
+	// plugin, independently of the temporary owner-delete compatibility.
 	admin := pluginrepo.Scope{CallerUID: "admin-1", SpaceID: "space-a", Admin: true}
 	if err := repo.Delete(ctx, admin, "plugin-1", "admin-1", "admin-1", "req-1", nil); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -200,13 +194,9 @@ func TestDeleteGraphCancelsPendingReviewsAcrossTheSubtree(t *testing.T) {
 	}
 }
 
-// TestDeleteRefusesAPluginApprovedMidFlight pins the under-lock twin of the
-// Service.Delete listing gate. Service.Delete reads listing_state/visibility from
-// an UNLOCKED GetWithRelations; Repo.Delete re-derives the (published AND space)
-// conjunction against the FOR UPDATE-locked row so an ApproveReview that commits
-// space+published between the unlocked read and the lock cannot let the author
-// soft-delete a plugin the org just listed.
-func TestDeleteRefusesAPluginApprovedMidFlight(t *testing.T) {
+// Temporary compatibility allows owner deletion even after the retained review
+// flow approves and publishes the plugin.
+func TestOwnerCanDeletePluginAfterApproval(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	ctx := context.Background()
@@ -224,23 +214,21 @@ func TestDeleteRefusesAPluginApprovedMidFlight(t *testing.T) {
 	}
 
 	err := repo.Delete(ctx, owner, "plugin-1", "user-1", "Alice", "req-1", nil)
-	if !errors.Is(err, pluginrepo.ErrListedRequiresReview) {
-		t.Fatalf("Delete of a just-approved plugin = %v, want ErrListedRequiresReview", err)
+	if err != nil {
+		t.Fatalf("Delete of a just-approved plugin = %v, want nil; the listed-delete gate is removed", err)
 	}
 	var deleted sql.NullTime
 	if err := database.QueryRow(`SELECT deleted_at FROM plugins WHERE plugin_id='plugin-1'`).Scan(&deleted); err != nil {
 		t.Fatal(err)
 	}
-	if deleted.Valid {
-		t.Fatalf("plugin was soft-deleted despite the refused Delete: deleted_at=%v", deleted.Time)
+	if !deleted.Valid {
+		t.Fatal("plugin was not soft-deleted; the owner delete must land")
 	}
 }
 
-// TestDeleteGraphRefusesAContainerApprovedMidFlight covers the same race on
-// the container-delete path. Graph roots (experts, expert_teams) almost never
-// carry incoming live relations, so rejectLiveIncomingRelations cannot protect
-// them; the under-lock listing gate is what must.
-func TestDeleteGraphRefusesAContainerApprovedMidFlight(t *testing.T) {
+// Container deletion follows the same temporary owner-delete behavior after
+// approval as single-plugin deletion.
+func TestOwnerCanDeleteContainerAfterApproval(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	ctx := context.Background()
@@ -258,14 +246,14 @@ func TestDeleteGraphRefusesAContainerApprovedMidFlight(t *testing.T) {
 	}
 
 	err := repo.DeleteGraph(ctx, owner, "expert-1", "user-1", "Alice", "req-1", nil)
-	if !errors.Is(err, pluginrepo.ErrListedRequiresReview) {
-		t.Fatalf("DeleteGraph of a just-approved container = %v, want ErrListedRequiresReview", err)
+	if err != nil {
+		t.Fatalf("DeleteGraph of a just-approved container = %v, want nil; the listed-delete gate is removed", err)
 	}
 	var deleted sql.NullTime
 	if err := database.QueryRow(`SELECT deleted_at FROM plugins WHERE plugin_id='expert-1'`).Scan(&deleted); err != nil {
 		t.Fatal(err)
 	}
-	if deleted.Valid {
-		t.Fatalf("container was soft-deleted despite the refused DeleteGraph: deleted_at=%v", deleted.Time)
+	if !deleted.Valid {
+		t.Fatal("container was not soft-deleted; the owner delete must land")
 	}
 }

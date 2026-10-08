@@ -9,20 +9,9 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
-// The review gate is listing_state, not visibility. visibility declares INTENT
-// ("who should see this once it is listed") and lists nothing on its own; a tenant
-// plugin stays `draft` until Publish routes it through review and an approval
-// stamps `published`.
-//
-// That inversion is why the old tests here had to go. They asserted "a tenant
-// create always lands private" and "a tenant update may never raise visibility",
-// which were the gate back when `private` doubled as the draft state. Under the
-// current model an author declares 仅本组织可见 on the draft itself, so both of
-// those rules would now block the normal flow rather than protect anything.
-//
-// Every assertion below is on what WOULD BE PERSISTED, not on an HTTP status: a
-// handler that 200s while writing `draft` is correct, and a handler that 400s
-// while writing `published` would pass a status-only check.
+// Temporary compatibility publishes tenant creates immediately and allows
+// owners to edit listed plugins. The declared audience and pending-review
+// safeguards remain enforced. Assert the values sent to persistence.
 
 func visibilityFixture(t *testing.T, current model.PluginVisibility, listing model.PluginListingState) (*fakeStore, *Service) {
 	t.Helper()
@@ -42,10 +31,10 @@ func visibilityFixture(t *testing.T, current model.PluginVisibility, listing mod
 	return store, fixedService(store)
 }
 
-// A fresh tenant create lands as a DRAFT and KEEPS the visibility it declared.
-// The declared value surviving is the point: it is what Publish later reads to
-// decide whether the plugin needs org review or lists immediately.
-func TestTenantCreateLandsDraftWithTheDeclaredVisibility(t *testing.T) {
+// A fresh tenant create lands PUBLISHED (listed immediately) and KEEPS the
+// visibility it declared. Upload-is-publish: there is no separate publish step
+// and no Space-review round trip.
+func TestTenantCreateLandsPublishedWithTheDeclaredVisibility(t *testing.T) {
 	for _, asked := range []model.PluginVisibility{
 		model.PluginVisibilitySpace,
 		model.PluginVisibilityPrivate,
@@ -75,8 +64,8 @@ func TestTenantCreateLandsDraftWithTheDeclaredVisibility(t *testing.T) {
 		if store.create.Visibility != asked {
 			t.Errorf("asked for %q, PERSISTED %q; the declared intent must survive", asked, store.create.Visibility)
 		}
-		if store.create.ListingState != model.PluginListingStateDraft {
-			t.Errorf("visibility=%q PERSISTED listing_state %q; a tenant create must never list directly", asked, store.create.ListingState)
+		if store.create.ListingState != model.PluginListingStatePublished {
+			t.Errorf("visibility=%q PERSISTED listing_state %q; a tenant create must list immediately", asked, store.create.ListingState)
 		}
 	}
 }
@@ -135,27 +124,23 @@ func TestTenantMayChangeVisibilityIntentOnAnUnlistedRow(t *testing.T) {
 	}
 }
 
-// Once a plugin is listed TO THE ORG the ordinary write path must refuse it:
-// every field reachable here is org-visible, so an edit that lands would be an
-// unreviewed change to what the whole Space is reading.
-func TestTenantCannotEditAListedPluginDirectly(t *testing.T) {
+// While the review rollout is deferred, the owner can edit a listed plugin
+// directly. The edit persists like any other save.
+func TestTenantCanEditAListedPluginDirectly(t *testing.T) {
 	store, svc := visibilityFixture(t, model.PluginVisibilitySpace, model.PluginListingStatePublished)
 	req := validRequest()
 	req.Visibility = model.PluginVisibilitySpace
 	req.Publisher = "Someone else"
 	_, err := svc.Update(context.Background(), testCaller, "plugin-1", req)
-	if !errors.Is(err, ErrListedRequiresReview) {
-		t.Fatalf("err = %v, want ErrListedRequiresReview", err)
+	if err != nil {
+		t.Fatalf("err = %v; a listed plugin must be owner-editable", err)
 	}
-	if store.update != nil {
-		t.Fatal("an unreviewed edit of a listed plugin was PERSISTED")
+	if store.update == nil {
+		t.Fatal("the edit of a listed plugin was not persisted")
 	}
 }
 
-// The refusal above is keyed on (published AND space), not on published alone.
-// A published PRIVATE plugin has no review channel — Publish lists it directly —
-// so refusing edits there would leave it permanently uneditable, and the reason
-// for the refusal does not apply: nobody else can read it.
+// Published private plugins remain owner-editable.
 func TestTenantMayEditAPublishedPrivatePlugin(t *testing.T) {
 	store, svc := visibilityFixture(t, model.PluginVisibilityPrivate, model.PluginListingStatePublished)
 	req := validRequest()
@@ -195,20 +180,22 @@ func TestTenantMayEditAnUnlistedRow(t *testing.T) {
 	}
 }
 
-// Self-delisting is GONE. Lowering visibility to private used to be how an author
-// took a listed plugin down; taking a listed plugin down is now a Space-admin
-// action, so this route must close rather than quietly keep working — otherwise
-// "only admins can delist" is decorative.
-func TestAuthorCannotSelfDelistThroughUpsert(t *testing.T) {
+// Lowering visibility on a listed plugin is now just an ordinary edit: it is
+// allowed, it persists the new visibility, and it does NOT delist the row
+// while the review gate and listing reset are temporarily bypassed.
+func TestLoweringVisibilityOnAListedPluginIsAnOrdinaryEdit(t *testing.T) {
 	store, svc := visibilityFixture(t, model.PluginVisibilitySpace, model.PluginListingStatePublished)
 	req := validRequest()
 	req.Visibility = model.PluginVisibilityPrivate
 	_, err := svc.Update(context.Background(), testCaller, "plugin-1", req)
-	if !errors.Is(err, ErrListedRequiresReview) {
-		t.Fatalf("err = %v, want ErrListedRequiresReview; lowering visibility must not delist", err)
+	if err != nil {
+		t.Fatalf("err = %v; changing visibility on a listed plugin must be allowed", err)
 	}
-	if store.update != nil {
-		t.Fatalf("a self-delist was PERSISTED as visibility %q", store.update.Visibility)
+	if store.update == nil {
+		t.Fatal("the visibility change was not persisted")
+	}
+	if store.update.Visibility != model.PluginVisibilityPrivate {
+		t.Fatalf("persisted visibility = %q, want private", store.update.Visibility)
 	}
 }
 

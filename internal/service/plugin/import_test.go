@@ -233,8 +233,6 @@ func TestImportCreatesSkillPluginAndAttachesDefaultPlacement(t *testing.T) {
 func TestImportReuploadPreservesIconWhenOmitted(t *testing.T) {
 	store, _, _, svc := importFixtures(t)
 	space := "space-a"
-	// Private: a LISTED plugin can no longer be reuploaded at all (that is an
-	// unreviewed change to what the org reads — see TestReimportOfAListedPluginIsRefused).
 	existing := &model.Plugin{ID: "skill-1", Name: "Existing", Type: model.PluginTypeSkill, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilityPrivate, Icon: "icons/kept.png", Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[]}`)}
 	store.plugins["skill-1"] = existing
 
@@ -533,11 +531,9 @@ func TestSkillMarkdownRefObjectWinsOverInlineStub(t *testing.T) {
 	}
 }
 
-// A tenant upload lands as a DRAFT and keeps the visibility it declared. The old
-// behaviour clamped the value to private, which under the current model would
-// throw away the author's stated intent — the thing Publish reads to decide
-// whether the upload needs org review.
-func TestImportLandsDraftAndKeepsTheDeclaredVisibility(t *testing.T) {
+// A tenant upload lands PUBLISHED (listed immediately) and keeps the visibility
+// it declared.
+func TestImportLandsPublishedAndKeepsTheDeclaredVisibility(t *testing.T) {
 	for _, tc := range []struct {
 		asked model.PluginVisibility
 		want  model.PluginVisibility
@@ -556,31 +552,31 @@ func TestImportLandsDraftAndKeepsTheDeclaredVisibility(t *testing.T) {
 		if store.create.Visibility != tc.want {
 			t.Errorf("import asked %q, PERSISTED visibility %q, want %q", tc.asked, store.create.Visibility, tc.want)
 		}
-		if store.create.ListingState != model.PluginListingStateDraft {
-			t.Errorf("import asked %q, PERSISTED listing_state %q; a fresh upload must not be listed", tc.asked, store.create.ListingState)
+		if store.create.ListingState != model.PluginListingStatePublished {
+			t.Errorf("import asked %q, PERSISTED listing_state %q; a fresh upload must be listed immediately", tc.asked, store.create.ListingState)
 		}
 	}
 }
 
-// A re-import must not delist an already-approved plugin (nor promote a private
-// one). It therefore replaces LIVE content without re-review — deliberate, and
-// recorded in the divergence note.
+// Direct re-imports preserve both the existing audience and published state,
+// even when the request supplies a different visibility.
 func TestReimportPreservesTheExistingVisibility(t *testing.T) {
-	// Only `private` is exercised here: a LISTED plugin cannot be reuploaded at
-	// all any more (TestReimportOfAListedPluginIsRefused), so "preserves space" is
-	// no longer a reachable outcome.
-	for _, existing := range []model.PluginVisibility{model.PluginVisibilityPrivate} {
+	for _, existing := range []model.PluginVisibility{model.PluginVisibilityPrivate, model.PluginVisibilitySpace} {
 		store, _, _, svc := importFixtures(t)
 		space := "space-a"
 		store.plugins["plugin-1"] = &model.Plugin{
 			ID: "plugin-1", Name: "My Skill", Type: model.PluginTypeSkill,
 			OwnerUID: "user-1", SpaceID: &space, Visibility: existing,
-			Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{"plugin_name":"My Skill","name":"my-skill","description":"d"}`),
+			ListingState: model.PluginListingStatePublished,
+			Tags:         json.RawMessage(`[]`), Manifest: json.RawMessage(`{"plugin_name":"My Skill","name":"my-skill","description":"d"}`),
 			Package: json.RawMessage(`{"attachments":[]}`),
 		}
-		// A client asking to widen the plugin on reupload must not get it.
+		requested := model.PluginVisibilitySpace
+		if existing == model.PluginVisibilitySpace {
+			requested = model.PluginVisibilityPrivate
+		}
 		if _, err := svc.Import(context.Background(), testCaller, ImportParams{
-			ParseTaskID: "task-1", PluginID: "plugin-1", Visibility: model.PluginVisibilitySpace,
+			ParseTaskID: "task-1", PluginID: "plugin-1", Visibility: requested,
 		}); err != nil {
 			t.Fatalf("existing=%q reupload err = %v", existing, err)
 		}
@@ -588,7 +584,10 @@ func TestReimportPreservesTheExistingVisibility(t *testing.T) {
 			t.Fatalf("existing=%q: nothing persisted", existing)
 		}
 		if store.update.Visibility != existing {
-			t.Fatalf("existing=%q, PERSISTED %q; a reupload must neither promote nor delist", existing, store.update.Visibility)
+			t.Fatalf("existing=%q, PERSISTED %q; a reupload must preserve its audience", existing, store.update.Visibility)
+		}
+		if store.update.ListingState != model.PluginListingStatePublished {
+			t.Fatalf("existing=%q, listing_state=%q; a reupload must stay published", existing, store.update.ListingState)
 		}
 	}
 }
@@ -637,11 +636,10 @@ func TestResolveImportFieldsDefaultsToPrivateAndPreservesIntent(t *testing.T) {
 	}
 }
 
-// The re-import path goes through Service.update, so the listed-plugin lock
-// covers it too: replacing a listed skill's package is an unreviewed change to
-// what the whole Space is reading.
-func TestReimportOfAListedPluginIsRefused(t *testing.T) {
-	store, _, tasks, svc := importFixtures(t)
+// Temporary compatibility allows listed skills to be reuploaded directly
+// through Service.update without a separate review request.
+func TestReimportOfAListedPluginReplacesItDirectly(t *testing.T) {
+	store, _, _, svc := importFixtures(t)
 	space := "space-a"
 	store.plugins["plugin-1"] = &model.Plugin{
 		ID: "plugin-1", Name: "My Skill", Type: model.PluginTypeSkill,
@@ -651,14 +649,10 @@ func TestReimportOfAListedPluginIsRefused(t *testing.T) {
 		Package: json.RawMessage(`{"attachments":[]}`),
 	}
 	_, err := svc.Import(context.Background(), testCaller, ImportParams{ParseTaskID: "task-1", PluginID: "plugin-1"})
-	if !errors.Is(err, ErrListedRequiresReview) {
-		t.Fatalf("err = %v, want ErrListedRequiresReview", err)
+	if err != nil {
+		t.Fatalf("err = %v; a listed plugin must be reuploadable directly", err)
 	}
-	if store.update != nil {
-		t.Fatal("an unreviewed reupload of a listed plugin was PERSISTED")
-	}
-	// The parse task is released so the author can retry through the review flow.
-	if len(tasks.released) != 1 {
-		t.Fatalf("released = %#v; a refused reupload must not consume the upload", tasks.released)
+	if store.update == nil {
+		t.Fatal("the reupload of a listed plugin was not persisted")
 	}
 }

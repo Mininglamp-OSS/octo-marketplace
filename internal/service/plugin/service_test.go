@@ -756,46 +756,37 @@ func TestDeleteExpertRemovesEmbeddedChildrenNotStandalone(t *testing.T) {
 	}
 }
 
-// TestDeleteRequiresDelistFirst pins the symmetric gate with Service.update:
-// a published, org-visible plugin cannot be soft-deleted by its author, because
-// that would bypass the Delist Space-admin takedown gate (listing.go:141-148)
-// irreversibly. An admin must Delist first, returning the row to draft; then
-// the author can delete it.
-func TestDeleteRequiresDelistFirst(t *testing.T) {
+// While the review rollout is deferred, an author can soft-delete their own
+// published, org-visible plugin directly.
+func TestOwnerCanDeleteAListedPlugin(t *testing.T) {
 	f := &fakeStore{plugins: map[string]*model.Plugin{
 		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
 	}}
 	err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1")
-	if !errors.Is(err, ErrListedRequiresReview) {
-		t.Fatalf("Delete of published+space = %v, want ErrListedRequiresReview; author must not remove a live org plugin unilaterally", err)
+	if err != nil {
+		t.Fatalf("Delete of published+space = %v, want nil; owner may delete a listed plugin", err)
 	}
-	if f.deleteID != "" || f.deleteGraphID != "" {
-		t.Fatalf("repo.Delete/DeleteGraph were called (id=%q graph=%q); gate must fire BEFORE the repo", f.deleteID, f.deleteGraphID)
+	if f.deleteID == "" && f.deleteGraphID == "" {
+		t.Fatal("repo delete was not called; the delete must reach the repo")
 	}
 }
 
-// TestDeleteOfAPublishedExpertGraphAlsoRequiresDelistFirst covers the graph
-// shape flagged in the blocker brief: expert/expert_team tops route through
-// DeleteGraph, which is the MOST exposed shape (graph roots almost never have
-// incoming live relations, so rejectLiveIncomingRelations never fires). The
-// gate must run before the type switch so DeleteGraph is covered too.
-func TestDeleteOfAPublishedExpertGraphAlsoRequiresDelistFirst(t *testing.T) {
+// TestOwnerCanDeleteAListedExpertGraph covers the graph shape: expert/expert_team
+// tops route through DeleteGraph and are equally deletable now.
+func TestOwnerCanDeleteAListedExpertGraph(t *testing.T) {
 	expert := &model.Plugin{ID: "expert-1", Type: model.PluginTypeExpert, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished}
 	f := &fakeStore{plugins: map[string]*model.Plugin{"expert-1": expert}}
 	err := fixedService(f).Delete(context.Background(), testCaller, "expert-1")
-	if !errors.Is(err, ErrListedRequiresReview) {
-		t.Fatalf("Delete of a published expert = %v, want ErrListedRequiresReview; the graph path must be gated too", err)
+	if err != nil {
+		t.Fatalf("Delete of a published expert = %v, want nil; the graph path is deletable too", err)
 	}
-	if f.deleteGraphID != "" {
-		t.Fatalf("repo.DeleteGraph was called for %q; gate must fire BEFORE the type switch", f.deleteGraphID)
+	if f.deleteGraphID != "expert-1" {
+		t.Fatalf("repo.DeleteGraph id = %q, want expert-1", f.deleteGraphID)
 	}
 }
 
-// TestDeletePositiveRegressions cover the cases that MUST keep working:
-// private+published (nobody else can read it, no review channel exists),
-// space+draft (never listed), and space+delisted (an admin already took it
-// down; the author can now clean it up). These pin that the gate is exactly
-// (published AND space), not "published alone" or "space alone".
+// Owner deletion remains available for private published plugins and for
+// existing drafts or delisted plugins.
 func TestDeletePositiveRegressions(t *testing.T) {
 	cases := []struct {
 		name string
