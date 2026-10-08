@@ -21,6 +21,7 @@ var normalizedCollationTables = []string{
 	"skill_versions",
 	"resource_metrics",
 	"resource_metric_flushes",
+	"plugin_scenes",
 }
 
 // testDSN returns the MySQL DSN for integration tests.
@@ -77,7 +78,7 @@ func isolatedTestDB(t *testing.T) *sql.DB {
 	return database
 }
 
-// TestRunMigrationsUpDown executes all migrations Up, asserts the three
+// TestRunMigrationsUpDown executes all migrations Up, asserts representative
 // marketplace tables exist, then runs Down and asserts they are dropped.
 func TestRunMigrationsUpDown(t *testing.T) {
 	database := isolatedTestDB(t)
@@ -102,7 +103,7 @@ func TestRunMigrationsUpDown(t *testing.T) {
 	}
 
 	// Assert tables exist by querying INFORMATION_SCHEMA.
-	expectedTables := []string{"categories", "skills", "parse_tasks"}
+	expectedTables := []string{"categories", "skills", "parse_tasks", "plugin_scenes"}
 	for _, table := range expectedTables {
 		var count int
 		err := database.QueryRow(
@@ -129,6 +130,14 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		if collation != "utf8mb4_unicode_ci" {
 			t.Errorf("table %s collation=%s want=utf8mb4_unicode_ci", table, collation)
 		}
+	}
+
+	var defaultSceneCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM plugin_scenes WHERE scene_code='default'").Scan(&defaultSceneCount); err != nil {
+		t.Fatalf("query default plugin scene: %v", err)
+	}
+	if defaultSceneCount != 1 {
+		t.Fatalf("default plugin scene count=%d want=1", defaultSceneCount)
 	}
 
 	// --- Down ---

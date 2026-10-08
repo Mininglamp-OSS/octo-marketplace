@@ -188,6 +188,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			pluginSvc.WithNotify(notifier, notify.BestEffort)
 		}
 		pluginCats := pluginsvc.NewCategories(pluginRepo, generateID)
+		pluginScenes := pluginsvc.NewScenes(pluginRepo, generateID)
 		pluginhandler.New(pluginSvc, pluginCats).Register(v1)
 		// The octo-server card-action callback is mounted on the ROOT engine, not
 		// on v1: it carries an HMAC signature instead of a user token, so it must
@@ -198,6 +199,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		// management of system connectors and global skills/experts, gated by the
 		// admin authenticator.
 		pluginhandler.NewAdmin(pluginSvc, pluginCats).RegisterAdmin(r, adminAuth)
+		pluginhandler.NewSceneAdmin(pluginScenes).RegisterAdmin(r, adminAuth)
 
 		catSvc := categorysvc.New(catRepo, skRepo)
 		skSvc := skillsvc.New(skRepo, catRepo, store, generateID)
