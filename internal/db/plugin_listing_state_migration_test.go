@@ -23,9 +23,9 @@ import (
 //
 // listing_state ships as FOUR files (add-column / backfill / reindex /
 // review-submitted-index, see 20260902-00's header for why). One newer review-
-// policy migration and plugin-rating migration now follow them, so Down must
-// take 6 steps to reach the listing files; Up then reapplies those same 6 tail
-// migrations.
+// policy migration, plugin-rating migration, and plugin-scene migration now
+// follow them, so Down must take 7 steps to reach the listing files; Up then
+// reapplies those same 7 tail migrations.
 func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 	database := isolatedTestDB(t)
 	source := &migrate.EmbedFileSystemMigrationSource{
@@ -37,11 +37,11 @@ func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 		t.Fatalf("migrate Up: %v", err)
 	}
 
-	// Roll back rating + policy plus the four listing_state migrations.
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 6); err != nil {
+	// Roll back scenes + rating + policy plus the four listing_state migrations.
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 7); err != nil {
 		t.Fatalf("migrate Down: %v", err)
-	} else if n != 6 {
-		t.Fatalf("migrate Down applied %d migrations, want 6", n)
+	} else if n != 7 {
+		t.Fatalf("migrate Down applied %d migrations, want 7", n)
 	}
 	if got := columnCount(t, database, "plugins", "listing_state"); got != 0 {
 		t.Fatal("listing_state column still exists after Down")
@@ -78,10 +78,10 @@ func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 		}
 	}
 
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Up, 6); err != nil {
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Up, 7); err != nil {
 		t.Fatalf("re-apply migrate Up after Down: %v", err)
-	} else if n != 6 {
-		t.Fatalf("re-apply applied %d migrations, want 6", n)
+	} else if n != 7 {
+		t.Fatalf("re-apply applied %d migrations, want 7", n)
 	}
 
 	// Grandfathering: a live row keeps the reach it had, a soft-deleted row stays

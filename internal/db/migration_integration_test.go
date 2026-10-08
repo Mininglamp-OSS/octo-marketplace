@@ -21,8 +21,9 @@ var normalizedCollationTables = []string{
 	"skill_versions",
 	"resource_metrics",
 	"resource_metric_flushes",
-	"plugin_scenes",
 }
+
+var currentCollationTables = append(normalizedCollationTables, "plugin_scenes")
 
 // testDSN returns the MySQL DSN for integration tests.
 //
@@ -118,7 +119,7 @@ func TestRunMigrationsUpDown(t *testing.T) {
 		}
 	}
 
-	for _, table := range normalizedCollationTables {
+	for _, table := range currentCollationTables {
 		var collation string
 		err := database.QueryRow(
 			"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
