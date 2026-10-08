@@ -39,10 +39,12 @@ back. See [issue #62](https://github.com/Mininglamp-OSS/octo-marketplace/issues/
 
 ## Out of scope
 
-- Reusing the first Skill ID by binding it to later members.
+- Reusing the first Skill ID by binding it to later members on the legacy squad
+  install path. Unified Plugin install behavior is defined separately in
+  `reuse-existing-plugin-skills`.
 - Comparing duplicate Skill contents or package digests.
-- Detecting Skills that already existed in the target workspace before this
-  installation began.
+- Detecting Skills that already existed in the target workspace before a
+  legacy squad installation began.
 - Changing Fleet's workspace-wide Skill name uniqueness contract.
 - Changing standalone expert installation semantics.
 
