@@ -60,6 +60,8 @@ import (
 // @tag.description Unified Plugin catalog, versions, audit history, categories, and Connector probes
 // @tag.name admin_plugin
 // @tag.description Administrative unified Plugin catalog — cross-Space system connectors, global skills/experts, and categories
+// @tag.name admin_plugin_scene
+// @tag.description Administrative Marketplace scenes and Plugin placement relationships
 // @tag.name admin_mcp
 // @tag.description Administrative MCP catalog
 // @tag.name session
