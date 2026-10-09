@@ -826,8 +826,8 @@ func TestUpdateSyncsPlacementCategory(t *testing.T) {
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}))
 	mock.ExpectExec(`UPDATE plugins SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
-	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\? AND placement_code='default'`).
-		WithArgs(category, now, "plugin-id").
+	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\? AND NOT \(category_id <=> \?\)`).
+		WithArgs(category, now, "plugin-id", category).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT relation_id,target_plugin_id,relation_type,sort_order,relation_json,status FROM plugin_relations`).
 		WithArgs("plugin-id").
@@ -867,11 +867,15 @@ func TestUpdateInsertsDefaultPlacementWhenMissing(t *testing.T) {
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).
 		WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}))
 	mock.ExpectExec(`UPDATE plugins SET`).WillReturnResult(sqlmock.NewResult(0, 1))
-	// No default placement exists ⇒ insert it (self-heal), do not update.
+	// No default placement exists ⇒ insert it, then conditionally synchronize
+	// any non-default scene placements without churning the inserted row.
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).
 		WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(0))
 	mock.ExpectExec(`INSERT INTO plugin_placements \(placement_id,placement_code,plugin_id,category_id,visible,sort_order,created_at,updated_at\)`).
 		WithArgs("placement-id", "default", "plugin-id", category, true, 0, now, now).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\? AND NOT \(category_id <=> \?\)`).
+		WithArgs(category, now, "plugin-id", category).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT relation_id,target_plugin_id,relation_type,sort_order,relation_json,status FROM plugin_relations`).
 		WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"relation_id", "target_plugin_id", "relation_type", "sort_order", "relation_json", "status"}))
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -906,8 +910,8 @@ func TestUpdateClearsPlacementCategoryWhenCleared(t *testing.T) {
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}))
 	mock.ExpectExec(`UPDATE plugins SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
-	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).
-		WithArgs(nil, now, "plugin-id").
+	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\? AND NOT \(category_id <=> \?\)`).
+		WithArgs(nil, now, "plugin-id", nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT relation_id,target_plugin_id,relation_type,sort_order,relation_json,status FROM plugin_relations`).
 		WithArgs("plugin-id").

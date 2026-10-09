@@ -15,15 +15,23 @@ CREATE TABLE `plugin_scenes` (
   COMMENT='Marketplace scene code registry';
 
 -- Older imports could retain more than one category-specific row for the same
--- Plugin and scene. The admin contract is one placement per Plugin and scene,
--- so retain one deterministic row and align it with the Plugin's current
--- category before tightening the unique key.
+-- Plugin and scene. Preserve a visible membership whenever any duplicate is
+-- visible; default is the compatibility fallback and must always be visible.
+UPDATE plugin_placements
+SET visible = 1
+WHERE placement_code = 'default';
+
+-- The admin contract is one placement per Plugin and scene. Prefer a visible
+-- row, then the lowest placement ID for deterministic reconciliation.
 DELETE duplicate
 FROM plugin_placements duplicate
 JOIN plugin_placements keeper
   ON keeper.placement_code = duplicate.placement_code
  AND keeper.plugin_id = duplicate.plugin_id
- AND keeper.placement_id < duplicate.placement_id;
+ AND (
+      keeper.visible > duplicate.visible
+      OR (keeper.visible = duplicate.visible AND keeper.placement_id < duplicate.placement_id)
+ );
 
 UPDATE plugin_placements pp
 JOIN plugins p ON p.plugin_id = pp.plugin_id

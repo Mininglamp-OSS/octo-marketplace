@@ -209,8 +209,9 @@ func TestPluginSceneMigrationDeduplicatesPlacements(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO plugin_placements
 		(placement_id,placement_code,plugin_id,category_id,visible,sort_order,created_at,updated_at)
 		VALUES
-		('placement-a','featured','plugin-scenes','category-old-a',1,1,NOW(3),NOW(3)),
-		('placement-b','featured','plugin-scenes','category-old-b',1,2,NOW(3),NOW(3))`); err != nil {
+		('placement-a','featured','plugin-scenes','category-old-a',0,1,NOW(3),NOW(3)),
+		('placement-b','featured','plugin-scenes','category-old-b',1,2,NOW(3),NOW(3)),
+		('placement-default','default','plugin-scenes','category-old-default',0,0,NOW(3),NOW(3))`); err != nil {
 		t.Fatalf("insert legacy placements: %v", err)
 	}
 	n, err := migrate.Exec(database, "mysql", fullSource, migrate.Up)
@@ -223,11 +224,20 @@ func TestPluginSceneMigrationDeduplicatesPlacements(t *testing.T) {
 
 	var count int
 	var categoryID string
-	if err := database.QueryRow(`SELECT COUNT(*),MAX(category_id) FROM plugin_placements WHERE plugin_id='plugin-scenes' AND placement_code='featured'`).Scan(&count, &categoryID); err != nil {
+	var visible bool
+	var placementID string
+	if err := database.QueryRow(`SELECT COUNT(*),MAX(category_id),MAX(visible),MAX(placement_id) FROM plugin_placements WHERE plugin_id='plugin-scenes' AND placement_code='featured'`).Scan(&count, &categoryID, &visible, &placementID); err != nil {
 		t.Fatalf("read reconciled placements: %v", err)
 	}
-	if count != 1 || categoryID != "category-current" {
-		t.Fatalf("placement count=%d category_id=%q", count, categoryID)
+	if count != 1 || categoryID != "category-current" || !visible || placementID != "placement-b" {
+		t.Fatalf("placement count=%d category_id=%q visible=%v placement_id=%q", count, categoryID, visible, placementID)
+	}
+	var defaultVisible bool
+	if err := database.QueryRow(`SELECT visible FROM plugin_placements WHERE plugin_id='plugin-scenes' AND placement_code='default'`).Scan(&defaultVisible); err != nil {
+		t.Fatalf("read reconciled default placement: %v", err)
+	}
+	if !defaultVisible {
+		t.Fatal("default placement remained hidden after migration")
 	}
 	if columns := indexColumns(t, database, "plugin_placements", "uq_plugin_placement"); strings.Join(columns, ",") != "placement_code,plugin_id" {
 		t.Fatalf("uq_plugin_placement columns=%v", columns)

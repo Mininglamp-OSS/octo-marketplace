@@ -219,7 +219,7 @@ LEFT JOIN plugin_categories c ON c.category_id=pp.category_id AND c.status=1 AND
 	queryArgs := append(append([]any{}, args...), limit, max(f.Offset, 0))
 	rows, err := r.db.QueryContext(ctx, `SELECT pp.placement_id,s.scene_id,s.scene_code,s.name,
 p.plugin_id,p.plugin_name,p.plugin_type,pp.category_id,c.name,pp.visible,pp.sort_order,pp.created_at,pp.updated_at`+
-		from+where+` ORDER BY s.sort_order,pp.sort_order,p.plugin_name,p.plugin_id LIMIT ? OFFSET ?`, queryArgs...)
+		from+where+` ORDER BY s.sort_order,pp.sort_order,p.plugin_name,p.plugin_id,pp.placement_id LIMIT ? OFFSET ?`, queryArgs...)
 	if err != nil {
 		return nil, 0, wrapped("list plugin placements", err)
 	}

@@ -187,7 +187,7 @@ func TestListPlacementsFiltersSceneTypeAndKeyword(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	now := time.Now().UTC()
 	columns := []string{"placement_id", "scene_id", "scene_code", "scene_name", "plugin_id", "plugin_name", "plugin_type", "category_id", "category_name", "visible", "sort_order", "created_at", "updated_at"}
-	mock.ExpectQuery(`SELECT pp\.placement_id.*ORDER BY s\.sort_order.*LIMIT \? OFFSET \?`).
+	mock.ExpectQuery(`SELECT pp\.placement_id.*ORDER BY s\.sort_order,pp\.sort_order,p\.plugin_name,p\.plugin_id,pp\.placement_id LIMIT \? OFFSET \?`).
 		WithArgs("featured", model.PluginTypeSkill, "%ops%", 10, 20).
 		WillReturnRows(sqlmock.NewRows(columns).AddRow("placement-1", "scene-1", "featured", "Featured", "skill-1", "Ops", model.PluginTypeSkill, nil, nil, true, 5, now, now))
 

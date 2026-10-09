@@ -379,6 +379,16 @@ func TestAdminListPassesVisibilityAndSystemAdminCaller(t *testing.T) {
 	}
 }
 
+func TestListItemDTOSceneCodesNeverNull(t *testing.T) {
+	body, err := json.Marshal(listItemDTO(&model.Plugin{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte(`"scene_codes":[]`)) {
+		t.Fatalf("scene_codes must be an array: %s", body)
+	}
+}
+
 func TestAdminListRequiresPluginType(t *testing.T) {
 	rec := httptest.NewRecorder()
 	adminTestEngine(&fakeAdminService{}, &fakeAdminCategories{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins", nil))
