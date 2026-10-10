@@ -819,6 +819,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin artifact exceeds the size limit", nil, "Reduce the attachment size and try again.")
 	case errors.Is(err, pluginsvc.ErrGraphTooLarge):
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin graph exceeds the size cap", map[string]any{"max_nodes": pluginsvc.MaxGraphNodes(), "max_edges": pluginsvc.MaxGraphEdges()}, "The plugin references too many related plugins; contact the publisher to reduce the graph size.")
+	case errors.Is(err, pluginsvc.ErrRelationInUse):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is referenced by another live plugin", map[string]any{"conflict_reason": "relation_in_use"}, "Remove the referencing plugin relation and try again.")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin state conflicts with an existing resource", map[string]any{"conflict_reason": "state"}, "Refresh the resource and try again.")
 	// Transient InnoDB lock contention (a deadlock victim, or a lock-wait timeout)

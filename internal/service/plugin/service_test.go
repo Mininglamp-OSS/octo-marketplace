@@ -654,6 +654,16 @@ func TestDeleteConflictMapsToServiceError(t *testing.T) {
 	}
 }
 
+func TestDeleteIncomingRelationMapsToActionableServiceError(t *testing.T) {
+	f := &fakeStore{plugins: map[string]*model.Plugin{
+		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID)},
+	}}
+	f.err = pluginrepo.ErrRelationInUse
+	if err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1"); !errors.Is(err, ErrRelationInUse) {
+		t.Fatalf("Delete conflict = %v, want ErrRelationInUse", err)
+	}
+}
+
 func TestCreateRejectsSubmittedRelationIDs(t *testing.T) {
 	f := &fakeStore{plugins: map[string]*model.Plugin{"target-1": {ID: "target-1", Type: model.PluginTypeSkill}}}
 	req := validRequest()
@@ -760,35 +770,43 @@ func TestDeleteExpertRemovesEmbeddedChildrenNotStandalone(t *testing.T) {
 // decision: publishing to the organization does not transfer ownership to the
 // Space, so the author may still soft-delete their own plugin directly.
 func TestDeleteAllowsOwnerToRemoveListedPlugin(t *testing.T) {
-	f := &fakeStore{plugins: map[string]*model.Plugin{
-		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
-	}}
-	if err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1"); err != nil {
-		t.Fatalf("Delete of published+space = %v, want nil", err)
-	}
-	if f.deleteID != "plugin-1" || f.deleteGraphID != "" {
-		t.Fatalf("deleteID=%q deleteGraphID=%q, want single-row delete", f.deleteID, f.deleteGraphID)
+	for _, typ := range []model.PluginType{model.PluginTypeSkill, model.PluginTypeConnector} {
+		t.Run(string(typ), func(t *testing.T) {
+			f := &fakeStore{plugins: map[string]*model.Plugin{
+				"plugin-1": {ID: "plugin-1", Type: typ, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
+			}}
+			if err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1"); err != nil {
+				t.Fatalf("Delete of published+space = %v, want nil", err)
+			}
+			if f.deleteID != "plugin-1" || f.deleteGraphID != "" {
+				t.Fatalf("deleteID=%q deleteGraphID=%q, want single-row delete", f.deleteID, f.deleteGraphID)
+			}
+		})
 	}
 }
 
-// TestDeleteAllowsOwnerToRemovePublishedExpertGraph covers the container path:
-// an owner delete must route through DeleteGraph even while the top is listed.
-func TestDeleteAllowsOwnerToRemovePublishedExpertGraph(t *testing.T) {
-	expert := &model.Plugin{ID: "expert-1", Type: model.PluginTypeExpert, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished}
-	f := &fakeStore{plugins: map[string]*model.Plugin{"expert-1": expert}}
-	if err := fixedService(f).Delete(context.Background(), testCaller, "expert-1"); err != nil {
-		t.Fatalf("Delete of published expert = %v, want nil", err)
-	}
-	if f.deleteGraphID != "expert-1" || f.deleteID != "" {
-		t.Fatalf("deleteGraphID=%q deleteID=%q, want graph delete", f.deleteGraphID, f.deleteID)
+// TestDeleteAllowsOwnerToRemovePublishedContainerGraph covers both container
+// paths: an owner delete routes through DeleteGraph even while the top is listed.
+func TestDeleteAllowsOwnerToRemovePublishedContainerGraph(t *testing.T) {
+	for _, typ := range []model.PluginType{model.PluginTypeExpert, model.PluginTypeExpertTeam} {
+		t.Run(string(typ), func(t *testing.T) {
+			container := &model.Plugin{ID: "container-1", Type: typ, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished}
+			f := &fakeStore{plugins: map[string]*model.Plugin{"container-1": container}}
+			if err := fixedService(f).Delete(context.Background(), testCaller, "container-1"); err != nil {
+				t.Fatalf("Delete of published container = %v, want nil", err)
+			}
+			if f.deleteGraphID != "container-1" || f.deleteID != "" {
+				t.Fatalf("deleteGraphID=%q deleteID=%q, want graph delete", f.deleteGraphID, f.deleteID)
+			}
+		})
 	}
 }
 
 // TestDeletePositiveRegressions cover the cases that MUST keep working:
 // private+published (nobody else can read it, no review channel exists),
 // space+draft (never listed), and space+delisted (an admin already took it
-// down; the author can now clean it up). These pin that the gate is exactly
-// (published AND space), not "published alone" or "space alone".
+// down; the author can now clean it up). They remain baseline owner-delete
+// coverage alongside the newly allowed published+space case above.
 func TestDeletePositiveRegressions(t *testing.T) {
 	cases := []struct {
 		name string
@@ -811,16 +829,15 @@ func TestDeletePositiveRegressions(t *testing.T) {
 	}
 }
 
-// TestSystemAdminCanDeleteListedPlugin pins that broadening tenant owner delete
-// does not regress the platform-operator delete path.
-func TestSystemAdminCanDeleteListedPlugin(t *testing.T) {
+func TestDeleteRejectsEmbeddedChildOutOfBand(t *testing.T) {
 	f := &fakeStore{plugins: map[string]*model.Plugin{
-		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
+		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), IsEmbedded: true},
 	}}
-	admin := testCaller
-	admin.IsSystemAdmin = true
-	if err := fixedService(f).Delete(context.Background(), admin, "plugin-1"); err != nil {
-		t.Fatalf("admin Delete of listed plugin = %v, want nil; the platform-operator escape hatch must survive", err)
+	if err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete embedded child = %v, want ErrNotFound", err)
+	}
+	if f.deleteID != "" || f.deleteGraphID != "" {
+		t.Fatalf("embedded child reached delete boundary: deleteID=%q deleteGraphID=%q", f.deleteID, f.deleteGraphID)
 	}
 }
 

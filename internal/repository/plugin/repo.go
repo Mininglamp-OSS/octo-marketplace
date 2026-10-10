@@ -15,6 +15,10 @@ var (
 	ErrNotFound = errors.New("plugin not found")
 	// ErrConflict indicates an immutable version or placement uniqueness conflict.
 	ErrConflict = errors.New("plugin conflict")
+	// ErrRelationInUse indicates deletion was refused because another live plugin
+	// still references the target. Callers can surface an actionable conflict
+	// instead of collapsing this into a generic state race.
+	ErrRelationInUse = errors.New("plugin is referenced by another live plugin")
 	// ErrReviewPending indicates a state change refused because an open review
 	// request exists on the plugin. Reported from inside a transaction that holds
 	// the plugin row lock, so it closes the window the service's own unlocked

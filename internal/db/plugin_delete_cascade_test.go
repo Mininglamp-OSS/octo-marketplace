@@ -216,12 +216,25 @@ func TestDeleteAllowsOwnerToRemoveAJustApprovedPlugin(t *testing.T) {
 	if err := repo.Delete(ctx, owner, "plugin-1", "user-1", "Alice", "req-1", nil); err != nil {
 		t.Fatalf("Delete of a just-approved plugin: %v", err)
 	}
-	var deleted sql.NullTime
-	if err := database.QueryRow(`SELECT deleted_at FROM plugins WHERE plugin_id='plugin-1'`).Scan(&deleted); err != nil {
+	var (
+		deleted      sql.NullTime
+		listingState string
+	)
+	if err := database.QueryRow(`SELECT deleted_at,listing_state FROM plugins WHERE plugin_id='plugin-1'`).Scan(&deleted, &listingState); err != nil {
 		t.Fatal(err)
 	}
 	if !deleted.Valid {
 		t.Fatal("plugin was not soft-deleted by its owner")
+	}
+	if listingState != string(model.PluginListingStateDraft) {
+		t.Fatalf("listing_state = %q, want draft so an undelete cannot silently relist it", listingState)
+	}
+	var versions int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id='plugin-1'`).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions == 0 {
+		t.Fatal("plugin_versions history was removed by soft delete")
 	}
 }
 
@@ -253,5 +266,67 @@ func TestDeleteGraphAllowsOwnerToRemoveAJustApprovedContainer(t *testing.T) {
 	}
 	if !deleted.Valid {
 		t.Fatal("container was not soft-deleted by its owner")
+	}
+}
+
+// Deleting a listed squad tears down its two-level embedded graph and closes
+// the listing state on every row, not only on the top. This is the shape that
+// would otherwise let a later undelete silently relist a descendant.
+func TestDeleteGraphDraftsListedExpertTeamAndDescendants(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	ctx := context.Background()
+	owner := tenantScope()
+
+	seed(t, database, seedPlugin{id: "team-1", typ: "expert_team", visibility: "space", listingState: "published"})
+	seed(t, database, seedPlugin{id: "expert-1", typ: "expert", visibility: "space", listingState: "published", embedded: true})
+	seed(t, database, seedPlugin{id: "skill-1", typ: "skill", visibility: "space", listingState: "published", embedded: true})
+	seedRelation(t, database, "rel-team-expert", "team-1", "expert-1", "expert_team_expert")
+	seedRelation(t, database, "rel-expert-skill", "expert-1", "skill-1", "expert_skill")
+
+	if err := repo.DeleteGraph(ctx, owner, "team-1", "user-1", "Alice", "req-team", nil); err != nil {
+		t.Fatalf("DeleteGraph: %v", err)
+	}
+	for _, id := range []string{"team-1", "expert-1", "skill-1"} {
+		var (
+			deleted sql.NullTime
+			state   string
+		)
+		if err := database.QueryRow(`SELECT deleted_at,listing_state FROM plugins WHERE plugin_id=?`, id).Scan(&deleted, &state); err != nil {
+			t.Fatal(err)
+		}
+		if !deleted.Valid || state != string(model.PluginListingStateDraft) {
+			t.Errorf("%s deleted=%v listing_state=%q, want soft-deleted draft", id, deleted.Valid, state)
+		}
+	}
+}
+
+func TestAdminDeleteSingleRowCancelsReviewAndDraftsListing(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	ctx := context.Background()
+	owner := tenantScope()
+
+	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
+	req := newRequest("plugin-1", "2.0.0")
+	if err := repo.InsertReviewRequest(ctx, owner, req, snapshotOf(`{"plugin_name":"V2"}`, `{"attachments":[]}`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	admin := pluginrepo.Scope{CallerUID: "root", Admin: true}
+	if err := repo.Delete(ctx, admin, "plugin-1", "root", "Root", "req-admin", nil); err != nil {
+		t.Fatalf("admin Delete: %v", err)
+	}
+	if status, reviewer, _, _ := reviewRow(t, database, req.ID); status != string(model.ReviewStatusCanceled) || reviewer != "root" {
+		t.Fatalf("review status=%q reviewer=%q, want canceled by root", status, reviewer)
+	}
+	var (
+		deleted sql.NullTime
+		state   string
+	)
+	if err := database.QueryRow(`SELECT deleted_at,listing_state FROM plugins WHERE plugin_id='plugin-1'`).Scan(&deleted, &state); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted.Valid || state != string(model.PluginListingStateDraft) {
+		t.Fatalf("deleted=%v listing_state=%q, want soft-deleted draft", deleted.Valid, state)
 	}
 }

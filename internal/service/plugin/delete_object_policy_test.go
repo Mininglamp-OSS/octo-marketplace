@@ -38,12 +38,12 @@ func TestDeletingAPluginCollectsNoObjects(t *testing.T) {
 		ID: "plugin-1", Name: "S", Type: model.PluginTypeSkill,
 		OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID),
 		Visibility:   model.PluginVisibilitySpace,
-		ListingState: model.PluginListingStateDraft,
+		ListingState: model.PluginListingStatePublished,
 		Tags:         json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{}`),
 		AttachmentKeys: json.RawMessage(`{"SKILL.md":"` + liveAttachmentKey + `"}`),
 	}
-	// Seed a draft because object retention is independent of listing state; the
-	// owner-delete tests cover the published+space shape separately.
+	// Use the newly allowed published+space shape so the retention guarantee is
+	// pinned on the exact product path this change opens.
 	store := &fakeStore{plugins: map[string]*model.Plugin{"plugin-1": skill}}
 	objects := &importStorage{objects: map[string][]byte{
 		liveAttachmentKey:    []byte("live body"),

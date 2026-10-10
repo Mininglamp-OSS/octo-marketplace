@@ -243,8 +243,8 @@ func TestDelistRequiresTheReviewerRole(t *testing.T) {
 	}
 }
 
-// An ordinary member cannot use the Space-admin Delist moderation action. Owner
-// deletion is a separate path covered by the delete tests.
+// Being the author does not grant the Space-admin Delist moderation action.
+// Owner deletion is a separate path covered by the delete tests.
 func TestTheAuthorCannotDelistTheirOwnPlugin(t *testing.T) {
 	store, svc := listingFixture(t, model.PluginVisibilitySpace, model.PluginListingStatePublished)
 	author := Caller{UID: "user-1", Name: "Author", SpaceID: "space-a", SpaceRole: SpaceRoleMember}

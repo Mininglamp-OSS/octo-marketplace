@@ -21,6 +21,7 @@ import (
 var (
 	ErrNotFound       = errors.New("plugin not found")
 	ErrConflict       = errors.New("plugin conflict")
+	ErrRelationInUse  = errors.New("plugin is referenced by another live plugin")
 	ErrInvalidRequest = errors.New("invalid plugin request")
 	ErrTooLarge       = errors.New("plugin artifact exceeds size limit")
 	// ErrDeadlock is returned when a review transaction was chosen as the InnoDB
@@ -815,6 +816,9 @@ func (s *Service) Delete(ctx context.Context, caller Caller, pluginID string) er
 	if old.OwnerUID != caller.UID || (old.SpaceID != nil && *old.SpaceID != caller.SpaceID) {
 		return ErrNotFound
 	}
+	if old.IsEmbedded {
+		return ErrNotFound
+	}
 	audit := s.audit(caller, storageID, "delete", old, nil, s.now())
 	// An expert/expert_team top owns embedded children (an expert's bundled skills;
 	// a squad's member experts and their skills) — the population backfilled tenant
@@ -977,6 +981,8 @@ func mapStoreError(err error) error {
 		return ErrNotFound
 	case errors.Is(err, pluginrepo.ErrConflict):
 		return ErrConflict
+	case errors.Is(err, pluginrepo.ErrRelationInUse):
+		return ErrRelationInUse
 	case errors.Is(err, pluginrepo.ErrGraphTooLarge):
 		return ErrGraphTooLarge
 	case errors.Is(err, pluginrepo.ErrDeadlock):

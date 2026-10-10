@@ -200,10 +200,10 @@ func (r *Repo) DelistPlugin(ctx context.Context, scope Scope, p DelistParams) (_
 	// answer identical to the read the same admin is allowed to make.
 	//
 	// The consequence, stated deliberately: a PUBLISHED PRIVATE plugin has no
-	// takedown path at all, since self-delisting was removed from the write path.
+	// admin moderation path, since self-delisting was removed from the write path.
 	// It needs none — published+private means "listed to its owner alone" — and the
-	// owner can still drop it back to a draft by widening the visibility, which
-	// un-lists it (see the ResetListingToDraft branch in the service's Update).
+	// owner may delete it or drop it back to a draft by widening the visibility,
+	// which un-lists it (see ResetListingToDraft in the service's Update).
 	if current.Visibility != model.PluginVisibilitySpace {
 		return nil, ErrNotFound
 	}

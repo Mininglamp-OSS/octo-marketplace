@@ -2424,7 +2424,10 @@ info:
 
     and resubmit), `already_published` / `not_published` (the listing transition
 
-    does not apply in the plugin''s current state), `deadlock` (transient lock
+    does not apply in the plugin''s current state), `relation_in_use` (another live
+
+    plugin still references this one; remove that relation first), `deadlock` (transient
+    lock
 
     contention; also sets `retryable: true`, so retry the request unchanged), and
 

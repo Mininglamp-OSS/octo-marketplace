@@ -906,10 +906,13 @@ allowed. That is how an author takes their plugin down." That was the
 self-delist loophole and it is closed in shipped code
 (`internal/service/plugin/service.go:574-576`: "Self-delisting by lowering
 visibility to private is NO LONGER a way out: taking a listed plugin down is
-a Space-admin action (Delist)"). Visibility is free to change only on an
+a Space-admin moderation action (Delist); the owner may separately delete their
+own plugin"). Visibility is free to change only on an
 UNLISTED row, where it declares intent rather than changing what the org
 reads; on a `published`+`space` row the refusal fires before visibility can
-be lowered to evade it, and `Delist` is the only takedown path.
+be lowered to evade it. `Delist` is the non-destructive moderation path; owner
+delete is the separate soft-delete path defined by
+`author-delete-listed-plugin`.
 
 A system admin is exempt, as with the other gates: `/api/v1/admin/*` already
 reaches all of this, and `system` rows are not tenant-owned. **(See item 36
@@ -1823,7 +1826,7 @@ Legend:
 |---|---|---|---|---|
 | Upsert service gate (ErrListedRequiresReview) | `service.go:603-605` predicate `old.ListingState == published AND old.Visibility == space` | pre | T | Refuses ALL edits to published+space rows, which closes the "lower visibility to private" loophole; comment at `service.go:574-576` says so explicitly. |
 | Upsert LOCKED re-derivation (`EnforceListingGate`) | `write.go:554-557` | yes (`getOwnedForUpdate` at :514) | T | Authoritative; restates the published+space conjunction from the locked row, so a concurrent Approve that flips a draft published between the service read and the lock is caught. |
-| Owner delete | `service.go` `Service.Delete`; `write.go` `Repo.Delete` / `Repo.DeleteGraph` | yes | T | A listed plugin remains deletable by its owner. The locked repository paths still enforce owner/Space scope, incoming-relation safety, soft deletion, review cancellation, and audit logging. Pinned by `TestDeleteAllowsOwnerToRemoveAJustApprovedPlugin` and `TestDeleteGraphAllowsOwnerToRemoveAJustApprovedContainer`. |
+| Owner delete | `service.go` `Service.Delete`; `write.go` `Repo.Delete` / `Repo.DeleteGraph` | yes | T | A listed plugin remains deletable by its owner. Unit coverage spans skill, connector, expert, and expert_team routing; MySQL coverage pins draft-on-delete, version retention, review cancellation, and the expert_team descendant cascade. Incoming relations have repository and handler coverage with `relation_in_use`. |
 | Delist moderation path is Space-admin-gated | `service/listing.go:162` + repo lock by Space not owner | yes | T (Space admin) | `getReviewedPluginForUpdate` (`review.go:814-824`) locks by `space_id` not `owner_uid` so a non-owner admin can take it down. |
 | Delist CAS restates visibility + listing_state + is_embedded | `listing.go:210-216` | yes (CAS) | T (Space admin) | Defense in depth. |
 | Visibility change while a review is pending | `service.go:658-667` (`HasPendingReview`) + locked re-derivation `write.go:524-534` (`RefusePendingReview`) | pre + yes | T | The actual invariant here (visibility cannot change while pending) is enforced by the service pre-check and re-checked under lock in Repo.Update. ApproveReview's isFirst branch at `review.go:562-570` decides its branch from the LOCKED `current.Visibility/ListingState` and restates the expected (space,published) in the CAS WHERE, so a visibility flip after the service read does not cause a silent wrong-branch apply — it causes mustChangeState to return ErrConflict. The distinct race where an author flips visibility to private WHILE an approval is in flight is safe: isFirst fires, the UPDATE sets visibility=space back (a no-op for re-approve), and mustChangeState on the upgrade branch is satisfied only when the row is genuinely in the upgrade state. |
@@ -1861,7 +1864,6 @@ mutations are deliberately excluded (no second lock).
 |---|---|---|---|---|
 | Tenant upsert service gate | `service.go:603-605` | pre | T | Predicate is the conjunction (published AND space), NOT `visibility == 'space'` alone (corrected in item 19 above). |
 | Tenant upsert LOCKED re-derivation (`EnforceListingGate`) | `write.go:554-557` | yes (`getOwnedForUpdate`) | T | Authoritative; closes the TOCTOU the pre-check leaves. |
-| Tenant delete service gate | `service.go:750-753` | pre | T | Identical conjunction. **Gap: no locked re-derivation in Repo.Delete** (see item 8 row). |
 | Publish service pre-check (immediate vs review) | `service/listing.go:67-89` | pre | T | |
 | PublishPlugin locked re-derivation of `visibility=private` | `listing.go:80-95` + CAS at :115-123 | yes | T | |
 | ApproveReview CAS on state transition | `review.go:571-575` `mustChangeState` | yes | T, IM | |
@@ -1897,9 +1899,10 @@ pattern should:
    re-check only in admin, or vice versa).
 3. Look for transactions under "NOT applied to" rows in the deadlock section —
    those are the obvious candidates for the same miss.
-4. **All three of the highest-confidence defects this table named are now closed**
-   (Delete's locked listing gate in round 15; deadlock classification and
-   forward-only under the `Repo.Update` lock in round 16). The list is kept rather
+4. **The remaining applicable high-confidence defects this table named are now
+   closed** (deadlock classification and forward-only under the `Repo.Update`
+   lock in round 16). The former Delete listing gate was intentionally removed by
+   the later owner-delete product decision. The list is kept rather
    than deleted, because "the table predicted the next round's findings three times
    running" is the useful fact about it — and because a reviewer should be able to
    check the closures rather than take them on faith. What remains open at this head

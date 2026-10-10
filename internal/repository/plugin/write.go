@@ -500,7 +500,7 @@ func softDeleteRebuiltChild(ctx context.Context, tx *sql.Tx, newID func() string
 	if scope.Admin {
 		delWhere, delTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{now, now, id}
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=? `+delWhere, delTail...)
+	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=?,listing_state='draft' `+delWhere, delTail...)
 	if err != nil {
 		return wrapped("rebuild delete child", err)
 	}
@@ -763,7 +763,7 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	if scope.Admin {
 		delWhere, delTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{now, now, pluginID}
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=? `+delWhere, delTail...)
+	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=?,listing_state='draft' `+delWhere, delTail...)
 	if err != nil {
 		return err
 	}
@@ -869,7 +869,7 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	if scope.Admin {
 		delWhere, delTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{now, now, topID}
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=? `+delWhere, delTail...)
+	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=?,listing_state='draft' `+delWhere, delTail...)
 	if err != nil {
 		return err
 	}
@@ -1004,7 +1004,7 @@ ORDER BY r.relation_id FOR UPDATE`, pluginID)
 	}
 	defer rows.Close()
 	if rows.Next() {
-		return ErrConflict
+		return ErrRelationInUse
 	}
 	return rows.Err()
 }
