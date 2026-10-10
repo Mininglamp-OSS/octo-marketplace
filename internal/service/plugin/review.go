@@ -56,8 +56,9 @@ var (
 	// ErrListedRequiresReview is returned when a tenant tries to modify an
 	// already-listed, org-visible plugin through the ordinary write path. It is a
 	// STATE conflict, not a permission problem — the owner may change this plugin,
-	// just through a review request. Self-delisting is no longer an escape hatch:
-	// taking a listed plugin down is a Space-admin action.
+	// just through a review request. Lowering visibility is not an escape hatch:
+	// changing listing state through Delist is a Space-admin action. Owners may
+	// separately soft-delete plugins they own.
 	ErrListedRequiresReview = errors.New("a listed plugin may only be changed through review")
 	// ErrVersionRegressed is returned when a write would move a plugin's version
 	// label backwards. It names the field so the form can point at the input

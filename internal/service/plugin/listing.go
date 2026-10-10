@@ -154,9 +154,8 @@ type DelistParams struct {
 //
 // Space admins only, using the SAME predicate as approve and reject: taking
 // something down is the same authority as putting it up, and a second notion of
-// "who moderates this Space" would drift from the first. The author deliberately
-// cannot do this — self-delisting through the write path was removed — so that a
-// plugin the org depends on cannot vanish at its author's discretion.
+// "who moderates this Space" would drift from the first. Authors cannot use this
+// moderation action, but may separately soft-delete plugins they own.
 //
 // The plugin stays editable and re-publishable afterwards.
 func (s *Service) Delist(ctx context.Context, caller Caller, params DelistParams) (*Detail, error) {

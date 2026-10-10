@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -71,15 +70,9 @@ func TestDeleteCancelsThePendingReviewRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Repo.Delete now restates the listed-plugin gate against the FOR UPDATE
-	// row (symmetric with Repo.Update's EnforceListingGate), so a non-admin
-	// owner-scope call refuses published+space at the repo layer too. AdminDelete
-	// must still be able to cascade-cancel pending requests on a listed row it
-	// is removing (system admins are the takedown actor), so drive this test
-	// through an admin scope — that is also the production shape for removing
-	// an abusive listed plugin.
-	admin := pluginrepo.Scope{CallerUID: "admin-1", SpaceID: "space-a", Admin: true}
-	if err := repo.Delete(ctx, admin, "plugin-1", "admin-1", "admin-1", "req-1", nil); err != nil {
+	// The owner may delete their own listed plugin directly; the same transaction
+	// must still cancel its pending upgrade request.
+	if err := repo.Delete(ctx, owner, "plugin-1", "user-1", "Alice", "req-1", nil); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -90,7 +83,7 @@ func TestDeleteCancelsThePendingReviewRequest(t *testing.T) {
 	if !settled {
 		t.Error("reviewed_at is NULL on a settled request")
 	}
-	if reviewer != "admin-1" {
+	if reviewer != "user-1" {
 		t.Errorf("reviewer_uid = %q, want the operator who caused the cancellation", reviewer)
 	}
 	if reason == "" {
@@ -200,13 +193,10 @@ func TestDeleteGraphCancelsPendingReviewsAcrossTheSubtree(t *testing.T) {
 	}
 }
 
-// TestDeleteRefusesAPluginApprovedMidFlight pins the under-lock twin of the
-// Service.Delete listing gate. Service.Delete reads listing_state/visibility from
-// an UNLOCKED GetWithRelations; Repo.Delete re-derives the (published AND space)
-// conjunction against the FOR UPDATE-locked row so an ApproveReview that commits
-// space+published between the unlocked read and the lock cannot let the author
-// soft-delete a plugin the org just listed.
-func TestDeleteRefusesAPluginApprovedMidFlight(t *testing.T) {
+// TestDeleteAllowsOwnerToRemoveAJustApprovedPlugin pins the repository-level
+// behavior: the locked row may already be space+published and is still deletable
+// by its owner.
+func TestDeleteAllowsOwnerToRemoveAJustApprovedPlugin(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	ctx := context.Background()
@@ -223,24 +213,21 @@ func TestDeleteRefusesAPluginApprovedMidFlight(t *testing.T) {
 		t.Fatalf("ApproveReview: %v", err)
 	}
 
-	err := repo.Delete(ctx, owner, "plugin-1", "user-1", "Alice", "req-1", nil)
-	if !errors.Is(err, pluginrepo.ErrListedRequiresReview) {
-		t.Fatalf("Delete of a just-approved plugin = %v, want ErrListedRequiresReview", err)
+	if err := repo.Delete(ctx, owner, "plugin-1", "user-1", "Alice", "req-1", nil); err != nil {
+		t.Fatalf("Delete of a just-approved plugin: %v", err)
 	}
 	var deleted sql.NullTime
 	if err := database.QueryRow(`SELECT deleted_at FROM plugins WHERE plugin_id='plugin-1'`).Scan(&deleted); err != nil {
 		t.Fatal(err)
 	}
-	if deleted.Valid {
-		t.Fatalf("plugin was soft-deleted despite the refused Delete: deleted_at=%v", deleted.Time)
+	if !deleted.Valid {
+		t.Fatal("plugin was not soft-deleted by its owner")
 	}
 }
 
-// TestDeleteGraphRefusesAContainerApprovedMidFlight covers the same race on
-// the container-delete path. Graph roots (experts, expert_teams) almost never
-// carry incoming live relations, so rejectLiveIncomingRelations cannot protect
-// them; the under-lock listing gate is what must.
-func TestDeleteGraphRefusesAContainerApprovedMidFlight(t *testing.T) {
+// TestDeleteGraphAllowsOwnerToRemoveAJustApprovedContainer covers the same
+// owner-delete behavior on the expert/expert-team graph path.
+func TestDeleteGraphAllowsOwnerToRemoveAJustApprovedContainer(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	ctx := context.Background()
@@ -257,15 +244,14 @@ func TestDeleteGraphRefusesAContainerApprovedMidFlight(t *testing.T) {
 		t.Fatalf("ApproveReview: %v", err)
 	}
 
-	err := repo.DeleteGraph(ctx, owner, "expert-1", "user-1", "Alice", "req-1", nil)
-	if !errors.Is(err, pluginrepo.ErrListedRequiresReview) {
-		t.Fatalf("DeleteGraph of a just-approved container = %v, want ErrListedRequiresReview", err)
+	if err := repo.DeleteGraph(ctx, owner, "expert-1", "user-1", "Alice", "req-1", nil); err != nil {
+		t.Fatalf("DeleteGraph of a just-approved container: %v", err)
 	}
 	var deleted sql.NullTime
 	if err := database.QueryRow(`SELECT deleted_at FROM plugins WHERE plugin_id='expert-1'`).Scan(&deleted); err != nil {
 		t.Fatal(err)
 	}
-	if deleted.Valid {
-		t.Fatalf("container was soft-deleted despite the refused DeleteGraph: deleted_at=%v", deleted.Time)
+	if !deleted.Valid {
+		t.Fatal("container was not soft-deleted by its owner")
 	}
 }

@@ -756,38 +756,31 @@ func TestDeleteExpertRemovesEmbeddedChildrenNotStandalone(t *testing.T) {
 	}
 }
 
-// TestDeleteRequiresDelistFirst pins the symmetric gate with Service.update:
-// a published, org-visible plugin cannot be soft-deleted by its author, because
-// that would bypass the Delist Space-admin takedown gate (listing.go:141-148)
-// irreversibly. An admin must Delist first, returning the row to draft; then
-// the author can delete it.
-func TestDeleteRequiresDelistFirst(t *testing.T) {
+// TestDeleteAllowsOwnerToRemoveListedPlugin pins the owner-delete product
+// decision: publishing to the organization does not transfer ownership to the
+// Space, so the author may still soft-delete their own plugin directly.
+func TestDeleteAllowsOwnerToRemoveListedPlugin(t *testing.T) {
 	f := &fakeStore{plugins: map[string]*model.Plugin{
 		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
 	}}
-	err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1")
-	if !errors.Is(err, ErrListedRequiresReview) {
-		t.Fatalf("Delete of published+space = %v, want ErrListedRequiresReview; author must not remove a live org plugin unilaterally", err)
+	if err := fixedService(f).Delete(context.Background(), testCaller, "plugin-1"); err != nil {
+		t.Fatalf("Delete of published+space = %v, want nil", err)
 	}
-	if f.deleteID != "" || f.deleteGraphID != "" {
-		t.Fatalf("repo.Delete/DeleteGraph were called (id=%q graph=%q); gate must fire BEFORE the repo", f.deleteID, f.deleteGraphID)
+	if f.deleteID != "plugin-1" || f.deleteGraphID != "" {
+		t.Fatalf("deleteID=%q deleteGraphID=%q, want single-row delete", f.deleteID, f.deleteGraphID)
 	}
 }
 
-// TestDeleteOfAPublishedExpertGraphAlsoRequiresDelistFirst covers the graph
-// shape flagged in the blocker brief: expert/expert_team tops route through
-// DeleteGraph, which is the MOST exposed shape (graph roots almost never have
-// incoming live relations, so rejectLiveIncomingRelations never fires). The
-// gate must run before the type switch so DeleteGraph is covered too.
-func TestDeleteOfAPublishedExpertGraphAlsoRequiresDelistFirst(t *testing.T) {
+// TestDeleteAllowsOwnerToRemovePublishedExpertGraph covers the container path:
+// an owner delete must route through DeleteGraph even while the top is listed.
+func TestDeleteAllowsOwnerToRemovePublishedExpertGraph(t *testing.T) {
 	expert := &model.Plugin{ID: "expert-1", Type: model.PluginTypeExpert, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished}
 	f := &fakeStore{plugins: map[string]*model.Plugin{"expert-1": expert}}
-	err := fixedService(f).Delete(context.Background(), testCaller, "expert-1")
-	if !errors.Is(err, ErrListedRequiresReview) {
-		t.Fatalf("Delete of a published expert = %v, want ErrListedRequiresReview; the graph path must be gated too", err)
+	if err := fixedService(f).Delete(context.Background(), testCaller, "expert-1"); err != nil {
+		t.Fatalf("Delete of published expert = %v, want nil", err)
 	}
-	if f.deleteGraphID != "" {
-		t.Fatalf("repo.DeleteGraph was called for %q; gate must fire BEFORE the type switch", f.deleteGraphID)
+	if f.deleteGraphID != "expert-1" || f.deleteID != "" {
+		t.Fatalf("deleteGraphID=%q deleteID=%q, want graph delete", f.deleteGraphID, f.deleteID)
 	}
 }
 
@@ -818,10 +811,8 @@ func TestDeletePositiveRegressions(t *testing.T) {
 	}
 }
 
-// TestSystemAdminCanDeleteListedPlugin pins the platform-operator escape hatch:
-// matching Service.update, a system admin is exempt from the tenant gate so an
-// operator can still remove abusive content immediately without a round-trip
-// through Delist.
+// TestSystemAdminCanDeleteListedPlugin pins that broadening tenant owner delete
+// does not regress the platform-operator delete path.
 func TestSystemAdminCanDeleteListedPlugin(t *testing.T) {
 	f := &fakeStore{plugins: map[string]*model.Plugin{
 		"plugin-1": {ID: "plugin-1", Type: model.PluginTypeSkill, OwnerUID: testCaller.UID, SpaceID: stringPtr(testCaller.SpaceID), Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStatePublished},
