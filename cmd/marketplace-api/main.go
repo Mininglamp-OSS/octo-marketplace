@@ -40,7 +40,8 @@ import (
 // @description change must go through review or an admin must delist it first),
 // @description `label_taken` (the submitted version label is already published; pick another
 // @description and resubmit), `already_published` / `not_published` (the listing transition
-// @description does not apply in the plugin's current state), `deadlock` (transient lock
+// @description does not apply in the plugin's current state), `relation_in_use` (another live
+// @description plugin still references this one; remove that relation first), `deadlock` (transient lock
 // @description contention; also sets `retryable: true`, so retry the request unchanged), and
 // @description `state` (a generic raced state change; refresh and retry).
 // @contact.name OCTO API Team

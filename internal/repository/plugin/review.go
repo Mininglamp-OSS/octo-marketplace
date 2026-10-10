@@ -859,8 +859,9 @@ func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topT
 // and (Install having no is_embedded refusal until this PR) install the child's
 // full content, even though the parent that declared it is hidden. The audience
 // does not widen (the children were org-readable while the parent was listed),
-// but the moderation action was incomplete: delist is the only takedown control,
-// so it must take the whole graph down.
+// but the moderation action was incomplete: delist must take the whole graph
+// down. Owner delete is a separate soft-delete control and already tears down
+// the same embedded subtree through DeleteGraph.
 //
 // The child's declared visibility (`space`) is left intact so a later re-approve
 // re-promotes it exactly the way promoteEmbeddedChildren does. Narrow by the same

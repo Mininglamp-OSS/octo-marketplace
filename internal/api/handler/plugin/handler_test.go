@@ -464,6 +464,22 @@ func TestDeleteRouteSoftDeletesByBodyPluginID(t *testing.T) {
 	}
 }
 
+func TestDeleteRouteReportsIncomingRelationConflict(t *testing.T) {
+	f := &fakeService{err: pluginsvc.ErrRelationInUse}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/delete", strings.NewReader(`{"plugin_id":"p1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	testEngine(f).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, want := range []string{`"code":"CONFLICT"`, `"conflict_reason":"relation_in_use"`, `Remove the referencing plugin relation`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("missing %q in body=%s", want, rec.Body.String())
+		}
+	}
+}
+
 func TestListTagsRouteForwardsFiltersAndClampsLimit(t *testing.T) {
 	f := &fakeService{tags: []model.TagFilter{{Name: "dev", Count: 3}}}
 	rec := httptest.NewRecorder()

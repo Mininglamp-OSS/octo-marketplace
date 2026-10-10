@@ -500,7 +500,7 @@ func softDeleteRebuiltChild(ctx context.Context, tx *sql.Tx, newID func() string
 	if scope.Admin {
 		delWhere, delTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{now, now, id}
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=? `+delWhere, delTail...)
+	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=?,listing_state='draft' `+delWhere, delTail...)
 	if err != nil {
 		return wrapped("rebuild delete child", err)
 	}
@@ -755,19 +755,6 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	if err != nil {
 		return err
 	}
-	// Re-derive the listed-plugin gate against the LOCKED row. The service refuses
-	// published+space from an unlocked read taken several round trips earlier; an
-	// ApproveReview that commits between that read and this FOR UPDATE lock can
-	// promote the draft to space+published, and without this re-check the soft
-	// delete below takes out a plugin the org just listed — exactly what the
-	// service-level comment ("the author deliberately cannot do this") promises
-	// cannot happen. This is the same locked re-derivation Repo.Update performs via
-	// EnforceListingGate for edits (write.go:554-557). System admins are exempt
-	// (they are the Delist actor themselves and can remove abusive listed content).
-	if !scope.Admin &&
-		before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
-		return ErrListedRequiresReview
-	}
 	if err = rejectLiveIncomingRelations(ctx, tx, pluginID); err != nil {
 		return err
 	}
@@ -776,7 +763,7 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	if scope.Admin {
 		delWhere, delTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{now, now, pluginID}
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=? `+delWhere, delTail...)
+	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=?,listing_state='draft' `+delWhere, delTail...)
 	if err != nil {
 		return err
 	}
@@ -866,16 +853,6 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	if err != nil {
 		return err
 	}
-	// Same locked re-derivation as Repo.Delete: a concurrent ApproveReview can
-	// promote a draft container to space+published between the service's unlocked
-	// read and this FOR UPDATE lock. Graph roots essentially never carry incoming
-	// live relations, so rejectLiveIncomingRelations cannot protect them; the
-	// listing-gate check is what prevents a published org container from vanishing
-	// at its author's discretion.
-	if !scope.Admin &&
-		before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
-		return ErrListedRequiresReview
-	}
 	if err = rejectLiveIncomingRelations(ctx, tx, topID); err != nil {
 		return err
 	}
@@ -892,7 +869,7 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	if scope.Admin {
 		delWhere, delTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{now, now, topID}
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=? `+delWhere, delTail...)
+	res, err := tx.ExecContext(ctx, `UPDATE plugins SET deleted_at=?,updated_at=?,listing_state='draft' `+delWhere, delTail...)
 	if err != nil {
 		return err
 	}
@@ -1027,7 +1004,7 @@ ORDER BY r.relation_id FOR UPDATE`, pluginID)
 	}
 	defer rows.Close()
 	if rows.Next() {
-		return ErrConflict
+		return ErrRelationInUse
 	}
 	return rows.Err()
 }
