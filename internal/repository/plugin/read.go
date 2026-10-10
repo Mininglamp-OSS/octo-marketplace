@@ -124,7 +124,49 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+	if f.AllSpaces {
+		if err := r.hydrateSceneCodes(ctx, out); err != nil {
+			return nil, 0, err
+		}
+	}
 	return out, total, nil
+}
+
+// hydrateSceneCodes loads placement relationships for an admin list page in a
+// single query. Hidden placements are included: the admin column describes
+// configured channel membership, not only what is currently visible to users.
+func (r *Repo) hydrateSceneCodes(ctx context.Context, plugins []model.Plugin) error {
+	if len(plugins) == 0 {
+		return nil
+	}
+	args := make([]any, len(plugins))
+	byID := make(map[string]int, len(plugins))
+	for i := range plugins {
+		plugins[i].SceneCodes = []string{}
+		args[i] = plugins[i].ID
+		byID[plugins[i].ID] = i
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT plugin_id,placement_code
+FROM plugin_placements
+WHERE plugin_id IN (`+placeholders(len(args))+`)
+ORDER BY plugin_id,placement_code`, args...)
+	if err != nil {
+		return wrapped("hydrate scene codes", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pluginID, sceneCode string
+		if err := rows.Scan(&pluginID, &sceneCode); err != nil {
+			return wrapped("hydrate scene codes", err)
+		}
+		if i, ok := byID[pluginID]; ok {
+			plugins[i].SceneCodes = append(plugins[i].SceneCodes, sceneCode)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return wrapped("hydrate scene codes", err)
+	}
+	return nil
 }
 
 // listedSQL is the marketplace GRID's listing gate: only a published row is on

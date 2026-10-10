@@ -1280,9 +1280,9 @@ func decodeSidecarMap(raw json.RawMessage) map[string]string {
 	return m
 }
 
-// defaultPlacementCode is the one placement code the unified plugin surface
-// manages. Every market list INNER JOINs it on `visible=1`; publish-era
-// multi-scene placements are gone.
+// defaultPlacementCode is the compatibility placement managed automatically by
+// Plugin create/approve flows. Additional scene placements are administered
+// independently, while category changes are synchronized across every scene.
 const defaultPlacementCode = "default"
 
 // syncDefaultPlacement keeps a plugin listable across a save. Market list pages
@@ -1290,10 +1290,10 @@ const defaultPlacementCode = "default"
 // path inserts one — so a plugin created before auto-placement (e.g. an old
 // tenant create that never published) would be permanently filtered out on its
 // next edit. Insert the default placement when the plugin has none (self-healing,
-// carrying the current category), otherwise sync the existing placement's
-// category to the current one (including clearing it to NULL). The id is consumed
-// only on the insert path. Only the default placement is managed; publish-era
-// multi-scene placements are gone.
+// carrying the current category). Category is denormalized onto every scene
+// placement because scene-scoped catalog filters and facets read it there; sync
+// only rows whose category actually changed so unrelated saves do not churn
+// placement timestamps. The id is consumed only on the insert path.
 func syncDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, pluginID string, categoryID *string) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM plugin_placements WHERE plugin_id=? AND placement_code=?)`, pluginID, defaultPlacementCode).Scan(&exists); err != nil {
@@ -1304,9 +1304,8 @@ func syncDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func() string, 
 			newID(), defaultPlacementCode, pluginID, categoryID, true, 0, now, now); err != nil {
 			return wrapped("insert default placement", err)
 		}
-		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE plugin_placements SET category_id=?,updated_at=? WHERE plugin_id=?`, categoryID, now, pluginID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE plugin_placements SET category_id=?,updated_at=? WHERE plugin_id=? AND NOT (category_id <=> ?)`, categoryID, now, pluginID, categoryID); err != nil {
 		return wrapped("update placements", err)
 	}
 	return nil
@@ -1325,8 +1324,8 @@ func syncDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func() string, 
 // It is deliberately idempotent: an already-visible placement is left untouched
 // (no `updated_at` churn), a hidden one is flipped, and a missing one is
 // inserted. The insert carries `ON DUPLICATE KEY UPDATE visible=1` because the
-// unique key is (placement_code, plugin_id, category_key) — a concurrent writer
-// that inserted first must not turn approval into a duplicate-key error.
+// unique key is (placement_code, plugin_id) — a concurrent writer that inserted
+// first must not turn approval into a duplicate-key error.
 //
 // Only `visible` is forced. Category stays whatever the placement already
 // carries; syncDefaultPlacement owns category reconciliation on the write path.

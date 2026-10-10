@@ -137,12 +137,12 @@ func TestPluginReviewMigrationUpDownMySQL(t *testing.T) {
 	// the listing_state step is now split into four tail files
 	// (20260902-00/-01/-02/-03), so reaching 20260901-00 takes 6 steps (4 listing
 	// + 2 review-feature files). The newer review-policy migration adds one more
-	// tail step, and the newer plugin-rating migration adds another, so reaching
-	// 20260901-00 now takes 8.
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 8); err != nil {
+	// tail step, while the newer plugin-rating and plugin-scene migrations add two
+	// more, so reaching 20260901-00 now takes 9.
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 9); err != nil {
 		t.Fatalf("migrate Down: %v", err)
-	} else if n != 8 {
-		t.Fatalf("migrate Down applied %d migrations, want 8", n)
+	} else if n != 9 {
+		t.Fatalf("migrate Down applied %d migrations, want 9", n)
 	}
 	for _, table := range pluginReviewTables {
 		var count int
