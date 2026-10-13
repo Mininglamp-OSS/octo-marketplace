@@ -49,6 +49,14 @@ components:
           type: array
           uniqueItems: false
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-array_internal_api_handler_plugin_pluginSceneResponse
+    : properties:
+        data:
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.pluginSceneResponse'
+          type: array
+          uniqueItems: false
+      type: object
     ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_api_response_EmptyResp
     : properties:
         data:
@@ -175,6 +183,21 @@ components:
         data:
           $ref: '#/components/schemas/internal_api_handler_plugin.installResponse'
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginPlacementBatchResponse
+    : properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.pluginPlacementBatchResponse'
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginPlacementResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.pluginPlacementResponse'
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginSceneResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.pluginSceneResponse'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_publishResponse:
       properties:
         data:
@@ -284,6 +307,16 @@ components:
         data:
           items:
             $ref: '#/components/schemas/internal_api_handler_plugin.listItemResponse'
+          type: array
+          uniqueItems: false
+        pagination:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetPagination'
+      type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-internal_api_handler_plugin_pluginPlacementResponse
+    : properties:
+        data:
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.pluginPlacementResponse'
           type: array
           uniqueItems: false
         pagination:
@@ -1740,6 +1773,11 @@ components:
           - 'null'
         review_id:
           type: string
+        scene_codes:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
         space_id:
           type: string
         status:
@@ -1757,6 +1795,86 @@ components:
           type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
+      type: object
+    internal_api_handler_plugin.pluginPlacementBatchItemResponse:
+      properties:
+        is_placed:
+          type: boolean
+        plugin_id:
+          type: string
+        scene_code:
+          type: string
+      type: object
+    internal_api_handler_plugin.pluginPlacementBatchRequest:
+      properties:
+        is_placed:
+          type: boolean
+        is_visible:
+          type: boolean
+        plugin_ids:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+        scene_code:
+          type: string
+        sort_order:
+          type: integer
+      type: object
+    internal_api_handler_plugin.pluginPlacementBatchResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.pluginPlacementBatchItemResponse'
+          type: array
+          uniqueItems: false
+      type: object
+    internal_api_handler_plugin.pluginPlacementCreateRequest:
+      properties:
+        is_visible:
+          type: boolean
+        plugin_id:
+          type: string
+        scene_code:
+          type: string
+        sort_order:
+          type: integer
+      type: object
+    internal_api_handler_plugin.pluginPlacementResponse:
+      properties:
+        category_id:
+          type: string
+        category_name:
+          type: string
+        created_at:
+          type: string
+        is_visible:
+          type: boolean
+        placement_id:
+          type: string
+        plugin_id:
+          type: string
+        plugin_name:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        scene_code:
+          type: string
+        scene_id:
+          type: string
+        scene_name:
+          type: string
+        sort_order:
+          type: integer
+        updated_at:
+          type: string
+      type: object
+    internal_api_handler_plugin.pluginPlacementUpdateRequest:
+      properties:
+        is_visible:
+          type: boolean
+        sort_order:
+          type: integer
       type: object
     internal_api_handler_plugin.pluginResponse:
       properties:
@@ -1838,6 +1956,47 @@ components:
           type: integer
         visibility:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
+      type: object
+    internal_api_handler_plugin.pluginSceneCreateRequest:
+      properties:
+        description:
+          type: string
+        name:
+          type: string
+        scene_code:
+          type: string
+        sort_order:
+          type: integer
+      type: object
+    internal_api_handler_plugin.pluginSceneResponse:
+      properties:
+        category_count:
+          type: integer
+        created_at:
+          type: string
+        description:
+          type: string
+        name:
+          type: string
+        plugin_count:
+          type: integer
+        scene_code:
+          type: string
+        scene_id:
+          type: string
+        sort_order:
+          type: integer
+        updated_at:
+          type: string
+      type: object
+    internal_api_handler_plugin.pluginSceneUpdateRequest:
+      properties:
+        description:
+          type: string
+        name:
+          type: string
+        sort_order:
+          type: integer
       type: object
     internal_api_handler_plugin.pluginWriteRequest:
       properties:
@@ -2705,6 +2864,591 @@ paths:
       summary: Update plugin category (admin)
       tags:
       - admin_plugin
+  /admin/plugin_placements:
+    get:
+      description: List Plugin-to-scene relationships across all Spaces. Admin only.
+      operationId: admin_plugin_placement.list
+      parameters:
+      - description: Scene code
+        in: query
+        name: scene_code
+        schema:
+          type: string
+      - description: Plugin type
+        in: query
+        name: plugin_type
+        schema:
+          enum:
+          - expert
+          - expert_team
+          - skill
+          - connector
+          type: string
+      - description: Plugin name search query
+        in: query
+        name: q
+        schema:
+          type: string
+      - description: Page number, default 1
+        in: query
+        name: page
+        schema:
+          type: integer
+      - description: Page size, default 20, max 100
+        in: query
+        name: page_size
+        schema:
+          type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-internal_api_handler_plugin_pluginPlacementResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: List plugin placements
+      tags:
+      - admin_plugin_scene
+    post:
+      description: Place one live top-level Plugin in a configured Marketplace scene.
+        Admin only.
+      operationId: admin_plugin_placement.create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.pluginPlacementCreateRequest'
+                description: Plugin placement
+                summary: body
+        description: Plugin placement
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginPlacementResponse'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Create plugin placement
+      tags:
+      - admin_plugin_scene
+  /admin/plugin_placements/_batch:
+    post:
+      description: Atomically add, update, or remove one scene placement for up to
+        100 Plugins. Removing or hiding default placements is rejected.
+      operationId: admin_plugin_placement.batch_update
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.pluginPlacementBatchRequest'
+                description: Batch placement update
+                summary: body
+        description: Batch placement update
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginPlacementBatchResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Batch update plugin placements
+      tags:
+      - admin_plugin_scene
+  /admin/plugin_placements/{plugin_placement_id}:
+    delete:
+      description: Remove a Plugin from a non-default Marketplace scene. Admin only.
+      operationId: admin_plugin_placement.delete
+      parameters:
+      - description: Plugin placement ID
+        in: path
+        name: plugin_placement_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_api_response_EmptyResp'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Delete plugin placement
+      tags:
+      - admin_plugin_scene
+    patch:
+      description: Update visibility or ordering for a Plugin placement. The default
+        placement must remain visible. Admin only.
+      operationId: admin_plugin_placement.update
+      parameters:
+      - description: Plugin placement ID
+        in: path
+        name: plugin_placement_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.pluginPlacementUpdateRequest'
+                description: Plugin placement fields
+                summary: body
+        description: Plugin placement fields
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginPlacementResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Update plugin placement
+      tags:
+      - admin_plugin_scene
+  /admin/plugin_scenes:
+    get:
+      description: List configured Marketplace scenes with Plugin and category placement
+        counts. Admin only.
+      operationId: admin_plugin_scene.list
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-array_internal_api_handler_plugin_pluginSceneResponse'
+          description: OK
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: List plugin scenes
+      tags:
+      - admin_plugin_scene
+    post:
+      description: Create a stable Marketplace scene code and its display metadata.
+        Admin only.
+      operationId: admin_plugin_scene.create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.pluginSceneCreateRequest'
+                description: Plugin scene
+                summary: body
+        description: Plugin scene
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginSceneResponse'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Create plugin scene
+      tags:
+      - admin_plugin_scene
+  /admin/plugin_scenes/{plugin_scene_id}:
+    delete:
+      description: Delete an unused non-default Marketplace scene. Admin only.
+      operationId: admin_plugin_scene.delete
+      parameters:
+      - description: Plugin scene ID
+        in: path
+        name: plugin_scene_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_api_response_EmptyResp'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Delete plugin scene
+      tags:
+      - admin_plugin_scene
+    patch:
+      description: Update scene display metadata; scene_code is immutable. Admin only.
+      operationId: admin_plugin_scene.update
+      parameters:
+      - description: Plugin scene ID
+        in: path
+        name: plugin_scene_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.pluginSceneUpdateRequest'
+                description: Plugin scene fields
+                summary: body
+        description: Plugin scene fields
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_pluginSceneResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Update plugin scene
+      tags:
+      - admin_plugin_scene
   /admin/plugins:
     get:
       description: List plugins of one type across all Spaces, optionally narrowed
@@ -8725,6 +9469,8 @@ tags:
 - description: Administrative unified Plugin catalog — cross-Space system connectors,
     global skills/experts, and categories
   name: admin_plugin
+- description: Administrative Marketplace scenes and Plugin placement relationships
+  name: admin_plugin_scene
 - description: Administrative MCP catalog
   name: admin_mcp
 - description: Current authenticated user context

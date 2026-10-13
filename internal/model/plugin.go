@@ -169,6 +169,10 @@ type Plugin struct {
 	ViewCount     int
 	InstallCount  int
 	DownloadCount int
+	// SceneCodes is the admin-list projection of every placement relationship
+	// currently attached to this Plugin. It is hydrated in one page-level query
+	// and is not persisted on the plugins row.
+	SceneCodes []string
 	// HasPendingReview / LatestReviewID / LatestReviewStatus are the review half of
 	// the displayed status. They are DERIVED at read time and never persisted on
 	// this row — review state lives on plugin_review_requests so a listed v1 and an

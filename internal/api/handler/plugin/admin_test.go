@@ -356,7 +356,7 @@ func TestAdminSkillImportConflictIs409(t *testing.T) {
 
 func TestAdminListPassesVisibilityAndSystemAdminCaller(t *testing.T) {
 	space := "space-x"
-	f := &fakeAdminService{list: []model.Plugin{{ID: "plugin-1", Name: "Sys", Type: model.PluginTypeConnector, SpaceID: &space, Visibility: model.PluginVisibilitySystem, Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{}`), CreatedAt: time.Now(), UpdatedAt: time.Now()}}}
+	f := &fakeAdminService{list: []model.Plugin{{ID: "plugin-1", Name: "Sys", Type: model.PluginTypeConnector, SpaceID: &space, Visibility: model.PluginVisibilitySystem, Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{}`), SceneCodes: []string{"default", "featured"}, CreatedAt: time.Now(), UpdatedAt: time.Now()}}}
 	rec := httptest.NewRecorder()
 	adminTestEngine(f, &fakeAdminCategories{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins?plugin_type=connector&visibility=system&q=foo", nil))
 	if rec.Code != http.StatusOK {
@@ -373,6 +373,19 @@ func TestAdminListPassesVisibilityAndSystemAdminCaller(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`"plugin_id":"plugin-1"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"data"`)) {
 		t.Fatalf("body=%s", rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"scene_codes":["default","featured"]`)) {
+		t.Fatalf("scene_codes missing from body=%s", rec.Body.String())
+	}
+}
+
+func TestListItemDTOSceneCodesNeverNull(t *testing.T) {
+	body, err := json.Marshal(listItemDTO(&model.Plugin{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte(`"scene_codes":[]`)) {
+		t.Fatalf("scene_codes must be an array: %s", body)
 	}
 }
 

@@ -30,6 +30,48 @@ func TestListReturnsTotalAndAppliesConfirmedFilters(t *testing.T) {
 	}
 }
 
+func TestAdminListHydratesSceneCodesForPage(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close()
+	now := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT p.plugin_id\).*FROM plugins p.*p.plugin_type=\?`).
+		WithArgs(model.PluginTypeSkill).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+	columns := pluginTestColumns()
+	summaryColumns := append([]string{}, columns[:19]...)
+	summaryColumns = append(summaryColumns, columns[21:]...)
+	summaryColumns = append(summaryColumns, "view_count", "install_count", "download_count")
+	rows := sqlmock.NewRows(summaryColumns).
+		AddRow("plugin-a", "A", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", nil, model.PluginVisibilitySystem, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), "sha256:m1", "sha256:p1", nil, nil, 1, now, now, nil, 0, 0, 0).
+		AddRow("plugin-b", "B", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", nil, model.PluginVisibilitySystem, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), "sha256:m2", "sha256:p2", nil, nil, 1, now, now, nil, 0, 0, 0)
+	mock.ExpectQuery(`SELECT .*FROM plugins p.*p.plugin_type=\?.*LIMIT \? OFFSET \?`).
+		WithArgs(model.PluginTypeSkill, 20, 0).
+		WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT plugin_id,placement_code\s+FROM plugin_placements\s+WHERE plugin_id IN \(\?,\?\)\s+ORDER BY plugin_id,placement_code`).
+		WithArgs("plugin-a", "plugin-b").
+		WillReturnRows(sqlmock.NewRows([]string{"plugin_id", "placement_code"}).
+			AddRow("plugin-a", "default").
+			AddRow("plugin-a", "featured"))
+
+	items, total, err := New(db).List(context.Background(), Scope{Admin: true}, ListFilter{AllSpaces: true, Type: model.PluginTypeSkill})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("items=%d total=%d", len(items), total)
+	}
+	if got := strings.Join(items[0].SceneCodes, ","); got != "default,featured" {
+		t.Fatalf("plugin-a scene codes = %q", got)
+	}
+	if items[1].SceneCodes == nil || len(items[1].SceneCodes) != 0 {
+		t.Fatalf("plugin-b scene codes = %#v, want empty non-nil slice", items[1].SceneCodes)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEscapeLike(t *testing.T) {
 	if got := escapeLike(`a!b%c_d`); got != `a!!b!%c!_d` {
 		t.Fatalf("escapeLike=%q", got)

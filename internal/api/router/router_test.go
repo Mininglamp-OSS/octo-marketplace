@@ -590,7 +590,7 @@ func adminPluginEngine(t *testing.T, resolver auth.Resolver) *gin.Engine {
 }
 
 // adminPluginRoutes is the representative set of new admin routes: every verb on
-// /admin/plugins and /admin/plugin_categories plus the import/reupload actions.
+// the Plugin, category, scene, and placement surfaces plus import/reupload actions.
 var adminPluginRoutes = []struct {
 	method string
 	path   string
@@ -611,6 +611,15 @@ var adminPluginRoutes = []struct {
 	{http.MethodPost, "/api/v1/admin/plugin_categories"},
 	{http.MethodPatch, "/api/v1/admin/plugin_categories/c-1"},
 	{http.MethodDelete, "/api/v1/admin/plugin_categories/c-1"},
+	{http.MethodGet, "/api/v1/admin/plugin_scenes"},
+	{http.MethodPost, "/api/v1/admin/plugin_scenes"},
+	{http.MethodPatch, "/api/v1/admin/plugin_scenes/s-1"},
+	{http.MethodDelete, "/api/v1/admin/plugin_scenes/s-1"},
+	{http.MethodGet, "/api/v1/admin/plugin_placements"},
+	{http.MethodPost, "/api/v1/admin/plugin_placements"},
+	{http.MethodPost, "/api/v1/admin/plugin_placements/_batch"},
+	{http.MethodPatch, "/api/v1/admin/plugin_placements/p-1"},
+	{http.MethodDelete, "/api/v1/admin/plugin_placements/p-1"},
 }
 
 // TestAdminPluginSurfaceAdmitsMarketAdmin proves each new admin route is mounted
