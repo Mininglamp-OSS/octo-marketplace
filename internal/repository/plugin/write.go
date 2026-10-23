@@ -13,13 +13,15 @@ import (
 
 // Mutation contains current state, replacement relations, and append-only audit metadata.
 type Mutation struct {
-	Plugin       model.Plugin
-	Relations    []model.PluginRelation
-	Placements   []model.PluginPlacement
-	OperatorID   string
-	OperatorName string
-	RequestID    string
-	Remark       *string
+	RestoreSourceVersionID   string
+	ExpectedCurrentVersionID string
+	Plugin                   model.Plugin
+	Relations                []model.PluginRelation
+	Placements               []model.PluginPlacement
+	OperatorID               string
+	OperatorName             string
+	RequestID                string
+	Remark                   *string
 	// SnapshotVersion, when set, appends one immutable plugin_versions row for this
 	// Plugin inside the write transaction and points current_version_id at it,
 	// setting current_version to the caller-declared label, so every save
@@ -131,6 +133,11 @@ func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (*RelationSy
 	var newVersionID string
 	if m.SnapshotVersion {
 		if newVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID); err != nil {
+			return nil, err
+		}
+	}
+	if r.versionManagement && scope.Admin && p.ListingState == model.PluginListingStatePublished && newVersionID != "" {
+		if err = r.recordRelease(ctx, tx, &p, newVersionID, *p.CurrentVersion, m.OperatorID, r.now()); err != nil {
 			return nil, err
 		}
 	}
@@ -310,6 +317,16 @@ func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) (
 			}
 		}
 	}
+	if r.versionManagement && scope.Admin {
+		for i := range nodes {
+			p := nodes[i].Plugin
+			if p.ListingState == model.PluginListingStatePublished && syncs[i].NewVersionID != "" {
+				if err = r.recordRelease(ctx, tx, &p, syncs[i].NewVersionID, *p.CurrentVersion, nodes[i].OperatorID, r.now()); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	// Phase 3: append one create audit per plugin.
 	for i := range nodes {
 		if err = insertAudit(ctx, tx, r.id(), now, nodes[i].Plugin, "create", nodes[i], "", nodes[i].Plugin.PluginHash); err != nil {
@@ -360,6 +377,9 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	before, err := getOwnedForUpdate(ctx, tx, scope, topPlugin.ID)
 	if err != nil {
 		return nil, err
+	}
+	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished {
+		return nil, ErrConflict
 	}
 	if topPlugin.Type != before.Type {
 		return nil, ErrInvalidRelation
@@ -557,6 +577,23 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err != nil {
 		return nil, err
 	}
+	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished {
+		var published sql.NullString
+		if err = tx.QueryRowContext(ctx, `SELECT published_version_id FROM plugins WHERE plugin_id=?`, before.ID).Scan(&published); err != nil {
+			return nil, err
+		}
+		// Explicitly adopt a legacy published snapshot before editing it; a mutable
+		// compatibility read must not start returning a newly saved draft.
+		if !published.Valid {
+			return nil, ErrConflict
+		}
+	}
+	if err = guardVersionRestore(ctx, tx, before, m); err != nil {
+		return nil, err
+	}
+	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility {
+		return nil, ErrConflict
+	}
 	// A visibility change while a review is pending is refused by the service, but
 	// from an UNLOCKED read. Re-check under the plugin row lock this transaction now
 	// holds so a SubmitReview that committed after the service's read cannot slip a
@@ -594,7 +631,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	// system admin keeps the platform-operator escape hatch and is not gated here.
 	resetListing := m.ResetListingToDraft
 	if m.EnforceListingGate {
-		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
+		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace && !(r.versionManagement && versioned(before)) {
 			return nil, ErrListedRequiresReview
 		}
 		resetListing = before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility
@@ -698,8 +735,13 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	relationsChanged := len(sync.Created) > 0 || len(sync.Updated) > 0 || len(sync.Deleted) > 0
 	sidecarUnchanged := sameAttachmentKeys(p.AttachmentKeys, before.AttachmentKeys)
 	hasChangelog := m.Changelog != nil && *m.Changelog != ""
-	if m.SnapshotVersion && (!contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || hasChangelog) {
+	if m.SnapshotVersion && (m.RestoreSourceVersionID != "" || !contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || hasChangelog) {
 		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID); err != nil {
+			return nil, err
+		}
+	}
+	if m.RestoreSourceVersionID != "" && sync.NewVersionID != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE plugin_versions SET restored_from_version_id=? WHERE plugin_id=? AND version_id=?`, m.RestoreSourceVersionID, p.ID, sync.NewVersionID); err != nil {
 			return nil, err
 		}
 	}

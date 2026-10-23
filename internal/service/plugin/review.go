@@ -201,7 +201,7 @@ func (s *Service) submitReview(ctx context.Context, caller Caller, params Review
 	sc := scope(caller)
 	// includeRelations: the membership graph of an expert/expert_team is part of
 	// what is being reviewed and must be frozen with the documents.
-	detail, err := s.Detail(ctx, caller, params.PluginID, true)
+	detail, err := s.currentDetail(ctx, caller, params.PluginID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +340,7 @@ func (s *Service) submitReview(ctx context.Context, caller Caller, params Review
 // Canceling restores the single-pending slot and cleans up snapshot-only objects,
 // allowing the caller to retry the original operation.
 func (s *Service) autoApproveReview(ctx context.Context, caller Caller, review *model.PluginReviewRequest, parseTaskID string) (*model.Plugin, error) {
-	published, approveErr := s.repo.ApproveReview(ctx, scope(caller), pluginrepo.ApproveReviewParams{
+	published, approveErr := s.approveWithVersionFiles(ctx, scope(caller), pluginrepo.ApproveReviewParams{
 		ReviewID: review.ID, ReviewerUID: caller.UID, ReviewerName: caller.Name,
 		DecisionSource: model.ReviewDecisionSourcePolicy, RequestID: caller.RequestID,
 	})
@@ -428,7 +428,7 @@ func (s *Service) freezeSubmission(ctx context.Context, caller Caller, detail *D
 	// for a plugin that is not yet listed — the draft row IS what the reviewer
 	// should see — but for an already-listed plugin it would freeze the LIVE
 	// content and produce an approval that changes nothing.
-	if !hasManifest && plugin.ListingState == model.PluginListingStatePublished {
+	if !hasManifest && plugin.ListingState == model.PluginListingStatePublished && !(s.versionManagement && plugin.Type != model.PluginTypeConnector) {
 		return pluginrepo.FrozenSnapshot{}, ErrReviewContentRequired
 	}
 
@@ -733,7 +733,7 @@ func (s *Service) ApproveReview(ctx context.Context, caller Caller, reviewID str
 	if !s.isReviewer(caller) {
 		return nil, ErrReviewForbidden
 	}
-	plug, err := s.repo.ApproveReview(ctx, scope(caller), pluginrepo.ApproveReviewParams{
+	plug, err := s.approveWithVersionFiles(ctx, scope(caller), pluginrepo.ApproveReviewParams{
 		ReviewID:       reviewID,
 		ReviewerUID:    caller.UID,
 		ReviewerName:   caller.Name,
@@ -1008,7 +1008,7 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 	var state string
 	var applyErr error
 	if decision == "approve" {
-		_, applyErr = s.repo.ApproveReview(ctx, adminScope, pluginrepo.ApproveReviewParams{
+		_, applyErr = s.approveWithVersionFiles(ctx, adminScope, pluginrepo.ApproveReviewParams{
 			ReviewID:    reviewID,
 			ReviewerUID: operatorUID,
 			// TODO(cross-repo): stamp the operator's DISPLAY NAME here once the

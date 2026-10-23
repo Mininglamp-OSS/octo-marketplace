@@ -215,3 +215,16 @@ Standard error codes:
 - `err.marketplace.category_in_use` — Category has skills, cannot delete (HTTP 409)
 - `err.marketplace.conflict` — Resource conflict (HTTP 409)
 - `err.marketplace.internal_error` — Internal server error (HTTP 500)
+
+## Expert and skill version management (local staged rollout)
+
+`PLUGIN_VERSION_MANAGEMENT_ENABLED` defaults to `false`. Enable it only in the
+PR2/PR3 isolated test environment. It activates formal release identities,
+explicit draft reads, historical detail/file/restore endpoints, and release-only
+public content reads. Existing connectors keep current-state behavior.
+
+A published legacy expert/skill with no formal release pointer must be explicitly
+published/adopted before saving a new draft; the service does not invent release
+history from saved snapshots. Published container ZIP reupload remains blocked in
+this staged mode until PR3 can protect the historical embedded dependency graph.
+The old compatibility path remains available with the rollout disabled.

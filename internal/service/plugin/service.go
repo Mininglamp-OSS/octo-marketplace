@@ -120,6 +120,7 @@ type Store interface {
 var _ Store = (*pluginrepo.Repo)(nil)
 
 type Service struct {
+	versionManagement   bool
 	repo                Store
 	storage             storage.Storage
 	provisioner         Provisioner
@@ -253,6 +254,8 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
+	restoreSourceVersionID   string
+	expectedCurrentVersionID string
 	// grandfatheredVersion is the plugin's STORED version label, set only by
 	// Service.update. A label minted before the format was tightened (v999,
 	// 1.0.0lll) no longer passes validVersion, and every save re-sends the stored
@@ -463,6 +466,21 @@ func normalizeListTags(raw []string) ([]string, error) {
 }
 
 func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, includeRelations bool) (*Detail, error) {
+	d, err := s.currentDetail(ctx, caller, pluginID, true)
+	if err != nil {
+		return nil, err
+	}
+	d, err = s.publishedDetail(ctx, scope(caller), d.Plugin, d.Relations)
+	if err != nil {
+		return nil, err
+	}
+	if !includeRelations {
+		d.Relations = []model.PluginRelation{}
+	}
+	return d, nil
+}
+
+func (s *Service) currentDetail(ctx context.Context, caller Caller, pluginID string, includeRelations bool) (*Detail, error) {
 	if validateCaller(caller) != nil {
 		return nil, ErrInvalidRequest
 	}
@@ -512,6 +530,13 @@ func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, in
 // returned relation slice, which is also the only count consistent with the
 // caller's visibility.
 func (s *Service) DetailGraph(ctx context.Context, caller Caller, pluginID string) (*DetailGraph, error) {
+	if s.versionManagement {
+		id, err := parseStorageID(pluginID)
+		if err != nil {
+			return nil, err
+		}
+		return s.publishedGraph(ctx, caller, id)
+	}
 	if err := validateCaller(caller); err != nil {
 		return nil, ErrInvalidRequest
 	}
@@ -679,7 +704,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 		if !validVisibility(req.Visibility, false) {
 			return nil, ErrInvalidRequest
 		}
-		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace {
+		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace && !(s.versionManagement && old.Type != model.PluginTypeConnector) {
 			return nil, ErrListedRequiresReview
 		}
 		// While a review is pending, the frozen snapshot is what the reviewer will
@@ -733,6 +758,8 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m := mutation(*p, rels, audit)
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
+	m.RestoreSourceVersionID = req.restoreSourceVersionID
+	m.ExpectedCurrentVersionID = req.expectedCurrentVersionID
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
 	// restate it against the row it locks, for the same reason the two listing
 	// decisions below are re-derived: an approval that publishes a frozen label can
@@ -852,7 +879,17 @@ func (s *Service) ListVersions(ctx context.Context, caller Caller, pluginID stri
 	if err != nil {
 		return nil, 0, mapStoreError(err)
 	}
-	items, total, err := s.repo.ListVersions(ctx, scope(caller), storageID, limit, offset)
+	var items []model.PluginVersion
+	var total int64
+	if s.versionManagement {
+		store, e := s.versionStore()
+		if e != nil {
+			return nil, 0, e
+		}
+		items, total, err = store.ListManagedVersions(ctx, scope(caller), storageID, limit, offset)
+	} else {
+		items, total, err = s.repo.ListVersions(ctx, scope(caller), storageID, limit, offset)
+	}
 	for i := range items {
 		items[i].PluginType = p.Type
 	}

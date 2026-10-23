@@ -198,7 +198,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	// First-listing drafts are still allowed to snapshot the live row (that IS what
 	// the reviewer should see), which is why this is gated on the locked
 	// listing_state rather than applied unconditionally.
-	if !snap.DeclaredContent && current.ListingState == model.PluginListingStatePublished {
+	if !snap.DeclaredContent && current.ListingState == model.PluginListingStatePublished && !(r.versionManagement && versioned(current)) {
 		return ErrReviewContentRequired
 	}
 	// Re-run the forward-only ordering rule against the LOCKED current_version.
@@ -212,7 +212,12 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 		!model.VersionNotRegressed(*current.CurrentVersion, req.Version) {
 		return ErrVersionRegressed
 	}
-	published, err := publishedVersionLabels(ctx, tx, req.PluginID, current)
+	var published map[string]struct{}
+	if r.versionManagement && versioned(current) {
+		published, err = managedLabels(ctx, tx, req.PluginID)
+	} else {
+		published, err = publishedVersionLabels(ctx, tx, req.PluginID, current)
+	}
 	if err != nil {
 		return err
 	}
@@ -518,6 +523,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	current, err := getReviewedPluginForUpdate(ctx, tx, scope.SpaceID, pluginID)
 	if err != nil {
 		return nil, err
+	}
+	if r.versionManagement && versioned(current) {
+		return r.approveManagedReview(ctx, tx, scope, p, current, version, changelog, manifest, pkg, attKeys, relationBytes, manifestHash, pluginHash)
 	}
 	// Re-run the forward-only ordering rule against the LOCKED current_version
 	// before stamping the applicant's frozen label below (snapshotVersion writes

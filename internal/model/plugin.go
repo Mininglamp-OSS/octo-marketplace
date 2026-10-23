@@ -235,6 +235,10 @@ type PluginAuditLog struct {
 
 // PluginVersion is an immutable saved snapshot, not necessarily a formal release.
 type PluginVersion struct {
+	Release               *PluginVersionRelease
+	IsCurrent             bool
+	IsPublished           bool
+	RestoredFromVersionID *string
 	DeclaredVersion       *string
 	SnapshotSchemaVersion *int
 	Artifacts             json.RawMessage

@@ -90,6 +90,10 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	plugins.POST("/publish", h.Publish)
 	plugins.POST("/delist", h.Delist)
 	plugins.GET("/versions", h.ListVersions)
+	plugins.GET("/:plugin_id/draft", h.GetDraft)
+	plugins.GET("/:plugin_id/versions/:version_id", h.GetVersion)
+	plugins.GET("/:plugin_id/versions/:version_id/file", h.DownloadVersionFile)
+	plugins.POST("/:plugin_id/versions/:version_id/restore", h.RestoreVersion)
 	plugins.POST("/install", h.Install)
 	plugins.POST("/:plugin_id/installations", h.CreateInstallation)
 	plugins.POST("/import", h.Import)
@@ -277,15 +281,20 @@ type relationResultResponse struct {
 // visible (incl. system) plugin. Callers get the label, hashes, changelog and
 // timestamp per row; full content is fetched from the plugin detail.
 type versionResponse struct {
-	VersionID    string           `json:"version_id"`
-	PluginID     string           `json:"plugin_id"`
-	Version      string           `json:"version"`
-	ManifestHash string           `json:"manifest_hash"`
-	PluginHash   string           `json:"plugin_hash"`
-	Relations    []map[string]any `json:"relations"`
-	Changelog    *string          `json:"changelog,omitempty"`
-	CreatedBy    string           `json:"created_by"`
-	CreatedAt    time.Time        `json:"created_at" swaggertype:"string,date-time"`
+	DeclaredVersion       *string                 `json:"declared_version,omitempty"`
+	Release               *versionReleaseResponse `json:"release,omitempty"`
+	IsCurrent             bool                    `json:"is_current"`
+	IsPublished           bool                    `json:"is_published"`
+	RestoredFromVersionID *string                 `json:"restored_from_version_id,omitempty"`
+	VersionID             string                  `json:"version_id"`
+	PluginID              string                  `json:"plugin_id"`
+	Version               string                  `json:"version"`
+	ManifestHash          string                  `json:"manifest_hash"`
+	PluginHash            string                  `json:"plugin_hash"`
+	Relations             []map[string]any        `json:"relations"`
+	Changelog             *string                 `json:"changelog,omitempty"`
+	CreatedBy             string                  `json:"created_by"`
+	CreatedAt             time.Time               `json:"created_at" swaggertype:"string,date-time"`
 }
 
 type categoryResponse struct {
@@ -918,7 +927,11 @@ func detailGraphDTO(d *pluginsvc.DetailGraph) detailGraphResponse {
 	return detailGraphResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, RelatedPlugins: related}
 }
 func versionDTO(x model.PluginVersion) versionResponse {
-	return versionResponse{VersionID: x.ID, PluginID: x.PluginID, Version: x.Version, ManifestHash: x.ManifestHash, PluginHash: x.PluginHash, Relations: versionRelationSlice(x.Relations), Changelog: x.Changelog, CreatedBy: x.CreatedBy, CreatedAt: x.CreatedAt}
+	var release *versionReleaseResponse
+	if x.Release != nil {
+		release = &versionReleaseResponse{VersionLabel: x.Release.VersionLabel, ReleasedBy: x.Release.ReleasedBy, ReleasedAt: x.Release.ReleasedAt}
+	}
+	return versionResponse{DeclaredVersion: x.DeclaredVersion, Release: release, IsCurrent: x.IsCurrent, IsPublished: x.IsPublished, RestoredFromVersionID: x.RestoredFromVersionID, VersionID: x.ID, PluginID: x.PluginID, Version: x.Version, ManifestHash: x.ManifestHash, PluginHash: x.PluginHash, Relations: versionRelationSlice(x.Relations), Changelog: x.Changelog, CreatedBy: x.CreatedBy, CreatedAt: x.CreatedAt}
 }
 
 func rawJSON(value any) json.RawMessage {

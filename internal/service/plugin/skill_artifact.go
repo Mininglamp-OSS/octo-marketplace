@@ -126,7 +126,7 @@ func (s *Service) skillMarkdown(ctx context.Context, sc pluginrepo.Scope, plugin
 	if err != nil {
 		return "", err
 	}
-	p, _, err := s.repo.GetWithRelations(ctx, sc, storageID)
+	p, err := s.publishedPlugin(ctx, sc, storageID)
 	if err != nil {
 		return "", mapStoreError(err)
 	}
@@ -189,7 +189,7 @@ func (s *Service) openSkillPackage(ctx context.Context, sc pluginrepo.Scope, plu
 	if err != nil {
 		return nil, err
 	}
-	p, _, err := s.repo.GetWithRelations(ctx, sc, storageID)
+	p, err := s.publishedPlugin(ctx, sc, storageID)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
