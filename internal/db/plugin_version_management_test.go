@@ -445,6 +445,36 @@ func TestManagedLegacyPublishedBaselineAdoption(t *testing.T) {
 	}
 }
 
+// A system resource listed during the V1 window is adopted through the existing
+// admin publish entry: the approved snapshot becomes the formal release, after
+// which an admin save uses the publish-on-write matrix.
+func TestManagedAdminAdoptsLegacySystemBaseline(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
+	d, err := svc.AdminCreate(ctx, admin, managedWrite("1.0.0", "system v1", model.PluginVisibilitySystem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := d.Plugin.ID
+	v1 := *d.Plugin.CurrentVersionID
+	if _, err = database.Exec(`UPDATE plugins SET published_version_id=NULL WHERE plugin_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.AdminPublishVersion(ctx, admin, id); err != nil {
+		t.Fatalf("admin adoption: %v", err)
+	}
+	state, err := repo.GetVersionState(ctx, pluginrepo.Scope{Admin: true, CallerUID: admin.UID}, id)
+	if err != nil || state.PublishedVersionID == nil || *state.PublishedVersionID != v1 {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
+
 // Adoption is evidence-gated: without an approved review over the same version
 // and content, a Space resource must stay blocked for the M1/M3 inventory rather
 // than have an arbitrary draft declared published.
