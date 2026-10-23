@@ -11,7 +11,7 @@ export GO_BIN=/home/mlamp/go-sdk/go/bin/go
 ./tools/integration-harness/run.sh health
 ./tools/integration-harness/run.sh smoke
 $GO_BIN test ./internal/inventory/... ./internal/referencecontract/... ./internal/service/plugin/...
-$GO_BIN build ./...
+GIT_DIR="$(git rev-parse --absolute-git-dir)" GIT_WORK_TREE="$(git rev-parse --show-toplevel)" $GO_BIN build ./...
 $GO_BIN test ./...
 ```
 
@@ -23,3 +23,10 @@ $GO_BIN test ./...
 
 健康检查是 MySQL fixture 可查询性，不代表完整 Marketplace HTTP/Fleet 安装流程通过。
 本轮没有真实环境盘点或对象存储校验。数据库参数不接受用户提供的真实 DSN。
+
+## 2026-10-24 本地验证
+
+基于 V1 `31a2759`，组合 M1、R fixture 和 I 算法提交后：`up`、`health`、
+`smoke` 均通过。已核验 SELECT-only 用户写入失败，盘点前后完整 fixture dump
+SHA256 一致。上述对应包测试、`go build ./...`、`go test ./...` 全部通过。
+构建显式指定当前 worktree 的 Git 元数据，避免宿主机上层 Git 仓库干扰 VCS stamping。
