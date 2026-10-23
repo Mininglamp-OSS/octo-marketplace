@@ -211,16 +211,18 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := managedOwner()
+	// Confirmed matrix: an admin save of a LISTED system resource publishes in the
+	// same transaction, so the public read switches immediately.
 	view, err := svc.Detail(ctx, reader, id, true)
-	if err != nil || !strings.Contains(string(view.Plugin.Package), "public v1") {
-		t.Fatalf("admin save published: %+v %v", view, err)
+	if err != nil || !strings.Contains(string(view.Plugin.Package), "admin draft") {
+		t.Fatalf("admin save did not publish: %+v %v", view, err)
 	}
-	if _, err = svc.AdminPublishVersion(ctx, admin, id); err != nil {
+	var publishedID, currentID string
+	if err = database.QueryRow(`SELECT published_version_id,current_version_id FROM plugins WHERE plugin_id=?`, id).Scan(&publishedID, &currentID); err != nil {
 		t.Fatal(err)
 	}
-	view, err = svc.Detail(ctx, reader, id, true)
-	if err != nil || !strings.Contains(string(view.Plugin.Package), "admin draft") {
-		t.Fatalf("admin publish failed: %+v %v", view, err)
+	if publishedID != currentID || publishedID == v1 {
+		t.Fatalf("published=%s current=%s, want the new snapshot published", publishedID, currentID)
 	}
 	// Corrupt a fixture's stored historical object. No current file may substitute.
 	sum := sha256.Sum256([]byte("historical bytes"))
@@ -262,6 +264,76 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 	}
 	if _, err = svc.ManagedVersion(ctx, reader, id, v1, false); err != nil {
 		t.Fatalf("old public release inaccessible: %v", err)
+	}
+}
+
+// A delisted system resource is off the market; an admin edit only advances the
+// editable head and must not silently re-list it through a release.
+func TestManagedAdminDelistedSystemUpdateOnlySaves(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
+	d, err := svc.AdminCreate(ctx, admin, managedWrite("1.0.0", "listed", model.PluginVisibilitySystem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := d.Plugin.ID
+	v1 := *d.Plugin.CurrentVersionID
+	if _, err = database.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.AdminUpdate(ctx, admin, id, managedWrite("2.0.0", "later edit", model.PluginVisibilitySystem)); err != nil {
+		t.Fatal(err)
+	}
+	var publishedID, currentID string
+	if err = database.QueryRow(`SELECT published_version_id,current_version_id FROM plugins WHERE plugin_id=?`, id).Scan(&publishedID, &currentID); err != nil {
+		t.Fatal(err)
+	}
+	if publishedID != v1 || currentID == v1 {
+		t.Fatalf("published=%s current=%s, want published kept at %s", publishedID, currentID, v1)
+	}
+	var releases int
+	if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_version_releases WHERE plugin_id=? AND version_label='2.0.0'`, id).Scan(&releases); err != nil {
+		t.Fatal(err)
+	}
+	if releases != 0 {
+		t.Fatalf("delisted admin edit minted %d releases", releases)
+	}
+}
+
+// The publish-on-write exception is limited to system resources: an admin edit of
+// a tenant resource preserves the tenant's published version.
+func TestManagedAdminTenantUpdateOnlySaves(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "tenant v1", model.PluginVisibilityPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := d.Plugin.ID
+	v1 := *d.Plugin.CurrentVersionID
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+		t.Fatal(err)
+	}
+	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
+	if _, err = svc.AdminUpdate(ctx, admin, id, managedWrite("2.0.0", "tenant v2", model.PluginVisibilityPrivate)); err != nil {
+		t.Fatal(err)
+	}
+	var publishedID, currentID string
+	if err = database.QueryRow(`SELECT published_version_id,current_version_id FROM plugins WHERE plugin_id=?`, id).Scan(&publishedID, &currentID); err != nil {
+		t.Fatal(err)
+	}
+	if publishedID != v1 || currentID == v1 {
+		t.Fatalf("published=%s current=%s, want published kept at %s", publishedID, currentID, v1)
+	}
+	view, err := svc.Detail(ctx, owner, id, true)
+	if err != nil || !strings.Contains(string(view.Plugin.Package), "tenant v1") {
+		t.Fatalf("tenant release drifted: %+v %v", view, err)
 	}
 }
 

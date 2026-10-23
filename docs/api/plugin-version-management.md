@@ -72,9 +72,14 @@ physical deletion or automatic retention expiry in this rollout.
 
 Existing tenant `POST /plugins/publish` publishes the current private draft or
 submits the current Space draft for review. For the admin surface,
-`POST /admin/plugins/{plugin_id}/publish` explicitly publishes the current saved
-version; admin saves no longer implicitly replace an existing formal release.
-Admin creation retains its existing immediate-publication behavior.
+`POST /admin/plugins/{plugin_id}/publish` explicitly publishes a saved draft.
+
+Admin writes follow the confirmed state matrix: creating or importing a system
+resource, and saving/uploading a **listed** system resource, publish in the same
+transaction (current and published are the same snapshot). Saving a delisted or
+draft system resource, or any tenant resource, only advances the editable head
+and leaves the published pointer and listing state unchanged. Admin DTOs do not
+expose the published pointer.
 
 ## Local acceptance
 

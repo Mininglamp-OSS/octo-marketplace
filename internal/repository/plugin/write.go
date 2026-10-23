@@ -745,6 +745,26 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 			return nil, err
 		}
 	}
+	// Confirmed Admin matrix: an admin save of a LISTED system resource is a
+	// publish-on-write. The frozen snapshot just inserted becomes the formal
+	// release and the published pointer moves in this same transaction, so a
+	// visible row never reads content that has no release identity. Delisted or
+	// draft system rows and every tenant row only advance current; a visibility
+	// change that drops the row back to draft must not move published either.
+	// Connectors are excluded by versioned() and produce no snapshot at all.
+	isSystemRow := before.SpaceID == nil || *before.SpaceID == ""
+	if r.versionManagement && scope.Admin && sync.NewVersionID != "" && isSystemRow && !resetListing &&
+		before.ListingState == model.PluginListingStatePublished && versioned(&p) {
+		// Mirror snapshotVersion's default so the release label always matches the
+		// declared_version stamped on the row it points at.
+		label := "1.0.0"
+		if p.CurrentVersion != nil && *p.CurrentVersion != "" {
+			label = *p.CurrentVersion
+		}
+		if err = r.recordRelease(ctx, tx, &p, sync.NewVersionID, label, m.OperatorID, r.now()); err != nil {
+			return nil, err
+		}
+	}
 	if err = insertAudit(ctx, tx, r.id(), now, p, "update", m, before.PluginHash, p.PluginHash); err != nil {
 		return nil, err
 	}
