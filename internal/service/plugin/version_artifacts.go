@@ -166,8 +166,10 @@ func (s *Service) freezeArtifact(ctx context.Context, spaceID, key string, limit
 	defer body.Close()
 
 	// Spool to a temp file while hashing: a bounded artifact then needs one disk
-	// copy instead of two full in-memory buffers (source plus frozen copy).
-	tmp, err := os.CreateTemp("", "octo-version-artifact-*")
+	// copy instead of two full in-memory buffers (source plus frozen copy). Local
+	// storage keeps the spool under its own root; remote storage falls back to a
+	// 0600 system temp file.
+	tmp, err := s.artifactTempFile()
 	if err != nil {
 		return "", 0, "", err
 	}
@@ -205,6 +207,28 @@ func (s *Service) freezeArtifact(ctx context.Context, spaceID, key string, limit
 		}
 	}
 	return frozen, n, digest, nil
+}
+
+// scratchDirProvider is implemented by storage backends that own a local
+// filesystem root. Spooling there keeps tenant artifacts inside that protected
+// tree instead of the shared system temp directory.
+type scratchDirProvider interface {
+	ScratchDir() string
+}
+
+func (s *Service) artifactTempFile() (*os.File, error) {
+	if p, ok := s.storage.(scratchDirProvider); ok {
+		if dir := p.ScratchDir(); dir != "" {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return nil, err
+			}
+			return os.CreateTemp(dir, "artifact-*")
+		}
+	}
+	// Remote storage has no local root; os.CreateTemp creates a 0600 file, but it
+	// still lives in the operator's temp dir. Deployments can point TMPDIR at a
+	// protected volume if that is not acceptable.
+	return os.CreateTemp("", "octo-version-artifact-*")
 }
 
 // verifyFrozenArtifact compares an existing immutable object with the digest and

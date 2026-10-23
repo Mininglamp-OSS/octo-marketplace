@@ -12,8 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
+	"go.uber.org/zap"
 )
 
 // maxReviewBodyBytes bounds a review request body. It MUST stay equal to
@@ -145,7 +147,7 @@ type reviewRelationResponse struct {
 	Data           json.RawMessage  `json:"data,omitempty" swaggertype:"object"`
 }
 
-func decodeFrozenRelations(raw json.RawMessage) []reviewRelationResponse {
+func decodeFrozenRelations(reviewID, pluginID string, raw json.RawMessage) []reviewRelationResponse {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -157,8 +159,13 @@ func decodeFrozenRelations(raw json.RawMessage) []reviewRelationResponse {
 	edges, err := model.DecodeSnapshotRelations(raw)
 	if err != nil {
 		// A malformed snapshot must not 500 the detail read: the reviewer still
-		// needs to see the documents and reject. Surface as an explicitly tagged
-		// empty (non-nil, zero-length) slice so the wire key renders as [].
+		// needs to see the documents and reject. Log it with correlation IDs and
+		// surface an explicitly tagged empty (non-nil, zero-length) slice so the
+		// wire key renders as [].
+		logging.Warn("plugin: malformed frozen relation snapshot",
+			zap.String("review_id", reviewID),
+			zap.String("plugin_id", pluginID),
+			zap.Error(err))
 		return []reviewRelationResponse{}
 	}
 	out := make([]reviewRelationResponse, 0, len(edges))
@@ -280,7 +287,7 @@ func reviewDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 	// "absent" (nil pointer, list path) from "present but empty" (pointer to
 	// 0-len slice, detail path with no edges or corrupt bytes) from "present
 	// with edges".
-	if edges := decodeFrozenRelations(r.RelationsJSON); edges != nil {
+	if edges := decodeFrozenRelations(r.ID, r.PluginID, r.RelationsJSON); edges != nil {
 		out.FrozenRelations = &edges
 	}
 	return out
