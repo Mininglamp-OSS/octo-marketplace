@@ -310,6 +310,10 @@ func (s *Service) submitReview(ctx context.Context, caller Caller, params Review
 		}
 		return nil, mapStoreError(err)
 	}
+	// The request now owns only immutable keys. Reclaim the mutable staging
+	// uploads immediately: reject/cancel must not be the first (and only) chance
+	// to delete them, because the frozen sidecar no longer names them.
+	s.discardStagingObjects(ctx, uploadedKeys)
 	// InsertReviewRequest assigns ID/kind/timestamps on req. Build the remaining
 	// response projection from the frozen snapshot and the already-authorized
 	// plugin detail instead of doing a fallible post-commit read. In auto mode a

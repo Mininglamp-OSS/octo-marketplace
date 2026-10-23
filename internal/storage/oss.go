@@ -123,6 +123,9 @@ func (s *OSSStorage) PresignPut(ctx context.Context, key string, contentType str
 // PresignGet returns the public object URL when a public endpoint is configured.
 // Otherwise it falls back to a presigned URL against the storage endpoint.
 func (s *OSSStorage) PresignGet(ctx context.Context, key string, expires time.Duration) (string, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", ErrImmutableObject
+	}
 	if s.publicEndpoint != "" && !s.downloadSigned {
 		return s.publicObjectURL(key)
 	}
@@ -230,6 +233,9 @@ func (s *OSSStorage) CopyObject(ctx context.Context, srcKey, dstKey string) erro
 // GET at this path. OSS_PUBLIC_ENDPOINT must be configured; otherwise there is
 // no stable non-signed URL we can return.
 func (s *OSSStorage) PublicURL(_ context.Context, key string) (string, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", ErrImmutableObject
+	}
 	if s.publicEndpoint == "" {
 		return "", fmt.Errorf("OSS_PUBLIC_ENDPOINT not configured; cannot construct a persistent public URL")
 	}

@@ -109,8 +109,12 @@ func TestFreezeArtifactsRejectsCorruptMissingCrossSpaceAndOversizedBytes(t *test
 			case "oversize":
 				s.SetArtifactLimits(3)
 			}
-			if err := s.freezeVersionArtifacts(ctx, model.PluginTypeSkill, docs, "space-a"); err == nil {
+			err := s.freezeVersionArtifacts(ctx, model.PluginTypeSkill, docs, "space-a")
+			if err == nil {
 				t.Fatalf("accepted %s", mode)
+			}
+			if mode == "missing" && !errors.Is(err, ErrIntegrity) {
+				t.Fatalf("missing source not classified as integrity: %v", err)
 			}
 		})
 	}
@@ -155,6 +159,42 @@ func TestFreezeLegacyRefRetainsActualArchiveAndMarkdown(t *testing.T) {
 		if ref[field+"_hash"] == nil || ref[field+"_size"] == nil {
 			t.Fatalf("missing inventory: %s", raw)
 		}
+	}
+}
+
+func TestFreezeUsesInlineStorageURIWhenSidecarIsMissing(t *testing.T) {
+	ctx := context.Background()
+	blobs := storage.NewLocal(t.TempDir(), "http://localhost")
+	s := New(&fakeStore{}, blobs)
+	key := "plugins/space-a/attachments/legacy.bin"
+	data := []byte("legacy bytes")
+	if err := blobs.PutObject(ctx, key, strings.NewReader(string(data)), int64(len(data)), ""); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	pkg, _ := json.Marshal(map[string]any{"attachments": []map[string]any{{
+		"path":         "assets/legacy.bin",
+		"content_type": "storage",
+		"content_size": len(data),
+		"content_hash": "sha256:" + hex.EncodeToString(sum[:]),
+		"storage_uri":  key,
+	}}})
+	docs := &CanonicalDocuments{Package: pkg}
+	if err := s.freezeVersionArtifacts(ctx, model.PluginTypeSkill, docs, "space-a"); err != nil {
+		t.Fatal(err)
+	}
+	frozen := attachmentKeyMap(docs.AttachmentKeys)["assets/legacy.bin"]
+	if !storage.IsImmutableArtifactKey(frozen) {
+		t.Fatalf("not frozen: %q (sidecar=%s)", frozen, docs.AttachmentKeys)
+	}
+	body, err := blobs.GetObject(ctx, frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+	got, _ := io.ReadAll(body)
+	if string(got) != string(data) {
+		t.Fatalf("bytes=%q", got)
 	}
 }
 

@@ -122,6 +122,9 @@ func (s *LocalStorage) PresignPut(_ context.Context, key string, contentType str
 
 // PresignGet returns a URL from which the client can GET the file.
 func (s *LocalStorage) PresignGet(_ context.Context, key string, _ time.Duration) (string, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", ErrImmutableObject
+	}
 	full, err := s.safePath(key)
 	if err != nil {
 		return "", err
@@ -138,6 +141,9 @@ func (s *LocalStorage) PresignGet(_ context.Context, key string, _ time.Duration
 // upload happens (we hand the URL back to the client to store on the
 // record, then the client PUTs the bytes to the presigned put URL).
 func (s *LocalStorage) PublicURL(_ context.Context, key string) (string, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", ErrImmutableObject
+	}
 	if _, err := s.safePath(key); err != nil {
 		return "", err
 	}

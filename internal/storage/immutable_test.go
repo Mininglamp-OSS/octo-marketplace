@@ -47,6 +47,12 @@ func TestLocalImmutableConcurrentCreateAndMutationGuards(t *testing.T) {
 		if _, _, err := s.PresignPut(context.Background(), alias, "text/plain", time.Minute); err == nil {
 			t.Fatalf("presign allowed at %s", alias)
 		}
+		if _, err := s.PresignGet(context.Background(), alias, time.Minute); err == nil {
+			t.Fatalf("presign get allowed at %s", alias)
+		}
+		if _, err := s.PublicURL(context.Background(), alias); err == nil {
+			t.Fatalf("public url allowed at %s", alias)
+		}
 		if err := s.DeleteObject(context.Background(), alias); err == nil {
 			t.Fatalf("delete allowed at %s", alias)
 		}
@@ -119,6 +125,12 @@ func TestOSSImmutableUsesConditionalWriteAndGuards(t *testing.T) {
 		}
 		if _, _, err := s.PresignPut(context.Background(), alias, "", time.Minute); err != ErrImmutableObject {
 			t.Fatalf("presign: %v", err)
+		}
+		if _, err := s.PresignGet(context.Background(), alias, time.Minute); err != ErrImmutableObject {
+			t.Fatalf("presign get: %v", err)
+		}
+		if _, err := s.PublicURL(context.Background(), alias); err != ErrImmutableObject {
+			t.Fatalf("public url: %v", err)
 		}
 	}
 }

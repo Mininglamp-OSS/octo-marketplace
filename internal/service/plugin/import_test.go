@@ -209,8 +209,9 @@ func TestImportCreatesSkillPluginAndAttachesDefaultPlacement(t *testing.T) {
 			uploaded++
 		}
 	}
-	// The binary has a staging object and an immutable history object; text stays inline.
-	if uploaded != 2 {
+	// The binary's mutable staging upload is reclaimed after the commit; only the
+	// immutable history object remains. Text stays inline.
+	if uploaded != 1 {
 		t.Fatalf("uploaded objects = %#v", blobs.objects)
 	}
 	// Q2: the reserved ID is the persisted ID. It is baked into the SKILL.md
@@ -222,14 +223,17 @@ func TestImportCreatesSkillPluginAndAttachesDefaultPlacement(t *testing.T) {
 	if !strings.Contains(pkg, "id: plugin-new") {
 		t.Fatalf("SKILL.md frontmatter id does not match persisted id: %s", pkg)
 	}
-	namespaced := false
+	immutable := false
 	for key := range blobs.objects {
 		if strings.HasPrefix(key, "plugins/space-a/attachments/skill-plugin-new-") {
-			namespaced = true
+			t.Fatalf("staging upload leaked: %s", key)
+		}
+		if strings.HasPrefix(key, "plugins/space-a/attachments/versions/") {
+			immutable = true
 		}
 	}
-	if !namespaced {
-		t.Fatalf("spilled object not namespaced under persisted id: %#v", blobs.objects)
+	if !immutable {
+		t.Fatalf("no immutable history object: %#v", blobs.objects)
 	}
 }
 

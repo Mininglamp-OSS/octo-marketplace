@@ -19,7 +19,12 @@ the author's label. `snapshot_schema_version=1` identifies the stable snake_case
 relation codec. Readers also accept legacy Go field names without rewriting old
 JSON. Both review and version DTOs project that data onto their existing wire
 schemas. New connector saves do not append versions; connector configuration
-continues to use current-state reads and existing permissions/review.
+continues to use current-state reads and existing permissions/review. A connector
+save or review approval still advances the display label in
+`plugins.current_version` (the catalog, detail and approval flows read it) but
+leaves `current_version_id` at the row's existing value, or NULL for a new
+connector. Skipping the label would make an update echo a version the database
+never stored and would let a connector's public label regress.
 
 `artifacts_json` inventories original files by relative path, size and SHA-256.
 Inline bytes remain in the immutable package; external file bytes use host-private
@@ -34,6 +39,14 @@ The internal `GetSavedVersion` repository method returns complete saved content
 only to the owner in the same Space, or an explicitly authorized admin scope. It
 is not a public release-read endpoint. Object keys, file inventory and draft
 content do not enter public metadata DTOs.
+
+The inventory digest is defined precisely so a future reader can verify bytes
+without reinterpreting them:
+
+- raw attachment: `sha256` over the UTF-8 bytes of `raw_content`; size is that
+  same byte length (the JSON string contents, not an uploaded archive);
+- storage attachment and legacy pointer: `sha256` over the object's raw bytes;
+- both are rendered as `sha256:<64 lowercase hex>`.
 
 ## File lifetime and integrity
 
@@ -54,6 +67,16 @@ unreferenced immutable object. It is intentionally retained because a concurrent
 save may already refer to the same bytes; failure compensation only removes
 ordinary staging objects. There is no new physical garbage collector. This also
 protects shared objects during concurrent retries and abandoned reviews.
+
+The inverse is not true: once a write commits, its mutable staging uploads are
+unreferenced and are deleted best-effort. The same cleanup runs after a review
+submission commits, so a later reject/cancel is not the only chance to reclaim
+them (and the frozen sidecar no longer names the staging keys). A failed delete
+leaves an orphan for audit; it never removes a frozen key.
+
+`PresignGet` and `PublicURL` refuse the immutable namespace just like
+`PresignPut`, `Delete` and `Copy`. A historical file is served through an
+authorized, version-aware read path, never a stable URL for a bare object key.
 
 Object-store operations happen before the database transaction. Snapshot content,
 file inventory and the saved-version pointer are committed in one transaction;
@@ -78,3 +101,22 @@ retain new snapshots and objects; the Down migration is for isolated verificatio
 not a production rollback procedure. Only a compatibility build that understands both codecs may resume writes or
 approvals after the new codec is enabled; an arbitrary older binary is not a
 validated application rollback target.
+
+A review request submitted before this release may still carry mutable upload
+keys or legacy `skill/ref.json` pointers without size/digest. Approving it would
+either fail on missing metadata or record mutable bytes as history, so the
+approval is refused with a typed conflict (`legacy_snapshot_requires_resubmit`).
+The applicant cancels and resubmits; the new submission freezes its files. A
+read-only query over pending `plugin_review_requests` rows is the rollout check
+for how many requests this affects:
+
+```sql
+SELECT review_id, plugin_id, space_id
+FROM plugin_review_requests
+WHERE status = 'pending' AND deleted_at IS NULL
+  AND attachment_keys_json IS NOT NULL;
+```
+
+Inspect each candidate's `plugin_json`/`attachment_keys_json`; requests whose
+external keys are not under `plugins/<space>/attachments/versions/` will be
+fenced.

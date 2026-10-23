@@ -187,7 +187,25 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p
 // attachment_keys_json mirrors the current row's storage-attachment sidecar.
 // Callers hold the transaction.
 func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, p model.Plugin, relations []model.PluginRelation, changelog *string, createdBy string) (string, error) {
+	currentVersion := "1.0.0"
+	if p.CurrentVersion != nil && *p.CurrentVersion != "" {
+		currentVersion = *p.CurrentVersion
+	}
+	// Connectors remain current-state resources: they get no plugin_versions row
+	// and do not move current_version_id. They DO carry a display label that the
+	// catalog, detail and review approval all read from current_version, and this
+	// helper is the only writer of that column on the save/approve paths. Skipping
+	// the pointer is required; skipping the label is a regression that makes a
+	// successful update echo a version the database never stored.
 	if p.Type == model.PluginTypeConnector {
+		// An omitted label must not reset a connector to the 1.0.0 default; only a
+		// caller-declared label advances the display version.
+		if p.CurrentVersion == nil || *p.CurrentVersion == "" {
+			return "", nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE plugins SET current_version=?,updated_at=? WHERE plugin_id=? AND deleted_at IS NULL`, *p.CurrentVersion, now, p.ID); err != nil {
+			return "", wrapped("advance current version", err)
+		}
 		return "", nil
 	}
 	var count int
@@ -205,10 +223,6 @@ func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now i
 	artifacts, err := snapshotArtifacts(p)
 	if err != nil {
 		return "", wrapped("snapshot artifacts", err)
-	}
-	currentVersion := "1.0.0"
-	if p.CurrentVersion != nil && *p.CurrentVersion != "" {
-		currentVersion = *p.CurrentVersion
 	}
 	versionID := newID()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions (version_id,plugin_id,version,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,relations_json,changelog,created_by,created_at,declared_version,snapshot_schema_version,artifacts_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,

@@ -14,7 +14,13 @@ current-state resources; existing connector history is retained.
 - Stored files are retained across versions; immutable attachment writes cannot
   overwrite an existing object, and reused data is checked for size/digest.
 - Caller-referenced mutable upload objects must be frozen before a version is saved.
-- Cleanup must not delete objects referenced by historical snapshots/reviews.
+- A review approval must refuse a frozen-format exception: every external file in
+  a snapshot must already live in the resource's own immutable namespace. Pending
+  requests created before this release are fenced with a resubmit hint.
+- Connectors get no version row; save and approval still persist the display label
+  in `plugins.current_version` and leave `current_version_id` unchanged.
+- Cleanup must not delete objects referenced by historical snapshots/reviews;
+  successful writes reclaim their own mutable staging uploads.
 
 ## Out of scope
 New HTTP endpoints, UI, publication/read switching, dependency pins/indexes,

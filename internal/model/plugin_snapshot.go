@@ -58,7 +58,21 @@ type SnapshotRelation struct {
 func EncodeSnapshotRelations(relations []PluginRelation) (json.RawMessage, error) {
 	out := make([]SnapshotRelation, 0, len(relations))
 	for _, r := range relations {
-		out = append(out, SnapshotRelation{r.ID, r.SourcePluginID, r.SourcePluginType, r.TargetPluginID, r.TargetPluginType, r.Type, r.SortOrder, r.Data, r.Status, r.CreatedBy, r.CreatedAt, r.UpdatedAt, r.DeletedAt})
+		out = append(out, SnapshotRelation{
+			ID:               r.ID,
+			SourcePluginID:   r.SourcePluginID,
+			SourcePluginType: r.SourcePluginType,
+			TargetPluginID:   r.TargetPluginID,
+			TargetPluginType: r.TargetPluginType,
+			Type:             r.Type,
+			SortOrder:        r.SortOrder,
+			Data:             r.Data,
+			Status:           r.Status,
+			CreatedBy:        r.CreatedBy,
+			CreatedAt:        r.CreatedAt,
+			UpdatedAt:        r.UpdatedAt,
+			DeletedAt:        r.DeletedAt,
+		})
 	}
 	return json.Marshal(out)
 }

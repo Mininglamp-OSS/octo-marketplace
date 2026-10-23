@@ -12,10 +12,31 @@ import (
 	"strings"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
 
+// ErrLegacySnapshotArtifacts reports a snapshot whose external files were not
+// frozen into this resource's immutable namespace. Approving such a request
+// would either fail on missing inventory metadata or, worse, record a mutable
+// upload key as historical content. Both are refused at the approval boundary;
+// the applicant cancels and resubmits so the normal freeze path runs.
+var ErrLegacySnapshotArtifacts = errors.New("legacy snapshot artifacts require resubmission")
+
+// frozenArtifactKey is the approval-boundary invariant: every external file a
+// version records must already live in the resource's own immutable namespace.
+// It is intentionally stricter than IsImmutableArtifactKey — a key from another
+// Space's versions prefix must not become historical content either.
+func frozenArtifactKey(key string, spaceID *string) bool {
+	if key == "" || spaceID == nil || *spaceID == "" {
+		return false
+	}
+	return strings.HasPrefix(key, "plugins/"+*spaceID+"/attachments/versions/") && storage.IsImmutableArtifactKey(key)
+}
+
 // snapshotArtifacts describes bytes without copying inline content out of the
-// immutable package. Empty/legacy metadata stays visibly unknown, never latest.
+// immutable package. Every external file must already be frozen in this
+// resource's namespace; a legacy or mutable key is refused instead of being
+// recorded as historical content.
 func snapshotArtifacts(p model.Plugin) (json.RawMessage, error) {
 	var doc struct {
 		Attachments []struct {
@@ -62,19 +83,19 @@ func snapshotArtifacts(p model.Plugin) (json.RawMessage, error) {
 					}
 					_ = json.Unmarshal(ref[field+"_size"], &size)
 					_ = json.Unmarshal(ref[field+"_hash"], &digest)
-					if size < 0 || len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") {
-						return nil, errors.New("incomplete legacy artifact metadata")
+					if !frozenArtifactKey(key, p.SpaceID) || size < 0 || len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") {
+						return nil, ErrLegacySnapshotArtifacts
 					}
 					out = append(out, model.PluginVersionArtifact{Path: a.Path + "/" + field, ContentType: "storage", ObjectKey: key, Size: size, Digest: digest})
 				}
 			}
 		case "storage":
 			f.ObjectKey = keys[a.Path]
-			if f.ObjectKey == "" || f.Size < 0 || len(f.Digest) != 71 || !strings.HasPrefix(f.Digest, "sha256:") {
-				return nil, errors.New("incomplete snapshot artifact metadata")
+			if !frozenArtifactKey(f.ObjectKey, p.SpaceID) || f.Size < 0 || len(f.Digest) != 71 || !strings.HasPrefix(f.Digest, "sha256:") {
+				return nil, ErrLegacySnapshotArtifacts
 			}
 			if _, err := hex.DecodeString(strings.TrimPrefix(f.Digest, "sha256:")); err != nil {
-				return nil, err
+				return nil, ErrLegacySnapshotArtifacts
 			}
 		default:
 			return nil, errors.New("unsupported snapshot artifact type")

@@ -41,6 +41,10 @@ var (
 	// content_hash/content_size recorded for it at publish time — a
 	// content-addressed object must never be served under a mismatched digest.
 	ErrIntegrity = errors.New("plugin artifact integrity check failed")
+	// ErrLegacySnapshot is returned when a review request created before the
+	// immutable-artifact rollout still points at mutable files. It is a one-time
+	// compatibility condition: the applicant cancels and resubmits.
+	ErrLegacySnapshot = errors.New("legacy snapshot artifacts require resubmission")
 	// ErrGraphTooLarge is returned when a plugin's transitive relation closure
 	// exceeds the per-request node or edge cap; the detail_graph endpoint fails
 	// closed so a caller never renders a partially-missing squad or agent.
@@ -1001,6 +1005,8 @@ func mapStoreError(err error) error {
 		return ErrLabelTaken
 	case errors.Is(err, pluginrepo.ErrReviewContentRequired):
 		return ErrReviewContentRequired
+	case errors.Is(err, pluginrepo.ErrLegacySnapshotArtifacts):
+		return ErrLegacySnapshot
 	case errors.Is(err, pluginrepo.ErrInvalidRelation), errors.Is(err, pluginrepo.ErrInvalidCategory), errors.Is(err, pluginrepo.ErrInvalidPlacement):
 		return ErrInvalidRequest
 	default:

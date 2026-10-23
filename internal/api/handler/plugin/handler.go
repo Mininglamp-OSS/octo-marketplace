@@ -834,6 +834,17 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 	// instruction to a client, and splitting it would move the wire contract.
 	case errors.Is(err, pluginsvc.ErrDeadlock):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "the request conflicted with a concurrent change", map[string]any{"conflict_reason": "deadlock", "retryable": true}, "Please retry the request.")
+	// A pending request created before immutable artifacts were enforced still
+	// points at ordinary upload keys (or carries legacy ref metadata without a
+	// digest). Approving it would either fail opaquely or enshrine mutable bytes as
+	// history, so refuse it with the one action that fixes it.
+	case errors.Is(err, pluginsvc.ErrLegacySnapshot):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "this review request was created before file freezing was enabled", map[string]any{"conflict_reason": "legacy_snapshot_requires_resubmit"}, "Cancel the pending request and submit it again; the new submission freezes its files.")
+	// A stored file is missing or no longer matches the digest recorded when it was
+	// saved. This is a permanent data condition on one row, not a transient server
+	// fault; tell the author to re-upload instead of returning an opaque 500.
+	case errors.Is(err, pluginsvc.ErrIntegrity):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a stored artifact is missing or does not match its recorded digest", map[string]any{"conflict_reason": "artifact_integrity"}, "Re-upload the affected file and retry; files lost before the version rollout cannot be recovered.")
 	default:
 		apiresponse.Internal(c, err, operation)
 	}

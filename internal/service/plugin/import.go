@@ -301,6 +301,7 @@ func (s *Service) importConsumedTask(ctx context.Context, caller Caller, task *s
 		s.deleteObjects(ctx, uploaded...)
 		return nil, err
 	}
+	s.discardStagingObjects(ctx, uploaded)
 	return detail, nil
 }
 
@@ -366,6 +367,18 @@ func (s *Service) deleteObjects(ctx context.Context, keys ...string) {
 	for _, key := range keys {
 		_ = s.storage.DeleteObject(cctx, key)
 	}
+}
+
+// discardStagingObjects reclaims the mutable upload keys that
+// buildSkillAttachmentTree created for this write. freezeVersionArtifacts
+// copied the same bytes into the immutable namespace before the transaction, so
+// after a successful commit the staging keys are unreferenced. Best-effort: a
+// failed delete leaves an object for the audit path, never a broken version.
+func (s *Service) discardStagingObjects(ctx context.Context, uploaded []string) {
+	if len(uploaded) == 0 {
+		return
+	}
+	s.deleteObjects(ctx, uploaded...)
 }
 
 // readVerifiedUpload downloads the parse task's temporary archive and verifies

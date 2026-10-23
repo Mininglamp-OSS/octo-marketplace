@@ -12,7 +12,8 @@ import (
 )
 
 func TestSnapshotArtifactInventoryIsDeterministicAndComplete(t *testing.T) {
-	p := model.Plugin{Package: json.RawMessage(`{"attachments":[{"path":"scripts/run.sh","content_type":"storage","content_size":3,"content_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"path":"SKILL.md","content_type":"raw","raw_content":"hello"}]}`), AttachmentKeys: json.RawMessage(`{"scripts/run.sh":"plugins/a/attachments/versions/hash"}`)}
+	space := "a"
+	p := model.Plugin{SpaceID: &space, Package: json.RawMessage(`{"attachments":[{"path":"scripts/run.sh","content_type":"storage","content_size":3,"content_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"path":"SKILL.md","content_type":"raw","raw_content":"hello"}]}`), AttachmentKeys: json.RawMessage(`{"scripts/run.sh":"plugins/a/attachments/versions/hash"}`)}
 	raw, err := snapshotArtifacts(p)
 	if err != nil {
 		t.Fatal(err)
@@ -59,18 +60,42 @@ func TestSavedVersionReadsFailClosedAcrossOwnersSpacesAndResources(t *testing.T)
 	}
 }
 
-func TestConnectorSnapshotDoesNotCreateVersion(t *testing.T) {
+func TestConnectorSnapshotAdvancesLabelWithoutCreatingVersion(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
 	mock.ExpectBegin()
 	tx, _ := db.Begin()
-	if id, err := snapshotVersion(context.Background(), tx, func() string { t.Fatal("connector minted version ID"); return "" }, nil, model.Plugin{Type: model.PluginTypeConnector}, nil, nil, "owner"); err != nil || id != "" {
+	label := "2.0.0"
+	mock.ExpectExec(`UPDATE plugins SET current_version=\?,updated_at=\? WHERE plugin_id=\? AND deleted_at IS NULL`).
+		WithArgs(label, nil, "connector").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if id, err := snapshotVersion(context.Background(), tx, func() string { t.Fatal("connector minted version ID"); return "" }, nil, model.Plugin{ID: "connector", Type: model.PluginTypeConnector, CurrentVersion: &label}, nil, nil, "owner"); err != nil || id != "" {
 		t.Fatalf("version=%q err=%v", id, err)
 	}
 	mock.ExpectRollback()
 	_ = tx.Rollback()
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSnapshotArtifactsRejectsNonFrozenOrCrossSpaceKeys(t *testing.T) {
+	space := "a"
+	digest := "sha256:" + strings.Repeat("a", 64)
+	stored := func(pkg, keys string) model.Plugin {
+		return model.Plugin{SpaceID: &space, Package: json.RawMessage(pkg), AttachmentKeys: json.RawMessage(keys)}
+	}
+	storageAtt := `{"attachments":[{"path":"assets/a.bin","content_type":"storage","content_size":1,"content_hash":"` + digest + `"}]}`
+	for name, p := range map[string]model.Plugin{
+		"mutable upload key":        stored(storageAtt, `{"assets/a.bin":"plugins/a/attachments/upload.bin"}`),
+		"cross-space immutable key": stored(storageAtt, `{"assets/a.bin":"plugins/b/attachments/versions/hash"}`),
+		"legacy ref without inventory": stored(
+			`{"attachments":[{"path":"skill/ref.json","content_type":"raw","raw_content":"{\"object_key\":\"plugins/a/attachments/legacy.zip\"}"}]}`,
+			`{}`),
+	} {
+		if _, err := snapshotArtifacts(p); !errors.Is(err, ErrLegacySnapshotArtifacts) {
+			t.Fatalf("%s: err=%v", name, err)
+		}
 	}
 }
 
