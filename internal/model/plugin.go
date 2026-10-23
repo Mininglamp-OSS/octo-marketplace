@@ -233,14 +233,17 @@ type PluginAuditLog struct {
 	CreatedAt        time.Time
 }
 
-// PluginVersion is an immutable published snapshot.
+// PluginVersion is an immutable saved snapshot, not necessarily a formal release.
 type PluginVersion struct {
-	ID         string
-	PluginID   string
-	PluginType PluginType
-	Version    string
-	Manifest   json.RawMessage
-	Package    json.RawMessage
+	DeclaredVersion       *string
+	SnapshotSchemaVersion *int
+	Artifacts             json.RawMessage
+	ID                    string
+	PluginID              string
+	PluginType            PluginType
+	Version               string
+	Manifest              json.RawMessage
+	Package               json.RawMessage
 	// AttachmentKeys is the version snapshot's copy of the storage-attachment
 	// path->object-key sidecar; see Plugin.AttachmentKeys.
 	AttachmentKeys json.RawMessage

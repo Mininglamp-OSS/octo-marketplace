@@ -247,7 +247,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	if relations == nil {
 		relations = []model.PluginRelation{}
 	}
-	relationsJSON, err := json.Marshal(relations)
+	relationsJSON, err := model.EncodeSnapshotRelations(relations)
 	if err != nil {
 		return err
 	}
@@ -597,7 +597,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 
 	var frozen []model.PluginRelation
 	if len(relationBytes) > 0 {
-		if err := json.Unmarshal(relationBytes, &frozen); err != nil {
+		var err error
+		frozen, err = model.DecodeSnapshotRelations(relationBytes)
+		if err != nil {
 			return nil, wrapped("decode frozen relations", err)
 		}
 	}

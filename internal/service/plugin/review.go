@@ -470,6 +470,11 @@ func (s *Service) freezeSubmission(ctx context.Context, caller Caller, detail *D
 		}
 		snap.Relations = rels
 	}
+	docs := &CanonicalDocuments{Manifest: snap.Manifest, Package: snap.Package, PluginHash: snap.PluginHash, AttachmentKeys: snap.AttachmentKeys}
+	if err := s.freezeVersionArtifacts(ctx, plugin.Type, docs, caller.SpaceID); err != nil {
+		return pluginrepo.FrozenSnapshot{}, err
+	}
+	snap.Package, snap.PluginHash, snap.AttachmentKeys = docs.Package, docs.PluginHash, docs.AttachmentKeys
 	return snap, nil
 }
 
@@ -536,6 +541,9 @@ func (s *Service) freezeSubmissionFromParseTask(ctx context.Context, caller Call
 		return pluginrepo.FrozenSnapshot{}, &ReviewFieldError{Field: "parse_task_id", Reason: "invalid_package", Err: err}
 	}
 
+	if err := s.freezeVersionArtifacts(ctx, plugin.Type, docs, caller.SpaceID); err != nil {
+		return pluginrepo.FrozenSnapshot{}, err
+	}
 	// Relations: if the submit body included relations, use them; otherwise
 	// inherit the live graph (same semantics as the declared-JSON path).
 	rels := detail.Relations

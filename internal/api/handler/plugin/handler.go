@@ -977,8 +977,8 @@ func rfc5987Escape(s string) string {
 }
 
 func versionRelationSlice(raw json.RawMessage) []map[string]any {
-	var relations []model.PluginRelation
-	if len(raw) == 0 || json.Unmarshal(raw, &relations) != nil || relations == nil {
+	relations, err := model.DecodeSnapshotRelations(raw)
+	if len(raw) == 0 || err != nil || relations == nil {
 		return []map[string]any{}
 	}
 	out := make([]map[string]any, 0, len(relations))

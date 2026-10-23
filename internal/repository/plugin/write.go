@@ -182,11 +182,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p
 // is a per-plugin auto-increment sequence (1, 2, 3 ...) — distinct from the
 // current_version LABEL — computed under the transaction: for Update the plugin
 // row is already FOR UPDATE-locked, and a fresh Create has no prior snapshot, so
-// the COUNT is race-free. relations is marshaled as a []model.PluginRelation, and
+// the COUNT is race-free. Relations use the stable host snapshot codec;
 // nil becomes an empty JSON array to satisfy the relations_json ARRAY check.
 // attachment_keys_json mirrors the current row's storage-attachment sidecar.
 // Callers hold the transaction.
 func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, p model.Plugin, relations []model.PluginRelation, changelog *string, createdBy string) (string, error) {
+	if p.Type == model.PluginTypeConnector {
+		return "", nil
+	}
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugin_versions WHERE plugin_id=?`, p.ID).Scan(&count); err != nil {
 		return "", wrapped("count versions", err)
@@ -195,20 +198,22 @@ func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now i
 	if relations == nil {
 		relations = []model.PluginRelation{}
 	}
-	relationJSON, err := json.Marshal(relations)
+	relationJSON, err := model.EncodeSnapshotRelations(relations)
 	if err != nil {
 		return "", err
 	}
-	versionID := newID()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions (version_id,plugin_id,version,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,relations_json,changelog,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		versionID, p.ID, seq, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, string(relationJSON), changelog, createdBy, now); err != nil {
-		return "", wrapped("snapshot version", err)
+	artifacts, err := snapshotArtifacts(p)
+	if err != nil {
+		return "", wrapped("snapshot artifacts", err)
 	}
-	// current_version is the caller-declared label; fall back to "1.0.0" so the
-	// pointer is never left NULL (the service normally sets p.CurrentVersion).
 	currentVersion := "1.0.0"
 	if p.CurrentVersion != nil && *p.CurrentVersion != "" {
 		currentVersion = *p.CurrentVersion
+	}
+	versionID := newID()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions (version_id,plugin_id,version,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,relations_json,changelog,created_by,created_at,declared_version,snapshot_schema_version,artifacts_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		versionID, p.ID, seq, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, string(relationJSON), changelog, createdBy, now, currentVersion, model.PluginSnapshotSchemaVersion, string(artifacts)); err != nil {
+		return "", wrapped("snapshot version", err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,updated_at=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, currentVersion, now, p.ID); err != nil {
 		return "", wrapped("advance current version", err)

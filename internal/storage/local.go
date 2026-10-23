@@ -101,6 +101,9 @@ func pathWithin(base, target string) bool {
 // PresignPut returns a URL to which the client can PUT a file.
 // For local storage, this is a backend proxy endpoint.
 func (s *LocalStorage) PresignPut(_ context.Context, key string, contentType string, _ time.Duration) (string, http.Header, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", nil, ErrImmutableObject
+	}
 	full, err := s.safePath(key)
 	if err != nil {
 		return "", nil, err
@@ -177,9 +180,15 @@ func (s *LocalStorage) PutObject(_ context.Context, key string, reader io.Reader
 
 // DeleteObject removes the file from disk.
 func (s *LocalStorage) DeleteObject(_ context.Context, key string) error {
+	if IsImmutableArtifactKey(key) {
+		return ErrImmutableObject
+	}
 	full, err := s.safePath(key)
 	if err != nil {
 		return err
+	}
+	if s.isImmutablePath(full) {
+		return ErrImmutableObject
 	}
 	err = os.Remove(full)
 	if err != nil && !os.IsNotExist(err) {
@@ -190,9 +199,15 @@ func (s *LocalStorage) DeleteObject(_ context.Context, key string) error {
 
 // WriteObject writes data to the local filesystem (used by the local upload proxy).
 func (s *LocalStorage) WriteObject(key string, r io.Reader) (retErr error) {
+	if IsImmutableArtifactKey(key) {
+		return ErrImmutableObject
+	}
 	full, err := s.safePath(key)
 	if err != nil {
 		return err
+	}
+	if s.isImmutablePath(full) {
+		return ErrImmutableObject
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return fmt.Errorf("local storage: mkdir: %w", err)
@@ -228,6 +243,9 @@ func (s *LocalStorage) WriteObject(key string, r io.Reader) (retErr error) {
 
 // CopyObject copies a file from srcKey to dstKey within the local filesystem.
 func (s *LocalStorage) CopyObject(_ context.Context, srcKey, dstKey string) error {
+	if IsImmutableArtifactKey(dstKey) {
+		return ErrImmutableObject
+	}
 	srcFull, err := s.safePath(srcKey)
 	if err != nil {
 		return err
@@ -235,6 +253,9 @@ func (s *LocalStorage) CopyObject(_ context.Context, srcKey, dstKey string) erro
 	dstFull, err := s.safePath(dstKey)
 	if err != nil {
 		return err
+	}
+	if s.isImmutablePath(dstFull) {
+		return ErrImmutableObject
 	}
 	src, err := os.OpenFile(srcFull, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -272,4 +293,21 @@ func (s *LocalStorage) CopyObject(_ context.Context, srcKey, dstKey string) erro
 	}
 	committed = true
 	return nil
+}
+
+// isImmutablePath prevents an in-root symlink alias from bypassing history guards.
+func (s *LocalStorage) isImmutablePath(full string) bool {
+	base, err := filepath.Abs(s.baseDir)
+	if err != nil {
+		return true
+	}
+	base, err = filepath.EvalSymlinks(base)
+	if err != nil {
+		return true
+	}
+	rel, err := filepath.Rel(base, full)
+	if err != nil {
+		return true
+	}
+	return IsImmutableArtifactKey(filepath.ToSlash(rel))
 }

@@ -129,20 +129,12 @@ func TestPluginReviewMigrationUpDownMySQL(t *testing.T) {
 		t.Fatalf("duplicate event_id error=%v, want MySQL 1062", err)
 	}
 
-	// Roll back the review feature's migrations; the rest of the chain stays
-	// applied. The feature spans TWO files — 20260901-00 creates the tables and
-	// 20260901-01 adds attachment_keys_json — and ExecMax counts from the newest
-	// applied migration, so rolling back only one would drop the column and leave
-	// both tables standing. Appending a later migration means bumping this count:
-	// the listing_state step is now split into four tail files
-	// (20260902-00/-01/-02/-03), so reaching 20260901-00 takes 6 steps (4 listing
-	// + 2 review-feature files). The newer review-policy migration adds one more
-	// tail step, while the newer plugin-rating and plugin-scene migrations add two
-	// more, so reaching 20260901-00 now takes 9.
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 9); err != nil {
+	// Roll back the review tables and every newer migration, preserving the baseline.
+	steps := migrationTailCount(t, source, "20260901-00-plugin-review-requests.sql")
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, steps); err != nil {
 		t.Fatalf("migrate Down: %v", err)
-	} else if n != 9 {
-		t.Fatalf("migrate Down applied %d migrations, want 9", n)
+	} else if n != steps {
+		t.Fatalf("migrate Down applied %d migrations, want %d", n, steps)
 	}
 	for _, table := range pluginReviewTables {
 		var count int

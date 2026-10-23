@@ -153,24 +153,9 @@ func decodeFrozenRelations(raw json.RawMessage) []reviewRelationResponse {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
-	// model.PluginRelation has no json tags, so plugin_review_requests.relations_json
-	// stores Go default field names (ID, TargetPluginID, Type, SortOrder, Data, …).
-	// Decode with those tags and project onto the stable snake_case wire DTO.
-	// Use a sentinel pointer so we can distinguish "empty array in JSON" (return
-	// non-nil empty) from "decoder error" (also return non-nil empty for the
-	// degrade-to-[] contract) — both surface as [] on the wire, but the pointer
-	// trick below is only needed if we ever need to distinguish them. We don't
-	// here; the non-nil empty slice encodes as the JSON array [] via the custom
-	// marshaler we add on the response type.
-	var edges []struct {
-		ID               string           `json:"ID"`
-		TargetPluginID   string           `json:"TargetPluginID"`
-		TargetPluginType model.PluginType `json:"TargetPluginType"`
-		Type             string           `json:"Type"`
-		SortOrder        int              `json:"SortOrder"`
-		Data             json.RawMessage  `json:"Data"`
-	}
-	if err := json.Unmarshal(raw, &edges); err != nil {
+	// Stored snapshots can use historical Go names or the stable host codec.
+	edges, err := model.DecodeSnapshotRelations(raw)
+	if err != nil {
 		// A malformed snapshot must not 500 the detail read: the reviewer still
 		// needs to see the documents and reject. Surface as an explicitly tagged
 		// empty (non-nil, zero-length) slice so the wire key renders as [].

@@ -56,6 +56,12 @@ func (s *importStorage) PutObject(_ context.Context, key string, reader io.Reade
 	s.objects[key] = data
 	return nil
 }
+func (s *importStorage) PutImmutable(ctx context.Context, key string, r io.Reader, size int64, ct string) (bool, error) {
+	if _, ok := s.objects[key]; ok {
+		return false, nil
+	}
+	return true, s.PutObject(ctx, key, r, size, ct)
+}
 func (s *importStorage) DeleteObject(_ context.Context, key string) error {
 	s.deletes = append(s.deletes, key)
 	if s.events != nil {
@@ -203,8 +209,8 @@ func TestImportCreatesSkillPluginAndAttachesDefaultPlacement(t *testing.T) {
 			uploaded++
 		}
 	}
-	// Only the binary spills to object storage; the two text files stay inline.
-	if uploaded != 1 {
+	// The binary has a staging object and an immutable history object; text stays inline.
+	if uploaded != 2 {
 		t.Fatalf("uploaded objects = %#v", blobs.objects)
 	}
 	// Q2: the reserved ID is the persisted ID. It is baked into the SKILL.md

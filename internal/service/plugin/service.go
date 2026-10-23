@@ -889,6 +889,10 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := s.freezeVersionArtifacts(ctx, req.Type, docs, c.SpaceID); err != nil {
+		return nil, nil, err
+	}
+	p.Package, p.PluginHash, p.AttachmentKeys = docs.Package, docs.PluginHash, docs.AttachmentKeys
 	return p, rels, nil
 }
 

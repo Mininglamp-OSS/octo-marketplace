@@ -72,7 +72,7 @@ func (r *Repo) redactVersionRelations(ctx context.Context, scope Scope, versions
 		}
 		parsed[i] = rels
 		for _, rel := range rels {
-			if id, ok := rel["target_plugin_id"].(string); ok && id != "" {
+			if id := snapshotTargetID(rel); id != "" {
 				targets[id] = struct{}{}
 			}
 		}
@@ -90,7 +90,7 @@ func (r *Repo) redactVersionRelations(ctx context.Context, scope Scope, versions
 		}
 		kept := make([]map[string]any, 0, len(parsed[i]))
 		for _, rel := range parsed[i] {
-			id, _ := rel["target_plugin_id"].(string)
+			id := snapshotTargetID(rel)
 			if _, ok := visible[id]; ok {
 				kept = append(kept, rel)
 			}
@@ -177,4 +177,12 @@ WHERE cp.placement_code=? AND cp.plugin_type=? AND cp.visible=1 AND c.status=1 A
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func snapshotTargetID(rel map[string]any) string {
+	if id, ok := rel["target_plugin_id"].(string); ok {
+		return id
+	}
+	id, _ := rel["TargetPluginID"].(string)
+	return id
 }

@@ -92,6 +92,9 @@ func NewOSS(cfg OSSConfig) (*OSSStorage, error) {
 
 // PresignPut generates a presigned PUT URL using the public endpoint.
 func (s *OSSStorage) PresignPut(ctx context.Context, key string, contentType string, expires time.Duration) (string, http.Header, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", nil, ErrImmutableObject
+	}
 	pc := s3.NewPresignClient(s.presignClient)
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -170,6 +173,9 @@ func (s *OSSStorage) GetObject(ctx context.Context, key string) (io.ReadCloser, 
 
 // PutObject uploads an object to storage from a reader.
 func (s *OSSStorage) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
+	if IsImmutableArtifactKey(key) {
+		return ErrImmutableObject
+	}
 	input := &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(s.key(key)),
@@ -188,6 +194,9 @@ func (s *OSSStorage) PutObject(ctx context.Context, key string, reader io.Reader
 
 // DeleteObject removes an object from storage.
 func (s *OSSStorage) DeleteObject(ctx context.Context, key string) error {
+	if IsImmutableArtifactKey(key) {
+		return ErrImmutableObject
+	}
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(s.key(key)),
@@ -200,6 +209,9 @@ func (s *OSSStorage) DeleteObject(ctx context.Context, key string) error {
 
 // CopyObject copies an object from srcKey to dstKey within the same bucket.
 func (s *OSSStorage) CopyObject(ctx context.Context, srcKey, dstKey string) error {
+	if IsImmutableArtifactKey(dstKey) {
+		return ErrImmutableObject
+	}
 	copySource := fmt.Sprintf("%s/%s", s.bucket, s.key(srcKey))
 	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucket),
