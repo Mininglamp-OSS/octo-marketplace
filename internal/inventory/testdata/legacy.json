@@ -1,0 +1,10 @@
+{
+ "plugins": [
+  {"id":"expert-a","name":"Expert","type":"expert","owner":"alice","space":"space-a","visibility":"private","listing":"published","current":"v1","attachments":[]},
+  {"id":"skill-a","name":"search","type":"skill","owner":"alice","space":"space-a","visibility":"private","listing":"published","embedded":true,"attachments":[{"path":"secret-path","content_type":"storage","content_size":5,"content_hash":"sha256:placeholder"}],"keys":{"secret-path":"private-object-key"}},
+  {"id":"skill-b","name":"search","type":"skill","owner":"bob","space":"space-b","visibility":"private","listing":"draft","attachments":[]}
+ ],
+ "versions":[{"id":"v1","plugin_id":"expert-a","schema":0,"attachments":[],"relations":[{"TargetPluginID":"skill-a"}]}],
+ "relations":[{"id":"r1","source":"expert-a","target":"skill-a","type":"expert_skill"}],
+ "releases":[]
+}
