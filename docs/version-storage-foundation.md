@@ -86,6 +86,16 @@ operator with direct bucket/filesystem access. Recorded digests detect corruptio
 when bytes are validated. Files lost before this rollout are not recoverable
 merely because a historical JSON reference survives.
 
+Corruption in an immutable object is fail-closed: `PutImmutable` refuses to
+overwrite the key and `verifyFrozenArtifact` reports `ErrIntegrity` instead of
+silently adopting different bytes. The service deliberately has no
+"overwrite if the existing digest does not match" path: that would race
+concurrent readers, destroy the only copy of a historical object, and turn a
+detected corruption into an unaudited mutation. Operator remediation is to
+restore the object from backup or from a known-good source, or to mark the
+affected version unrecoverable; a future operator tool may rebuild an object
+from a verified source, but it is not part of this rollout.
+
 ## Verification and deployment
 
 Run the relevant Go package tests, then the full suite with an isolated MySQL

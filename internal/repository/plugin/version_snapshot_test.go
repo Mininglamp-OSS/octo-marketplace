@@ -2,8 +2,10 @@ package plugin
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -57,6 +59,35 @@ func TestSavedVersionReadsFailClosedAcrossOwnersSpacesAndResources(t *testing.T)
 			t.Fatal(err)
 		}
 		db.Close()
+	}
+}
+
+func TestSavedVersionQueryShapeIsExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scope Scope
+		query string
+		args  []driver.Value
+	}{
+		{"tenant", Scope{CallerUID: "owner", SpaceID: "space"}, savedVersionTenantSelect, []driver.Value{"plugin", "version", "owner", "space"}},
+		{"admin", Scope{Admin: true}, savedVersionSelect, []driver.Value{"plugin", "version"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			mock.ExpectQuery(regexp.QuoteMeta(tc.query)).
+				WithArgs(tc.args...).
+				WillReturnRows(sqlmock.NewRows([]string{"version_id"}))
+			if _, err := New(db).GetSavedVersion(context.Background(), tc.scope, "plugin", "version"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("read err=%v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

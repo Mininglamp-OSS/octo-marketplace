@@ -20,6 +20,7 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // maxBodyBytes caps a plugin write body. `maxReviewBodyBytes` (review.go) is
@@ -918,7 +919,7 @@ func detailGraphDTO(d *pluginsvc.DetailGraph) detailGraphResponse {
 	return detailGraphResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, RelatedPlugins: related}
 }
 func versionDTO(x model.PluginVersion) versionResponse {
-	return versionResponse{VersionID: x.ID, PluginID: x.PluginID, Version: x.Version, ManifestHash: x.ManifestHash, PluginHash: x.PluginHash, Relations: versionRelationSlice(x.Relations), Changelog: x.Changelog, CreatedBy: x.CreatedBy, CreatedAt: x.CreatedAt}
+	return versionResponse{VersionID: x.ID, PluginID: x.PluginID, Version: x.Version, ManifestHash: x.ManifestHash, PluginHash: x.PluginHash, Relations: versionRelationSlice(x.PluginID, x.ID, x.Relations), Changelog: x.Changelog, CreatedBy: x.CreatedBy, CreatedAt: x.CreatedAt}
 }
 
 func rawJSON(value any) json.RawMessage {
@@ -987,9 +988,21 @@ func rfc5987Escape(s string) string {
 	return b.String()
 }
 
-func versionRelationSlice(raw json.RawMessage) []map[string]any {
+func versionRelationSlice(pluginID, versionID string, raw json.RawMessage) []map[string]any {
 	relations, err := model.DecodeSnapshotRelations(raw)
-	if len(raw) == 0 || err != nil || relations == nil {
+	if len(raw) == 0 {
+		return []map[string]any{}
+	}
+	if err != nil {
+		// Keep the historical page-loading behavior, but make corruption visible
+		// in logs instead of silently rendering an empty relation list.
+		logging.Warn("plugin: malformed version relation snapshot",
+			zap.String("plugin_id", pluginID),
+			zap.String("version_id", versionID),
+			zap.Error(err))
+		return []map[string]any{}
+	}
+	if relations == nil {
 		return []map[string]any{}
 	}
 	out := make([]map[string]any, 0, len(relations))
