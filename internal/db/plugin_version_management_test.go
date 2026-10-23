@@ -264,3 +264,153 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 		t.Fatalf("old public release inaccessible: %v", err)
 	}
 }
+
+func TestManagedPublicationUsesExpectedHeadAndRejectsLabelReuse(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "first", model.PluginVisibilityPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := d.Plugin.ID
+	v1 := *d.Plugin.CurrentVersionID
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Update(ctx, owner, id, managedWrite("1.0.0", "changed under same draft label", model.PluginVisibilityPrivate)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = repo.PublishManaged(ctx, tenantScope(), pluginrepo.PublishParams{PluginID: id, ExpectedVersionID: v1, OperatorID: owner.UID}); !errors.Is(err, pluginrepo.ErrConflict) {
+		t.Fatalf("stale head published: %v", err)
+	}
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); !errors.Is(err, pluginsvc.ErrLabelTaken) {
+		t.Fatalf("reused published label: %v", err)
+	}
+	state, err := repo.GetVersionState(ctx, tenantScope(), id)
+	if err != nil || *state.PublishedVersionID != v1 {
+		t.Fatalf("failed publication changed head: %+v %v", state, err)
+	}
+	// Current access, including deletion, is authoritative for every old release.
+	if err = svc.Delete(ctx, owner, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ManagedVersion(ctx, owner, id, v1, false); !errors.Is(err, pluginsvc.ErrNotFound) {
+		t.Fatalf("deleted resource's version still visible: %v", err)
+	}
+	var count int
+	if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id=?`, id).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("delete removed historical storage: %d %v", count, err)
+	}
+}
+
+func TestManagedCatalogSearchAndTagsUseRelease(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	req := managedWrite("1.0.0", "original", model.PluginVisibilitySpace)
+	req.Tags = json.RawMessage(`["released-tag"]`)
+	req.Manifest = json.RawMessage(strings.Replace(string(req.Manifest), `"labels":[]`, `"labels":["released-tag"]`, 1))
+	d, err := svc.Create(ctx, owner, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+		t.Fatal(err)
+	}
+	req = managedWrite("2.0.0", "secret draft", model.PluginVisibilitySpace)
+	req.Name = "Secret Draft Name"
+	req.Tags = json.RawMessage(`["secret-draft-tag"]`)
+	req.Manifest = json.RawMessage(strings.Replace(strings.Replace(string(req.Manifest), `"plugin_name":"Versioned Expert"`, `"plugin_name":"Secret Draft Name"`, 1), `"labels":[]`, `"labels":["secret-draft-tag"]`, 1))
+	if _, err = svc.Update(ctx, owner, d.Plugin.ID, req); err != nil {
+		t.Fatal(err)
+	}
+	reader := pluginsvc.Caller{UID: "reader", SpaceID: owner.SpaceID}
+	view, err := svc.Detail(ctx, reader, d.Plugin.ID, false)
+	if err != nil || view.Plugin.Name != "Versioned Expert" {
+		t.Fatalf("draft name leaked: %+v %v", view, err)
+	}
+	items, n, err := svc.List(ctx, reader, pluginsvc.ListParams{Type: model.PluginTypeExpert, Keyword: "Secret Draft Name", Limit: 20})
+	if err != nil || n != 0 || len(items) != 0 {
+		t.Fatalf("draft search leaked: %v %d %v", items, n, err)
+	}
+	items, n, err = svc.List(ctx, reader, pluginsvc.ListParams{Type: model.PluginTypeExpert, Tags: []string{"released-tag"}, Limit: 20})
+	if err != nil || n != 1 || len(items) != 1 {
+		t.Fatalf("release filters broken: %v %d %v", items, n, err)
+	}
+	tags, err := svc.ListTags(ctx, reader, pluginsvc.TagListParams{Type: model.PluginTypeExpert, Limit: 20})
+	if err != nil || len(tags) != 1 || tags[0].Name != "released-tag" {
+		t.Fatalf("draft tag leaked: %+v %v", tags, err)
+	}
+}
+
+func TestManagedRestoreRetainsHistoricalBinaryAfterReplacement(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	store := storage.NewLocal(t.TempDir(), "http://localhost")
+	svc := pluginsvc.New(repo, store).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	key := "plugins/space-a/attachments/upload.bin"
+	write := func(label, bytes string) pluginsvc.WriteRequest {
+		t.Helper()
+		if err := store.PutObject(ctx, key, strings.NewReader(bytes), int64(len(bytes)), "application/octet-stream"); err != nil {
+			t.Fatal(err)
+		}
+		req := managedWrite(label, "instructions", model.PluginVisibilityPrivate)
+		var pkg map[string]any
+		if err := json.Unmarshal(req.Package, &pkg); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(bytes))
+		pkg["attachments"] = append(pkg["attachments"].([]any), map[string]any{"path": "assets/data.bin", "content_type": "storage", "mime_type": "application/octet-stream", "content_size": len(bytes), "content_hash": "sha256:" + hex.EncodeToString(sum[:]), "storage_uri": key})
+		req.Package, _ = json.Marshal(pkg)
+		return req
+	}
+	d, err := svc.Create(ctx, owner, write("1.0.0", "old bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := d.Plugin.ID
+	v1 := *d.Plugin.CurrentVersionID
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: pid}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Update(ctx, owner, pid, write("2.0.0", "replacement bytes")); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := svc.RestoreVersion(ctx, owner, pid, v1, "3.0.0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := svc.VersionFile(ctx, owner, pid, *restored.Plugin.CurrentVersionID, "assets/data.bin", false)
+	if err != nil || string(data) != "old bytes" {
+		t.Fatalf("restored latest bytes instead of history: %q %v", data, err)
+	}
+	data, err = svc.VersionFile(ctx, owner, pid, v1, "assets/data.bin", false)
+	if err != nil || string(data) != "old bytes" {
+		t.Fatalf("source history changed: %q %v", data, err)
+	}
+}
+
+func TestManagedLegacyPublicationNeedsVerifiedBaseline(t *testing.T) {
+	database := reviewDB(t)
+	seed(t, database, seedPlugin{id: "legacy-managed", typ: "expert", visibility: "private", listingState: "published", currentVersion: "1.0.0"})
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := svc.Update(ctx, owner, "legacy-managed", managedWrite("2.0.0", "new unapproved draft", model.PluginVisibilityPrivate)); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
+		t.Fatalf("legacy draft escaped compatibility guard: %v", err)
+	}
+	if _, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: "legacy-managed"}); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
+		t.Fatalf("legacy save fabricated publication: %v", err)
+	}
+	var n int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id='legacy-managed'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("failed adoption changed history: %d %v", n, err)
+	}
+}

@@ -12,6 +12,8 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
+var ErrVersionBaselineUnavailable = errors.New("version history migration required")
+
 // WithVersionManagement gates the new publication semantics during rollout.
 // Both repository and service are configured at construction, before serving.
 func (r *Repo) WithVersionManagement(enabled bool) *Repo { r.versionManagement = enabled; return r }
@@ -135,7 +137,7 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 			return err
 		}
 		if !declared.Valid || declared.String != label || len(raw) == 0 {
-			return ErrConflict
+			return ErrVersionBaselineUnavailable
 		}
 		var artifacts []model.PluginVersionArtifact
 		if err = json.Unmarshal(raw, &artifacts); err != nil {

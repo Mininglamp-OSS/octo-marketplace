@@ -585,7 +585,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 		// Explicitly adopt a legacy published snapshot before editing it; a mutable
 		// compatibility read must not start returning a newly saved draft.
 		if !published.Valid {
-			return nil, ErrConflict
+			return nil, ErrVersionBaselineUnavailable
 		}
 	}
 	if err = guardVersionRestore(ctx, tx, before, m); err != nil {

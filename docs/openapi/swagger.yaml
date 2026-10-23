@@ -3894,6 +3894,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
             application/json:
@@ -4085,6 +4091,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
             application/json:
@@ -4152,6 +4164,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
             application/json:
@@ -4181,7 +4199,7 @@ paths:
         and marketplace admins may manage drafts; other readers can access formally
         released versions only. Original snapshots are immutable. Restoration creates
         a new draft and requires publication.
-      operationId: admin_plugin.version.file.download
+      operationId: admin_plugin.version.download
       parameters:
       - description: Plugin ID
         in: path
@@ -4211,35 +4229,42 @@ paths:
           content:
             application/octet-stream:
               schema:
-                type: file
+                type: string
+                format: binary
           description: OK
         '400':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: VALIDATION_ERROR
         '401':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: NOT_FOUND
         '409':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: CONFLICT
         '500':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: INTERNAL_ERROR
@@ -4272,11 +4297,7 @@ paths:
         content:
           application/json:
             schema:
-              oneOf:
-              - type: object
-              - $ref: '#/components/schemas/internal_api_handler_plugin.restoreVersionRequest'
-                description: New forward version label for the restored draft
-                summary: body
+              $ref: '#/components/schemas/internal_api_handler_plugin.restoreVersionRequest'
         description: New forward version label for the restored draft
         required: true
       responses:
@@ -4298,6 +4319,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
             application/json:
@@ -6862,6 +6889,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
             application/json:
@@ -7046,6 +7079,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
             application/json:
@@ -7075,7 +7114,7 @@ paths:
         and marketplace admins may manage drafts; other readers can access formally
         released versions only. Original snapshots are immutable. Restoration creates
         a new draft and requires publication.
-      operationId: plugin.version.file.download
+      operationId: plugin.version.download
       parameters:
       - description: Plugin ID
         in: path
@@ -7105,35 +7144,42 @@ paths:
           content:
             application/octet-stream:
               schema:
-                type: file
+                type: string
+                format: binary
           description: OK
         '400':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: VALIDATION_ERROR
         '401':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: NOT_FOUND
         '409':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: CONFLICT
         '500':
           content:
-            application/octet-stream:
+            application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: INTERNAL_ERROR
@@ -7166,11 +7212,7 @@ paths:
         content:
           application/json:
             schema:
-              oneOf:
-              - type: object
-              - $ref: '#/components/schemas/internal_api_handler_plugin.restoreVersionRequest'
-                description: New forward version label for the restored draft
-                summary: body
+              $ref: '#/components/schemas/internal_api_handler_plugin.restoreVersionRequest'
         description: New forward version label for the restored draft
         required: true
       responses:
@@ -7192,6 +7234,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
         '404':
           content:
             application/json:
@@ -8344,11 +8392,11 @@ paths:
       - plugin
   /plugins/versions:
     get:
-      description: List a visible Plugin's version history (one immutable snapshot
-        per save, newest first) using offset pagination. Each row is metadata only
-        (label, hashes, changelog, timestamp); full manifest/package content is fetched
-        from the plugin detail, so intermediate/rolled-back saves are not exposed
-        in bulk.
+      description: List a visible Plugin's version history using offset pagination.
+        With version management enabled, authors see saved snapshots and readers see
+        formal releases only; metadata identifies current and published heads. Full
+        content and original files use the version-specific endpoints. With the rollout
+        disabled, the legacy metadata projection applies.
       operationId: plugin.version.list
       parameters:
       - description: Plugin ID

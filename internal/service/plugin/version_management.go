@@ -13,6 +13,8 @@ import (
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
 
+var ErrVersionBaselineUnavailable = errors.New("version history migration required")
+
 // VersionStore is the concrete persistence extension used only with the rollout
 // enabled. The legacy Store contract stays compatible with existing adapters.
 type VersionStore interface {
@@ -188,10 +190,33 @@ func (s *Service) VersionFile(ctx context.Context, caller Caller, pluginID, vers
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
+	if filePath == "skill/ref.json" {
+		return nil, ErrNotFound
+	}
 	return s.versionFileBytes(ctx, p, v, filePath)
 }
 
 func (s *Service) versionFileBytes(ctx context.Context, p *model.Plugin, v *model.PluginVersion, filePath string) ([]byte, error) {
+	if key, size, digest, ok, err := legacyVersionPointer(v, filePath); err != nil {
+		return nil, err
+	} else if ok {
+		if s.storage == nil || !trustedArtifactKey(key, p.SpaceID) {
+			return nil, ErrIntegrity
+		}
+		limit := s.maxAttachmentBytes
+		if filePath == "skill/package.zip" || strings.HasSuffix(filePath, "/zip_object_key") || strings.HasSuffix(filePath, "/file_url") {
+			limit = s.maxArchiveBytes
+		}
+		data, err := s.readArtifactBytes(ctx, key, limit)
+		if err != nil {
+			return nil, ErrIntegrity
+		}
+		sum := sha256.Sum256(data)
+		if int64(len(data)) != size || digest != "sha256:"+hex.EncodeToString(sum[:]) {
+			return nil, ErrIntegrity
+		}
+		return data, nil
+	}
 	keys := attachmentKeyMap(v.AttachmentKeys)
 	for _, a := range decodePackageAttachments(v.Package) {
 		if a.Path != filePath {
@@ -232,6 +257,23 @@ func (s *Service) verifyVersionFiles(ctx context.Context, p *model.Plugin, v *mo
 	}
 	seen := map[string]bool{}
 	var total int64
+	// Review submissions predate a version inventory. Inspect their descriptor
+	// directly so approval cannot skip missing original markdown/archive bytes.
+	for _, field := range []string{"object_key", "zip_object_key", "file_url"} {
+		filePath := "skill/ref.json/" + field
+		if _, _, _, ok, err := legacyVersionPointer(v, filePath); err != nil {
+			return err
+		} else if ok {
+			data, err := s.versionFileBytes(ctx, p, v, filePath)
+			if err != nil {
+				return err
+			}
+			total += int64(len(data))
+			if total > s.maxArchiveBytes {
+				return ErrTooLarge
+			}
+		}
+	}
 	for _, a := range doc.Attachments {
 		if a.Path == "" || seen[a.Path] {
 			return ErrIntegrity
@@ -322,6 +364,9 @@ func (s *Service) adminRestore(ctx context.Context, caller Caller, old *model.Pl
 	p.SpaceID = old.SpaceID
 	p.ListingState = old.ListingState
 	p.CreatedAt = old.CreatedAt
+	p.CreatorName, p.CreatedByType = old.CreatorName, old.CreatedByType
+	p.CreatedByBotUID, p.CreatedByBotName = old.CreatedByBotUID, old.CreatedByBotName
+	p.Rating = old.Rating
 	m := mutation(*p, rels, s.audit(caller, p.ID, "restore", old, p, s.now()))
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
@@ -351,7 +396,7 @@ func (s *Service) AdminPublishVersion(ctx context.Context, caller Caller, plugin
 		return nil, err
 	}
 	if d.Plugin.CurrentVersionID == nil {
-		return nil, ErrConflict
+		return nil, ErrVersionBaselineUnavailable
 	}
 	v, err := s.ManagedVersion(ctx, caller, pluginID, *d.Plugin.CurrentVersionID, true)
 	if err != nil {
@@ -441,7 +486,7 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 	for len(queue) > 0 {
 		d := queue[0]
 		queue = queue[1:]
-		if len(out.Relations)+len(d.Relations) > 500 {
+		if len(out.Relations)+len(d.Relations) > pluginrepo.MaxGraphEdges() {
 			return nil, ErrGraphTooLarge
 		}
 		out.Relations = append(out.Relations, d.Relations...)
@@ -450,7 +495,7 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 				continue
 			}
 			seen[r.TargetPluginID] = true
-			if len(seen) > 200 {
+			if len(seen) > pluginrepo.MaxGraphNodes() {
 				return nil, ErrGraphTooLarge
 			}
 			next, err := s.Detail(ctx, caller, r.TargetPluginID, true)
@@ -465,4 +510,44 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 		}
 	}
 	return out, nil
+}
+
+func legacyVersionPointer(v *model.PluginVersion, filePath string) (key string, size int64, digest string, ok bool, err error) {
+	field := ""
+	switch filePath {
+	case "SKILL.md":
+		field = "object_key"
+	case "skill/package.zip":
+		field = "zip_object_key"
+	case "skill/ref.json/object_key":
+		field = "object_key"
+	case "skill/ref.json/zip_object_key":
+		field = "zip_object_key"
+	case "skill/ref.json/file_url":
+		field = "file_url"
+	default:
+		return
+	}
+	raw, exists := rawAttachmentContent(v.Package, "skill/ref.json")
+	if !exists {
+		return
+	}
+	var ref map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &ref) != nil {
+		err = ErrIntegrity
+		return
+	}
+	_ = json.Unmarshal(ref[field], &key)
+	if key == "" && field == "zip_object_key" {
+		field = "file_url"
+		_ = json.Unmarshal(ref[field], &key)
+	}
+	if key == "" {
+		return
+	}
+	ok = true
+	if json.Unmarshal(ref[field+"_size"], &size) != nil || json.Unmarshal(ref[field+"_hash"], &digest) != nil || size < 0 || len(digest) != 71 {
+		err = ErrIntegrity
+	}
+	return
 }

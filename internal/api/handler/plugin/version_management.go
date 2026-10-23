@@ -39,7 +39,7 @@ type historicalVersionResponse struct {
 }
 
 func historicalVersionDTO(v model.PluginVersion) historicalVersionResponse {
-	return historicalVersionResponse{Version: versionDTO(v), ManifestJSON: normalizedObjectRaw(v.Manifest), PluginJSON: normalizedObjectRaw(v.Package)}
+	return historicalVersionResponse{Version: versionDTO(v), ManifestJSON: normalizedObjectRaw(v.Manifest), PluginJSON: publicVersionPackage(v.Package)}
 }
 
 func versionService(c *gin.Context, svc any) (versionManagementService, bool) {
@@ -134,6 +134,7 @@ func restoreVersion(c *gin.Context, svc any, admin bool) {
 // @Success 200 {object} apiresponse.Data[historicalVersionResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -144,7 +145,7 @@ func (h *Handler) GetVersion(c *gin.Context) { getVersion(c, h.svc, false) }
 // @Summary Download an original historical file
 // @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
 // @Tags plugin
-// @ID plugin.version.file.download
+// @ID plugin.version.download
 // @Accept json
 // @Produce octet-stream
 // @Security Bearer
@@ -154,6 +155,7 @@ func (h *Handler) GetVersion(c *gin.Context) { getVersion(c, h.svc, false) }
 // @Success 200 {file} binary
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -174,6 +176,7 @@ func (h *Handler) DownloadVersionFile(c *gin.Context) { downloadVersionFile(c, h
 // @Success 200 {object} apiresponse.Data[detailResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -193,6 +196,7 @@ func (h *Handler) RestoreVersion(c *gin.Context) { restoreVersion(c, h.svc, fals
 // @Success 200 {object} apiresponse.Data[historicalVersionResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -203,7 +207,7 @@ func (h *AdminHandler) GetVersion(c *gin.Context) { getVersion(c, h.svc, true) }
 // @Summary Download a historical file (admin)
 // @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
 // @Tags admin_plugin
-// @ID admin_plugin.version.file.download
+// @ID admin_plugin.version.download
 // @Accept json
 // @Produce octet-stream
 // @Security Bearer
@@ -213,6 +217,7 @@ func (h *AdminHandler) GetVersion(c *gin.Context) { getVersion(c, h.svc, true) }
 // @Success 200 {file} binary
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -233,6 +238,7 @@ func (h *AdminHandler) DownloadVersionFile(c *gin.Context) { downloadVersionFile
 // @Success 200 {object} apiresponse.Data[detailResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -250,6 +256,7 @@ func (h *AdminHandler) RestoreVersion(c *gin.Context) { restoreVersion(c, h.svc,
 // @Success 200 {object} apiresponse.Data[detailResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -286,6 +293,7 @@ func (h *Handler) GetDraft(c *gin.Context) {
 // @Success 200 {object} apiresponse.OffsetList[versionResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -328,6 +336,7 @@ func (h *AdminHandler) ListVersions(c *gin.Context) {
 // @Success 200 {object} apiresponse.Data[detailResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
+// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
@@ -348,4 +357,41 @@ func (h *AdminHandler) PublishVersion(c *gin.Context) {
 		return
 	}
 	apiresponse.OK(c, detailDTO(result))
+}
+
+// The legacy skill/ref.json attachment is host metadata. Its object locations
+// are private even when the historical snapshot is authorized for public read.
+func publicVersionPackage(raw json.RawMessage) json.RawMessage {
+	var pkg map[string]any
+	if json.Unmarshal(raw, &pkg) != nil {
+		return json.RawMessage(`{}`)
+	}
+	if attachments, ok := pkg["attachments"].([]any); ok {
+		for _, item := range attachments {
+			a, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			delete(a, "storage_uri")
+			if a["path"] != "skill/ref.json" {
+				continue
+			}
+			str, _ := a["raw_content"].(string)
+			var ref map[string]any
+			if json.Unmarshal([]byte(str), &ref) != nil {
+				delete(a, "raw_content")
+				continue
+			}
+			delete(ref, "object_key")
+			delete(ref, "zip_object_key")
+			delete(ref, "file_url")
+			value, _ := json.Marshal(ref)
+			a["raw_content"] = string(value)
+		}
+	}
+	value, err := json.Marshal(pkg)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return value
 }

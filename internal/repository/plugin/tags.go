@@ -37,7 +37,12 @@ func (r *Repo) ListTags(ctx context.Context, scope Scope, f TagListFilter) ([]mo
 		from += ` JOIN plugin_placements pp ON pp.plugin_id=p.plugin_id AND pp.placement_code=? AND pp.visible=1`
 		args = append(args, f.PlacementCode)
 	}
-	from += ` JOIN JSON_TABLE(p.tags_json, '$[*]' COLUMNS (tag VARCHAR(128) CHARACTER SET utf8mb4 PATH '$')) jt`
+	tagsColumn := "p.tags_json"
+	if r.versionManagement && !f.Mine {
+		from += ` LEFT JOIN plugin_versions published_tags ON published_tags.plugin_id=p.plugin_id AND published_tags.version_id=p.published_version_id`
+		tagsColumn = `COALESCE(JSON_EXTRACT(published_tags.manifest_json,'$.labels'),p.tags_json)`
+	}
+	from += ` JOIN JSON_TABLE(` + tagsColumn + `, '$[*]' COLUMNS (tag VARCHAR(128) CHARACTER SET utf8mb4 PATH '$')) jt`
 	where := ` WHERE p.status=1 AND p.deleted_at IS NULL AND p.is_embedded=0 AND ` + visibilitySQL
 	args = append(args, scope.SpaceID, scope.CallerUID)
 	if f.Type != "" {

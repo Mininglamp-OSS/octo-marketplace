@@ -137,7 +137,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 			return nil, e
 		}
 		if detail.Plugin.CurrentVersionID == nil {
-			return nil, ErrConflict
+			return nil, ErrVersionBaselineUnavailable
 		}
 		v, e := s.ManagedVersion(ctx, caller, detail.Plugin.ID, *detail.Plugin.CurrentVersionID, false)
 		if e != nil {

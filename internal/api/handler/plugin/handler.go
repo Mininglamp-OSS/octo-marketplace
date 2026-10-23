@@ -534,7 +534,7 @@ func (h *Handler) Delete(c *gin.Context) {
 
 // ListVersions godoc
 // @Summary List plugin versions
-// @Description List a visible Plugin's version history (one immutable snapshot per save, newest first) using offset pagination. Each row is metadata only (label, hashes, changelog, timestamp); full manifest/package content is fetched from the plugin detail, so intermediate/rolled-back saves are not exposed in bulk.
+// @Description List a visible Plugin's version history using offset pagination. With version management enabled, authors see saved snapshots and readers see formal releases only; metadata identifies current and published heads. Full content and original files use the version-specific endpoints. With the rollout disabled, the legacy metadata projection applies.
 // @Tags plugin
 // @ID plugin.version.list
 // @Accept json
@@ -831,6 +831,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin graph exceeds the size cap", map[string]any{"max_nodes": pluginsvc.MaxGraphNodes(), "max_edges": pluginsvc.MaxGraphEdges()}, "The plugin references too many related plugins; contact the publisher to reduce the graph size.")
 	case errors.Is(err, pluginsvc.ErrRelationInUse):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is referenced by another live plugin", map[string]any{"conflict_reason": "relation_in_use"}, "Remove the referencing plugin relation and try again.")
+	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "version history migration is required", map[string]any{"reason": "version_migration_required"}, "Establish a verified publication baseline before enabling managed edits for this legacy resource.")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin state conflicts with an existing resource", map[string]any{"conflict_reason": "state"}, "Refresh the resource and try again.")
 	// Transient InnoDB lock contention (a deadlock victim, or a lock-wait timeout)

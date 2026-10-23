@@ -223,8 +223,13 @@ PR2/PR3 isolated test environment. It activates formal release identities,
 explicit draft reads, historical detail/file/restore endpoints, and release-only
 public content reads. Existing connectors keep current-state behavior.
 
-A published legacy expert/skill with no formal release pointer must be explicitly
-published/adopted before saving a new draft; the service does not invent release
-history from saved snapshots. Published container ZIP reupload remains blocked in
+A published expert/skill needs a formal release baseline before saving a new
+draft. Complete PR1 snapshots may be explicitly published; older records lacking
+required metadata/evidence return `version_migration_required` until the separately
+planned data migration. No release history is inferred from saved snapshots.
+The switch is a local rollout gate, not a production rollback mechanism: turning
+it off restores legacy reads, which expect current content. Do not switch it off
+on a database with unpublished managed drafts; production rollback is part of the
+later migration/cutover plan. Published container ZIP reupload remains blocked in
 this staged mode until PR3 can protect the historical embedded dependency graph.
 The old compatibility path remains available with the rollout disabled.
