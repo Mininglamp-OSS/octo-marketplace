@@ -40,7 +40,11 @@ import json
 with open('report.json') as f: report = json.load(f)
 assert len(report['resources']) == 4, report
 assert report['same_name_groups'] == [['fixture-skill-a', 'fixture-skill-b']], report
-assert report['finding_counts']['current_snapshot_missing'] == 1, report
+assert report['finding_counts'] == {
+    'attachment_metadata_unknown': 5,
+    'attachment_sidecar_invalid': 1,
+    'current_snapshot_missing': 1,
+}, report
 assert report['object_verification'] == 'not_checked', report
 print('M1 SQL inventory: expected resources, duplicate names and missing snapshot found')
 PY

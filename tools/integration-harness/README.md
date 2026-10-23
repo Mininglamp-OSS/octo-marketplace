@@ -24,6 +24,10 @@ $GO_BIN test ./...
 健康检查是 MySQL fixture 可查询性，不代表完整 Marketplace HTTP/Fleet 安装流程通过。
 本轮没有真实环境盘点或对象存储校验。数据库参数不接受用户提供的真实 DSN。
 
+fixture 包含有意的负例：5 处附件元数据缺失、1 处附件 sidecar 使用了错误的数组格式
+（fixture-skill-b）、1 个缺少 current snapshot 的技能。smoke 精确断言这三类发现的数量，
+这些告警是验收结果，并不表示样例全部满足迁移条件。
+
 ## 2026-10-24 本地验证
 
 基于 V1 `31a2759`，组合 M1、R fixture 和 I 算法提交后：`up`、`health`、
