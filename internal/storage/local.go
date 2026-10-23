@@ -27,6 +27,14 @@ func NewLocal(baseDir, baseURL string) *LocalStorage {
 	return &LocalStorage{baseDir: baseDir, baseURL: baseURL}
 }
 
+// ScratchDir is a service-owned directory under the local storage root for
+// transient spool files. Keeping tenant bytes here (rather than the shared
+// system temp dir) keeps them inside the same protected filesystem tree and
+// makes cleanup/auditing predictable.
+func (s *LocalStorage) ScratchDir() string {
+	return filepath.Join(s.baseDir, ".scratch")
+}
+
 // safePath validates and resolves a key to a safe absolute path within baseDir.
 // Existing path components are evaluated through symlinks so a link inside the
 // storage tree cannot redirect an operation outside the configured root.

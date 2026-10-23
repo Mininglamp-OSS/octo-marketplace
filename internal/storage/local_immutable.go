@@ -23,7 +23,7 @@ func (s *LocalStorage) PutImmutable(ctx context.Context, key string, r io.Reader
 	if !s.isImmutablePath(full) {
 		return false, ErrImmutableObject
 	}
-	if err = os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		return false, err
 	}
 	f, err := os.CreateTemp(filepath.Dir(full), ".version-*")

@@ -198,6 +198,35 @@ func TestFreezeUsesInlineStorageURIWhenSidecarIsMissing(t *testing.T) {
 	}
 }
 
+func TestArtifactTempFileLivesUnderStorageScratch(t *testing.T) {
+	root := t.TempDir()
+	s := New(&fakeStore{}, storage.NewLocal(root, "http://localhost"))
+	f, err := s.artifactTempFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	defer os.Remove(f.Name())
+	wantDir := filepath.Join(root, ".scratch")
+	if !strings.HasPrefix(f.Name(), wantDir+string(os.PathSeparator)) {
+		t.Fatalf("temp file %q is not under %q", f.Name(), wantDir)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("temp file mode = %o, want 0600", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(wantDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("scratch dir mode = %o, want 0700", dirInfo.Mode().Perm())
+	}
+}
+
 func TestFreezeConnectorDoesNotReadOrVersionItsConfiguration(t *testing.T) {
 	docs := &CanonicalDocuments{Package: json.RawMessage(`{}`), AttachmentKeys: json.RawMessage(`{"configuration":"mutable"}`)}
 	if err := New(&fakeStore{}).freezeVersionArtifacts(context.Background(), model.PluginTypeConnector, docs, "space-a"); err != nil {
