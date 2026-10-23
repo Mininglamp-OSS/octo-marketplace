@@ -10,10 +10,16 @@ create no pull request until the user has tested.
 - Feature flag PLUGIN_VERSION_MANAGEMENT_ENABLED defaults off until adoption,
   dependency protection and the M1 inventory are ready.
 - Saving never advances the published pointer. Approval releases the frozen
-  submission without overwriting a newer saved draft.
+  submission without overwriting a newer saved draft. A first listing also
+  applies the frozen relations to the live graph and promotes embedded children so
+  the listed container is installable by other Space members.
 - Confirmed Admin matrix: a listed system resource publishes on save/import in
   the same transaction; a delisted or draft system resource and every tenant
   resource only advance current. Connectors never enter the version model.
+- V1-window compatibility: re-publishing a listed resource with a complete
+  snapshot but no release adopts that approved snapshot as the baseline. Space
+  resources require an approved review over the same version and content; rows
+  without that evidence stay blocked for the M1/M3 inventory and migration.
 - Release labels are unique per resource and publication metadata is atomic.
 - Users can read only current-authorized releases; same-Space owners and gated
   marketplace admins can manage drafts. Every version lookup matches resource ID.

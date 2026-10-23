@@ -337,6 +337,152 @@ func TestManagedAdminTenantUpdateOnlySaves(t *testing.T) {
 	}
 }
 
+// A first listing of a container must promote its bundled rows with it, or the
+// listed expert/squad is uninstallable by anyone but its author.
+func TestManagedFirstListingPromotesEmbeddedChildren(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "container", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := d.Plugin.ID
+	seed(t, database, seedPlugin{id: "child-1", typ: "skill", visibility: "private", listingState: "draft", embedded: true, owner: owner.UID})
+	seedRelation(t, database, "rel-child", id, "child-1", "expert_skill")
+	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.Review == nil {
+		t.Fatal("missing pending review")
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
+		t.Fatal(err)
+	}
+	var visibility, listing string
+	if err = database.QueryRow(`SELECT visibility,listing_state FROM plugins WHERE plugin_id='child-1'`).Scan(&visibility, &listing); err != nil {
+		t.Fatal(err)
+	}
+	if visibility != string(model.PluginVisibilitySpace) || listing != string(model.PluginListingStatePublished) {
+		t.Fatalf("embedded child stayed %s/%s", visibility, listing)
+	}
+	var live int
+	if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_relations WHERE source_plugin_id=? AND target_plugin_id='child-1' AND deleted_at IS NULL`, id).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 1 {
+		t.Fatalf("live relation count=%d, want the frozen edge", live)
+	}
+	// Another member of the Space must be able to read the promoted child, which is
+	// what an install resolves before it counts declared relations.
+	other := pluginsvc.Caller{UID: "teammate", SpaceID: "space-a"}
+	if _, err = svc.Detail(ctx, other, "child-1", false); err != nil {
+		t.Fatalf("teammate cannot read embedded child: %v", err)
+	}
+}
+
+// Resources published during the V1 window have snapshots but no release row.
+// Pressing publish adopts the approved snapshot as the formal baseline instead of
+// dead-locking on "version_migration_required" + "label_taken".
+func TestManagedLegacyPublishedBaselineAdoption(t *testing.T) {
+	for _, visibility := range []model.PluginVisibility{model.PluginVisibilityPrivate, model.PluginVisibilitySpace} {
+		t.Run(string(visibility), func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			svc := pluginsvc.New(repo).WithVersionManagement(true)
+			ctx := context.Background()
+			owner := managedOwner()
+			if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
+				t.Fatal(err)
+			}
+			d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "approved v1", visibility))
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := d.Plugin.ID
+			pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pub.Review != nil {
+				if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Reconstruct the V1 state: immutable snapshot + listing, no release.
+			if _, err = database.Exec(`UPDATE plugins SET published_version_id=NULL WHERE plugin_id=?`, id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id=?`, id); err != nil {
+				t.Fatal(err)
+			}
+			adopted, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+			if err != nil {
+				t.Fatalf("adoption failed: %v", err)
+			}
+			if adopted.Review != nil {
+				t.Fatal("adoption opened a review instead of registering the baseline")
+			}
+			state, err := repo.GetVersionState(ctx, tenantScope(), id)
+			if err != nil || state.PublishedVersionID == nil {
+				t.Fatalf("missing adopted release: %+v %v", state, err)
+			}
+			// Editing is unblocked, and the published read still serves v1.
+			if _, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "next draft", visibility)); err != nil {
+				t.Fatalf("edit after adoption: %v", err)
+			}
+			view, err := svc.Detail(ctx, owner, id, true)
+			if err != nil || !strings.Contains(string(view.Plugin.Package), "approved v1") {
+				t.Fatalf("published read drifted: %+v %v", view, err)
+			}
+		})
+	}
+}
+
+// Adoption is evidence-gated: without an approved review over the same version
+// and content, a Space resource must stay blocked for the M1/M3 inventory rather
+// than have an arbitrary draft declared published.
+func TestManagedLegacyAdoptionRequiresApprovalEvidence(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "unverified", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := d.Plugin.ID
+	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+	if err != nil || pub.Review == nil {
+		t.Fatalf("publish=%+v err=%v", pub, err)
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec(`UPDATE plugins SET published_version_id=NULL WHERE plugin_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec(`DELETE FROM plugin_review_requests WHERE plugin_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
+		t.Fatalf("evidence-free adoption err=%v", err)
+	}
+}
+
 func TestManagedPublicationUsesExpectedHeadAndRejectsLabelReuse(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)

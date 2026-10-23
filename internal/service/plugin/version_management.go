@@ -22,6 +22,7 @@ type VersionStore interface {
 	GetManagedVersion(context.Context, pluginrepo.Scope, string, string) (*model.PluginVersion, error)
 	ListManagedVersions(context.Context, pluginrepo.Scope, string, int, int) ([]model.PluginVersion, int64, error)
 	PublishManaged(context.Context, pluginrepo.Scope, pluginrepo.PublishParams) (*model.Plugin, error)
+	AdoptPublishedBaseline(context.Context, pluginrepo.Scope, pluginrepo.AdoptParams) (*model.Plugin, error)
 }
 
 func (s *Service) WithVersionManagement(enabled bool) *Service {
@@ -57,6 +58,48 @@ func (s *Service) CurrentDetail(ctx context.Context, caller Caller, pluginID str
 		return nil, ErrNotFound
 	}
 	return d, nil
+}
+
+// adoptPublishedBaseline is the explicit compatibility path for resources that
+// were already published before managed releases existed. Re-publishing one
+// registers its approved snapshot as the formal release instead of opening a
+// review whose label the approval evidence already occupies. It returns (nil,
+// nil) when a release already exists, so the ordinary publish flow still runs.
+func (s *Service) adoptPublishedBaseline(ctx context.Context, caller Caller, d *Detail) (*Detail, error) {
+	if !s.versionManagement || d.Plugin.Type == model.PluginTypeConnector || d.Plugin.CurrentVersionID == nil {
+		return nil, nil
+	}
+	store, err := s.versionStore()
+	if err != nil {
+		return nil, err
+	}
+	sc := scope(caller)
+	state, err := store.GetVersionState(ctx, sc, d.Plugin.ID)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if state.PublishedVersionID != nil {
+		return nil, nil
+	}
+	v, err := store.GetManagedVersion(ctx, sc, d.Plugin.ID, *d.Plugin.CurrentVersionID)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if err = s.verifyVersionFiles(ctx, d.Plugin, v); err != nil {
+		return nil, err
+	}
+	published, err := store.AdoptPublishedBaseline(ctx, sc, pluginrepo.AdoptParams{
+		PluginID:          d.Plugin.ID,
+		ExpectedVersionID: v.ID,
+		OperatorID:        caller.UID,
+		OperatorName:      caller.Name,
+		RequestID:         caller.RequestID,
+	})
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	published.IconURL = s.resolveIcon(ctx, published.Icon)
+	return &Detail{Plugin: published, Relations: d.Relations}, nil
 }
 
 // publishedDetail overlays only immutable content. Current permissions, listing,

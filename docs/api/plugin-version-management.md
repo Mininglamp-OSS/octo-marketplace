@@ -1,9 +1,10 @@
-# Expert and skill version management (PR2 local rollout)
+# Expert and skill version management (V2 local rollout)
 
 Enable `PLUGIN_VERSION_MANAGEMENT_ENABLED=true` in an isolated environment built
-with the PR1 version/artifact foundation migrations and PR2 restore-source
-migration. The default is off while PR3's historical dependency protection is
-pending. Connectors keep their existing current-state behavior and review flow.
+with the V1 version/artifact foundation migrations and the restore-source
+migration. The default is off while dependency pins/protection (R1-R4), the
+inventory (M1) and the adoption case below are still being rolled out. Connectors
+keep their existing current-state behavior and review flow.
 
 ## Publication and editing
 
@@ -12,6 +13,10 @@ publication and marketplace-admin publication create a formal release and move
 `published_version_id` atomically. Space-visible publication follows the existing
 automatic/manual review policy. Approval publishes the frozen submission and
 preserves any later draft and draft relations; rejection leaves the old release.
+A **first listing** also applies the frozen edge set to the live graph and
+promotes the container's embedded skills/member experts, so another Space member
+can see and install them. A managed upgrade leaves the live draft graph alone
+because the release row carries the frozen topology the market reads.
 
 Default tenant detail, catalog content/search/tags, graph and skill artifact reads
 use released content when a formal release pointer exists. Editing uses the new
@@ -22,11 +27,15 @@ latest saved draft. History's `is_current` and `is_published` expose the distinc
 without returning unpublished content to other readers.
 
 Existing records with no formal release retain legacy read compatibility. A published resource must have a verified release baseline before saving a
-new draft. A resource already carrying complete PR1 snapshot metadata may be
-explicitly published to establish it. Older records lacking the necessary
-metadata/evidence return `409` with `reason=version_migration_required` and wait
-for the separately planned data inventory/migration; historical rows are not
-rewritten or all marked as published. Published container ZIP rebuilds are refused
+new draft. Re-publishing a listed resource that carries complete V1 snapshot
+metadata but no release registers that approved snapshot as the baseline: the
+snapshot must still match the live row (hashes and file inventory), and a
+Space-visible resource must also have an approved review request over the same
+version and content. Private resources have no review channel, so the matching
+snapshot is the evidence. Older records lacking the necessary metadata/evidence
+return `409` with `reason=version_migration_required` and wait for the separately
+planned data inventory/migration; historical rows are not rewritten or all marked
+as published. Published container ZIP rebuilds are refused
 in this staged mode pending PR3; the compatibility mode remains available with
 the rollout off. Disabling this staged switch is not a production rollback strategy: the legacy read path expects current content, so do not turn it off against a database containing unpublished managed drafts. Production switching/rollback remains gated on PR3 and the migration plan. This work does not implement fixed-version Fleet installation.
 

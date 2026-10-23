@@ -215,6 +215,116 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 	return current, nil
 }
 
+// AdoptParams identifies the already-published snapshot a compatibility adoption
+// promotes to a formal release.
+type AdoptParams struct {
+	PluginID          string
+	ExpectedVersionID string
+	OperatorID        string
+	OperatorName      string
+	RequestID         string
+}
+
+// AdoptPublishedBaseline registers the snapshot of a resource that was published
+// before managed releases existed as its formal release. The V1 rollout created
+// immutable snapshots without release identities, so without this a listed
+// resource can neither be edited (the save path refuses a missing baseline) nor
+// re-published (the approved label already occupies the submission label set).
+//
+// This is NOT a way to publish arbitrary drafts. It requires the current pointer
+// to still name the approved snapshot (size/digest inventory present, hashes
+// equal to the live row) and, for a Space resource, an approved review request
+// over exactly that version and content. A legacy row without that evidence stays
+// blocked and belongs to the M1/M3 inventory and migration.
+func (r *Repo) AdoptPublishedBaseline(ctx context.Context, scope Scope, p AdoptParams) (_ *model.Plugin, err error) {
+	defer func() { err = classifyDeadlock(err) }()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	current, err := getOwnedForUpdate(ctx, tx, scope, p.PluginID)
+	if err != nil {
+		return nil, err
+	}
+	if !versioned(current) || current.IsEmbedded {
+		return nil, ErrNotFound
+	}
+	if current.ListingState != model.PluginListingStatePublished {
+		return nil, ErrConflict
+	}
+	if current.CurrentVersionID == nil || *current.CurrentVersionID != p.ExpectedVersionID {
+		return nil, ErrConflict
+	}
+	var published sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT published_version_id FROM plugins WHERE plugin_id=?`, current.ID).Scan(&published); err != nil {
+		return nil, err
+	}
+	if published.Valid {
+		// A concurrent adoption or a real release already owns the baseline.
+		return nil, ErrConflict
+	}
+	var (
+		declared              sql.NullString
+		artifacts             []byte
+		manifestHash, pkgHash string
+	)
+	err = tx.QueryRowContext(ctx,
+		`SELECT declared_version,artifacts_json,manifest_hash,plugin_hash
+		   FROM plugin_versions WHERE plugin_id=? AND version_id=?`,
+		current.ID, p.ExpectedVersionID).Scan(&declared, &artifacts, &manifestHash, &pkgHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrVersionBaselineUnavailable
+	}
+	if err != nil {
+		return nil, err
+	}
+	// No frozen inventory means the file bytes were never detached from mutable
+	// upload keys, and unequal hashes mean the live row is a later unapproved save.
+	// Neither is evidence of what was published.
+	if !declared.Valid || declared.String == "" || len(artifacts) == 0 ||
+		manifestHash != current.ManifestHash || pkgHash != current.PluginHash {
+		return nil, ErrVersionBaselineUnavailable
+	}
+	switch current.Visibility {
+	case model.PluginVisibilitySpace:
+		if !scope.Admin {
+			var approvals int
+			err = tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM plugin_review_requests
+				  WHERE plugin_id=? AND space_id=? AND status='approved' AND version=? AND
+				        manifest_hash=? AND plugin_hash=? AND deleted_at IS NULL`,
+				current.ID, scope.SpaceID, declared.String, manifestHash, pkgHash).Scan(&approvals)
+			if err != nil {
+				return nil, err
+			}
+			if approvals == 0 {
+				return nil, ErrVersionBaselineUnavailable
+			}
+		}
+	case model.PluginVisibilitySystem, model.PluginVisibilityPublic:
+		// System rows are published by a marketplace admin; there is no review
+		// channel to point at, so the hash equality above is the evidence.
+		if !scope.Admin {
+			return nil, ErrNotFound
+		}
+	}
+	if err = r.recordRelease(ctx, tx, current, p.ExpectedVersionID, declared.String, p.OperatorID, r.now()); err != nil {
+		return nil, err
+	}
+	if err = ensureVisibleDefaultPlacement(ctx, tx, r.id, r.now(), current.ID, current.CategoryID); err != nil {
+		return nil, err
+	}
+	m := Mutation{OperatorID: p.OperatorID, OperatorName: p.OperatorName, RequestID: p.RequestID}
+	if err = insertAudit(ctx, tx, r.id(), r.now(), *current, "publish", m, current.PluginHash, current.PluginHash); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
 // publishedListProjection keeps catalog filters and displayed content on the
 // same release. Editing/admin lists retain their explicit current projection.
 func publishedListProjection(query string) string {

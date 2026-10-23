@@ -87,6 +87,20 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	if pending {
 		return nil, ErrReviewPending
 	}
+	// A listed resource published before managed releases existed has no formal
+	// release identity. Re-publishing it adopts the already-approved snapshot as
+	// the baseline; submitting a review would only collide with the label that
+	// approval evidence already occupies. (nil, nil) means a release exists and the
+	// ordinary flow below applies.
+	if s.versionManagement && detail.Plugin.ListingState == model.PluginListingStatePublished {
+		adopted, err := s.adoptPublishedBaseline(ctx, caller, detail)
+		if err != nil {
+			return nil, err
+		}
+		if adopted != nil {
+			return &PublishResult{Plugin: adopted}, nil
+		}
+	}
 
 	if detail.Plugin.Visibility == model.PluginVisibilitySpace {
 		policy, err := s.repo.GetReviewPolicy(ctx, scope(caller))
