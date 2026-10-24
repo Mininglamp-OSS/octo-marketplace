@@ -480,6 +480,9 @@ func (s *Service) freezeSubmission(ctx context.Context, caller Caller, detail *D
 		snap.Relations = rels
 	}
 	if s.references {
+		if err := rejectInlineCapabilities(plugin.Type, snap.Manifest); err != nil {
+			return pluginrepo.FrozenSnapshot{}, err
+		}
 		if err := rejectInlineCapabilities(plugin.Type, snap.Package); err != nil {
 			return pluginrepo.FrozenSnapshot{}, err
 		}

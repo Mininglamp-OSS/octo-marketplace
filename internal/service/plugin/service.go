@@ -903,6 +903,9 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 		return nil, nil, ErrInvalidRequest
 	}
 	if s.references {
+		if err := rejectInlineCapabilities(req.Type, req.Manifest); err != nil {
+			return nil, nil, err
+		}
 		if err := rejectInlineCapabilities(req.Type, req.Package); err != nil {
 			return nil, nil, err
 		}
