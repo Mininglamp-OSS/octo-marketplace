@@ -72,7 +72,19 @@ type Finding struct {
 	// Index locates attachment metadata without exposing names, paths or content.
 	Index *int `json:"attachment_index,omitempty"`
 }
+
+// Distribution counts metadata as observed, without inferring publication from a
+// listing state. Deleted rows remain separate so totals cover the entire input.
+type Distribution struct {
+	Visibility string `json:"visibility"`
+	Listing    string `json:"listing"`
+	Identity   string `json:"identity"`
+	Deleted    bool   `json:"deleted"`
+	Count      int    `json:"count"`
+}
+
 type Report struct {
+	Distribution       []Distribution `json:"distribution"`
 	Format             int            `json:"format"`
 	Scope              string         `json:"scope"`
 	ObjectVerification string         `json:"object_verification"`
@@ -87,7 +99,7 @@ type Report struct {
 // In particular names, package content, relation data, keys and URLs never leave
 // the analyzer. Same-name groups are candidates, not automatic reuse decisions.
 func Build(in Input) Report {
-	r := Report{Format: 1, Scope: "all_marketplace_resources_including_deleted", ObjectVerification: "not_checked", Resources: []Resource{}, Relations: append([]Relation{}, in.Relations...), SameNameGroups: [][]string{}, Findings: []Finding{}, Counts: map[string]int{}}
+	r := Report{Distribution: buildDistribution(in.Plugins), Format: 1, Scope: "all_marketplace_resources_including_deleted", ObjectVerification: "not_checked", Resources: []Resource{}, Relations: append([]Relation{}, in.Relations...), SameNameGroups: [][]string{}, Findings: []Finding{}, Counts: map[string]int{}}
 	add := func(code, p, v, related string) {
 		r.Findings = append(r.Findings, Finding{Code: code, PluginID: p, VersionID: v, RelatedID: related})
 	}
@@ -268,4 +280,53 @@ func inspectAttachments(r *Report, p, v string, raw, keys json.RawMessage) {
 			add("orphan_attachment_key", nil)
 		}
 	}
+}
+
+// Unknown labels are bucketed rather than copied into aggregated report fields.
+// Legacy public is explicit; converting it to system is a migration decision.
+func buildDistribution(plugins []Plugin) []Distribution {
+	type key struct {
+		visibility, listing, identity string
+		deleted                       bool
+	}
+	counts := map[key]int{}
+	for _, p := range plugins {
+		visibility := p.Visibility
+		switch visibility {
+		case "private", "space", "system":
+		case "public":
+			visibility = "legacy_public"
+		default:
+			visibility = "unknown"
+		}
+		listing := p.Listing
+		switch listing {
+		case "draft", "published", "delisted":
+		default:
+			listing = "unknown"
+		}
+		identity := "top_level"
+		if p.Embedded {
+			identity = "embedded"
+		}
+		counts[key{visibility, listing, identity, p.Deleted}]++
+	}
+	result := []Distribution{}
+	for k, n := range counts {
+		result = append(result, Distribution{k.visibility, k.listing, k.identity, k.deleted, n})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		a, b := result[i], result[j]
+		if a.Visibility != b.Visibility {
+			return a.Visibility < b.Visibility
+		}
+		if a.Listing != b.Listing {
+			return a.Listing < b.Listing
+		}
+		if a.Identity != b.Identity {
+			return a.Identity < b.Identity
+		}
+		return !a.Deleted && b.Deleted
+	})
+	return result
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -104,5 +106,51 @@ func TestReadLimitFailsWithoutPartialInventory(t *testing.T) {
 	}
 	if e = m.ExpectationsWereMet(); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestDistributionAccountsForEveryVisibilityLifecycleAndIdentity(t *testing.T) {
+	var plugins []Plugin
+	for _, visibility := range []string{"private", "space", "system"} {
+		for _, listing := range []string{"draft", "published", "delisted"} {
+			for _, embedded := range []bool{false, true} {
+				for _, deleted := range []bool{false, true} {
+					plugins = append(plugins, Plugin{ID: fmt.Sprint(len(plugins)), Visibility: visibility, Listing: listing, Embedded: embedded, Deleted: deleted})
+				}
+			}
+		}
+	}
+	got := Build(Input{Plugins: plugins}).Distribution
+	if len(got) != 36 {
+		t.Fatalf("distribution cells = %d", len(got))
+	}
+	for _, cell := range got {
+		if cell.Count != 1 {
+			t.Fatalf("unexpected cell %+v", cell)
+		}
+	}
+	for i, j := 0, len(plugins)-1; i < j; i, j = i+1, j-1 {
+		plugins[i], plugins[j] = plugins[j], plugins[i]
+	}
+	if !reflect.DeepEqual(got, Build(Input{Plugins: plugins}).Distribution) {
+		t.Fatal("distribution depends on input order")
+	}
+}
+
+func TestDistributionKeepsLegacyAndUnknownExplicit(t *testing.T) {
+	got := Build(Input{Plugins: []Plugin{
+		{Visibility: "public", Listing: "published"},
+		{Visibility: "unrecognized-secret-value", Listing: "invalid"},
+		{Visibility: "", Listing: ""},
+	}}).Distribution
+	want := []Distribution{
+		{Visibility: "legacy_public", Listing: "published", Identity: "top_level", Count: 1},
+		{Visibility: "unknown", Listing: "unknown", Identity: "top_level", Count: 2},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("distribution: %+v", got)
+	}
+	if empty := Build(Input{}).Distribution; empty == nil || len(empty) != 0 {
+		t.Fatal("empty distribution must serialize as []")
 	}
 }

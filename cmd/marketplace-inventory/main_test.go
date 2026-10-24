@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/inventory"
@@ -31,6 +32,14 @@ func TestFixtureEndToEndIsReadOnly(t *testing.T) {
 	}
 	if len(report.Resources) != 3 || report.Counts["listed_publication_unknown"] != 2 || report.ObjectVerification != "not_checked" {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+	wantDistribution := []inventory.Distribution{
+		{Visibility: "private", Listing: "draft", Identity: "top_level", Count: 1},
+		{Visibility: "private", Listing: "published", Identity: "embedded", Count: 1},
+		{Visibility: "private", Listing: "published", Identity: "top_level", Count: 1},
+	}
+	if !reflect.DeepEqual(report.Distribution, wantDistribution) {
+		t.Fatalf("distribution: %+v", report.Distribution)
 	}
 	after, err := os.ReadFile(fixture)
 	if err != nil || !bytes.Equal(original, after) {

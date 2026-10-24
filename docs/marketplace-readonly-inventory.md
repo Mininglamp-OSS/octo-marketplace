@@ -23,3 +23,18 @@ It uses four SELECT queries inside a repeatable-read read-only transaction, endi
 This iteration validates fixed fixtures only. Do not point it at production or real tenant data. A separate authorized inventory session must assess actual rollout readiness.
 
 `object_verification: not_checked` is deliberate: this tool checks metadata only. `storage_object_not_checked` does not mean an object exists or its digest is correct. Report files contain operator metadata and should not be published. Package contents, names, storage keys, paths and credential values are excluded; this is not a secret scanner.
+
+`distribution` is a sparse cross-tab of visibility × listing × identity × deleted,
+including every input resource exactly once. Visibility buckets are `private`,
+`space`, `system`, `legacy_public`, and `unknown`; listing buckets are `draft`,
+`published`, `delisted`, and `unknown`. Identity is `embedded` or `top_level`.
+Legacy `public` is reported explicitly rather than silently converted to system.
+Unknown values are not guessed. Deleted rows have their own cells. Listing is
+observed metadata, not proof of a formal release. Missing combinations have zero
+rows rather than fabricated entries; an empty input emits `distribution: []`.
+
+The isolated SQL fixture and commands are documented in
+[tools/integration-harness/README.md](../tools/integration-harness/README.md).
+Tool/sample acceptance does not authorize target-environment inventory or satisfy
+actual rollout readiness. M3 may consume evidence and exception codes, but this
+tool never creates references, releases, resources, or backfill rows.

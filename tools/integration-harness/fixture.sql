@@ -19,7 +19,11 @@ INSERT INTO plugins VALUES
  ('fixture-expert','Research','expert','fixture-alice','fixture-space-a','private','published',0,NULL,'fixture-ev1','fixture-ev1',NULL,NULL),
  ('fixture-skill-a','Search','skill','fixture-alice','fixture-space-a','private','published',1,NULL,'fixture-sv1','fixture-sv1',NULL,NULL),
  ('fixture-skill-b','Search','skill','fixture-bob','fixture-space-b','private','draft',0,NULL,NULL,NULL,JSON_OBJECT('attachments',JSON_ARRAY()),JSON_ARRAY()),
- ('fixture-connector','Search MCP','connector','fixture-alice','fixture-space-a','private','published',0,NULL,NULL,NULL,NULL,NULL);
+ ('fixture-connector','Search MCP','connector','fixture-alice','fixture-space-a','private','published',0,NULL,NULL,NULL,NULL,NULL),
+ ('fixture-space','Space MCP','connector','fixture-alice','fixture-space-a','space','published',0,NULL,NULL,NULL,JSON_OBJECT('attachments',JSON_ARRAY()),NULL),
+ ('fixture-system','System MCP','connector','fixture-alice','fixture-space-a','system','draft',0,NULL,NULL,NULL,JSON_OBJECT('attachments',JSON_ARRAY()),NULL),
+ ('fixture-legacy-public','Legacy MCP','connector','fixture-alice','fixture-space-a','public','delisted',0,NULL,NULL,NULL,JSON_OBJECT('attachments',JSON_ARRAY()),NULL),
+ ('fixture-unknown','Unknown MCP','connector','fixture-alice','fixture-space-a','other','other',0,NULL,NULL,NULL,JSON_OBJECT('attachments',JSON_ARRAY()),NULL);
 INSERT INTO plugin_versions VALUES
  ('fixture-ev1','fixture-expert',1,NULL,NULL,JSON_ARRAY(),JSON_ARRAY(JSON_OBJECT('target_plugin_id','fixture-skill-a','target_version_id','fixture-sv1'),JSON_OBJECT('target_plugin_id','fixture-connector'))),
  ('fixture-sv1','fixture-skill-a',1,NULL,NULL,JSON_ARRAY(),JSON_ARRAY());
