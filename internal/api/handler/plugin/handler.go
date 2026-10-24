@@ -835,7 +835,7 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 	case errors.Is(err, pluginsvc.ErrRelationInUse):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is referenced by another live plugin", map[string]any{"conflict_reason": "relation_in_use"}, "Remove the referencing plugin relation and try again.")
 	case errors.Is(err, pluginsvc.ErrReferenceIndexIncomplete):
-		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "historical reference indexes require verification", map[string]any{"reason": "reference_index_incomplete"}, "Run the verified historical reference index backfill before querying impact.")
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "historical reference indexes require verification", map[string]any{"reason": "reference_index_incomplete", "conflict_reason": "reference_index_incomplete"}, "Run the verified historical reference index backfill before querying impact.")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "version history migration is required", map[string]any{"reason": "version_migration_required"}, "Establish a verified publication baseline before enabling managed edits for this legacy resource.")
 	case errors.Is(err, pluginsvc.ErrConflict):
