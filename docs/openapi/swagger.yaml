@@ -312,6 +312,26 @@ components:
         pagination:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetPagination'
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_ReferenceCandidate
+    : properties:
+        data:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.ReferenceCandidate'
+          type: array
+          uniqueItems: false
+        pagination:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetPagination'
+      type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_ReferenceDependent
+    : properties:
+        data:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.ReferenceDependent'
+          type: array
+          uniqueItems: false
+        pagination:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetPagination'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-internal_api_handler_plugin_listItemResponse:
       properties:
         data:
@@ -1146,6 +1166,38 @@ components:
       - VisibilityPrivate
       - VisibilitySystem
       - VisibilitySpace
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.ReferenceCandidate:
+      properties:
+        already_bound:
+          type: boolean
+        is_selectable:
+          type: boolean
+        name:
+          type: string
+        plugin_id:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        reason:
+          type: string
+        version_id:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.ReferenceDependent:
+      properties:
+        depth:
+          type: integer
+        name:
+          type: string
+        plugin_id:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        relation_type:
+          type: string
+        version_id:
+          type: string
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_service.IconResult:
       properties:
         icon_url:
@@ -2156,6 +2208,8 @@ components:
           type: string
         target_plugin_id:
           type: string
+        target_version_id:
+          type: string
       type: object
     internal_api_handler_plugin.relationResponse:
       properties:
@@ -2170,6 +2224,8 @@ components:
         source_plugin_id:
           type: string
         target_plugin_id:
+          type: string
+        target_version_id:
           type: string
       type: object
     internal_api_handler_plugin.relationResultResponse:
@@ -3829,6 +3885,82 @@ paths:
       summary: Update plugin (admin)
       tags:
       - admin_plugin
+  /admin/plugins/{plugin_id}/dependents:
+    get:
+      description: Requires marketplace administrator role and enabled references.
+        Returns immutable historical consumers without artifact content or storage
+        keys.
+      operationId: admin_plugin.dependents.list
+      parameters:
+      - description: Target plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      - description: Optional target version ID
+        in: query
+        name: version_id
+        schema:
+          type: string
+      - description: Page number
+        in: query
+        name: page
+        schema:
+          type: integer
+      - description: Page size, at most 100
+        in: query
+        name: page_size
+        schema:
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_ReferenceDependent'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: 'CONFLICT: reference index coverage is incomplete'
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: List administrative plugin dependents
+      tags:
+      - admin_plugin
   /admin/plugins/{plugin_id}/download:
     get:
       description: Stream the reconstructed package zip of any skill plugin by id,
@@ -4138,6 +4270,10 @@ paths:
           application/x-www-form-urlencoded:
             schema:
               oneOf:
+              - title: container_schema_version
+                type: string
+              - title: version
+                type: string
               - title: file
                 type: string
               - title: category_id
@@ -4145,8 +4281,9 @@ paths:
           multipart/form-data:
             schema:
               type: object
-        description: Expert/expert_team container zip (binary) | Optional plugin category
-          for the top-level expert/team
+        description: Reference container schema version; 2 required when reference
+          writes enabled | Declared version label | Expert/expert_team container zip
+          (binary) | Optional plugin category for the top-level expert/team
       responses:
         '200':
           content:
@@ -4203,17 +4340,20 @@ paths:
       - admin_plugin
   /admin/plugins/import:
     post:
-      description: 'Ingest an uploaded expert or expert_team container archive (multipart
-        file field "file") and store it as the unified plugin graph in one transaction:
-        the expert/team plugin, its bundled skills as separate skill plugins, its
-        squad members as separate expert plugins, and the relations wiring them. Admin
-        only.'
+      description: Admin-only upload. With independent references enabled, schema
+        2 carries released skill/expert IDs and ID-only connectors; inline child packages
+        are rejected. With the rollout disabled, legacy container behavior remains
+        unchanged.
       operationId: admin_plugin.import
       requestBody:
         content:
           application/x-www-form-urlencoded:
             schema:
               oneOf:
+              - title: container_schema_version
+                type: string
+              - title: version
+                type: string
               - title: file
                 type: string
               - title: category_id
@@ -4221,8 +4361,9 @@ paths:
           multipart/form-data:
             schema:
               type: object
-        description: Expert/expert_team container zip (binary) | Optional plugin category
-          for the top-level expert/team
+        description: Reference container schema version; 2 required when reference
+          writes enabled | Declared version label | Expert/expert_team container zip
+          (binary) | Optional plugin category for the top-level expert/team
       responses:
         '200':
           content:
@@ -6627,6 +6768,83 @@ paths:
       summary: List plugins
       tags:
       - plugin
+  /plugins/{plugin_id}/dependents:
+    get:
+      description: Returns authorized direct and indirect consumers from immutable
+        reference indexes. Unverified historical index coverage returns a conflict
+        instead of a partial result. Delisting remains available regardless of these
+        diagnostic results.
+      operationId: plugin.dependents.list
+      parameters:
+      - description: Target plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      - description: Optional target version ID
+        in: query
+        name: version_id
+        schema:
+          type: string
+      - description: Page number
+        in: query
+        name: page
+        schema:
+          type: integer
+      - description: Page size, at most 100
+        in: query
+        name: page_size
+        schema:
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_ReferenceDependent'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: 'CONFLICT: reference index coverage is incomplete'
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: List historical plugin dependents
+      tags:
+      - plugin
   /plugins/{plugin_id}/draft:
     get:
       description: Requires enabled version management. Draft access is owner-only;
@@ -6802,6 +7020,81 @@ paths:
       security:
       - Bearer: []
       summary: Install a plugin through Fleet capability installation
+      tags:
+      - plugin
+  /plugins/{plugin_id}/reference_candidates:
+    get:
+      description: Returns independently published resources compatible with the source
+        audience. Already bound targets and missing release baselines are explicitly
+        unselectable; placements never determine eligibility.
+      operationId: plugin.references.list
+      parameters:
+      - description: Source plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      - description: Relation type
+        in: query
+        name: relation_type
+        required: true
+        schema:
+          enum:
+          - expert_skill
+          - expert_connector
+          - expert_team_expert
+          type: string
+      - description: Page number
+        in: query
+        name: page
+        schema:
+          type: integer
+      - description: Page size, at most 100
+        in: query
+        name: page_size
+        schema:
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_ReferenceCandidate'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: List authorized plugin reference candidates
       tags:
       - plugin
   /plugins/{plugin_id}/versions/{version_id}:

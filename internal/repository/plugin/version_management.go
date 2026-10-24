@@ -120,6 +120,9 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 	if !versioned(p) {
 		return nil
 	}
+	if err := r.validateReleaseReferences(ctx, tx, *p, versionID); err != nil {
+		return err
+	}
 	var existing string
 	err := tx.QueryRowContext(ctx, `SELECT version_id FROM plugin_version_releases WHERE plugin_id=? AND version_label=?`, p.ID, label).Scan(&existing)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {

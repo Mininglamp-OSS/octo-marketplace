@@ -44,6 +44,7 @@ type Pinger interface {
 // StorageConfig holds configuration for the skill archive storage layer.
 type StorageConfig struct {
 	PluginVersionManagementEnabled bool
+	PluginReferencesEnabled        bool
 	Driver                         string // "local" or "oss"
 	LocalDir                       string
 	BaseURL                        string
@@ -175,7 +176,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			panic("unsupported STORAGE_DRIVER: " + storageCfg.Driver)
 		}
 
-		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled)
+		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled).WithReferences(storageCfg.PluginReferencesEnabled)
 		pluginSvc.SetArtifactLimits(int64(storageCfg.MaxMB) << 20)
 		// Space review IM integration. A disabled notifier keeps the review
 		// endpoints fully functional and simply sends no approval card. Partial

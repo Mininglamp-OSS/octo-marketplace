@@ -104,6 +104,7 @@ type Config struct {
 	WriteTimeout                   time.Duration
 	IdleTimeout                    time.Duration
 	PluginVersionManagementEnabled bool
+	PluginReferencesEnabled        bool
 	ProbeAllowPrivate              bool
 	BotPublishTimeout              time.Duration
 
@@ -203,6 +204,7 @@ func Load() Config {
 		WriteTimeout:                   envDuration("HTTP_WRITE_TIMEOUT", DefaultHTTPWriteTimeout),
 		IdleTimeout:                    envDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
 		PluginVersionManagementEnabled: envBool("PLUGIN_VERSION_MANAGEMENT_ENABLED", false),
+		PluginReferencesEnabled:        envBool("PLUGIN_REFERENCES_ENABLED", false),
 		ProbeAllowPrivate:              envBool("PROBE_ALLOW_PRIVATE", false),
 		BotPublishTimeout:              envDuration("BOT_PUBLISH_TIMEOUT", DefaultBotPublishTimeout),
 
