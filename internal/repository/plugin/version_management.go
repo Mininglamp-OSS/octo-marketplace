@@ -329,17 +329,22 @@ func (r *Repo) AdoptPublishedBaseline(ctx context.Context, scope Scope, p AdoptP
 
 // publishedListProjection keeps catalog filters and displayed content on the
 // same release. Editing/admin lists retain their explicit current projection.
+// publishedVersionJoin attaches the formal release snapshot once. The projection
+// below references published_pv instead of running a correlated subquery for
+// every projected/WHERE/ORDER BY column.
+const publishedVersionJoin = ` LEFT JOIN plugin_versions published_pv ON published_pv.plugin_id=p.plugin_id AND published_pv.version_id=p.published_version_id`
+
 func publishedListProjection(query string) string {
 	value := func(column, fallback string) string {
-		return `COALESCE((SELECT ` + column + ` FROM plugin_versions pv WHERE pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id),` + fallback + `)`
+		return `COALESCE(` + column + `,` + fallback + `)`
 	}
 	return strings.NewReplacer(
-		"p.plugin_name", value(`JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name'))`, "p.plugin_name"),
-		"p.tags_json", `CASE WHEN p.published_version_id IS NULL THEN p.tags_json ELSE `+value(`CASE WHEN JSON_TYPE(JSON_EXTRACT(pv.manifest_json,'$.labels'))='ARRAY' THEN JSON_EXTRACT(pv.manifest_json,'$.labels') ELSE JSON_ARRAY() END`, "JSON_ARRAY()")+` END`,
-		"p.manifest_json", value("pv.manifest_json", "p.manifest_json"),
-		"p.manifest_hash", value("pv.manifest_hash", "p.manifest_hash"),
-		"p.plugin_hash", value("pv.plugin_hash", "p.plugin_hash"),
+		"p.plugin_name", value(`JSON_UNQUOTE(JSON_EXTRACT(published_pv.manifest_json,'$.plugin_name'))`, "p.plugin_name"),
+		"p.tags_json", `CASE WHEN p.published_version_id IS NULL THEN p.tags_json ELSE COALESCE(CASE WHEN JSON_TYPE(JSON_EXTRACT(published_pv.manifest_json,'$.labels'))='ARRAY' THEN JSON_EXTRACT(published_pv.manifest_json,'$.labels') ELSE JSON_ARRAY() END,JSON_ARRAY()) END`,
+		"p.manifest_json", value("published_pv.manifest_json", "p.manifest_json"),
+		"p.manifest_hash", value("published_pv.manifest_hash", "p.manifest_hash"),
+		"p.plugin_hash", value("published_pv.plugin_hash", "p.plugin_hash"),
 		"p.current_version_id", `COALESCE(p.published_version_id,p.current_version_id)`,
-		"p.current_version", value("pv.declared_version", "p.current_version"),
+		"p.current_version", value("published_pv.declared_version", "p.current_version"),
 	).Replace(query)
 }

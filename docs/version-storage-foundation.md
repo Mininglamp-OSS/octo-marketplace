@@ -55,7 +55,9 @@ files and freezes them at `plugins/<space>/attachments/versions/<full-sha256>`.
 Identical bytes can share an object within that Space. Local storage creates an
 absent object atomically using a hard link; S3-compatible storage uses conditional
 PUT with `If-None-Match: *`. Existing objects are read and checked rather than
-overwritten. Unsupported conditional writes fail closed.
+overwritten. Unsupported conditional writes fail closed. The bucket/proxy in
+front of OSS **must** honor `If-None-Match: *`; a gateway that strips or ignores
+the header breaks the immutability guarantee and is not supported.
 
 Generic upload, copy and delete operations cannot modify that reserved namespace.
 Changing/removing a file, publishing another version, soft-deleting a resource,

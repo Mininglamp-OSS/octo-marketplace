@@ -80,6 +80,20 @@ func TestVersionAccessArgsMatchVisibilitySQL(t *testing.T) {
 	}
 }
 
+func TestPublishedListProjectionUsesJoinedSnapshot(t *testing.T) {
+	projected := publishedListProjection("SELECT p.plugin_name,p.tags_json,p.manifest_json,p.current_version FROM plugins p")
+	if strings.Contains(projected, "(SELECT") {
+		t.Fatalf("projection still contains a correlated subquery: %s", projected)
+	}
+	if !strings.Contains(projected, "published_pv") {
+		t.Fatalf("projection does not reference the joined snapshot: %s", projected)
+	}
+	if !strings.Contains(publishedVersionJoin, "LEFT JOIN plugin_versions published_pv") ||
+		!strings.Contains(publishedVersionJoin, "published_pv.version_id=p.published_version_id") {
+		t.Fatalf("unexpected published join: %s", publishedVersionJoin)
+	}
+}
+
 func TestSavedVersionQueryShapeIsExplicit(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

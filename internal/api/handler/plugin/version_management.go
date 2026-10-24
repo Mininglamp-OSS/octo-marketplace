@@ -18,9 +18,11 @@ import (
 )
 
 // maxConcurrentVersionDownloads bounds peak historical-file heap use. Each
-// request is already capped by the service (20 MiB attachment / 100 MiB archive
-// or legacy pointer); this semaphore keeps a burst from multiplying that cap.
-const maxConcurrentVersionDownloads = 4
+// request is still returned as []byte by the service, capped at 20 MiB for an
+// attachment and 100 MiB for an archive/legacy pointer; two slots therefore bound
+// the worst case at roughly 2x100 MiB plus request overhead. Streaming the
+// verified bytes is a follow-up, not a silent unbounded buffer.
+const maxConcurrentVersionDownloads = 2
 
 var versionDownloadSlots = make(chan struct{}, maxConcurrentVersionDownloads)
 
@@ -149,6 +151,7 @@ func (h *Handler) GetVersion(c *gin.Context) { getVersion(c, h.svc, false) }
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 429 {object} apiresponse.Error "RATE_LIMITED"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /plugins/{plugin_id}/versions/{version_id}/file [get]
 func (h *Handler) DownloadVersionFile(c *gin.Context) { downloadVersionFile(c, h.svc, false) }
