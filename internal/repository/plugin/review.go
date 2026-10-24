@@ -849,6 +849,40 @@ func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topT
 	if err != nil {
 		return err
 	}
+	return promoteEmbeddedIDs(ctx, tx, childIDs, spaceID, now)
+}
+
+// promoteFrozenEmbeddedChildren lists the embedded targets declared by an
+// approved frozen topology without touching the live editable edges. A first
+// listing whose author saved a newer draft must release the submitted children,
+// not the draft's. Member experts are embedded rows and are not independently
+// editable, so their live skill edges are safe to traverse.
+func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topType model.PluginType, frozen []model.PluginRelation, spaceID string, now interface{}) error {
+	var ids []string
+	switch topType {
+	case model.PluginTypeExpert:
+		for _, rel := range frozen {
+			if rel.Type == "expert_skill" {
+				ids = append(ids, rel.TargetPluginID)
+			}
+		}
+	case model.PluginTypeExpertTeam:
+		for _, rel := range frozen {
+			if rel.Type != "expert_team_expert" {
+				continue
+			}
+			ids = append(ids, rel.TargetPluginID)
+			skills, err := embeddedRelationTargets(ctx, tx, rel.TargetPluginID, "expert_skill")
+			if err != nil {
+				return err
+			}
+			ids = append(ids, skills...)
+		}
+	}
+	return promoteEmbeddedIDs(ctx, tx, ids, spaceID, now)
+}
+
+func promoteEmbeddedIDs(ctx context.Context, tx *sql.Tx, childIDs []string, spaceID string, now interface{}) error {
 	for _, id := range childIDs {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE plugins SET visibility=?,listing_state=?,updated_at=?

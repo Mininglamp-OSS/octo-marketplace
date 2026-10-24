@@ -96,7 +96,7 @@ func downloadVersionFile(c *gin.Context, svc any, admin bool) {
 
 // GetVersion godoc
 // @Summary Get a historical plugin version
-// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
+// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable.
 // @Tags plugin
 // @ID plugin.version.get
 // @Accept json
@@ -116,7 +116,7 @@ func (h *Handler) GetVersion(c *gin.Context) { getVersion(c, h.svc, false) }
 
 // DownloadVersionFile godoc
 // @Summary Download an original historical file
-// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
+// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable.
 // @Tags plugin
 // @ID plugin.version.download
 // @Accept json
@@ -137,7 +137,7 @@ func (h *Handler) DownloadVersionFile(c *gin.Context) { downloadVersionFile(c, h
 
 // GetVersion godoc
 // @Summary Get a historical plugin version (admin)
-// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
+// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable.
 // @Tags admin_plugin
 // @ID admin_plugin.version.get
 // @Accept json

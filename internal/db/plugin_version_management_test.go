@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
+	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
@@ -631,5 +632,164 @@ func TestManagedLegacyPublicationNeedsVerifiedBaseline(t *testing.T) {
 	var n int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id='legacy-managed'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("failed adoption changed history: %d %v", n, err)
+	}
+}
+
+// installStubProvisioner records successful provision calls without Loop/Fleet.
+type installStubProvisioner struct{ agents int }
+
+func (p *installStubProvisioner) ProvisionAgentFromSpec(context.Context, expertsvc.InstallInput, expertsvc.ProvisionAgentSpec) (string, error) {
+	p.agents++
+	return "agent-1", nil
+}
+
+func (p *installStubProvisioner) ProvisionSquadFromSpec(context.Context, expertsvc.InstallInput, *model.Squad) (expertsvc.InstallSquadResult, error) {
+	p.agents++
+	return expertsvc.InstallSquadResult{SquadID: "squad-1"}, nil
+}
+
+func managedSkillWrite(label, name string, visibility model.PluginVisibility) pluginsvc.WriteRequest {
+	manifest, _ := json.Marshal(map[string]any{"$schema": "cowork-plugin-manifest-2.0.json", "plugin_name": name, "plugin_type": "skill", "name": strings.ToLower(name), "description": "fixture", "labels": []string{}, "examples": []string{}})
+	pkg, _ := json.Marshal(map[string]any{"$schema": "cowork-plugin-package-2.0.json", "attachments": []any{map[string]any{"path": "SKILL.md", "content_type": "raw", "mime_type": "text/markdown", "raw_content": "# " + name}}})
+	return pluginsvc.WriteRequest{Name: name, Type: model.PluginTypeSkill, Visibility: visibility, Version: label, Manifest: manifest, Package: pkg, Tags: json.RawMessage(`[]`)}
+}
+
+func publishManaged(t *testing.T, svc *pluginsvc.Service, owner pluginsvc.Caller, id string) {
+	t.Helper()
+	ctx := context.Background()
+	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.Review != nil {
+		if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestManagedInstallUsesReleasedRelations(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	provisioner := &installStubProvisioner{}
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithProvisioner(provisioner)
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	expert, err := svc.Create(ctx, owner, managedWrite("1.0.0", "v1", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, expert.Plugin.ID)
+	teammate := pluginsvc.Caller{UID: "teammate", SpaceID: "space-a"}
+	params := pluginsvc.InstallParams{WorkspaceID: "ws", RuntimeID: "rt"}
+	if _, err = svc.Install(ctx, teammate, expert.Plugin.ID, params); err != nil {
+		t.Fatalf("baseline install: %v", err)
+	}
+	skill, err := svc.Create(ctx, owner, managedSkillWrite("1.0.0", "Visible Skill", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, skill.Plugin.ID)
+	draft := managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)
+	draft.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skill.Plugin.ID, Type: "expert_skill"}}
+	if _, err = svc.Update(ctx, owner, expert.Plugin.ID, draft); err != nil {
+		t.Fatal(err)
+	}
+	published, err := svc.Detail(ctx, teammate, expert.Plugin.ID, true)
+	if err != nil || len(published.Relations) != 0 {
+		t.Fatalf("released graph changed: %+v %v", published.Relations, err)
+	}
+	if _, err = svc.Install(ctx, teammate, expert.Plugin.ID, params); err != nil {
+		t.Fatalf("unpublished draft broke the released install: %v", err)
+	}
+}
+
+func TestManagedFirstApprovalKeepsLaterDraftRelations(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	skillA, err := svc.Create(ctx, owner, managedSkillWrite("1.0.0", "Skill A", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, skillA.Plugin.ID)
+	skillB, err := svc.Create(ctx, owner, managedSkillWrite("1.0.0", "Skill B", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, skillB.Plugin.ID)
+	submitted := managedWrite("1.0.0", "submitted v1", model.PluginVisibilitySpace)
+	submitted.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skillA.Plugin.ID, Type: "expert_skill"}}
+	expert, err := svc.Create(ctx, owner, submitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: expert.Plugin.ID})
+	if err != nil || pub.Review == nil {
+		t.Fatalf("publish=%+v err=%v", pub, err)
+	}
+	later := managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)
+	later.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skillB.Plugin.ID, Type: "expert_skill"}}
+	updated, err := svc.Update(ctx, owner, expert.Plugin.ID, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	laterID := *updated.Plugin.CurrentVersionID
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := svc.CurrentDetail(ctx, owner, expert.Plugin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Plugin.CurrentVersionID == nil || *current.Plugin.CurrentVersionID != laterID {
+		t.Fatalf("later draft pointer lost: %+v", current.Plugin.CurrentVersionID)
+	}
+	if len(current.Relations) != 1 || current.Relations[0].TargetPluginID != skillB.Plugin.ID {
+		t.Fatalf("later draft relations overwritten: %+v", current.Relations)
+	}
+	published, err := svc.Detail(ctx, managedOwner(), expert.Plugin.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Relations) != 1 || published.Relations[0].TargetPluginID != skillA.Plugin.ID {
+		t.Fatalf("released topology changed: %+v", published.Relations)
+	}
+}
+
+func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithProvisioner(&installStubProvisioner{})
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	hidden, err := svc.Create(ctx, owner, managedSkillWrite("1.0.0", "Private Skill", model.PluginVisibilityPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: hidden.Plugin.ID}); err != nil {
+		t.Fatal(err)
+	}
+	req := managedWrite("1.0.0", "expert", model.PluginVisibilitySpace)
+	req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: hidden.Plugin.ID, Type: "expert_skill"}}
+	expert, err := svc.Create(ctx, owner, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, expert.Plugin.ID)
+	teammate := pluginsvc.Caller{UID: "teammate", SpaceID: "space-a"}
+	if _, err = svc.Install(ctx, teammate, expert.Plugin.ID, pluginsvc.InstallParams{WorkspaceID: "ws", RuntimeID: "rt"}); !errors.Is(err, pluginsvc.ErrDependencyHidden) {
+		t.Fatalf("hidden released dependency install err=%v", err)
 	}
 }

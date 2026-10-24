@@ -4049,8 +4049,7 @@ paths:
     get:
       description: Requires enabled version management and current access. Authors
         and marketplace admins may manage drafts; other readers can access formally
-        released versions only. Original snapshots are immutable. Restoration creates
-        a new draft and requires publication.
+        released versions only. Original snapshots are immutable.
       operationId: admin_plugin.version.get
       parameters:
       - description: Plugin ID
@@ -6809,8 +6808,7 @@ paths:
     get:
       description: Requires enabled version management and current access. Authors
         and marketplace admins may manage drafts; other readers can access formally
-        released versions only. Original snapshots are immutable. Restoration creates
-        a new draft and requires publication.
+        released versions only. Original snapshots are immutable.
       operationId: plugin.version.get
       parameters:
       - description: Plugin ID
@@ -6882,8 +6880,7 @@ paths:
     get:
       description: Requires enabled version management and current access. Authors
         and marketplace admins may manage drafts; other readers can access formally
-        released versions only. Original snapshots are immutable. Restoration creates
-        a new draft and requires publication.
+        released versions only. Original snapshots are immutable.
       operationId: plugin.version.download
       parameters:
       - description: Plugin ID

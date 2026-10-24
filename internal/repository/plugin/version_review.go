@@ -57,24 +57,15 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if err = ensureVisibleDefaultPlacement(ctx, tx, r.id, now, current.ID, current.CategoryID); err != nil {
 		return nil, err
 	}
-	// A first listing must also enter the LIVE graph: the frozen edge set becomes
-	// the published topology, and an expert's bundled skills / a squad's member
-	// experts are promoted alongside it. Without this the container is listed while
-	// its embedded children stay private drafts, so resolveInstallDetail resolves
-	// fewer visible targets than CountDeclaredRelations and every non-owner install
-	// fails with ErrDependencyHidden. The same steps run for the legacy approval
-	// path; a managed UPGRADE deliberately leaves the live graph alone because the
-	// author may have saved newer relations after submit, and the release row holds
-	// the frozen topology the market reads.
+	// A first listing must promote the FROZEN topology's embedded children, not
+	// the live editable graph. The author may have saved a newer draft after
+	// submitting; approval deliberately keeps that draft (content, pointer and
+	// relations), so rewriting the live edges from the older submission would make
+	// CurrentDetail report the newer version with the older relations. The release
+	// row already carries the frozen topology the market and install read, so only
+	// the embedded children of the frozen targets need to be listed alongside it.
 	if current.ListingState != model.PluginListingStatePublished {
-		reconciled, err := reconcileFrozenRelations(ctx, tx, current.ID, rels, now)
-		if err != nil {
-			return nil, err
-		}
-		if _, err = syncRelations(ctx, tx, r.id, now, current.ID, current.OwnerUID, reconciled); err != nil {
-			return nil, err
-		}
-		if err = promoteEmbeddedChildren(ctx, tx, current.ID, current.Type, scope.SpaceID, now); err != nil {
+		if err = promoteFrozenEmbeddedChildren(ctx, tx, current.Type, rels, scope.SpaceID, now); err != nil {
 			return nil, err
 		}
 	}
