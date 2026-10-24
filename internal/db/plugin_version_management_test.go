@@ -792,6 +792,13 @@ func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
 	if _, err = svc.Install(ctx, teammate, expert.Plugin.ID, pluginsvc.InstallParams{WorkspaceID: "ws", RuntimeID: "rt"}); !errors.Is(err, pluginsvc.ErrDependencyHidden) {
 		t.Fatalf("hidden released dependency install err=%v", err)
 	}
+	versions, _, err := svc.ListVersions(ctx, owner, expert.Plugin.ID, 10, 0)
+	if err != nil || len(versions) == 0 {
+		t.Fatalf("list released versions: %v %d", err, len(versions))
+	}
+	if _, err = svc.ManagedVersion(ctx, teammate, expert.Plugin.ID, versions[0].ID, false); !errors.Is(err, pluginsvc.ErrDependencyHidden) {
+		t.Fatalf("hidden released dependency historical read err=%v", err)
+	}
 }
 
 // Legacy released manifests may lack labels. Their tag projection must be empty,

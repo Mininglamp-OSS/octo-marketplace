@@ -62,6 +62,24 @@ func TestSavedVersionReadsFailClosedAcrossOwnersSpacesAndResources(t *testing.T)
 	}
 }
 
+func TestVersionAccessArgsMatchVisibilitySQL(t *testing.T) {
+	where, args := versionAccess(Scope{SpaceID: "space", CallerUID: "owner"})
+	if len(args) != 4 || args[0] != "space" || args[1] != "owner" || args[2] != "owner" || args[3] != "space" {
+		t.Fatalf("tenant args = %#v", args)
+	}
+	if got := strings.Count(where, "?"); got != len(args) {
+		t.Fatalf("placeholders=%d args=%d where=%s", got, len(args), where)
+	}
+	if !strings.Contains(where, "p.space_id = ?") || !strings.Contains(where, "p.owner_uid=? AND p.space_id=?") {
+		t.Fatalf("unexpected tenant predicate: %s", where)
+	}
+
+	adminWhere, adminArgs := versionAccess(Scope{Admin: true, SpaceID: "space", CallerUID: "admin"})
+	if adminWhere != "1=1" || len(adminArgs) != 0 {
+		t.Fatalf("admin access = %q %#v", adminWhere, adminArgs)
+	}
+}
+
 func TestSavedVersionQueryShapeIsExplicit(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

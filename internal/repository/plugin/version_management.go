@@ -55,6 +55,9 @@ func versionAccess(scope Scope) (string, []any) {
 	if scope.Admin {
 		return "1=1", nil
 	}
+	// visibilitySQL consumes (space_id, owner_uid); the appended owner/Space
+	// clause consumes (owner_uid, space_id). Keep this order explicit: a swapped
+	// pair would compare a Space ID against an owner UID.
 	return visibilitySQL + ` AND ((p.owner_uid=? AND p.space_id=?) OR rel.version_id IS NOT NULL)`, []any{scope.SpaceID, scope.CallerUID, scope.CallerUID, scope.SpaceID}
 }
 

@@ -1002,10 +1002,10 @@ func rfc5987Escape(s string) string {
 }
 
 func versionRelationSlice(pluginID, versionID string, raw json.RawMessage) []map[string]any {
-	relations, err := model.DecodeSnapshotRelations(raw)
 	if len(raw) == 0 {
 		return []map[string]any{}
 	}
+	relations, err := model.DecodeSnapshotRelations(raw)
 	if err != nil {
 		// Keep the historical page-loading behavior, but make corruption visible
 		// in logs instead of silently rendering an empty relation list.

@@ -10,11 +10,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
 )
+
+// maxConcurrentVersionDownloads bounds peak historical-file heap use. Each
+// request is already capped by the service (20 MiB attachment / 100 MiB archive
+// or legacy pointer); this semaphore keeps a burst from multiplying that cap.
+const maxConcurrentVersionDownloads = 4
+
+var versionDownloadSlots = make(chan struct{}, maxConcurrentVersionDownloads)
 
 type versionManagementService interface {
 	CurrentDetail(context.Context, pluginsvc.Caller, string) (*pluginsvc.Detail, error)
@@ -82,6 +90,16 @@ func downloadVersionFile(c *gin.Context, svc any, admin bool) {
 	if !ok {
 		return
 	}
+	select {
+	case versionDownloadSlots <- struct{}{}:
+		defer func() { <-versionDownloadSlots }()
+	default:
+		apiresponse.Fail(c, http.StatusTooManyRequests, errcode.RateLimited,
+			"too many concurrent historical file downloads",
+			map[string]any{"retry_after_seconds": 1},
+			"Retry shortly.")
+		return
+	}
 	name := c.Query("path")
 	data, err := v.VersionFile(c.Request.Context(), who, c.Param("plugin_id"), c.Param("version_id"), name, admin)
 	if err != nil {
@@ -116,7 +134,7 @@ func (h *Handler) GetVersion(c *gin.Context) { getVersion(c, h.svc, false) }
 
 // DownloadVersionFile godoc
 // @Summary Download an original historical file
-// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable.
+// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Files are bounded to 20 MiB per attachment and 100 MiB per archive/legacy pointer; concurrent downloads are capped by the service.
 // @Tags plugin
 // @ID plugin.version.download
 // @Accept json
@@ -187,6 +205,9 @@ func (h *AdminHandler) GetVersion(c *gin.Context) {
 		if a.Path == "skill/ref.json" {
 			continue
 		}
+		// is_text is advisory metadata for rendering controls, never an instruction
+		// to inject the bytes as HTML. File downloads use application/octet-stream
+		// with nosniff; clients must still escape text in an HTML context.
 		files = append(files, adminVersionFileResponse{Path: a.Path, MIMEType: a.MIME, IsText: strings.HasPrefix(a.MIME, "text/") || a.MIME == "application/json"})
 	}
 	rels := versionRelationSlice(result.PluginID, result.ID, result.Relations)
@@ -201,6 +222,7 @@ func (h *AdminHandler) GetVersion(c *gin.Context) {
 		label = *result.DeclaredVersion
 	}
 	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
 	apiresponse.OK(c, adminHistoricalVersionResponse{PluginID: result.PluginID, VersionID: result.ID, RevisionNo: result.Version, VersionLabel: label, CreatedAt: result.CreatedAt, ManifestJSON: normalizedObjectRaw(result.Manifest), Files: files, Relations: rels, RelationDigest: hex.EncodeToString(digest[:])})
 }
 
