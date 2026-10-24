@@ -252,6 +252,25 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	if relations == nil {
 		relations = []model.PluginRelation{}
 	}
+	if r.references {
+		for i := range relations {
+			if relations[i].ID == "" {
+				var known string
+				err := tx.QueryRowContext(ctx, `SELECT relation_id FROM plugin_relations WHERE source_plugin_id=? AND target_plugin_id=? AND relation_type=? AND deleted_at IS NULL LIMIT 1`, current.ID, relations[i].TargetPluginID, relations[i].Type).Scan(&known)
+				if err != nil && err != sql.ErrNoRows {
+					return err
+				}
+				if known == "" {
+					known = r.id()
+				}
+				relations[i].ID = known
+			}
+			relations[i].SourcePluginID = current.ID
+		}
+		if err := validateReferenceTree(ctx, tx, *current, *current, relations, true, map[string]bool{}, 0); err != nil {
+			return err
+		}
+	}
 	relationsJSON, err := model.EncodeSnapshotRelations(relations)
 	if err != nil {
 		return err

@@ -219,6 +219,7 @@ func main() {
 		Addr: ":" + cfg.APIPort,
 		Handler: router.Public(database, authenticator, adminAuth, router.StorageConfig{
 			PluginVersionManagementEnabled: cfg.PluginVersionManagementEnabled,
+			PluginReferencesEnabled:        cfg.PluginReferencesEnabled,
 			Driver:                         cfg.StorageDriver,
 			LocalDir:                       cfg.LocalStorageDir,
 			BaseURL:                        publicBaseURL(cfg),

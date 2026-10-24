@@ -75,6 +75,7 @@ func (h *AdminHandler) RegisterAdmin(r *gin.Engine, adminAuth *marketmiddleware.
 	plugins.POST("/container_reupload/:plugin_id", h.ReuploadContainer)
 	plugins.POST("/skill_import", h.SkillImport)
 	plugins.POST("/skill_reupload/:plugin_id", h.SkillReupload)
+	plugins.GET("/:plugin_id/dependents", h.ReferenceDependents)
 	plugins.GET("/:plugin_id", h.Get)
 	plugins.GET("/:plugin_id/versions/:version_id", h.GetVersion)
 	plugins.GET("/:plugin_id/skill_md", h.SkillMarkdown)
@@ -333,12 +334,14 @@ func (h *AdminHandler) Create(c *gin.Context) {
 
 // ImportContainer godoc
 // @Summary Import expert/expert_team container (admin)
-// @Description Ingest an uploaded expert or expert_team container archive (multipart file field "file") and store it as the unified plugin graph in one transaction: the expert/team plugin, its bundled skills as separate skill plugins, its squad members as separate expert plugins, and the relations wiring them. Admin only.
+// @Description Admin-only upload. With independent references enabled, schema 2 carries released skill/expert IDs and ID-only connectors; inline child packages are rejected. With the rollout disabled, legacy container behavior remains unchanged.
 // @Tags admin_plugin
 // @ID admin_plugin.import
 // @Accept multipart/form-data
 // @Produce json
 // @Security Bearer
+// @Param container_schema_version formData string false "Reference container schema version; 2 required when reference writes enabled"
+// @Param version formData string false "Declared version label"
 // @Param file formData string true "Expert/expert_team container zip (binary)"
 // @Param category_id formData string false "Optional plugin category for the top-level expert/team"
 // @Success 200 {object} apiresponse.Data[detailResponse]
@@ -402,7 +405,7 @@ func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImp
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "container archive is too large", map[string]any{"max_bytes": maxBytes}, "Reduce the archive size and try again.")
 		return pluginsvc.ContainerImportParams{}, false
 	}
-	params := pluginsvc.ContainerImportParams{Archive: archive}
+	params := pluginsvc.ContainerImportParams{Archive: archive, SchemaVersion: c.PostForm("container_schema_version"), Version: c.PostForm("version")}
 	if categoryID := strings.TrimSpace(c.PostForm("category_id")); categoryID != "" {
 		params.CategoryID = &categoryID
 	}
@@ -418,6 +421,8 @@ func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImp
 // @Produce json
 // @Security Bearer
 // @Param plugin_id path string true "Plugin ID"
+// @Param container_schema_version formData string false "Reference container schema version; 2 required when reference writes enabled"
+// @Param version formData string false "Declared version label"
 // @Param file formData string true "Expert/expert_team container zip (binary)"
 // @Param category_id formData string false "Optional plugin category for the top-level expert/team"
 // @Success 200 {object} apiresponse.Data[detailResponse]

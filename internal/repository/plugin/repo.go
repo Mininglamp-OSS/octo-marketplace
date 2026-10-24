@@ -157,6 +157,7 @@ type Scope struct {
 // Repo provides Plugin persistence.
 type Repo struct {
 	versionManagement bool
+	references        bool
 	db                *sql.DB
 	now               func() time.Time
 	id                func() string

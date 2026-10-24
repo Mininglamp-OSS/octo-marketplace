@@ -116,7 +116,7 @@ func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (*RelationSy
 		return nil, err
 	}
 	// A single Create is not a container graph, so no embedded target is exempt.
-	if err = lockRelationTargets(ctx, tx, scope, p.Type, m.Relations, nil); err != nil {
+	if err = r.lockReferences(ctx, tx, scope, p, m.Relations, nil); err != nil {
 		return nil, err
 	}
 	if err = insertPlugin(ctx, tx, now, p); err != nil {
@@ -131,7 +131,7 @@ func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (*RelationSy
 	}
 	var newVersionID string
 	if m.SnapshotVersion {
-		if newVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID); err != nil {
+		if newVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID, r.references); err != nil {
 			return nil, err
 		}
 	}
@@ -192,7 +192,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p
 // nil becomes an empty JSON array to satisfy the relations_json ARRAY check.
 // attachment_keys_json mirrors the current row's storage-attachment sidecar.
 // Callers hold the transaction.
-func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, p model.Plugin, relations []model.PluginRelation, changelog *string, createdBy string) (string, error) {
+func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, p model.Plugin, relations []model.PluginRelation, changelog *string, createdBy string, indexRefs ...bool) (string, error) {
 	currentVersion := "1.0.0"
 	if p.CurrentVersion != nil && *p.CurrentVersion != "" {
 		currentVersion = *p.CurrentVersion
@@ -234,6 +234,11 @@ func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now i
 	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions (version_id,plugin_id,version,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,relations_json,changelog,created_by,created_at,declared_version,snapshot_schema_version,artifacts_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		versionID, p.ID, seq, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, string(relationJSON), changelog, createdBy, now, currentVersion, model.PluginSnapshotSchemaVersion, string(artifacts)); err != nil {
 		return "", wrapped("snapshot version", err)
+	}
+	if len(indexRefs) > 0 && indexRefs[0] {
+		if err := writeReferenceIndex(ctx, tx, p.ID, versionID, relations); err != nil {
+			return "", err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,updated_at=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, currentVersion, now, p.ID); err != nil {
 		return "", wrapped("advance current version", err)
@@ -295,7 +300,7 @@ func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) (
 	syncs := make([]*RelationSync, len(nodes))
 	for i := range nodes {
 		p := nodes[i].Plugin
-		if err = lockRelationTargets(ctx, tx, scope, p.Type, nodes[i].Relations, inGraph); err != nil {
+		if err = r.lockReferences(ctx, tx, scope, p, nodes[i].Relations, inGraph); err != nil {
 			return nil, err
 		}
 		created, err := insertRelations(ctx, tx, r.id, now, p.ID, nodes[i].OperatorID, nodes[i].Relations)
@@ -311,7 +316,7 @@ func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) (
 	// import records the top's initial version. Embedded children are not flagged.
 	for i := range nodes {
 		if nodes[i].SnapshotVersion {
-			if syncs[i].NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, nodes[i].Plugin, nodes[i].Relations, nodes[i].Changelog, nodes[i].OperatorID); err != nil {
+			if syncs[i].NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, nodes[i].Plugin, nodes[i].Relations, nodes[i].Changelog, nodes[i].OperatorID, r.references); err != nil {
 				return nil, err
 			}
 		}
@@ -453,7 +458,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	}
 	for i := range newChildren {
 		p := newChildren[i].Plugin
-		if err = lockRelationTargets(ctx, tx, scope, p.Type, newChildren[i].Relations, inGraph); err != nil {
+		if err = r.lockReferences(ctx, tx, scope, p, newChildren[i].Relations, inGraph); err != nil {
 			return nil, err
 		}
 		if _, err = insertRelations(ctx, tx, r.id, now, p.ID, newChildren[i].OperatorID, newChildren[i].Relations); err != nil {
@@ -482,10 +487,10 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	// Phase 4: resync the top plugin's relations to the new children. Every new
 	// edge carries an empty ID so syncRelations inserts it and soft-deletes the
 	// leftover old top→child edges.
-	if err = lockRelationTargets(ctx, tx, scope, topPlugin.Type, top.Relations, inGraph); err != nil {
+	if err = r.lockReferences(ctx, tx, scope, topPlugin, top.Relations, inGraph); err != nil {
 		return nil, err
 	}
-	sync, err := syncRelations(ctx, tx, r.id, now, topPlugin.ID, top.OperatorID, top.Relations)
+	sync, err := syncRelations(ctx, tx, r.id, now, topPlugin.ID, top.OperatorID, top.Relations, r.references)
 	if err != nil {
 		return nil, err
 	}
@@ -499,7 +504,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	// Snapshot the rebuilt top as a new history version (its content was just
 	// swapped) and advance current_version_id/current_version onto it.
 	if top.SnapshotVersion {
-		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, topPlugin, top.Relations, top.Changelog, top.OperatorID); err != nil {
+		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, topPlugin, top.Relations, top.Changelog, top.OperatorID, r.references); err != nil {
 			return nil, err
 		}
 	}
@@ -587,6 +592,11 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 			return nil, ErrVersionBaselineUnavailable
 		}
 	}
+	if r.references && m.Plugin.Visibility != before.Visibility {
+		if err = r.rejectPublishedMutation(ctx, tx, before); err != nil {
+			return nil, err
+		}
+	}
 	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility {
 		return nil, ErrConflict
 	}
@@ -664,7 +674,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err != nil {
 		return nil, err
 	}
-	if err = lockRelationTargets(ctx, tx, scope, p.Type, m.Relations, owned); err != nil {
+	if err = r.lockReferences(ctx, tx, scope, p, m.Relations, owned); err != nil {
 		return nil, err
 	}
 	// getOwnedForUpdate already proved existence under lock; RowsAffected reports
@@ -708,7 +718,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err = syncDefaultPlacement(ctx, tx, r.id, now, p.ID, p.CategoryID); err != nil {
 		return nil, err
 	}
-	sync, err := syncRelations(ctx, tx, r.id, now, p.ID, m.OperatorID, m.Relations)
+	sync, err := syncRelations(ctx, tx, r.id, now, p.ID, m.OperatorID, m.Relations, r.references)
 	if err != nil {
 		return nil, err
 	}
@@ -732,7 +742,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	sidecarUnchanged := sameAttachmentKeys(p.AttachmentKeys, before.AttachmentKeys)
 	hasChangelog := m.Changelog != nil && *m.Changelog != ""
 	if m.SnapshotVersion && (!contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || hasChangelog) {
-		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID); err != nil {
+		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID, r.references); err != nil {
 			return nil, err
 		}
 	}
@@ -825,6 +835,9 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	defer tx.Rollback()
 	before, err := getOwnedForUpdate(ctx, tx, scope, pluginID)
 	if err != nil {
+		return err
+	}
+	if err = r.rejectPublishedMutation(ctx, tx, before); err != nil {
 		return err
 	}
 	if err = rejectLiveIncomingRelations(ctx, tx, pluginID); err != nil {
@@ -923,6 +936,9 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	defer tx.Rollback()
 	before, err := getOwnedForUpdate(ctx, tx, scope, topID)
 	if err != nil {
+		return err
+	}
+	if err = r.rejectPublishedMutation(ctx, tx, before); err != nil {
 		return err
 	}
 	if err = rejectLiveIncomingRelations(ctx, tx, topID); err != nil {
@@ -1202,6 +1218,10 @@ func insertRelationRow(ctx context.Context, tx *sql.Tx, now interface{}, source,
 	if len(x.Data) > 0 {
 		data = string(x.Data)
 	}
+	if x.TargetVersionID != nil {
+		_, err := tx.ExecContext(ctx, `INSERT INTO plugin_relations (relation_id,source_plugin_id,target_plugin_id,target_version_id,relation_type,sort_order,relation_json,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, x.ID, source, x.TargetPluginID, x.TargetVersionID, x.Type, x.SortOrder, data, x.Status, creator, now, now)
+		return err
+	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO plugin_relations (relation_id,source_plugin_id,target_plugin_id,relation_type,sort_order,relation_json,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, x.ID, source, x.TargetPluginID, x.Type, x.SortOrder, data, x.Status, creator, now, now)
 	if err != nil {
 		return wrapped("replace relations", err)
@@ -1232,7 +1252,7 @@ func insertPlacements(ctx context.Context, tx *sql.Tx, newID func() string, now 
 // under row locks: empty IDs insert, known IDs update when any field differs,
 // and live IDs missing from the submission are soft-deleted. A non-empty ID
 // that does not match a live edge of this Plugin is rejected.
-func syncRelations(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, source, creator string, desired []model.PluginRelation) (*RelationSync, error) {
+func syncRelations(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, source, creator string, desired []model.PluginRelation, stable ...bool) (*RelationSync, error) {
 	type liveEdge struct {
 		target    string
 		typ       string
@@ -1264,6 +1284,14 @@ WHERE source_plugin_id=? AND deleted_at IS NULL ORDER BY relation_id FOR UPDATE`
 	sync := &RelationSync{Created: []string{}, Updated: []string{}, Deleted: []string{}}
 	for i := range desired {
 		rel := &desired[i]
+		if rel.ID == "" && len(stable) > 0 && stable[0] {
+			for id, edge := range live {
+				if edge.target == rel.TargetPluginID && edge.typ == rel.Type {
+					rel.ID = id
+					break
+				}
+			}
+		}
 		if rel.ID == "" {
 			rel.ID = newID()
 			if err := insertRelationRow(ctx, tx, now, source, creator, *rel); err != nil {
@@ -1277,8 +1305,17 @@ WHERE source_plugin_id=? AND deleted_at IS NULL ORDER BY relation_id FOR UPDATE`
 			return nil, ErrInvalidRelation
 		}
 		delete(live, rel.ID)
+		pinEqual := true
+		pinAware := rel.TargetVersionID != nil || (len(stable) > 0 && stable[0])
+		if pinAware {
+			var old sql.NullString
+			if err := tx.QueryRowContext(ctx, `SELECT target_version_id FROM plugin_relations WHERE relation_id=? AND source_plugin_id=?`, rel.ID, source).Scan(&old); err != nil {
+				return nil, err
+			}
+			pinEqual = (!old.Valid && rel.TargetVersionID == nil) || (old.Valid && rel.TargetVersionID != nil && old.String == *rel.TargetVersionID)
+		}
 		sameData := (len(rel.Data) == 0 && !edge.data.Valid) || (len(rel.Data) > 0 && edge.data.Valid && edge.data.String == string(rel.Data))
-		if edge.target == rel.TargetPluginID && edge.typ == rel.Type && edge.sortOrder == rel.SortOrder && edge.status == rel.Status && sameData {
+		if edge.target == rel.TargetPluginID && edge.typ == rel.Type && edge.sortOrder == rel.SortOrder && edge.status == rel.Status && sameData && pinEqual {
 			continue
 		}
 		var data any
@@ -1288,6 +1325,11 @@ WHERE source_plugin_id=? AND deleted_at IS NULL ORDER BY relation_id FOR UPDATE`
 		if _, err := tx.ExecContext(ctx, `UPDATE plugin_relations SET target_plugin_id=?,relation_type=?,sort_order=?,relation_json=?,status=?,updated_at=?
 WHERE relation_id=? AND source_plugin_id=? AND deleted_at IS NULL`, rel.TargetPluginID, rel.Type, rel.SortOrder, data, rel.Status, now, rel.ID, source); err != nil {
 			return nil, wrapped("update relation", err)
+		}
+		if pinAware {
+			if _, err := tx.ExecContext(ctx, `UPDATE plugin_relations SET target_version_id=? WHERE relation_id=? AND source_plugin_id=?`, rel.TargetVersionID, rel.ID, source); err != nil {
+				return nil, err
+			}
 		}
 		sync.Updated = append(sync.Updated, rel.ID)
 	}
