@@ -3,6 +3,9 @@
 ## Goal
 Persist independent expert and skill references to immutable released versions, with ID-only current connector references, while keeping legacy behavior behind a disabled rollout gate.
 
+## Background
+Legacy containers own embedded children and resolve mutable target IDs. Independent resources require explicit released pins, audience checks and historical reverse indexes before enabling the write path.
+
 ## Load-bearing behavior
 - Resource ownership and audience remain authoritative and are rechecked under transactional locks.
 - New expert/team edges cannot reference embedded resources or carry inline capability overrides.
