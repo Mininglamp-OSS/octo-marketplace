@@ -793,3 +793,52 @@ func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
 		t.Fatalf("hidden released dependency install err=%v", err)
 	}
 }
+
+// Legacy released manifests may lack labels. Their tag projection must be empty,
+// never the mutable tags of a later unpublished draft. SQL below constructs only
+// this historical fixture shape; no production snapshot is rewritten.
+func TestManagedMissingReleaseLabelsNeverExposeDraftTags(t *testing.T) {
+	for _, labels := range []string{"missing", "null", "empty"} {
+		t.Run(labels, func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			svc := pluginsvc.New(repo).WithVersionManagement(true)
+			ctx := context.Background()
+			owner := managedOwner()
+			d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "released", model.PluginVisibilitySpace))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+				t.Fatal(err)
+			}
+			var published string
+			if err = database.QueryRow(`SELECT published_version_id FROM plugins WHERE plugin_id=?`, d.Plugin.ID).Scan(&published); err != nil {
+				t.Fatal(err)
+			}
+			if labels == "missing" {
+				_, err = database.Exec(`UPDATE plugin_versions SET manifest_json=JSON_REMOVE(manifest_json,'$.labels') WHERE version_id=?`, published)
+			} else if labels == "null" {
+				_, err = database.Exec(`UPDATE plugin_versions SET manifest_json=JSON_SET(manifest_json,'$.labels',CAST('null' AS JSON)) WHERE version_id=?`, published)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			draft := managedWrite("2.0.0", "private draft tags", model.PluginVisibilitySpace)
+			draft.Tags = json.RawMessage(`["secret-draft-tag"]`)
+			draft.Manifest = json.RawMessage(strings.Replace(string(draft.Manifest), `"labels":[]`, `"labels":["secret-draft-tag"]`, 1))
+			if _, err = svc.Update(ctx, owner, d.Plugin.ID, draft); err != nil {
+				t.Fatal(err)
+			}
+			reader := pluginsvc.Caller{UID: "reader", SpaceID: owner.SpaceID}
+			tags, err := svc.ListTags(ctx, reader, pluginsvc.TagListParams{Type: model.PluginTypeExpert, Limit: 20})
+			if err != nil || len(tags) != 0 {
+				t.Fatalf("release %s labels exposed draft tags: %+v err=%v", labels, tags, err)
+			}
+			mine, err := svc.ListTags(ctx, owner, pluginsvc.TagListParams{Type: model.PluginTypeExpert, Mine: true, Limit: 20})
+			if err != nil || len(mine) != 1 || mine[0].Name != "secret-draft-tag" {
+				t.Fatalf("author's draft tags lost: %+v err=%v", mine, err)
+			}
+		})
+	}
+}

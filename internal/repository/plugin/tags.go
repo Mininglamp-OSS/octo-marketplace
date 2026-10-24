@@ -40,7 +40,11 @@ func (r *Repo) ListTags(ctx context.Context, scope Scope, f TagListFilter) ([]mo
 	tagsColumn := "p.tags_json"
 	if r.versionManagement && !f.Mine {
 		from += ` LEFT JOIN plugin_versions published_tags ON published_tags.plugin_id=p.plugin_id AND published_tags.version_id=p.published_version_id`
-		tagsColumn = `COALESCE(JSON_EXTRACT(published_tags.manifest_json,'$.labels'),p.tags_json)`
+		// Only resources without a formal release pointer use legacy/live tags.
+		// A release with missing labels means no released tags, not permission to
+		// expose labels from a later unpublished draft. A dangling release pointer
+		// likewise fails closed instead of falling back to mutable metadata.
+		tagsColumn = `CASE WHEN p.published_version_id IS NULL THEN p.tags_json ELSE COALESCE(JSON_EXTRACT(published_tags.manifest_json,'$.labels'),JSON_ARRAY()) END`
 	}
 	from += ` JOIN JSON_TABLE(` + tagsColumn + `, '$[*]' COLUMNS (tag VARCHAR(128) CHARACTER SET utf8mb4 PATH '$')) jt`
 	where := ` WHERE p.status=1 AND p.deleted_at IS NULL AND p.is_embedded=0 AND ` + visibilitySQL
