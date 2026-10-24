@@ -95,7 +95,8 @@ type RelationSync struct {
 }
 
 // Create atomically inserts current state, one-level relations, and an audit event.
-func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (*RelationSync, error) {
+func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (_ *RelationSync, err error) {
+	defer func() { err = classifyDeadlock(err) }()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -255,7 +256,8 @@ func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now i
 // relations can reference in-graph targets, and every plugin/target is inserted
 // before any relation is validated so an intra-graph edge resolves. A failure at
 // any node rolls the whole graph back — a partial expert/squad never commits.
-func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) ([]*RelationSync, error) {
+func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) (_ []*RelationSync, err error) {
+	defer func() { err = classifyDeadlock(err) }()
 	if len(nodes) == 0 {
 		return nil, ErrInvalidRelation
 	}

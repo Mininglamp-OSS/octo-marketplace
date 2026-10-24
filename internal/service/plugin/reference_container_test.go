@@ -3,8 +3,10 @@ package plugin
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func referenceArchive(t *testing.T, files map[string]string) []byte {
@@ -51,5 +53,15 @@ func TestReferenceInlinePackageRejection(t *testing.T) {
 		if rejectInlineCapabilities("expert", json.RawMessage(raw)) == nil {
 			t.Fatalf("accepted %s", raw)
 		}
+	}
+}
+
+func TestReferenceWriteRejectsManifestInlineAbilities(t *testing.T) {
+	svc := New(nil).WithVersionManagement(true).WithReferences(true)
+	// Manifest validation permits extension fields in the shared library, so the
+	// host must reject embedded ability declarations before canonicalization.
+	_, _, err := svc.buildWrite(context.Background(), Caller{UID: "owner", SpaceID: "space"}, "", WriteRequest{Name: "Expert", Type: "expert", Visibility: "private", Manifest: json.RawMessage(`{"skills":[{"file":"skills/hidden.zip"}]}`), Package: json.RawMessage(`{"attachments":[]}`)}, time.Now(), false)
+	if err == nil {
+		t.Fatal("accepted inline skills hidden in manifest extensions")
 	}
 }
