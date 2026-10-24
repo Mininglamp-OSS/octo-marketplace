@@ -83,6 +83,9 @@ func EncodeSnapshotRelations(relations []PluginRelation) (json.RawMessage, error
 // Go field names without ever rewriting historical JSON. A mixed document with
 // conflicting spellings is refused rather than choosing an ambiguous target.
 func DecodeSnapshotRelations(raw json.RawMessage) ([]PluginRelation, error) {
+	if err := ValidateUniqueJSONFields(raw); err != nil {
+		return nil, err
+	}
 	var rows []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, err

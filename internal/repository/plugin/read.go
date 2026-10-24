@@ -315,7 +315,7 @@ ORDER BY r.sort_order,r.relation_id`, relArgs...)
 // graphEdgeColumns is the column set used by graph edge queries. It is the
 // same 12 columns GetWithRelations selects, so both paths share a scan.
 const graphEdgeColumns = `r.relation_id,r.source_plugin_id,r.target_plugin_id,p.plugin_type,r.relation_type,r.sort_order,
- r.relation_json,r.status,r.created_by,r.created_at,r.updated_at,r.deleted_at`
+ r.relation_json,r.status,r.created_by,r.created_at,r.updated_at,r.deleted_at,r.target_version_id`
 
 // graphEdgeWhere returns the target-visibility predicate and bind args for edge
 // queries (used after the source-selection clause). Admin sees every live edge;
@@ -347,9 +347,19 @@ func scanRelationRow(rows *sql.Rows) (model.PluginRelation, error) {
 		data    []byte
 		deleted sql.NullTime
 	)
-	if err := rows.Scan(&x.ID, &x.SourcePluginID, &x.TargetPluginID, &x.TargetPluginType, &x.Type, &x.SortOrder, &data, &x.Status, &x.CreatedBy, &x.CreatedAt, &x.UpdatedAt, &deleted); err != nil {
+	dest := []any{&x.ID, &x.SourcePluginID, &x.TargetPluginID, &x.TargetPluginType, &x.Type, &x.SortOrder, &data, &x.Status, &x.CreatedBy, &x.CreatedAt, &x.UpdatedAt, &deleted}
+	var pin sql.NullString
+	cols, err := rows.Columns()
+	if err != nil {
 		return x, err
 	}
+	if len(cols) == 13 {
+		dest = append(dest, &pin)
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return x, err
+	}
+	x.TargetVersionID = nullString(pin)
 	x.Data = cloneJSON(data)
 	if deleted.Valid {
 		x.DeletedAt = &deleted.Time

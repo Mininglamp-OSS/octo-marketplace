@@ -23,7 +23,7 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 		return nil, err
 	}
 	owner := Scope{CallerUID: current.OwnerUID, SpaceID: scope.SpaceID}
-	if err = lockRelationTargets(ctx, tx, owner, current.Type, rels, live); err != nil {
+	if err = r.lockReferences(ctx, tx, owner, *current, rels, live); err != nil {
 		return nil, err
 	}
 	now := p.Now
@@ -42,7 +42,7 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if changelog.Valid {
 		note = &changelog.String
 	}
-	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, p.ReviewerUID)
+	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, p.ReviewerUID, r.references)
 	if err != nil {
 		return nil, err
 	}

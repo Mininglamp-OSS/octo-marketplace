@@ -236,6 +236,7 @@ func main() {
 			OSSSigningHost:                  cfg.OSSSigningHost,
 			OSSDownloadSigned:               cfg.OSSDownloadSigned,
 			CORSAllowedOrigins:              cfg.CORSAllowedOrigins,
+			PluginReferencesEnabled:         cfg.PluginReferencesEnabled,
 		}, mcpHandler, adminMCPHandler, router.ParseConfig{
 			ParseTimeout:      cfg.SkillParseTimeout,
 			StaleTimeout:      cfg.SkillParseStaleTimeout,

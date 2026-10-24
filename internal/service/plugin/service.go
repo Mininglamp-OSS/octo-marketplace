@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -122,6 +123,7 @@ var _ Store = (*pluginrepo.Repo)(nil)
 type Service struct {
 	versionManagement   bool
 	pinnedInstallation  bool
+	references          bool
 	repo                Store
 	storage             storage.Storage
 	provisioner         Provisioner
@@ -291,11 +293,12 @@ type RelationRequest struct {
 	// updates, and live relations omitted from the submission are deleted.
 	ID string
 	// SourcePluginID, when supplied, must address the Plugin being upserted.
-	SourcePluginID string
-	TargetPluginID string
-	Type           string
-	SortOrder      int
-	Data           json.RawMessage
+	SourcePluginID  string
+	TargetPluginID  string
+	TargetVersionID *string
+	Type            string
+	SortOrder       int
+	Data            json.RawMessage
 }
 
 func scope(c Caller) pluginrepo.Scope { return pluginrepo.Scope{CallerUID: c.UID, SpaceID: c.SpaceID} }
@@ -900,6 +903,11 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	if !validName(name) || !validPluginType(req.Type) || !validVisibility(req.Visibility, c.IsSystemAdmin) {
 		return nil, nil, ErrInvalidRequest
 	}
+	if s.references {
+		if err := rejectInlineCapabilities(req.Type, req.Package); err != nil {
+			return nil, nil, err
+		}
+	}
 	docs, err := CanonicalizeDocuments(name, req.Type, req.Tags, req.Manifest, req.Package, c.SpaceID)
 	if err != nil {
 		return nil, nil, err
@@ -942,7 +950,20 @@ func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, sour
 	}
 	out := make([]model.PluginRelation, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
-	for _, r := range in {
+	for index, r := range in {
+		if s.references {
+			field := fmt.Sprintf("relations[%d].target_version_id", index)
+			if r.Type == "expert_connector" {
+				if r.TargetVersionID != nil {
+					return nil, &ReviewFieldError{Field: field, Reason: "connector_version_not_allowed", Err: ErrInvalidRequest}
+				}
+			} else if r.TargetVersionID == nil || strings.TrimSpace(*r.TargetVersionID) == "" {
+				return nil, &ReviewFieldError{Field: field, Reason: "released_version_required", Err: ErrInvalidRequest}
+			}
+		}
+		if !s.references && r.TargetVersionID != nil {
+			return nil, ErrInvalidRequest
+		}
 		relationID := strings.TrimSpace(r.ID)
 		// A relation ID can only address an existing edge, so it is meaningless
 		// while the Plugin itself is being created (source.ID is still empty).
@@ -979,7 +1000,10 @@ func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, sour
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, model.PluginRelation{ID: relationID, SourcePluginID: source.ID, SourcePluginType: source.Type, TargetPluginID: targetID, TargetPluginType: target.Type, Type: typ, SortOrder: r.SortOrder, Data: data, Status: 1, CreatedBy: c.UID, CreatedAt: now, UpdatedAt: now})
+		out = append(out, model.PluginRelation{ID: relationID, SourcePluginID: source.ID, SourcePluginType: source.Type, TargetPluginID: targetID, TargetVersionID: r.TargetVersionID, TargetPluginType: target.Type, Type: typ, SortOrder: r.SortOrder, Data: data, Status: 1, CreatedBy: c.UID, CreatedAt: now, UpdatedAt: now})
+	}
+	if err := s.validateReferenceShape(ctx, source, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -1018,6 +1042,10 @@ func mutation(p model.Plugin, relations []model.PluginRelation, audit model.Plug
 }
 
 func mapStoreError(err error) error {
+	var refErr *pluginrepo.ReferenceValidationError
+	if errors.As(err, &refErr) {
+		return &ReviewFieldError{Field: refErr.Field, Reason: refErr.Reason, Err: ErrInvalidRequest}
+	}
 	switch {
 	case err == nil:
 		return nil

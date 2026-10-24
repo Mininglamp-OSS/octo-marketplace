@@ -107,6 +107,7 @@ type Config struct {
 	PluginPinnedInstallationEnabled bool
 	ProbeAllowPrivate               bool
 	BotPublishTimeout               time.Duration
+	PluginReferencesEnabled         bool
 
 	// Parse worker configuration for skill zip async parsing.
 	SkillParseTimeout        time.Duration // single parse execution timeout
@@ -207,6 +208,7 @@ func Load() Config {
 		PluginPinnedInstallationEnabled: envBool("PLUGIN_PINNED_INSTALLATION_ENABLED", false),
 		ProbeAllowPrivate:               envBool("PROBE_ALLOW_PRIVATE", false),
 		BotPublishTimeout:               envDuration("BOT_PUBLISH_TIMEOUT", DefaultBotPublishTimeout),
+		PluginReferencesEnabled:         envBool("PLUGIN_REFERENCES_ENABLED", false),
 
 		SkillParseTimeout:        envDuration("SKILL_PARSE_TIMEOUT", 1*time.Minute),
 		SkillParseStaleTimeout:   envDuration("SKILL_PARSE_STALE_TIMEOUT", 5*time.Minute),

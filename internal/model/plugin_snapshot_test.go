@@ -35,7 +35,7 @@ func TestSnapshotRelationsStableAndLegacyCompatible(t *testing.T) {
 }
 
 func TestSnapshotRelationsRejectAmbiguousOrMalformedHistory(t *testing.T) {
-	for _, raw := range []string{`[{"TargetPluginID":"a","target_plugin_id":"b"}]`, `{}`, `[null]`, `[{"sort_order":"wrong"}]`} {
+	for _, raw := range []string{`[{"TargetPluginID":"a","target_plugin_id":"b"}]`, `{}`, `[null]`, `[{"sort_order":"wrong"}]`, `[{"target_plugin_id":"a","target_plugin_id":"b"}]`, `[{"data":{"is_leader":true,"is_leader":false}}]`} {
 		if _, err := DecodeSnapshotRelations(json.RawMessage(raw)); err == nil {
 			t.Fatalf("accepted malformed relation %s", raw)
 		}

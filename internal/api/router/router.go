@@ -61,6 +61,7 @@ type StorageConfig struct {
 	OSSSigningHost                  string
 	OSSDownloadSigned               bool
 	CORSAllowedOrigins              []string
+	PluginReferencesEnabled         bool
 }
 
 // ParseConfig holds parse worker/service configuration passed from the caller.
@@ -176,7 +177,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			panic("unsupported STORAGE_DRIVER: " + storageCfg.Driver)
 		}
 
-		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled).WithPinnedInstallation(storageCfg.PluginPinnedInstallationEnabled)
+		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled).WithReferences(storageCfg.PluginReferencesEnabled).WithPinnedInstallation(storageCfg.PluginPinnedInstallationEnabled)
 		pluginSvc.SetArtifactLimits(int64(storageCfg.MaxMB) << 20)
 		// Space review IM integration. A disabled notifier keeps the review
 		// endpoints fully functional and simply sends no approval card. Partial

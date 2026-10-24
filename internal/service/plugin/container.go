@@ -52,8 +52,10 @@ const (
 // plugin category (the free-text manifest category is display-only and not
 // mapped to a category row).
 type ContainerImportParams struct {
-	Archive    []byte
-	CategoryID *string
+	SchemaVersion string
+	Version       string
+	Archive       []byte
+	CategoryID    *string
 }
 
 // ---- parsed container model (mirrors octo-admin parseContainer.ts) ----------
@@ -105,6 +107,9 @@ type parsedContainer struct {
 // as the unified plugin graph in one transaction. It returns the top-level
 // expert/team Detail (its plugin plus the relations to its skills/members).
 func (s *Service) ImportContainer(ctx context.Context, caller Caller, p ContainerImportParams) (*Detail, error) {
+	if s.references {
+		return s.importReferenceContainer(ctx, caller, p, "")
+	}
 	if strings.TrimSpace(caller.UID) == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -142,6 +147,9 @@ func (s *Service) ImportContainer(ctx context.Context, caller Caller, p Containe
 // IsEmbedded rows. It returns the rebuilt top-level Detail, the same shape as
 // ImportContainer. The container kind must match the existing plugin's type.
 func (s *Service) ReuploadContainer(ctx context.Context, caller Caller, pluginID string, p ContainerImportParams) (*Detail, error) {
+	if s.references {
+		return s.importReferenceContainer(ctx, caller, p, pluginID)
+	}
 	if strings.TrimSpace(caller.UID) == "" {
 		return nil, ErrInvalidRequest
 	}
