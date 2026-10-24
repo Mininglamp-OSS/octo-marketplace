@@ -166,6 +166,8 @@ func TestInstallationErrorMappingAndSafeRetry(t *testing.T) {
 		{"not_found", pluginsvc.ErrNotFound, 404, "NOT_FOUND"},
 		{"hidden", pluginsvc.ErrDependencyHidden, 403, "FORBIDDEN"},
 		{"size", pluginsvc.ErrTooLarge, 413, "PAYLOAD_TOO_LARGE"},
+		{"local-conflict", pluginsvc.ErrConflict, 409, "CONFLICT"},
+		{"missing-release", pluginsvc.ErrVersionBaselineUnavailable, 409, "CONFLICT"},
 		{"validation", &pluginsvc.InstallationValidationError{Field: "runtime_id", Reason: "invalid_uuid"}, 400, "VALIDATION_ERROR"},
 		{"timeout", &pluginsvc.InstallationAttemptError{Err: errors.New("secret-env-value token internal-url")}, 503, "UPSTREAM_UNAVAILABLE"},
 		{"preparation", errors.New("secret-env-value token internal-url"), 500, "INTERNAL_ERROR"},

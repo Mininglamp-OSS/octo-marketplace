@@ -99,13 +99,14 @@ type Config struct {
 	// and rejected.
 	OctoCardActionMaxSkew time.Duration
 
-	ReadHeaderTimeout              time.Duration
-	ReadTimeout                    time.Duration
-	WriteTimeout                   time.Duration
-	IdleTimeout                    time.Duration
-	PluginVersionManagementEnabled bool
-	ProbeAllowPrivate              bool
-	BotPublishTimeout              time.Duration
+	ReadHeaderTimeout               time.Duration
+	ReadTimeout                     time.Duration
+	WriteTimeout                    time.Duration
+	IdleTimeout                     time.Duration
+	PluginVersionManagementEnabled  bool
+	PluginPinnedInstallationEnabled bool
+	ProbeAllowPrivate               bool
+	BotPublishTimeout               time.Duration
 
 	// Parse worker configuration for skill zip async parsing.
 	SkillParseTimeout        time.Duration // single parse execution timeout
@@ -198,13 +199,14 @@ func Load() Config {
 		OctoNotifyTimeout:     envDuration("OCTO_NOTIFY_TIMEOUT", 3*time.Second),
 		OctoCardActionMaxSkew: envDuration("OCTO_CARD_ACTION_MAX_SKEW", 5*time.Minute),
 
-		ReadHeaderTimeout:              envDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-		ReadTimeout:                    envDuration("HTTP_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:                   envDuration("HTTP_WRITE_TIMEOUT", DefaultHTTPWriteTimeout),
-		IdleTimeout:                    envDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
-		PluginVersionManagementEnabled: envBool("PLUGIN_VERSION_MANAGEMENT_ENABLED", false),
-		ProbeAllowPrivate:              envBool("PROBE_ALLOW_PRIVATE", false),
-		BotPublishTimeout:              envDuration("BOT_PUBLISH_TIMEOUT", DefaultBotPublishTimeout),
+		ReadHeaderTimeout:               envDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		ReadTimeout:                     envDuration("HTTP_READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:                    envDuration("HTTP_WRITE_TIMEOUT", DefaultHTTPWriteTimeout),
+		IdleTimeout:                     envDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
+		PluginVersionManagementEnabled:  envBool("PLUGIN_VERSION_MANAGEMENT_ENABLED", false),
+		PluginPinnedInstallationEnabled: envBool("PLUGIN_PINNED_INSTALLATION_ENABLED", false),
+		ProbeAllowPrivate:               envBool("PROBE_ALLOW_PRIVATE", false),
+		BotPublishTimeout:               envDuration("BOT_PUBLISH_TIMEOUT", DefaultBotPublishTimeout),
 
 		SkillParseTimeout:        envDuration("SKILL_PARSE_TIMEOUT", 1*time.Minute),
 		SkillParseStaleTimeout:   envDuration("SKILL_PARSE_STALE_TIMEOUT", 5*time.Minute),
@@ -259,6 +261,9 @@ func (c Config) IsDev() bool {
 }
 
 func (c Config) ValidateAPI() error {
+	if c.PluginPinnedInstallationEnabled && !c.PluginVersionManagementEnabled {
+		return fmt.Errorf("PLUGIN_PINNED_INSTALLATION_ENABLED requires PLUGIN_VERSION_MANAGEMENT_ENABLED")
+	}
 	if c.MySQLDSN == "" {
 		return fmt.Errorf("MYSQL_DSN is required")
 	}

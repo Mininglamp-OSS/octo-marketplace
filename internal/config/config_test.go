@@ -445,3 +445,21 @@ func TestPluginVersionManagementRolloutDefaultsOff(t *testing.T) {
 		t.Fatal("explicit local rollout ignored")
 	}
 }
+
+func TestPluginPinnedInstallationDefaultsOff(t *testing.T) {
+	t.Setenv("PLUGIN_PINNED_INSTALLATION_ENABLED", "")
+	if Load().PluginPinnedInstallationEnabled {
+		t.Fatal("pinned installation default must remain disabled")
+	}
+	t.Setenv("PLUGIN_PINNED_INSTALLATION_ENABLED", "true")
+	if !Load().PluginPinnedInstallationEnabled {
+		t.Fatal("explicit rollout ignored")
+	}
+}
+
+func TestPinnedInstallationRequiresVersionManagement(t *testing.T) {
+	c := Config{PluginPinnedInstallationEnabled: true}
+	if err := c.ValidateAPI(); err == nil || !strings.Contains(err.Error(), "PLUGIN_VERSION_MANAGEMENT_ENABLED") {
+		t.Fatalf("missing version prerequisite: %v", err)
+	}
+}

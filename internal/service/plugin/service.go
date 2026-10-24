@@ -121,6 +121,7 @@ var _ Store = (*pluginrepo.Repo)(nil)
 
 type Service struct {
 	versionManagement   bool
+	pinnedInstallation  bool
 	repo                Store
 	storage             storage.Storage
 	provisioner         Provisioner
