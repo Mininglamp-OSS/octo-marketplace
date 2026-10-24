@@ -332,7 +332,7 @@ func publishedListProjection(query string) string {
 	}
 	return strings.NewReplacer(
 		"p.plugin_name", value(`JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name'))`, "p.plugin_name"),
-		"p.tags_json", value(`JSON_EXTRACT(pv.manifest_json,'$.labels')`, "p.tags_json"),
+		"p.tags_json", `CASE WHEN p.published_version_id IS NULL THEN p.tags_json ELSE `+value(`CASE WHEN JSON_TYPE(JSON_EXTRACT(pv.manifest_json,'$.labels'))='ARRAY' THEN JSON_EXTRACT(pv.manifest_json,'$.labels') ELSE JSON_ARRAY() END`, "JSON_ARRAY()")+` END`,
 		"p.manifest_json", value("pv.manifest_json", "p.manifest_json"),
 		"p.manifest_hash", value("pv.manifest_hash", "p.manifest_hash"),
 		"p.plugin_hash", value("pv.plugin_hash", "p.plugin_hash"),

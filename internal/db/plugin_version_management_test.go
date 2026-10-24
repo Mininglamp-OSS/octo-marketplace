@@ -835,6 +835,18 @@ func TestManagedMissingReleaseLabelsNeverExposeDraftTags(t *testing.T) {
 			if err != nil || len(tags) != 0 {
 				t.Fatalf("release %s labels exposed draft tags: %+v err=%v", labels, tags, err)
 			}
+			items, _, err := svc.List(ctx, reader, pluginsvc.ListParams{Type: model.PluginTypeExpert, Limit: 20})
+			if err != nil || len(items) != 1 || string(items[0].Tags) != "[]" {
+				t.Fatalf("release %s list leaked draft tags: %+v %v", labels, items, err)
+			}
+			detail, err := svc.Detail(ctx, reader, d.Plugin.ID, true)
+			if err != nil || string(detail.Plugin.Tags) != "[]" {
+				t.Fatalf("release %s detail leaked tags: %+v %v", labels, detail, err)
+			}
+			filtered, _, err := svc.List(ctx, reader, pluginsvc.ListParams{Type: model.PluginTypeExpert, Tags: []string{"secret-draft-tag"}, Limit: 20})
+			if err != nil || len(filtered) != 0 {
+				t.Fatalf("release %s draft tag matched public filter: %+v %v", labels, filtered, err)
+			}
 			mine, err := svc.ListTags(ctx, owner, pluginsvc.TagListParams{Type: model.PluginTypeExpert, Mine: true, Limit: 20})
 			if err != nil || len(mine) != 1 || mine[0].Name != "secret-draft-tag" {
 				t.Fatalf("author's draft tags lost: %+v err=%v", mine, err)
