@@ -58,10 +58,18 @@ func TestReferenceInlinePackageRejection(t *testing.T) {
 
 func TestReferenceWriteRejectsManifestInlineAbilities(t *testing.T) {
 	svc := New(nil).WithVersionManagement(true).WithReferences(true)
-	// Manifest validation permits extension fields in the shared library, so the
-	// host must reject embedded ability declarations before canonicalization.
-	_, _, err := svc.buildWrite(context.Background(), Caller{UID: "owner", SpaceID: "space"}, "", WriteRequest{Name: "Expert", Type: "expert", Visibility: "private", Manifest: json.RawMessage(`{"skills":[{"file":"skills/hidden.zip"}]}`), Package: json.RawMessage(`{"attachments":[]}`)}, time.Now(), false)
-	if err == nil {
+	// The shared library permits manifest extension fields; prove the document
+	// is otherwise valid so rejection cannot be attributed to malformed input.
+	manifest := map[string]any{"$schema": manifestSchema, "plugin_name": "Expert", "plugin_type": "expert", "name": "Expert", "description": "fixture", "labels": []string{}, "examples": []any{}}
+	raw, _ := json.Marshal(manifest)
+	pkg := json.RawMessage(`{"$schema":"cowork-plugin-package-2.0.json","attachments":[{"path":"AGENTS.md","content_type":"raw","mime_type":"text/markdown","raw_content":"Expert instructions"}]}`)
+	req := WriteRequest{Name: "Expert", Type: "expert", Visibility: "private", Tags: json.RawMessage(`[]`), Manifest: raw, Package: pkg}
+	if _, _, err := svc.buildWrite(context.Background(), Caller{UID: "owner", SpaceID: "space"}, "", req, time.Now(), false); err != nil {
+		t.Fatalf("valid control rejected: %v", err)
+	}
+	manifest["skills"] = []map[string]string{{"file": "skills/hidden.zip"}}
+	req.Manifest, _ = json.Marshal(manifest)
+	if _, _, err := svc.buildWrite(context.Background(), Caller{UID: "owner", SpaceID: "space"}, "", req, time.Now(), false); err == nil {
 		t.Fatal("accepted inline skills hidden in manifest extensions")
 	}
 }
