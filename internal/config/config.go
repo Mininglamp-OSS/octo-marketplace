@@ -261,6 +261,9 @@ func (c Config) IsDev() bool {
 }
 
 func (c Config) ValidateAPI() error {
+	if c.PluginReferencesEnabled && !c.PluginVersionManagementEnabled {
+		return fmt.Errorf("PLUGIN_REFERENCES_ENABLED requires PLUGIN_VERSION_MANAGEMENT_ENABLED")
+	}
 	if c.MySQLDSN == "" {
 		return fmt.Errorf("MYSQL_DSN is required")
 	}

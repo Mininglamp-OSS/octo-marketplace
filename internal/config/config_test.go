@@ -445,3 +445,23 @@ func TestPluginVersionManagementRolloutDefaultsOff(t *testing.T) {
 		t.Fatal("explicit local rollout ignored")
 	}
 }
+
+func TestPluginReferencesRolloutDefaultsOffAndRequiresVersions(t *testing.T) {
+	t.Setenv("PLUGIN_REFERENCES_ENABLED", "")
+	if Load().PluginReferencesEnabled {
+		t.Fatal("references enabled without explicit rollout")
+	}
+	t.Setenv("PLUGIN_REFERENCES_ENABLED", "true")
+	if !Load().PluginReferencesEnabled {
+		t.Fatal("explicit reference setting ignored")
+	}
+	cfg := buildValid()
+	cfg.PluginReferencesEnabled = true
+	if err := cfg.ValidateAPI(); err == nil || !strings.Contains(err.Error(), "PLUGIN_VERSION_MANAGEMENT_ENABLED") {
+		t.Fatalf("missing prerequisite accepted: %v", err)
+	}
+	cfg.PluginVersionManagementEnabled = true
+	if err := cfg.ValidateAPI(); err != nil {
+		t.Fatal(err)
+	}
+}
