@@ -134,7 +134,7 @@ func TestInstallSquadHappyPath(t *testing.T) {
 	}
 }
 
-func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
+func TestInstallSquadBindsSharedSkillsToEveryMember(t *testing.T) {
 	members := []model.SquadMember{
 		{
 			MemberKey: "member_01",
@@ -179,8 +179,8 @@ func TestInstallSquadSkipsDuplicateSkillNamesAcrossMembers(t *testing.T) {
 	if got := ff.bindings["a0"]; len(got) != 2 || got[0] != "shared" || got[1] != "planner" {
 		t.Fatalf("leader bindings = %#v, want [shared planner]", got)
 	}
-	if got := ff.bindings["a1"]; len(got) != 1 || got[0] != "coder" {
-		t.Fatalf("second member bindings = %#v, want [coder]", got)
+	if got := ff.bindings["a1"]; len(got) != 2 || got[0] != "shared" || got[1] != "coder" {
+		t.Fatalf("second member bindings = %#v, want [shared coder]", got)
 	}
 	if ff.instrCalls != 1 || ff.instrValue != "1. 先分析\n2. 再执行" {
 		t.Fatalf("instruction update calls=%d value=%q", ff.instrCalls, ff.instrValue)
@@ -454,5 +454,20 @@ func TestInstallSquadHiddenSquadNotFound(t *testing.T) {
 	}
 	if ff.agentIdx != 0 {
 		t.Fatal("fleet should not be called for a hidden squad")
+	}
+}
+
+func TestSharedSkillRollbackDeletesOnlyItsCreatingMemberOnce(t *testing.T) {
+	members := []model.SquadMember{{MemberKey: "a", Name: "First", IsLeader: true, Skills: []model.SkillRef{{Name: "shared", Markdown: "shared bytes"}}}, {MemberKey: "b", Name: "Second", Skills: []model.SkillRef{{Name: "shared", Markdown: "shared bytes"}, {Name: "new", Markdown: "new bytes"}}}}
+	ff := &fakeFleet{agentIDs: []string{"a0", "a1"}, skillIDs: []string{"shared"}, skillErr: errors.New("skill failure"), failAgentAt: -1, failSkillAt: 1, failMemberAt: -1, squadID: "team"}
+	svc, caller, id := installSquadFixtureStrategies(t, ff, members, nil)
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
+		t.Fatal("expected second member skill creation failure")
+	}
+	if len(ff.deletedSkills) != 1 || ff.deletedSkills[0] != "shared" {
+		t.Fatalf("shared skill deleted by wrong member or twice: %#v", ff.deletedSkills)
+	}
+	if len(ff.deletedAgents) != 2 {
+		t.Fatalf("incomplete agent rollback: %#v", ff.deletedAgents)
 	}
 }
