@@ -13,13 +13,14 @@ import (
 
 // Mutation contains current state, replacement relations, and append-only audit metadata.
 type Mutation struct {
-	Plugin       model.Plugin
-	Relations    []model.PluginRelation
-	Placements   []model.PluginPlacement
-	OperatorID   string
-	OperatorName string
-	RequestID    string
-	Remark       *string
+	ExpectedCurrentVersionID string
+	Plugin                   model.Plugin
+	Relations                []model.PluginRelation
+	Placements               []model.PluginPlacement
+	OperatorID               string
+	OperatorName             string
+	RequestID                string
+	Remark                   *string
 	// SnapshotVersion, when set, appends one immutable plugin_versions row for this
 	// Plugin inside the write transaction and points current_version_id at it,
 	// setting current_version to the caller-declared label, so every save
@@ -134,6 +135,11 @@ func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (*RelationSy
 			return nil, err
 		}
 	}
+	if r.versionManagement && scope.Admin && p.ListingState == model.PluginListingStatePublished && newVersionID != "" {
+		if err = r.recordRelease(ctx, tx, &p, newVersionID, *p.CurrentVersion, m.OperatorID, r.now()); err != nil {
+			return nil, err
+		}
+	}
 	if err = insertAudit(ctx, tx, r.id(), now, p, "create", m, "", p.PluginHash); err != nil {
 		return nil, err
 	}
@@ -182,11 +188,32 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p
 // is a per-plugin auto-increment sequence (1, 2, 3 ...) — distinct from the
 // current_version LABEL — computed under the transaction: for Update the plugin
 // row is already FOR UPDATE-locked, and a fresh Create has no prior snapshot, so
-// the COUNT is race-free. relations is marshaled as a []model.PluginRelation, and
+// the COUNT is race-free. Relations use the stable host snapshot codec;
 // nil becomes an empty JSON array to satisfy the relations_json ARRAY check.
 // attachment_keys_json mirrors the current row's storage-attachment sidecar.
 // Callers hold the transaction.
 func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now interface{}, p model.Plugin, relations []model.PluginRelation, changelog *string, createdBy string) (string, error) {
+	currentVersion := "1.0.0"
+	if p.CurrentVersion != nil && *p.CurrentVersion != "" {
+		currentVersion = *p.CurrentVersion
+	}
+	// Connectors remain current-state resources: they get no plugin_versions row
+	// and do not move current_version_id. They DO carry a display label that the
+	// catalog, detail and review approval all read from current_version, and this
+	// helper is the only writer of that column on the save/approve paths. Skipping
+	// the pointer is required; skipping the label is a regression that makes a
+	// successful update echo a version the database never stored.
+	if p.Type == model.PluginTypeConnector {
+		// An omitted label must not reset a connector to the 1.0.0 default; only a
+		// caller-declared label advances the display version.
+		if p.CurrentVersion == nil || *p.CurrentVersion == "" {
+			return "", nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE plugins SET current_version=?,updated_at=? WHERE plugin_id=? AND deleted_at IS NULL`, *p.CurrentVersion, now, p.ID); err != nil {
+			return "", wrapped("advance current version", err)
+		}
+		return "", nil
+	}
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugin_versions WHERE plugin_id=?`, p.ID).Scan(&count); err != nil {
 		return "", wrapped("count versions", err)
@@ -195,20 +222,18 @@ func snapshotVersion(ctx context.Context, tx *sql.Tx, newID func() string, now i
 	if relations == nil {
 		relations = []model.PluginRelation{}
 	}
-	relationJSON, err := json.Marshal(relations)
+	relationJSON, err := model.EncodeSnapshotRelations(relations)
 	if err != nil {
 		return "", err
 	}
-	versionID := newID()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions (version_id,plugin_id,version,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,relations_json,changelog,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		versionID, p.ID, seq, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, string(relationJSON), changelog, createdBy, now); err != nil {
-		return "", wrapped("snapshot version", err)
+	artifacts, err := snapshotArtifacts(p)
+	if err != nil {
+		return "", wrapped("snapshot artifacts", err)
 	}
-	// current_version is the caller-declared label; fall back to "1.0.0" so the
-	// pointer is never left NULL (the service normally sets p.CurrentVersion).
-	currentVersion := "1.0.0"
-	if p.CurrentVersion != nil && *p.CurrentVersion != "" {
-		currentVersion = *p.CurrentVersion
+	versionID := newID()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions (version_id,plugin_id,version,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,relations_json,changelog,created_by,created_at,declared_version,snapshot_schema_version,artifacts_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		versionID, p.ID, seq, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, string(relationJSON), changelog, createdBy, now, currentVersion, model.PluginSnapshotSchemaVersion, string(artifacts)); err != nil {
+		return "", wrapped("snapshot version", err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,updated_at=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, currentVersion, now, p.ID); err != nil {
 		return "", wrapped("advance current version", err)
@@ -291,6 +316,16 @@ func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) (
 			}
 		}
 	}
+	if r.versionManagement && scope.Admin {
+		for i := range nodes {
+			p := nodes[i].Plugin
+			if p.ListingState == model.PluginListingStatePublished && syncs[i].NewVersionID != "" {
+				if err = r.recordRelease(ctx, tx, &p, syncs[i].NewVersionID, *p.CurrentVersion, nodes[i].OperatorID, r.now()); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	// Phase 3: append one create audit per plugin.
 	for i := range nodes {
 		if err = insertAudit(ctx, tx, r.id(), now, nodes[i].Plugin, "create", nodes[i], "", nodes[i].Plugin.PluginHash); err != nil {
@@ -341,6 +376,9 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	before, err := getOwnedForUpdate(ctx, tx, scope, topPlugin.ID)
 	if err != nil {
 		return nil, err
+	}
+	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished {
+		return nil, ErrConflict
 	}
 	if topPlugin.Type != before.Type {
 		return nil, ErrInvalidRelation
@@ -538,6 +576,20 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err != nil {
 		return nil, err
 	}
+	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished {
+		var published sql.NullString
+		if err = tx.QueryRowContext(ctx, `SELECT published_version_id FROM plugins WHERE plugin_id=?`, before.ID).Scan(&published); err != nil {
+			return nil, err
+		}
+		// Explicitly adopt a legacy published snapshot before editing it; a mutable
+		// compatibility read must not start returning a newly saved draft.
+		if !published.Valid {
+			return nil, ErrVersionBaselineUnavailable
+		}
+	}
+	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility {
+		return nil, ErrConflict
+	}
 	// A visibility change while a review is pending is refused by the service, but
 	// from an UNLOCKED read. Re-check under the plugin row lock this transaction now
 	// holds so a SubmitReview that committed after the service's read cannot slip a
@@ -575,7 +627,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	// system admin keeps the platform-operator escape hatch and is not gated here.
 	resetListing := m.ResetListingToDraft
 	if m.EnforceListingGate {
-		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace {
+		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace && !(r.versionManagement && versioned(before)) {
 			return nil, ErrListedRequiresReview
 		}
 		resetListing = before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility
@@ -681,6 +733,26 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	hasChangelog := m.Changelog != nil && *m.Changelog != ""
 	if m.SnapshotVersion && (!contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || hasChangelog) {
 		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID); err != nil {
+			return nil, err
+		}
+	}
+	// Confirmed Admin matrix: an admin save of a LISTED system resource is a
+	// publish-on-write. The frozen snapshot just inserted becomes the formal
+	// release and the published pointer moves in this same transaction, so a
+	// visible row never reads content that has no release identity. Delisted or
+	// draft system rows and every tenant row only advance current; a visibility
+	// change that drops the row back to draft must not move published either.
+	// Connectors are excluded by versioned() and produce no snapshot at all.
+	isSystemRow := before.SpaceID == nil || *before.SpaceID == ""
+	if r.versionManagement && scope.Admin && sync.NewVersionID != "" && isSystemRow && !resetListing &&
+		before.ListingState == model.PluginListingStatePublished && versioned(&p) {
+		// Mirror snapshotVersion's default so the release label always matches the
+		// declared_version stamped on the row it points at.
+		label := "1.0.0"
+		if p.CurrentVersion != nil && *p.CurrentVersion != "" {
+			label = *p.CurrentVersion
+		}
+		if err = r.recordRelease(ctx, tx, &p, sync.NewVersionID, label, m.OperatorID, r.now()); err != nil {
 			return nil, err
 		}
 	}

@@ -198,7 +198,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	// First-listing drafts are still allowed to snapshot the live row (that IS what
 	// the reviewer should see), which is why this is gated on the locked
 	// listing_state rather than applied unconditionally.
-	if !snap.DeclaredContent && current.ListingState == model.PluginListingStatePublished {
+	if !snap.DeclaredContent && current.ListingState == model.PluginListingStatePublished && !(r.versionManagement && versioned(current)) {
 		return ErrReviewContentRequired
 	}
 	// Re-run the forward-only ordering rule against the LOCKED current_version.
@@ -212,7 +212,12 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 		!model.VersionNotRegressed(*current.CurrentVersion, req.Version) {
 		return ErrVersionRegressed
 	}
-	published, err := publishedVersionLabels(ctx, tx, req.PluginID, current)
+	var published map[string]struct{}
+	if r.versionManagement && versioned(current) {
+		published, err = managedLabels(ctx, tx, req.PluginID)
+	} else {
+		published, err = publishedVersionLabels(ctx, tx, req.PluginID, current)
+	}
 	if err != nil {
 		return err
 	}
@@ -247,7 +252,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	if relations == nil {
 		relations = []model.PluginRelation{}
 	}
-	relationsJSON, err := json.Marshal(relations)
+	relationsJSON, err := model.EncodeSnapshotRelations(relations)
 	if err != nil {
 		return err
 	}
@@ -519,6 +524,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	if err != nil {
 		return nil, err
 	}
+	if r.versionManagement && versioned(current) {
+		return r.approveManagedReview(ctx, tx, scope, p, current, version, changelog, manifest, pkg, attKeys, relationBytes, manifestHash, pluginHash)
+	}
 	// Re-run the forward-only ordering rule against the LOCKED current_version
 	// before stamping the applicant's frozen label below (snapshotVersion writes
 	// plugins.current_version = version unconditionally). The insert-time check in
@@ -597,7 +605,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 
 	var frozen []model.PluginRelation
 	if len(relationBytes) > 0 {
-		if err := json.Unmarshal(relationBytes, &frozen); err != nil {
+		var err error
+		frozen, err = model.DecodeSnapshotRelations(relationBytes)
+		if err != nil {
 			return nil, wrapped("decode frozen relations", err)
 		}
 	}
@@ -839,6 +849,58 @@ func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topT
 	if err != nil {
 		return err
 	}
+	return promoteEmbeddedIDs(ctx, tx, childIDs, spaceID, now)
+}
+
+// promoteFrozenEmbeddedChildren lists the embedded targets declared by an
+// approved frozen topology without touching the live editable edges. A first
+// listing whose author saved a newer draft must release the submitted children,
+// not the draft's. A team may also reference standalone experts; their private
+// children remain inside their own publication boundary and must not be traversed.
+// Only a live embedded member in the container's owner/Space can contribute skills.
+func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, frozen []model.PluginRelation, spaceID string, now interface{}) error {
+	var ids []string
+	switch topType {
+	case model.PluginTypeExpert:
+		for _, rel := range frozen {
+			if rel.Type == "expert_skill" {
+				ids = append(ids, rel.TargetPluginID)
+			}
+		}
+	case model.PluginTypeExpertTeam:
+		for _, rel := range frozen {
+			if rel.Type != "expert_team_expert" {
+				continue
+			}
+			// The frozen edge proves membership in the approved graph, but does
+			// not prove the target is owned by that graph: standalone experts are
+			// valid reference targets too. Check the member before descending.
+			var embedded bool
+			err := tx.QueryRowContext(ctx, `SELECT p.is_embedded FROM plugins p
+WHERE p.plugin_id=? AND p.plugin_type='expert' AND p.space_id=?
+AND p.owner_uid=(SELECT owner_uid FROM plugins WHERE plugin_id=?)
+AND p.status=1 AND p.deleted_at IS NULL FOR UPDATE`, rel.TargetPluginID, spaceID, topID).Scan(&embedded)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return wrapped("check frozen embedded member", err)
+			}
+			if !embedded {
+				continue
+			}
+			ids = append(ids, rel.TargetPluginID)
+			skills, err := embeddedRelationTargets(ctx, tx, rel.TargetPluginID, "expert_skill")
+			if err != nil {
+				return err
+			}
+			ids = append(ids, skills...)
+		}
+	}
+	return promoteEmbeddedIDs(ctx, tx, ids, spaceID, now)
+}
+
+func promoteEmbeddedIDs(ctx context.Context, tx *sql.Tx, childIDs []string, spaceID string, now interface{}) error {
 	for _, id := range childIDs {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE plugins SET visibility=?,listing_state=?,updated_at=?

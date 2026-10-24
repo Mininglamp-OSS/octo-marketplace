@@ -9,6 +9,8 @@ module.exports = (schema, opts, context) => {
   }
   if (operationId === 'plugin.skill_download') return;
   if (operationId === 'admin_plugin.download') return;
+  if (operationId === 'plugin.version.download') return;
+  if (operationId === 'admin_plugin.version.download') return;
   if (!schema || !schema.properties || !schema.properties.data) {
     return [{message: '2xx response must wrap payload in envelope (top-level `data` property required) (R1)'}];
   }

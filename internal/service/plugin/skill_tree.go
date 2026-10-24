@@ -148,26 +148,29 @@ func (s *Service) buildSkillAttachmentTree(ctx context.Context, spaceID, pluginI
 				return nil, nil, nil, ErrInvalidRequest
 			}
 			key := deterministicSkillObjectKey(spaceID, pluginID, it.path, it.bytes)
-			// Content-addressed: an object already at this key holds identical bytes
-			// (a prior import/version or a live row already references it). Only a
-			// CONFIRMED absence (ErrObjectNotFound) is recorded for rollback; a
-			// transient stat error is treated as "may exist" so a later failure never
-			// deletes a shared, live-referenced object (Q3'). The upload itself is an
-			// idempotent overwrite, so it is always safe to (re)issue.
+			// Never treat a failed stat as absence, or overwrite a prior
+			// version's content-addressed file while trying to repair it.
 			_, statErr := s.storage.StatObject(ctx, key)
-			exists := statErr == nil
-			if !exists {
-				contentType := "application/octet-stream"
-				if it.isText {
-					contentType = attachmentMIME(it.path, true)
-				}
-				if putErr := s.storage.PutObject(ctx, key, bytes.NewReader(it.bytes), int64(size), contentType); putErr != nil {
+			if statErr == nil {
+				existing, err := s.readArtifactBytes(ctx, key, s.maxAttachmentBytes)
+				if err != nil {
 					s.deleteObjects(ctx, uploaded...)
-					return nil, nil, nil, fmt.Errorf("upload skill file %s: %w", it.path, putErr)
+					return nil, nil, nil, err
 				}
-				if errors.Is(statErr, storage.ErrObjectNotFound) {
-					uploaded = append(uploaded, key)
+				if !bytes.Equal(existing, it.bytes) {
+					s.deleteObjects(ctx, uploaded...)
+					return nil, nil, nil, ErrIntegrity
 				}
+			} else if errors.Is(statErr, storage.ErrObjectNotFound) {
+				contentType := attachmentMIME(it.path, it.isText)
+				if err := s.storage.PutObject(ctx, key, bytes.NewReader(it.bytes), int64(size), contentType); err != nil {
+					s.deleteObjects(ctx, uploaded...)
+					return nil, nil, nil, err
+				}
+				uploaded = append(uploaded, key)
+			} else {
+				s.deleteObjects(ctx, uploaded...)
+				return nil, nil, nil, statErr
 			}
 			if it.isText {
 				spilled = append(spilled, it.path)

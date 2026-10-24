@@ -54,7 +54,7 @@ if os.path.exists(yaml_path):
 
     # swag applies @Produce to every response and emits `type: file`, which is
     # not valid OpenAPI 3.1. Keep byte-stream success bodies explicit while
-    # restoring JSON error envelopes for the two approved download operations.
+    # restoring JSON error envelopes for explicitly enumerated download operations.
     import yaml
     with open(yaml_path) as f:
         spec = yaml.safe_load(f)
@@ -66,6 +66,8 @@ if os.path.exists(yaml_path):
         ('/plugin_review_policies', 'patch'),
         ('/admin/plugins/{plugin_id}/rating', 'patch'),
         ('/plugins/{plugin_id}/installations', 'post'),
+        ('/plugins/{plugin_id}/versions/{version_id}/restore', 'post'),
+        ('/admin/plugins/{plugin_id}/versions/{version_id}/restore', 'post'),
     )
     for path_name, method in strict_body_operations:
         operation = spec.get('paths', {}).get(path_name, {}).get(method)
@@ -111,6 +113,8 @@ if os.path.exists(yaml_path):
     streams = {
         '/plugins/download': 'application/zip',
         '/admin/plugins/{plugin_id}/download': 'application/zip',
+        '/plugins/{plugin_id}/versions/{version_id}/file': 'application/octet-stream',
+        '/admin/plugins/{plugin_id}/versions/{version_id}/file': 'application/octet-stream',
     }
     for path_name, success_media in streams.items():
         operation = spec.get('paths', {}).get(path_name, {}).get('get')

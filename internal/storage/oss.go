@@ -92,6 +92,9 @@ func NewOSS(cfg OSSConfig) (*OSSStorage, error) {
 
 // PresignPut generates a presigned PUT URL using the public endpoint.
 func (s *OSSStorage) PresignPut(ctx context.Context, key string, contentType string, expires time.Duration) (string, http.Header, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", nil, ErrImmutableObject
+	}
 	pc := s3.NewPresignClient(s.presignClient)
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -120,6 +123,9 @@ func (s *OSSStorage) PresignPut(ctx context.Context, key string, contentType str
 // PresignGet returns the public object URL when a public endpoint is configured.
 // Otherwise it falls back to a presigned URL against the storage endpoint.
 func (s *OSSStorage) PresignGet(ctx context.Context, key string, expires time.Duration) (string, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", ErrImmutableObject
+	}
 	if s.publicEndpoint != "" && !s.downloadSigned {
 		return s.publicObjectURL(key)
 	}
@@ -170,6 +176,9 @@ func (s *OSSStorage) GetObject(ctx context.Context, key string) (io.ReadCloser, 
 
 // PutObject uploads an object to storage from a reader.
 func (s *OSSStorage) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
+	if IsImmutableArtifactKey(key) {
+		return ErrImmutableObject
+	}
 	input := &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(s.key(key)),
@@ -188,6 +197,9 @@ func (s *OSSStorage) PutObject(ctx context.Context, key string, reader io.Reader
 
 // DeleteObject removes an object from storage.
 func (s *OSSStorage) DeleteObject(ctx context.Context, key string) error {
+	if IsImmutableArtifactKey(key) {
+		return ErrImmutableObject
+	}
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(s.key(key)),
@@ -200,6 +212,9 @@ func (s *OSSStorage) DeleteObject(ctx context.Context, key string) error {
 
 // CopyObject copies an object from srcKey to dstKey within the same bucket.
 func (s *OSSStorage) CopyObject(ctx context.Context, srcKey, dstKey string) error {
+	if IsImmutableArtifactKey(dstKey) {
+		return ErrImmutableObject
+	}
 	copySource := fmt.Sprintf("%s/%s", s.bucket, s.key(srcKey))
 	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucket),
@@ -218,6 +233,9 @@ func (s *OSSStorage) CopyObject(ctx context.Context, srcKey, dstKey string) erro
 // GET at this path. OSS_PUBLIC_ENDPOINT must be configured; otherwise there is
 // no stable non-signed URL we can return.
 func (s *OSSStorage) PublicURL(_ context.Context, key string) (string, error) {
+	if IsImmutableArtifactKey(key) {
+		return "", ErrImmutableObject
+	}
 	if s.publicEndpoint == "" {
 		return "", fmt.Errorf("OSS_PUBLIC_ENDPOINT not configured; cannot construct a persistent public URL")
 	}

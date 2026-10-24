@@ -4,6 +4,8 @@ module.exports = (operation) => {
   const byteStreams = {
     'plugin.skill_download': 'application/zip',
     'admin_plugin.download': 'application/zip',
+    'plugin.version.download': 'application/octet-stream',
+    'admin_plugin.version.download': 'application/octet-stream',
   };
   const allowedSuccess = byteStreams[operation.operationId] || 'application/json';
   const errors = [];

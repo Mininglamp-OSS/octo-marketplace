@@ -133,7 +133,7 @@ func TestCreateSnapshotsVersionWhenFlagged(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM plugin_versions WHERE plugin_id=\?`).
 		WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectExec(`INSERT INTO plugin_versions`).
-		WithArgs("version-id", "plugin-id", "1", "{}", "{}", nil, "sha256:m", "sha256:p", "[]", nil, "caller", now).
+		WithArgs("version-id", "plugin-id", "1", "{}", "{}", nil, "sha256:m", "sha256:p", "[]", nil, "caller", now, "1.0.0", 1, "[]").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`UPDATE plugins SET current_version_id=\?,current_version=\?,updated_at=\? WHERE plugin_id=\? AND deleted_at IS NULL`).
 		WithArgs("version-id", "1.0.0", now, "plugin-id").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -177,7 +177,7 @@ func TestUpdateSnapshotsIncrementingVersion(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM plugin_versions WHERE plugin_id=\?`).
 		WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 	mock.ExpectExec(`INSERT INTO plugin_versions`).
-		WithArgs("version-id", "plugin-id", "3", "{}", "{}", nil, "sha256:m2", "sha256:p2", "[]", nil, "caller", now).
+		WithArgs("version-id", "plugin-id", "3", "{}", "{}", nil, "sha256:m2", "sha256:p2", "[]", nil, "caller", now, "1.0.0", 1, "[]").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`UPDATE plugins SET current_version_id=\?,current_version=\?,updated_at=\? WHERE plugin_id=\? AND deleted_at IS NULL`).
 		WithArgs("version-id", "1.0.0", now, "plugin-id").WillReturnResult(sqlmock.NewResult(0, 1))

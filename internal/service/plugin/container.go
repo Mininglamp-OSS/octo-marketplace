@@ -265,6 +265,7 @@ func (s *Service) ReuploadContainer(ctx context.Context, caller Caller, pluginID
 		s.deleteObjects(ctx, uploaded...)
 		return nil, mapStoreError(err)
 	}
+	s.discardStagingObjects(ctx, uploaded)
 	return s.topLevelDetail(ctx, top, sync), nil
 }
 
@@ -296,6 +297,7 @@ func (s *Service) importExpertContainer(ctx context.Context, eff Caller, parsed 
 		s.deleteObjects(ctx, uploaded...)
 		return nil, mapStoreError(err)
 	}
+	s.discardStagingObjects(ctx, uploaded)
 	return s.topLevelDetail(ctx, top, syncs[len(syncs)-1]), nil
 }
 
@@ -371,6 +373,7 @@ func (s *Service) importSquadContainer(ctx context.Context, eff Caller, parsed *
 		s.deleteObjects(ctx, uploaded...)
 		return nil, mapStoreError(err)
 	}
+	s.discardStagingObjects(ctx, uploaded)
 	return s.topLevelDetail(ctx, top, syncs[len(syncs)-1]), nil
 }
 

@@ -147,6 +147,7 @@ func (s *Service) adminImportConsumedTask(ctx context.Context, caller Caller, ta
 		if sync != nil && sync.NewVersionID != "" {
 			p.CurrentVersionID = &sync.NewVersionID
 		}
+		s.discardStagingObjects(ctx, uploaded)
 		return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
 	}
 
@@ -204,5 +205,6 @@ func (s *Service) adminImportConsumedTask(ctx context.Context, caller Caller, ta
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
 	}
+	s.discardStagingObjects(ctx, uploaded)
 	return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
 }

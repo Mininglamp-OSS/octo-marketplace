@@ -56,6 +56,12 @@ func (s *importStorage) PutObject(_ context.Context, key string, reader io.Reade
 	s.objects[key] = data
 	return nil
 }
+func (s *importStorage) PutImmutable(ctx context.Context, key string, r io.Reader, size int64, ct string) (bool, error) {
+	if _, ok := s.objects[key]; ok {
+		return false, nil
+	}
+	return true, s.PutObject(ctx, key, r, size, ct)
+}
 func (s *importStorage) DeleteObject(_ context.Context, key string) error {
 	s.deletes = append(s.deletes, key)
 	if s.events != nil {
@@ -203,7 +209,8 @@ func TestImportCreatesSkillPluginAndAttachesDefaultPlacement(t *testing.T) {
 			uploaded++
 		}
 	}
-	// Only the binary spills to object storage; the two text files stay inline.
+	// The binary's mutable staging upload is reclaimed after the commit; only the
+	// immutable history object remains. Text stays inline.
 	if uploaded != 1 {
 		t.Fatalf("uploaded objects = %#v", blobs.objects)
 	}
@@ -216,14 +223,17 @@ func TestImportCreatesSkillPluginAndAttachesDefaultPlacement(t *testing.T) {
 	if !strings.Contains(pkg, "id: plugin-new") {
 		t.Fatalf("SKILL.md frontmatter id does not match persisted id: %s", pkg)
 	}
-	namespaced := false
+	immutable := false
 	for key := range blobs.objects {
 		if strings.HasPrefix(key, "plugins/space-a/attachments/skill-plugin-new-") {
-			namespaced = true
+			t.Fatalf("staging upload leaked: %s", key)
+		}
+		if strings.HasPrefix(key, "plugins/space-a/attachments/versions/") {
+			immutable = true
 		}
 	}
-	if !namespaced {
-		t.Fatalf("spilled object not namespaced under persisted id: %#v", blobs.objects)
+	if !immutable {
+		t.Fatalf("no immutable history object: %#v", blobs.objects)
 	}
 }
 
