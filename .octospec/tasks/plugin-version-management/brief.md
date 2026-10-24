@@ -9,7 +9,7 @@ branch for review; production activation remains separate.
 
 ## Load-bearing behavior
 - Feature flag PLUGIN_VERSION_MANAGEMENT_ENABLED defaults off until adoption,
-  dependency protection and the M1 inventory are ready.
+  dependency protection, the M1 inventory and the M3 stock migration are ready.
 - Saving never advances the published pointer. Approval releases the frozen
   submission without overwriting a newer saved draft. A first listing
   promotes only the frozen container's own embedded children without replacing
@@ -34,9 +34,11 @@ branch for review; production activation remains separate.
 
 ## Out of scope
 Web/Admin UI, Fleet changes, version-pinned dependency resolution and indexes
-(R1-R4), restore-to-draft, security-disable, old-format ZIP conversion, stock
-resource extraction/migration and physical cleanup. The third implementation PR
-includes only provable historical dependency index backfill, not full migration.
+(R1-R4), restore-to-draft, security-disable, old-format ZIP conversion (M2) and
+physical cleanup. Full M3 stock resource extraction/migration is delivered in
+PR 3 (#123): embedded skills/connectors/member experts become independent
+resources with released reference versions, A' visibility is preserved, and only
+provable historical index entries are backfilled.
 
 ## Acceptance
 1. v1 release survives v2/v3 saves; frozen v2 approval preserves v3 draft.
