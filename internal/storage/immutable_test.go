@@ -15,6 +15,37 @@ import (
 	"time"
 )
 
+func TestIsImmutableArtifactKeyStrictNamespace(t *testing.T) {
+	positive := []string{
+		"plugins/space-a/attachments/versions/hash",
+		"./plugins/space-a/attachments/versions/hash",
+		"/plugins/space-a/attachments/versions/hash",
+		"plugins/space-a/attachments/./versions/hash",
+	}
+	for _, key := range positive {
+		if !IsImmutableArtifactKey(key) {
+			t.Fatalf("rejected canonical key %q", key)
+		}
+	}
+	negative := []string{
+		"plugins/space-a/attachments/x/versions/hash",
+		"plugins/space-a/other/attachments/versions/hash",
+		"plugins/space-a/attachments/versionsX/hash",
+		"plugins/space-a/attachments/versions",
+		"plugins/space-a/attachments/versions/",
+		"plugins//attachments/versions/hash",
+		"plugins/space a/attachments/versions/hash",
+		"plugins/.hidden/attachments/versions/hash",
+		"plugins/space-a/attachments/versions/../upload",
+		"x/plugins/space-a/attachments/versions/hash",
+	}
+	for _, key := range negative {
+		if IsImmutableArtifactKey(key) {
+			t.Fatalf("accepted non-canonical key %q", key)
+		}
+	}
+}
+
 func TestLocalImmutableConcurrentCreateAndMutationGuards(t *testing.T) {
 	s := NewLocal(t.TempDir(), "http://localhost")
 	key := "plugins/space-a/attachments/versions/digest"
