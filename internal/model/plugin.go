@@ -205,6 +205,7 @@ type PluginRelation struct {
 	SourcePluginID   string
 	SourcePluginType PluginType
 	TargetPluginID   string
+	TargetVersionID  *string
 	TargetPluginType PluginType
 	Type             string
 	SortOrder        int
