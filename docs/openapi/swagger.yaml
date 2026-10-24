@@ -2719,6 +2719,8 @@ info:
 
     contention; also sets `retryable: true`, so retry the request unchanged), and
 
+    `reference_index_incomplete` (historical reference indexes need verified backfill),
+
     `state` (a generic raced state change; refresh and retry).'
   title: Octo Marketplace API
   version: 1.0.0
