@@ -855,9 +855,10 @@ func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topT
 // promoteFrozenEmbeddedChildren lists the embedded targets declared by an
 // approved frozen topology without touching the live editable edges. A first
 // listing whose author saved a newer draft must release the submitted children,
-// not the draft's. Member experts are embedded rows and are not independently
-// editable, so their live skill edges are safe to traverse.
-func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topType model.PluginType, frozen []model.PluginRelation, spaceID string, now interface{}) error {
+// not the draft's. A team may also reference standalone experts; their private
+// children remain inside their own publication boundary and must not be traversed.
+// Only a live embedded member in the container's owner/Space can contribute skills.
+func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, frozen []model.PluginRelation, spaceID string, now interface{}) error {
 	var ids []string
 	switch topType {
 	case model.PluginTypeExpert:
@@ -869,6 +870,23 @@ func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topType mode
 	case model.PluginTypeExpertTeam:
 		for _, rel := range frozen {
 			if rel.Type != "expert_team_expert" {
+				continue
+			}
+			// The frozen edge proves membership in the approved graph, but does
+			// not prove the target is owned by that graph: standalone experts are
+			// valid reference targets too. Check the member before descending.
+			var embedded bool
+			err := tx.QueryRowContext(ctx, `SELECT p.is_embedded FROM plugins p
+WHERE p.plugin_id=? AND p.plugin_type='expert' AND p.space_id=?
+AND p.owner_uid=(SELECT owner_uid FROM plugins WHERE plugin_id=?)
+AND p.status=1 AND p.deleted_at IS NULL FOR UPDATE`, rel.TargetPluginID, spaceID, topID).Scan(&embedded)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return wrapped("check frozen embedded member", err)
+			}
+			if !embedded {
 				continue
 			}
 			ids = append(ids, rel.TargetPluginID)
