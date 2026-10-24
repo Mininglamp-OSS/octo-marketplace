@@ -86,6 +86,16 @@ func TestApplyInsertRepeatConflictAndStalePreview(t *testing.T) {
 					mock.ExpectExec("INSERT INTO plugin_version_relation_refs").WithArgs("expert", "expert-v1", "edge", "expert_skill", "skill", "skill-v1").WillReturnResult(sqlmock.NewResult(0, 1))
 				}
 			}
+			if !bad {
+				state := sqlmock.NewRows([]string{"source_plugin_id", "relation_count", "snapshot_digest"})
+				if mode == "repeat" {
+					state.AddRow("expert", 1, digest)
+				}
+				mock.ExpectQuery("SELECT source_plugin_id,relation_count,snapshot_digest FROM plugin_version_reference_index_state").WithArgs("expert-v1").WillReturnRows(state)
+				if mode == "insert" {
+					mock.ExpectExec("INSERT INTO plugin_version_reference_index_state").WithArgs("expert", "expert-v1", 1, digest).WillReturnResult(sqlmock.NewResult(0, 1))
+				}
+			}
 			if bad {
 				mock.ExpectRollback()
 			} else {

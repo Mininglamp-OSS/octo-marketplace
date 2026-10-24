@@ -27,7 +27,7 @@ go run ./cmd/marketplace-reference-index --all-spaces --apply \
   --version-id SOURCE_VERSION --expected-digest PREVIEW_DIGEST
 ```
 
-The tool re-reads and locks bounded evidence, validates every relation in the selected snapshot, checks all existing index facts, and inserts missing facts atomically. Same facts are a no-op; stale evidence, unknown pins, wrong ownership/type, missing releases, embedded resources or conflicting index facts stop the transaction. Completed versions can be safely repeated after interruption. A failed or incomplete snapshot never receives a partially reconstructed index from this tool.
+The tool re-reads and locks bounded evidence, validates every relation in the selected snapshot, checks all existing index facts, and inserts missing facts and a verified coverage marker atomically (including empty graphs). Same facts are a no-op; stale evidence, unknown pins, wrong ownership/type, missing releases, embedded resources or conflicting index facts/coverage stop the transaction. Completed versions can be safely repeated after interruption. A failed or incomplete snapshot never receives a partially reconstructed index from this tool.
 
 This small-batch maintenance implementation deliberately holds shared evidence locks while indexing one snapshot. It is for isolated rehearsal and bounded batches; larger installations require a reviewed paginated evidence strategy before use. No production invocation is part of development or startup.
 
@@ -35,4 +35,4 @@ This small-batch maintenance implementation deliberately holds shared evidence l
 
 `complete: false` blocks coverage claims for that version. Even `complete: true` proves snapshot/index facts only; runtime access/audience checks remain mandatory. Before enablement, reconcile snapshot IDs against the report and separately verify current policy and artifact availability.
 
-Rollback stops index use and retains facts. Never delete version history, fabricate releases or remove extracted/shared resources as an index rollback. Disputed full-resource migration remains outside this tool.
+Rollback stops index use and retains facts. Never delete version history, fabricate releases or remove extracted/shared resources as an index rollback. Full-resource migration is a separate tool; this index tool never extracts resources.

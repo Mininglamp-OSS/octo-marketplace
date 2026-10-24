@@ -74,6 +74,10 @@ func TestHistoricalReferenceIndexBackfillMySQL(t *testing.T) {
 	if string(retained) != string(baseline) {
 		t.Fatal("index backfill changed source/release evidence")
 	}
+	var coverage int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM plugin_version_reference_index_state`).Scan(&coverage); err != nil || coverage != 3 {
+		t.Fatalf("missing zero-edge coverage: %d %v", coverage, err)
+	}
 	if _, err := db.Exec(`UPDATE plugin_version_relation_refs SET relation_type='expert_connector',target_plugin_id='connector',target_version_id=NULL WHERE relation_id='skill-edge'`); err != nil {
 		t.Fatal(err)
 	}

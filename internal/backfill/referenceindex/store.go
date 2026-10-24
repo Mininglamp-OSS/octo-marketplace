@@ -169,6 +169,21 @@ func ApplyVersion(ctx context.Context, db *sql.DB, limit int, versionID, expecte
 		}
 		inserted++
 	}
+	// Coverage is explicit even for an empty graph. Never overwrite a conflicting
+	// marker: immutable evidence cannot legitimately acquire another digest.
+	var owner, digest string
+	var count int
+	err = tx.QueryRowContext(ctx, `SELECT source_plugin_id,relation_count,snapshot_digest FROM plugin_version_reference_index_state WHERE source_version_id=? FOR UPDATE`, versionID).Scan(&owner, &count, &digest)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = tx.ExecContext(ctx, `INSERT INTO plugin_version_reference_index_state (source_plugin_id,source_version_id,relation_count,snapshot_digest,verified_at) VALUES (?,?,?,?,NOW(3))`, selected.PluginID, versionID, len(selected.Edges), selected.SnapshotDigest)
+		if err != nil {
+			return 0, ErrWrite
+		}
+	} else if err != nil {
+		return 0, ErrRead
+	} else if owner != selected.PluginID || count != len(selected.Edges) || digest != selected.SnapshotDigest {
+		return 0, ErrConflict
+	}
 	if tx.Commit() != nil {
 		return 0, ErrWrite
 	}

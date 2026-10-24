@@ -14,7 +14,7 @@ The reference delivery adds an index, while old snapshots may contain only live 
 - A repeated or interrupted run can safely revisit completed snapshots; never modify resources, snapshots, releases, files, scope or listing pointers.
 
 ## Out of scope
-Embedded resource extraction, fabricated releases, production execution, feature enabling, external APIs and workspace data. Full migration scope remains pending clarification.
+Embedded resource extraction (covered by the separately authorized stock migration tool), fabricated releases, production execution, feature enabling, external APIs and workspace data.
 
 ## Acceptance
 - Fixture preview covers valid pins, missing pins, wrong-resource versions, unreleased versions, connectors and malformed snapshots.
