@@ -31,7 +31,7 @@ func managedReviewer() pluginsvc.Caller {
 	return pluginsvc.Caller{UID: "reviewer", Name: "Reviewer", SpaceID: "space-a", SpaceRole: pluginsvc.SpaceRoleAdmin}
 }
 
-func TestManagedPrivateReleasePreservesDraftAndRestore(t *testing.T) {
+func TestManagedPrivateReleasePreservesDraft(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	svc := pluginsvc.New(repo).WithVersionManagement(true)
@@ -69,27 +69,6 @@ func TestManagedPrivateReleasePreservesDraftAndRestore(t *testing.T) {
 	bytes, err := svc.VersionFile(ctx, owner, id, v1, "AGENTS.md", false)
 	if err != nil || string(bytes) != "original" {
 		t.Fatalf("file=%q err=%v", bytes, err)
-	}
-	restored, err := svc.RestoreVersion(ctx, owner, id, v1, "3.0.0", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if *restored.Plugin.CurrentVersionID == v1 || *restored.Plugin.CurrentVersionID == v2 {
-		t.Fatal("restore reused immutable ID")
-	}
-	state, err := repo.GetVersionState(ctx, tenantScope(), id)
-	if err != nil || *state.PublishedVersionID != v1 {
-		t.Fatalf("restore published: %+v %v", state, err)
-	}
-	restoredVersion, err := svc.ManagedVersion(ctx, owner, id, *restored.Plugin.CurrentVersionID, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restoredVersion.RestoredFromVersionID == nil || *restoredVersion.RestoredFromVersionID != v1 || restoredVersion.Release != nil {
-		t.Fatalf("restore provenance: %+v", restoredVersion)
-	}
-	if _, err = svc.RestoreVersion(ctx, owner, id, v1, "2.0.0", false); !errors.Is(err, pluginsvc.ErrVersionRegressed) {
-		t.Fatalf("backwards restore err=%v", err)
 	}
 	outsider := pluginsvc.Caller{UID: "other", SpaceID: "space-b"}
 	if _, err = svc.ManagedVersion(ctx, outsider, id, v1, false); !errors.Is(err, pluginsvc.ErrNotFound) {
@@ -259,8 +238,8 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 	if err = os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.RestoreVersion(ctx, reader, tenant.Plugin.ID, vid, "2.0.0", false); !errors.Is(err, pluginsvc.ErrIntegrity) {
-		t.Fatalf("missing restore allowed: %v", err)
+	if _, err = svc.VersionFile(ctx, reader, tenant.Plugin.ID, vid, "old.bin", false); !errors.Is(err, pluginsvc.ErrIntegrity) {
+		t.Fatalf("missing object served: %v", err)
 	}
 	if _, err = svc.ManagedVersion(ctx, reader, id, v1, false); err != nil {
 		t.Fatalf("old public release inaccessible: %v", err)
@@ -596,7 +575,7 @@ func TestManagedCatalogSearchAndTagsUseRelease(t *testing.T) {
 	}
 }
 
-func TestManagedRestoreRetainsHistoricalBinaryAfterReplacement(t *testing.T) {
+func TestManagedHistoricalBinaryRetainedAfterReplacement(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	store := storage.NewLocal(t.TempDir(), "http://localhost")
@@ -631,15 +610,7 @@ func TestManagedRestoreRetainsHistoricalBinaryAfterReplacement(t *testing.T) {
 	if _, err = svc.Update(ctx, owner, pid, write("2.0.0", "replacement bytes")); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := svc.RestoreVersion(ctx, owner, pid, v1, "3.0.0", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := svc.VersionFile(ctx, owner, pid, *restored.Plugin.CurrentVersionID, "assets/data.bin", false)
-	if err != nil || string(data) != "old bytes" {
-		t.Fatalf("restored latest bytes instead of history: %q %v", data, err)
-	}
-	data, err = svc.VersionFile(ctx, owner, pid, v1, "assets/data.bin", false)
+	data, err := svc.VersionFile(ctx, owner, pid, v1, "assets/data.bin", false)
 	if err != nil || string(data) != "old bytes" {
 		t.Fatalf("source history changed: %q %v", data, err)
 	}

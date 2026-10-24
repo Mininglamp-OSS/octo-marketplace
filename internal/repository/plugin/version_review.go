@@ -3,7 +3,6 @@ package plugin
 import (
 	"context"
 	"database/sql"
-	"errors"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
@@ -119,21 +118,4 @@ func managedLabels(ctx context.Context, tx *sql.Tx, pluginID string) (map[string
 		out[s] = struct{}{}
 	}
 	return out, rows.Err()
-}
-
-// Guard a draft restore and its provenance in the same locked update. Neither
-// source version nor expected head can be supplied across resource boundaries.
-func guardVersionRestore(ctx context.Context, tx *sql.Tx, p *model.Plugin, m Mutation) error {
-	if m.RestoreSourceVersionID == "" {
-		return nil
-	}
-	if p.CurrentVersionID == nil || *p.CurrentVersionID != m.ExpectedCurrentVersionID {
-		return ErrConflict
-	}
-	var id string
-	err := tx.QueryRowContext(ctx, `SELECT version_id FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, m.RestoreSourceVersionID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNotFound
-	}
-	return err
 }

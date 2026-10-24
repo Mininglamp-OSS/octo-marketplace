@@ -20,21 +20,20 @@ func (r *Repo) WithVersionManagement(enabled bool) *Repo { r.versionManagement =
 
 func versioned(p *model.Plugin) bool { return p.Type != model.PluginTypeConnector }
 
-const managedVersionColumns = `v.version_id,v.plugin_id,v.version,v.declared_version,v.manifest_json,v.plugin_json,v.attachment_keys_json,v.manifest_hash,v.plugin_hash,v.relations_json,v.changelog,v.created_by,v.created_at,v.snapshot_schema_version,v.artifacts_json,v.restored_from_version_id,
+const managedVersionColumns = `v.version_id,v.plugin_id,v.version,v.declared_version,v.manifest_json,v.plugin_json,v.attachment_keys_json,v.manifest_hash,v.plugin_hash,v.relations_json,v.changelog,v.created_by,v.created_at,v.snapshot_schema_version,v.artifacts_json,
  rel.version_label,rel.released_by,rel.released_at,COALESCE(p.current_version_id=v.version_id,0),COALESCE(p.published_version_id=v.version_id,0)`
 
 func scanManagedVersion(row interface{ Scan(...any) error }) (*model.PluginVersion, error) {
 	var v model.PluginVersion
-	var declared, changelog, restored, label, by sql.NullString
+	var declared, changelog, label, by sql.NullString
 	var schema sql.NullInt64
 	var released sql.NullTime
 	var manifest, pkg, keys, relations, artifacts []byte
-	if err := row.Scan(&v.ID, &v.PluginID, &v.Version, &declared, &manifest, &pkg, &keys, &v.ManifestHash, &v.PluginHash, &relations, &changelog, &v.CreatedBy, &v.CreatedAt, &schema, &artifacts, &restored, &label, &by, &released, &v.IsCurrent, &v.IsPublished); err != nil {
+	if err := row.Scan(&v.ID, &v.PluginID, &v.Version, &declared, &manifest, &pkg, &keys, &v.ManifestHash, &v.PluginHash, &relations, &changelog, &v.CreatedBy, &v.CreatedAt, &schema, &artifacts, &label, &by, &released, &v.IsCurrent, &v.IsPublished); err != nil {
 		return nil, err
 	}
 	v.DeclaredVersion = nullString(declared)
 	v.Changelog = nullString(changelog)
-	v.RestoredFromVersionID = nullString(restored)
 	v.Manifest = cloneJSON(manifest)
 	v.Package = cloneJSON(pkg)
 	v.AttachmentKeys = cloneJSON(keys)
@@ -94,7 +93,7 @@ func (r *Repo) ListManagedVersions(ctx context.Context, scope Scope, pluginID st
 		offset = 0
 	}
 	// Lists select no package/manifest bytes. Reuse the scanner with SQL NULLs.
-	columns := `v.version_id,v.plugin_id,v.version,v.declared_version,NULL,NULL,NULL,v.manifest_hash,v.plugin_hash,NULL,v.changelog,v.created_by,v.created_at,v.snapshot_schema_version,NULL,v.restored_from_version_id,rel.version_label,rel.released_by,rel.released_at,COALESCE(p.current_version_id=v.version_id,0),COALESCE(p.published_version_id=v.version_id,0)`
+	columns := `v.version_id,v.plugin_id,v.version,v.declared_version,NULL,NULL,NULL,v.manifest_hash,v.plugin_hash,NULL,v.changelog,v.created_by,v.created_at,v.snapshot_schema_version,NULL,rel.version_label,rel.released_by,rel.released_at,COALESCE(p.current_version_id=v.version_id,0),COALESCE(p.published_version_id=v.version_id,0)`
 	rows, err := r.db.QueryContext(ctx, `SELECT `+columns+from+` ORDER BY v.created_at DESC,v.version_id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err

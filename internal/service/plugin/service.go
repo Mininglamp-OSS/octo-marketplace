@@ -254,7 +254,6 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
-	restoreSourceVersionID   string
 	expectedCurrentVersionID string
 	// grandfatheredVersion is the plugin's STORED version label, set only by
 	// Service.update. A label minted before the format was tightened (v999,
@@ -758,7 +757,6 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m := mutation(*p, rels, audit)
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
-	m.RestoreSourceVersionID = req.restoreSourceVersionID
 	m.ExpectedCurrentVersionID = req.expectedCurrentVersionID
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
 	// restate it against the row it locks, for the same reason the two listing

@@ -76,11 +76,7 @@ func (h *AdminHandler) RegisterAdmin(r *gin.Engine, adminAuth *marketmiddleware.
 	plugins.POST("/skill_import", h.SkillImport)
 	plugins.POST("/skill_reupload/:plugin_id", h.SkillReupload)
 	plugins.GET("/:plugin_id", h.Get)
-	plugins.GET("/:plugin_id/versions", h.ListVersions)
 	plugins.GET("/:plugin_id/versions/:version_id", h.GetVersion)
-	plugins.GET("/:plugin_id/versions/:version_id/file", h.DownloadVersionFile)
-	plugins.POST("/:plugin_id/versions/:version_id/restore", h.RestoreVersion)
-	plugins.POST("/:plugin_id/publish", h.PublishVersion)
 	plugins.GET("/:plugin_id/skill_md", h.SkillMarkdown)
 	plugins.GET("/:plugin_id/download", h.DownloadSkillPackage)
 	plugins.PATCH("/:plugin_id", h.Update)
@@ -207,11 +203,13 @@ func (h *AdminHandler) Get(c *gin.Context) {
 // @Produce json
 // @Security Bearer
 // @Param plugin_id path string true "Plugin ID"
+// @Param version_id query string false "Fixed snapshot ID; omitted reads current editable content"
 // @Success 200 {object} apiresponse.Data[skillMarkdownResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
+// @Failure 409 {object} apiresponse.Error "CONFLICT: unavailable or corrupt historical artifact"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /admin/plugins/{plugin_id}/skill_md [get]
 func (h *AdminHandler) SkillMarkdown(c *gin.Context) {
@@ -220,7 +218,18 @@ func (h *AdminHandler) SkillMarkdown(c *gin.Context) {
 		unauthorized(c)
 		return
 	}
-	content, err := h.svc.AdminSkillMarkdown(c.Request.Context(), caller, c.Param("plugin_id"))
+	var content string
+	var err error
+	if versionID := c.Query("version_id"); versionID != "" {
+		v, ok := h.svc.(adminVersionSkillService)
+		if !ok {
+			writeServiceError(c, pluginsvc.ErrNotFound, "plugin.admin.skill_md")
+			return
+		}
+		content, err = v.AdminVersionSkillMarkdown(c.Request.Context(), caller, c.Param("plugin_id"), versionID)
+	} else {
+		content, err = h.svc.AdminSkillMarkdown(c.Request.Context(), caller, c.Param("plugin_id"))
+	}
 	if err != nil {
 		writeServiceError(c, err, "plugin.admin.skill_md")
 		return
@@ -237,12 +246,14 @@ func (h *AdminHandler) SkillMarkdown(c *gin.Context) {
 // @Produce application/zip
 // @Security Bearer
 // @Param plugin_id path string true "Plugin ID"
+// @Param version_id query string false "Fixed snapshot ID; omitted reads current editable content"
 // @Success 200 {file} binary "Skill package zip"
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
+// @Failure 409 {object} apiresponse.Error "CONFLICT: unavailable or corrupt historical artifact"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /admin/plugins/{plugin_id}/download [get]
 func (h *AdminHandler) DownloadSkillPackage(c *gin.Context) {
@@ -251,7 +262,18 @@ func (h *AdminHandler) DownloadSkillPackage(c *gin.Context) {
 		unauthorized(c)
 		return
 	}
-	result, err := h.svc.AdminOpenSkillPackage(c.Request.Context(), caller, c.Param("plugin_id"))
+	var result *pluginsvc.SkillPackageStream
+	var err error
+	if versionID := c.Query("version_id"); versionID != "" {
+		v, ok := h.svc.(adminVersionSkillService)
+		if !ok {
+			writeServiceError(c, pluginsvc.ErrNotFound, "plugin.admin.download")
+			return
+		}
+		result, err = v.AdminOpenVersionSkillPackage(c.Request.Context(), caller, c.Param("plugin_id"), versionID)
+	} else {
+		result, err = h.svc.AdminOpenSkillPackage(c.Request.Context(), caller, c.Param("plugin_id"))
+	}
 	if err != nil {
 		writeServiceError(c, err, "plugin.admin.download")
 		return
@@ -785,4 +807,10 @@ func (h *AdminHandler) DeleteCategory(c *gin.Context) {
 		return
 	}
 	apiresponse.Empty(c)
+}
+
+// Explicit historical helpers leave the legacy/current AdminService compatible.
+type adminVersionSkillService interface {
+	AdminVersionSkillMarkdown(context.Context, pluginsvc.Caller, string, string) (string, error)
+	AdminOpenVersionSkillPackage(context.Context, pluginsvc.Caller, string, string) (*pluginsvc.SkillPackageStream, error)
 }

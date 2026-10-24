@@ -2,9 +2,12 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
@@ -18,12 +21,6 @@ type versionManagementService interface {
 	ManagedVersion(context.Context, pluginsvc.Caller, string, string, bool) (*model.PluginVersion, error)
 	HistoricalVersions(context.Context, pluginsvc.Caller, string, int, int, bool) ([]model.PluginVersion, int64, error)
 	VersionFile(context.Context, pluginsvc.Caller, string, string, string, bool) ([]byte, error)
-	RestoreVersion(context.Context, pluginsvc.Caller, string, string, string, bool) (*pluginsvc.Detail, error)
-	AdminPublishVersion(context.Context, pluginsvc.Caller, string) (*pluginsvc.Detail, error)
-}
-
-type restoreVersionRequest struct {
-	Version string `json:"version" binding:"required"`
 }
 
 type versionReleaseResponse struct {
@@ -96,30 +93,6 @@ func downloadVersionFile(c *gin.Context, svc any, admin bool) {
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusOK, "application/octet-stream", data)
 }
-func restoreVersion(c *gin.Context, svc any, admin bool) {
-	who, ok := caller(c)
-	if admin {
-		who, ok = adminCaller(c)
-	}
-	if !ok {
-		unauthorized(c)
-		return
-	}
-	v, ok := versionService(c, svc)
-	if !ok {
-		return
-	}
-	var body restoreVersionRequest
-	if !decode(c, &body) {
-		return
-	}
-	result, err := v.RestoreVersion(c.Request.Context(), who, c.Param("plugin_id"), c.Param("version_id"), body.Version, admin)
-	if err != nil {
-		writeServiceError(c, err, "plugin.version.restore")
-		return
-	}
-	apiresponse.OK(c, detailDTO(result))
-}
 
 // GetVersion godoc
 // @Summary Get a historical plugin version
@@ -162,27 +135,6 @@ func (h *Handler) GetVersion(c *gin.Context) { getVersion(c, h.svc, false) }
 // @Router /plugins/{plugin_id}/versions/{version_id}/file [get]
 func (h *Handler) DownloadVersionFile(c *gin.Context) { downloadVersionFile(c, h.svc, false) }
 
-// RestoreVersion godoc
-// @Summary Restore a historical version to a new draft
-// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
-// @Tags plugin
-// @ID plugin.version.restore
-// @Accept json
-// @Produce json
-// @Security Bearer
-// @Param plugin_id path string true "Plugin ID"
-// @Param version_id path string true "Version ID belonging to this plugin"
-// @Param body body restoreVersionRequest true "New forward version label for the restored draft"
-// @Success 200 {object} apiresponse.Data[detailResponse]
-// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
-// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
-// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
-// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
-// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
-// @Router /plugins/{plugin_id}/versions/{version_id}/restore [post]
-func (h *Handler) RestoreVersion(c *gin.Context) { restoreVersion(c, h.svc, false) }
-
 // GetVersion godoc
 // @Summary Get a historical plugin version (admin)
 // @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
@@ -193,7 +145,7 @@ func (h *Handler) RestoreVersion(c *gin.Context) { restoreVersion(c, h.svc, fals
 // @Security Bearer
 // @Param plugin_id path string true "Plugin ID"
 // @Param version_id path string true "Version ID belonging to this plugin"
-// @Success 200 {object} apiresponse.Data[historicalVersionResponse]
+// @Success 200 {object} apiresponse.Data[adminHistoricalVersionResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
@@ -201,49 +153,73 @@ func (h *Handler) RestoreVersion(c *gin.Context) { restoreVersion(c, h.svc, fals
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /admin/plugins/{plugin_id}/versions/{version_id} [get]
-func (h *AdminHandler) GetVersion(c *gin.Context) { getVersion(c, h.svc, true) }
+func (h *AdminHandler) GetVersion(c *gin.Context) {
+	who, ok := adminCaller(c)
+	if !ok {
+		unauthorized(c)
+		return
+	}
+	v, ok := versionService(c, h.svc)
+	if !ok {
+		return
+	}
+	result, err := v.ManagedVersion(c.Request.Context(), who, c.Param("plugin_id"), c.Param("version_id"), true)
+	if err != nil {
+		writeServiceError(c, err, "admin_plugin.version.get")
+		return
+	}
+	if result.PluginType != model.PluginTypeSkill && result.PluginType != model.PluginTypeExpert && result.PluginType != model.PluginTypeExpertTeam {
+		writeServiceError(c, pluginsvc.ErrInvalidRequest, "admin_plugin.version.get")
+		return
+	}
+	var pkg struct {
+		Attachments []struct {
+			Path string `json:"path"`
+			MIME string `json:"mime_type"`
+		} `json:"attachments"`
+	}
+	if json.Unmarshal(result.Package, &pkg) != nil {
+		writeServiceError(c, pluginsvc.ErrIntegrity, "admin_plugin.version.get")
+		return
+	}
+	files := []adminVersionFileResponse{}
+	for _, a := range pkg.Attachments {
+		if a.Path == "skill/ref.json" {
+			continue
+		}
+		files = append(files, adminVersionFileResponse{Path: a.Path, MIMEType: a.MIME, IsText: strings.HasPrefix(a.MIME, "text/") || a.MIME == "application/json"})
+	}
+	rels := versionRelationSlice(result.PluginID, result.ID, result.Relations)
+	canonical, err := json.Marshal(rels)
+	if err != nil {
+		writeServiceError(c, pluginsvc.ErrIntegrity, "admin_plugin.version.get")
+		return
+	}
+	digest := sha256.Sum256(canonical)
+	label := ""
+	if result.DeclaredVersion != nil {
+		label = *result.DeclaredVersion
+	}
+	c.Header("Cache-Control", "private, no-store")
+	apiresponse.OK(c, adminHistoricalVersionResponse{PluginID: result.PluginID, VersionID: result.ID, RevisionNo: result.Version, VersionLabel: label, CreatedAt: result.CreatedAt, ManifestJSON: normalizedObjectRaw(result.Manifest), Files: files, Relations: rels, RelationDigest: hex.EncodeToString(digest[:])})
+}
 
-// DownloadVersionFile godoc
-// @Summary Download a historical file (admin)
-// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
-// @Tags admin_plugin
-// @ID admin_plugin.version.download
-// @Accept json
-// @Produce octet-stream
-// @Security Bearer
-// @Param plugin_id path string true "Plugin ID"
-// @Param version_id path string true "Version ID belonging to this plugin"
-// @Param path query string true "Relative file path in this historical version"
-// @Success 200 {file} binary
-// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
-// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
-// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
-// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
-// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
-// @Router /admin/plugins/{plugin_id}/versions/{version_id}/file [get]
-func (h *AdminHandler) DownloadVersionFile(c *gin.Context) { downloadVersionFile(c, h.svc, true) }
-
-// RestoreVersion godoc
-// @Summary Restore a historical version to a new draft (admin)
-// @Description Requires enabled version management and current access. Authors and marketplace admins may manage drafts; other readers can access formally released versions only. Original snapshots are immutable. Restoration creates a new draft and requires publication.
-// @Tags admin_plugin
-// @ID admin_plugin.version.restore
-// @Accept json
-// @Produce json
-// @Security Bearer
-// @Param plugin_id path string true "Plugin ID"
-// @Param version_id path string true "Version ID belonging to this plugin"
-// @Param body body restoreVersionRequest true "New forward version label for the restored draft"
-// @Success 200 {object} apiresponse.Data[detailResponse]
-// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
-// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
-// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
-// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
-// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
-// @Router /admin/plugins/{plugin_id}/versions/{version_id}/restore [post]
-func (h *AdminHandler) RestoreVersion(c *gin.Context) { restoreVersion(c, h.svc, true) }
+type adminVersionFileResponse struct {
+	Path     string `json:"path"`
+	MIMEType string `json:"mime_type"`
+	IsText   bool   `json:"is_text"`
+}
+type adminHistoricalVersionResponse struct {
+	PluginID       string                     `json:"plugin_id"`
+	VersionID      string                     `json:"version_id"`
+	RevisionNo     string                     `json:"revision_no"`
+	VersionLabel   string                     `json:"version_label"`
+	CreatedAt      time.Time                  `json:"created_at" swaggertype:"string,date-time"`
+	ManifestJSON   json.RawMessage            `json:"manifest_json" swaggertype:"object"`
+	Files          []adminVersionFileResponse `json:"files"`
+	Relations      []map[string]any           `json:"relations"`
+	RelationDigest string                     `json:"relation_digest"`
+}
 
 // GetDraft godoc
 // @Summary Get the current editable draft
@@ -277,85 +253,6 @@ func (h *Handler) GetDraft(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "private, no-store")
-	apiresponse.OK(c, detailDTO(result))
-}
-
-// ListVersions godoc
-// @Summary List historical plugin versions (admin)
-// @Description Requires enabled version management. Draft access is owner-only; admin routes require the marketplace admin gate.
-// @Tags admin_plugin
-// @ID admin_plugin.version.list
-// @Produce json
-// @Security Bearer
-// @Param plugin_id path string true "Plugin ID"
-// @Param page query int false "Page number, default 1"
-// @Param page_size query int false "Page size, default 20, max 100"
-// @Success 200 {object} apiresponse.OffsetList[versionResponse]
-// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
-// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
-// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
-// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
-// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
-// @Router /admin/plugins/{plugin_id}/versions [get]
-func (h *AdminHandler) ListVersions(c *gin.Context) {
-	who, ok := adminCaller(c)
-	if !ok {
-		unauthorized(c)
-		return
-	}
-	v, ok := versionService(c, h.svc)
-	if !ok {
-		return
-	}
-	page, size, ok := pagination(c)
-	if !ok {
-		validation(c, "pagination")
-		return
-	}
-	items, total, err := v.HistoricalVersions(c.Request.Context(), who, c.Param("plugin_id"), size, (page-1)*size, true)
-	if err != nil {
-		writeServiceError(c, err, "admin_plugin.version.list")
-		return
-	}
-	out := make([]versionResponse, len(items))
-	for i, item := range items {
-		out[i] = versionDTO(item)
-	}
-	apiresponse.Offset(c, out, int(total), page, size)
-}
-
-// PublishVersion godoc
-// @Summary Publish the current saved version (admin)
-// @Description Requires enabled version management. Draft access is owner-only; admin routes require the marketplace admin gate.
-// @Tags admin_plugin
-// @ID admin_plugin.version.publish
-// @Produce json
-// @Security Bearer
-// @Param plugin_id path string true "Plugin ID"
-// @Success 200 {object} apiresponse.Data[detailResponse]
-// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
-// @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
-// @Failure 403 {object} apiresponse.Error "FORBIDDEN"
-// @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
-// @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
-// @Router /admin/plugins/{plugin_id}/publish [post]
-func (h *AdminHandler) PublishVersion(c *gin.Context) {
-	who, ok := adminCaller(c)
-	if !ok {
-		unauthorized(c)
-		return
-	}
-	v, ok := versionService(c, h.svc)
-	if !ok {
-		return
-	}
-	result, err := v.AdminPublishVersion(c.Request.Context(), who, c.Param("plugin_id"))
-	if err != nil {
-		writeServiceError(c, err, "admin_plugin.version.publish")
-		return
-	}
 	apiresponse.OK(c, detailDTO(result))
 }
 

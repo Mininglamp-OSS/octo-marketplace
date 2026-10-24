@@ -1,9 +1,9 @@
 package plugin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,13 +42,6 @@ func (f *versionServiceFake) VersionFile(_ context.Context, c pluginsvc.Caller, 
 	f.gotPath = p
 	return f.file, f.versionErr
 }
-func (f *versionServiceFake) RestoreVersion(_ context.Context, c pluginsvc.Caller, pid, vid, label string, _ bool) (*pluginsvc.Detail, error) {
-	f.gotCaller = c
-	f.gotPlugin = pid
-	f.gotVersion = vid
-	f.gotLabel = label
-	return f.detail, f.versionErr
-}
 func (f *versionServiceFake) AdminPublishVersion(context.Context, pluginsvc.Caller, string) (*pluginsvc.Detail, error) {
 	return f.detail, f.versionErr
 }
@@ -58,8 +51,7 @@ func TestHistoricalVersionWireDoesNotExposeStorageKeys(t *testing.T) {
 	rawRef, _ := json.Marshal(map[string]any{"object_key": key, "zip_object_key": key, "file_url": key, "file_name": "skill.zip"})
 	pkg, _ := json.Marshal(map[string]any{"attachments": []any{map[string]any{"path": "skill/ref.json", "content_type": "raw", "raw_content": string(rawRef)}, map[string]any{"path": "file.bin", "content_type": "storage", "storage_uri": key}}})
 	label := "1.0.0"
-	source := "source-version"
-	f := &versionServiceFake{fakeService: &fakeService{}, version: model.PluginVersion{ID: "version-1", PluginID: "plugin-1", DeclaredVersion: &label, RestoredFromVersionID: &source, Manifest: json.RawMessage(`{}`), Package: pkg, AttachmentKeys: json.RawMessage(`{"file.bin":"` + key + `"}`), Artifacts: json.RawMessage(`[{"object_key":"` + key + `"}]`), Relations: json.RawMessage(`[]`), Release: &model.PluginVersionRelease{VersionLabel: label, ReleasedBy: "owner", ReleasedAt: time.Now()}}}
+	f := &versionServiceFake{fakeService: &fakeService{}, version: model.PluginVersion{ID: "version-1", PluginID: "plugin-1", DeclaredVersion: &label, Manifest: json.RawMessage(`{}`), Package: pkg, AttachmentKeys: json.RawMessage(`{"file.bin":"` + key + `"}`), Artifacts: json.RawMessage(`[{"object_key":"` + key + `"}]`), Relations: json.RawMessage(`[]`), Release: &model.PluginVersionRelease{VersionLabel: label, ReleasedBy: "owner", ReleasedAt: time.Now()}}}
 	rec := httptest.NewRecorder()
 	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/plugin-1/versions/version-1", nil))
 	if rec.Code != 200 {
@@ -71,7 +63,7 @@ func TestHistoricalVersionWireDoesNotExposeStorageKeys(t *testing.T) {
 			t.Fatalf("private location exposed: %s", body)
 		}
 	}
-	if !strings.Contains(body, `"declared_version":"1.0.0"`) || !strings.Contains(body, `"release"`) || !strings.Contains(body, `"restored_from_version_id":"source-version"`) {
+	if !strings.Contains(body, `"declared_version":"1.0.0"`) || !strings.Contains(body, `"release"`) {
 		t.Fatalf("missing version management metadata: %s", body)
 	}
 	if f.gotCaller.UID != "user-1" || f.gotCaller.SpaceID != "space-a" || f.gotPlugin != "plugin-1" || f.gotVersion != "version-1" {
@@ -100,26 +92,67 @@ func TestVersionFileWireCommitsOnlySuccessfulBytes(t *testing.T) {
 	}
 }
 
-func TestRestoreVersionAcceptsOnlyNewLabelAndTrustedIdentity(t *testing.T) {
-	f := &versionServiceFake{fakeService: &fakeService{detail: &pluginsvc.Detail{Plugin: &model.Plugin{ID: "plugin-1", Type: model.PluginTypeExpert}, Relations: []model.PluginRelation{}}}}
-	rec := httptest.NewRecorder()
-	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/plugins/plugin-1/versions/old/restore", bytes.NewBufferString(`{"version":"3.0.0"}`)))
-	if rec.Code != 200 || f.gotLabel != "3.0.0" || f.gotVersion != "old" || f.gotCaller.UID != "user-1" {
-		t.Fatalf("restore=%d %s %+v", rec.Code, rec.Body.String(), f)
-	}
-	for _, body := range []string{`{"version":"4.0.0","owner_id":"attacker"}`, `{"version":"4.0.0","space_id":"other"}`} {
-		rec = httptest.NewRecorder()
-		testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/plugins/plugin-1/versions/old/restore", bytes.NewBufferString(body)))
-		if rec.Code != 400 {
-			t.Fatalf("client identity accepted: %d %s", rec.Code, rec.Body.String())
-		}
-	}
-}
-
 func TestVersionManagementRoutesFailClosedWithoutCapability(t *testing.T) {
 	rec := httptest.NewRecorder()
 	testEngine(&fakeService{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/p1/versions/v1", nil))
 	if rec.Code != 404 {
 		t.Fatalf("unsupported version route=%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+type adminHistoricalFake struct {
+	*fakeAdminService
+	*versionServiceFake
+	helperVersion string
+}
+
+func (f *adminHistoricalFake) AdminVersionSkillMarkdown(_ context.Context, c pluginsvc.Caller, _, vid string) (string, error) {
+	f.helperVersion = vid
+	f.gotCaller = c
+	return "historical", nil
+}
+func (f *adminHistoricalFake) AdminOpenVersionSkillPackage(_ context.Context, c pluginsvc.Caller, _, vid string) (*pluginsvc.SkillPackageStream, error) {
+	f.helperVersion = vid
+	f.gotCaller = c
+	return &pluginsvc.SkillPackageStream{FileName: "history.zip", Write: func(w io.Writer) error { _, e := io.WriteString(w, "zip"); return e }}, nil
+}
+func TestAdminHistoricalContractAndRemovedOperations(t *testing.T) {
+	label := "1.0.0"
+	f := &adminHistoricalFake{fakeAdminService: &fakeAdminService{}, versionServiceFake: &versionServiceFake{fakeService: &fakeService{}, version: model.PluginVersion{ID: "v1", PluginID: "skill", PluginType: model.PluginTypeSkill, Version: "1", DeclaredVersion: &label, Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[{"path":"SKILL.md","mime_type":"text/markdown"}]}`), Relations: json.RawMessage(`[]`)}}}
+	r := adminTestEngine(f, nil)
+	for _, tc := range []struct{ method, path string }{{"GET", "/versions"}, {"GET", "/versions/v1/file"}, {"POST", "/versions/v1/restore"}, {"POST", "/publish"}} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(tc.method, "/api/v1/admin/plugins/skill"+tc.path, nil))
+		if rec.Code != 404 {
+			t.Fatalf("removed operation %s: %d", tc.path, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/admin/plugins/skill/versions/v1", nil))
+	if rec.Code != 200 {
+		t.Fatalf("detail %d %s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Data map[string]any `json:"data"`
+	}
+	if e := json.Unmarshal(rec.Body.Bytes(), &envelope); e != nil {
+		t.Fatal(e)
+	}
+	for _, k := range []string{"plugin_id", "version_id", "revision_no", "version_label", "files", "relations", "relation_digest"} {
+		if _, ok := envelope.Data[k]; !ok {
+			t.Errorf("missing %s", k)
+		}
+	}
+	for _, k := range []string{"release", "version", "published_version_id", "plugin_json"} {
+		if _, ok := envelope.Data[k]; ok {
+			t.Errorf("unexpected %s", k)
+		}
+	}
+	for _, route := range []string{"skill_md", "download"} {
+		rec = httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/admin/plugins/skill/"+route+"?version_id=v1", nil))
+		if rec.Code != 200 || f.helperVersion != "v1" || !f.gotCaller.IsSystemAdmin {
+			t.Fatalf("helper %s: %d %s", route, rec.Code, rec.Body.String())
+		}
 	}
 }

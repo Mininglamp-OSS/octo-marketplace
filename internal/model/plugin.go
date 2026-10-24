@@ -238,7 +238,6 @@ type PluginVersion struct {
 	Release               *PluginVersionRelease
 	IsCurrent             bool
 	IsPublished           bool
-	RestoredFromVersionID *string
 	DeclaredVersion       *string
 	SnapshotSchemaVersion *int
 	Artifacts             json.RawMessage

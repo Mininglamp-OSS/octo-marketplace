@@ -219,8 +219,8 @@ Standard error codes:
 ## Expert and skill version management (local staged rollout)
 
 `PLUGIN_VERSION_MANAGEMENT_ENABLED` defaults to `false`. Enable it only in the
-PR2/PR3 isolated test environment. It activates formal release identities,
-explicit draft reads, historical detail/file/restore endpoints, and release-only
+V2 isolated test environment. It activates formal release identities,
+explicit draft reads, historical detail/file endpoints, and release-only
 public content reads. Existing connectors keep current-state behavior.
 
 A published expert/skill needs a formal release baseline before saving a new
@@ -230,6 +230,6 @@ planned data migration. No release history is inferred from saved snapshots.
 The switch is a local rollout gate, not a production rollback mechanism: turning
 it off restores legacy reads, which expect current content. Do not switch it off
 on a database with unpublished managed drafts; production rollback is part of the
-later migration/cutover plan. Published container ZIP reupload remains blocked in
-this staged mode until PR3 can protect the historical embedded dependency graph.
+later migration/cutover plan. Old-format container ZIP import/reupload is rejected; the new format is
+delivered with R1.
 The old compatibility path remains available with the rollout disabled.

@@ -153,6 +153,11 @@ components:
           type: array
           uniqueItems: false
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_adminHistoricalVersionResponse
+    : properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.adminHistoricalVersionResponse'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_categoryResponse:
       properties:
         data:
@@ -1547,6 +1552,34 @@ components:
         resource_type:
           type: string
       type: object
+    internal_api_handler_plugin.adminHistoricalVersionResponse:
+      properties:
+        created_at:
+          type: string
+        files:
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.adminVersionFileResponse'
+          type: array
+          uniqueItems: false
+        manifest_json:
+          type: object
+        plugin_id:
+          type: string
+        relation_digest:
+          type: string
+        relations:
+          items:
+            additionalProperties: {}
+            type: object
+          type: array
+          uniqueItems: false
+        revision_no:
+          type: string
+        version_id:
+          type: string
+        version_label:
+          type: string
+      type: object
     internal_api_handler_plugin.adminSkillImportRequest:
       properties:
         category_id:
@@ -1565,6 +1598,15 @@ components:
           type: array
           uniqueItems: false
         version:
+          type: string
+      type: object
+    internal_api_handler_plugin.adminVersionFileResponse:
+      properties:
+        is_text:
+          type: boolean
+        mime_type:
+          type: string
+        path:
           type: string
       type: object
     internal_api_handler_plugin.categoryResponse:
@@ -2153,13 +2195,6 @@ components:
           type: array
           uniqueItems: false
       type: object
-    internal_api_handler_plugin.restoreVersionRequest:
-      properties:
-        version:
-          type: string
-      required:
-      - version
-      type: object
     internal_api_handler_plugin.reviewDecisionSourceResponse:
       description: DecisionSource identifies the human decision channel; omitted for
         policy approvals and undecided requests.
@@ -2387,8 +2422,6 @@ components:
           uniqueItems: false
         release:
           $ref: '#/components/schemas/internal_api_handler_plugin.versionReleaseResponse'
-        restored_from_version_id:
-          type: string
         version:
           type: string
         version_id:
@@ -3809,6 +3842,11 @@ paths:
         required: true
         schema:
           type: string
+      - description: Fixed snapshot ID; omitted reads current editable content
+        in: query
+        name: version_id
+        schema:
+          type: string
       requestBody:
         content:
           application/json:
@@ -3846,6 +3884,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: 'CONFLICT: unavailable or corrupt historical artifact'
         '413':
           content:
             application/json:
@@ -3861,66 +3905,6 @@ paths:
       security:
       - Bearer: []
       summary: Download skill plugin package (admin)
-      tags:
-      - admin_plugin
-  /admin/plugins/{plugin_id}/publish:
-    post:
-      description: Requires enabled version management. Draft access is owner-only;
-        admin routes require the marketplace admin gate.
-      operationId: admin_plugin.version.publish
-      parameters:
-      - description: Plugin ID
-        in: path
-        name: plugin_id
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailResponse'
-          description: OK
-        '400':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: VALIDATION_ERROR
-        '401':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: AUTH_REQUIRED
-        '403':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: FORBIDDEN
-        '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: NOT_FOUND
-        '409':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
-        '500':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: INTERNAL_ERROR
-      security:
-      - Bearer: []
-      summary: Publish the current saved version (admin)
       tags:
       - admin_plugin
   /admin/plugins/{plugin_id}/rating:
@@ -4003,6 +3987,11 @@ paths:
         required: true
         schema:
           type: string
+      - description: Fixed snapshot ID; omitted reads current editable content
+        in: query
+        name: version_id
+        schema:
+          type: string
       requestBody:
         content:
           application/json:
@@ -4039,6 +4028,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: 'CONFLICT: unavailable or corrupt historical artifact'
         '500':
           content:
             application/json:
@@ -4048,76 +4043,6 @@ paths:
       security:
       - Bearer: []
       summary: Read skill plugin SKILL.md (admin)
-      tags:
-      - admin_plugin
-  /admin/plugins/{plugin_id}/versions:
-    get:
-      description: Requires enabled version management. Draft access is owner-only;
-        admin routes require the marketplace admin gate.
-      operationId: admin_plugin.version.list
-      parameters:
-      - description: Plugin ID
-        in: path
-        name: plugin_id
-        required: true
-        schema:
-          type: string
-      - description: Page number, default 1
-        in: query
-        name: page
-        schema:
-          type: integer
-      - description: Page size, default 20, max 100
-        in: query
-        name: page_size
-        schema:
-          type: integer
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.OffsetList-internal_api_handler_plugin_versionResponse'
-          description: OK
-        '400':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: VALIDATION_ERROR
-        '401':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: AUTH_REQUIRED
-        '403':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: FORBIDDEN
-        '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: NOT_FOUND
-        '409':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
-        '500':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: INTERNAL_ERROR
-      security:
-      - Bearer: []
-      summary: List historical plugin versions (admin)
       tags:
       - admin_plugin
   /admin/plugins/{plugin_id}/versions/{version_id}:
@@ -4150,7 +4075,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_historicalVersionResponse'
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_adminHistoricalVersionResponse'
           description: OK
         '400':
           content:
@@ -4191,161 +4116,6 @@ paths:
       security:
       - Bearer: []
       summary: Get a historical plugin version (admin)
-      tags:
-      - admin_plugin
-  /admin/plugins/{plugin_id}/versions/{version_id}/file:
-    get:
-      description: Requires enabled version management and current access. Authors
-        and marketplace admins may manage drafts; other readers can access formally
-        released versions only. Original snapshots are immutable. Restoration creates
-        a new draft and requires publication.
-      operationId: admin_plugin.version.download
-      parameters:
-      - description: Plugin ID
-        in: path
-        name: plugin_id
-        required: true
-        schema:
-          type: string
-      - description: Version ID belonging to this plugin
-        in: path
-        name: version_id
-        required: true
-        schema:
-          type: string
-      - description: Relative file path in this historical version
-        in: query
-        name: path
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        '200':
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-          description: OK
-        '400':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: VALIDATION_ERROR
-        '401':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: AUTH_REQUIRED
-        '403':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: FORBIDDEN
-        '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: NOT_FOUND
-        '409':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
-        '500':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: INTERNAL_ERROR
-      security:
-      - Bearer: []
-      summary: Download a historical file (admin)
-      tags:
-      - admin_plugin
-  /admin/plugins/{plugin_id}/versions/{version_id}/restore:
-    post:
-      description: Requires enabled version management and current access. Authors
-        and marketplace admins may manage drafts; other readers can access formally
-        released versions only. Original snapshots are immutable. Restoration creates
-        a new draft and requires publication.
-      operationId: admin_plugin.version.restore
-      parameters:
-      - description: Plugin ID
-        in: path
-        name: plugin_id
-        required: true
-        schema:
-          type: string
-      - description: Version ID belonging to this plugin
-        in: path
-        name: version_id
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/internal_api_handler_plugin.restoreVersionRequest'
-        description: New forward version label for the restored draft
-        required: true
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailResponse'
-          description: OK
-        '400':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: VALIDATION_ERROR
-        '401':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: AUTH_REQUIRED
-        '403':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: FORBIDDEN
-        '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: NOT_FOUND
-        '409':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
-        '500':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: INTERNAL_ERROR
-      security:
-      - Bearer: []
-      summary: Restore a historical version to a new draft (admin)
       tags:
       - admin_plugin
   /admin/plugins/container_reupload/{plugin_id}:
@@ -7186,81 +6956,6 @@ paths:
       security:
       - Bearer: []
       summary: Download an original historical file
-      tags:
-      - plugin
-  /plugins/{plugin_id}/versions/{version_id}/restore:
-    post:
-      description: Requires enabled version management and current access. Authors
-        and marketplace admins may manage drafts; other readers can access formally
-        released versions only. Original snapshots are immutable. Restoration creates
-        a new draft and requires publication.
-      operationId: plugin.version.restore
-      parameters:
-      - description: Plugin ID
-        in: path
-        name: plugin_id
-        required: true
-        schema:
-          type: string
-      - description: Version ID belonging to this plugin
-        in: path
-        name: version_id
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/internal_api_handler_plugin.restoreVersionRequest'
-        description: New forward version label for the restored draft
-        required: true
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailResponse'
-          description: OK
-        '400':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: VALIDATION_ERROR
-        '401':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: AUTH_REQUIRED
-        '403':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: FORBIDDEN
-        '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: NOT_FOUND
-        '409':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
-        '500':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: INTERNAL_ERROR
-      security:
-      - Bearer: []
-      summary: Restore a historical version to a new draft
       tags:
       - plugin
   /plugins/delete:

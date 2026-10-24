@@ -1,10 +1,10 @@
 # Expert and skill version management (V2 local rollout)
 
 Enable `PLUGIN_VERSION_MANAGEMENT_ENABLED=true` in an isolated environment built
-with the V1 version/artifact foundation migrations and the restore-source
-migration. The default is off while dependency pins/protection (R1-R4), the
-inventory (M1) and the adoption case below are still being rolled out. Connectors
-keep their existing current-state behavior and review flow.
+with the V1 version/artifact foundation migration. The default is off while
+dependency pins/protection (R1-R4), the inventory (M1) and the stock migration
+(M3) are still being rolled out. Connectors keep their existing current-state
+behavior and review flow.
 
 ## Publication and editing
 
@@ -49,10 +49,9 @@ Resource/path naming follows R6/R7 and operation IDs follow R10.
 | Capability | Tenant path | Admin path |
 | --- | --- | --- |
 | Current draft | `GET /plugins/{plugin_id}/draft` | Existing `GET /admin/plugins/{plugin_id}` |
-| Version list | `GET /plugins/versions?plugin_id=...` | `GET /admin/plugins/{plugin_id}/versions` |
+| Version list | `GET /plugins/versions?plugin_id=...` | Not exposed (Admin boundary) |
 | Version detail | `GET /plugins/{plugin_id}/versions/{version_id}` | Same suffix under `/admin/plugins` |
-| Original file | `GET /plugins/{plugin_id}/versions/{version_id}/file?path=AGENTS.md` | Same suffix under `/admin/plugins` |
-| Restore as new draft | `POST /plugins/{plugin_id}/versions/{version_id}/restore` | Same suffix under `/admin/plugins` |
+| Original file | `GET /plugins/{plugin_id}/versions/{version_id}/file?path=AGENTS.md` | `skill_md?version_id=...` / `download?version_id=...` |
 
 Lists use `page` and `page_size` (20 default, 100 maximum) and offset pagination
 (R5). Authors in their resource's Space and gated marketplace admins may read
@@ -62,7 +61,7 @@ current access also prevents historical reads. Hidden dependency graphs fail
 closed rather than returning a misleading partial graph.
 
 Version metadata adds `declared_version`, optional `release` (label, actor/time),
-`is_current`, `is_published`, and optional `restored_from_version_id`.
+`is_current` and `is_published`.
 Version detail contains `{version, manifest_json, plugin_json}`. Host storage
 sidecars/object keys are excluded, including locations inside legacy
 `skill/ref.json` metadata. The original bytes remain internal and immutable.
@@ -72,16 +71,18 @@ retrieved using their inventory paths (`skill/ref.json/object_key`,
 `skill/ref.json/zip_object_key`, `skill/ref.json/file_url`), or the aliases
 `SKILL.md` and `skill/package.zip`; the private descriptor itself is not downloadable.
 
-Restore body: `{"version":"3.0.0"}`. The label must be valid and strictly later
-than the current saved label. Restore copies historical content and relations
-to a new saved version, preserves current access settings and records provenance.
-It never moves the published pointer; publish/review again to release it. A stale
-head or conflicting release label is rejected. Historical files/versions have no
-physical deletion or automatic retention expiry in this rollout.
+Historical files/versions have no physical deletion or automatic retention expiry
+in this rollout. Restore-to-draft is not part of this release.
 
 Existing tenant `POST /plugins/publish` publishes the current private draft or
-submits the current Space draft for review. For the admin surface,
-`POST /admin/plugins/{plugin_id}/publish` explicitly publishes a saved draft.
+submits the current Space draft for review. Admin does not expose a publish or
+release API; an admin save follows the state matrix below.
+
+Visibility follows the confirmed A' rule: a private resource may be published and
+is visible only to its owner; the owner's private expert/team may reference the
+owner's authorized private resources. A space resource is shared within the
+Space; system is global. Space/system sources cannot reference private
+dependencies.
 
 Admin writes follow the confirmed state matrix: creating or importing a system
 resource, and saving/uploading a **listed** system resource, publish in the same
@@ -94,8 +95,8 @@ expose the published pointer.
 
 The prepared PR2 API uses only its own demo database and storage. The test service
 has development authentication; use it only on the loopback port mapping. The
-script creates one private test expert per run and checks published v1, saved v2,
-historical file bytes and restoring v1 as a distinct v3 draft:
+script creates one private test expert per run and checks published v1, saved v2
+and historical file bytes:
 
 ```bash
 python3 scripts/test-version-management.py --base-url http://127.0.0.1:32772

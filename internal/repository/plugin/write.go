@@ -13,7 +13,6 @@ import (
 
 // Mutation contains current state, replacement relations, and append-only audit metadata.
 type Mutation struct {
-	RestoreSourceVersionID   string
 	ExpectedCurrentVersionID string
 	Plugin                   model.Plugin
 	Relations                []model.PluginRelation
@@ -588,9 +587,6 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 			return nil, ErrVersionBaselineUnavailable
 		}
 	}
-	if err = guardVersionRestore(ctx, tx, before, m); err != nil {
-		return nil, err
-	}
 	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility {
 		return nil, ErrConflict
 	}
@@ -735,13 +731,8 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	relationsChanged := len(sync.Created) > 0 || len(sync.Updated) > 0 || len(sync.Deleted) > 0
 	sidecarUnchanged := sameAttachmentKeys(p.AttachmentKeys, before.AttachmentKeys)
 	hasChangelog := m.Changelog != nil && *m.Changelog != ""
-	if m.SnapshotVersion && (m.RestoreSourceVersionID != "" || !contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || hasChangelog) {
+	if m.SnapshotVersion && (!contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || hasChangelog) {
 		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID); err != nil {
-			return nil, err
-		}
-	}
-	if m.RestoreSourceVersionID != "" && sync.NewVersionID != "" {
-		if _, err = tx.ExecContext(ctx, `UPDATE plugin_versions SET restored_from_version_id=? WHERE plugin_id=? AND version_id=?`, m.RestoreSourceVersionID, p.ID, sync.NewVersionID); err != nil {
 			return nil, err
 		}
 	}
