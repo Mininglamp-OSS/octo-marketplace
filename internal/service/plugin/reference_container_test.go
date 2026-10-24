@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
 func referenceArchive(t *testing.T, files map[string]string) []byte {
@@ -71,5 +73,41 @@ func TestReferenceWriteRejectsManifestInlineAbilities(t *testing.T) {
 	req.Manifest, _ = json.Marshal(manifest)
 	if _, _, err := svc.buildWrite(context.Background(), Caller{UID: "owner", SpaceID: "space"}, "", req, time.Now(), false); err == nil {
 		t.Fatal("accepted inline skills hidden in manifest extensions")
+	}
+}
+
+func TestTaggedReferenceContainerPassesCanonicalWriteValidation(t *testing.T) {
+	svc := New(nil).WithVersionManagement(true).WithReferences(true)
+	for _, filename := range []string{"expert.json", "squad.json"} {
+		doc := `{"schema_version":"2","kind":"agent","name":"reviewer","instruction":"Review","tags":["research"]}`
+		if filename == "squad.json" {
+			doc = `{"schema_version":"2","kind":"squad","name":"team","instruction":"Review","tags":["research"],"members":[{"id":"expert","version_id":"v1","member_key":"reviewer","is_leader":true}]}`
+		}
+		req, err := svc.parseReferenceContainer(ContainerImportParams{SchemaVersion: "2", Archive: referenceArchive(t, map[string]string{filename: doc})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(req.Tags) != `["research"]` {
+			t.Fatalf("tags lost: %s", req.Tags)
+		}
+		// Exercise both public service entry points, including admin writes.
+		store := &fakeStore{plugins: map[string]*model.Plugin{"expert": {ID: "expert", Type: model.PluginTypeExpert, Visibility: model.PluginVisibilitySystem}}}
+		service := fixedService(store).WithVersionManagement(true).WithReferences(true)
+		params := ContainerImportParams{SchemaVersion: "2", Archive: referenceArchive(t, map[string]string{filename: doc})}
+		imported, err := service.ImportContainer(context.Background(), adminCaller, params)
+		if err != nil {
+			t.Fatalf("%s import: %v", filename, err)
+		}
+		if string(imported.Plugin.Tags) != `["research"]` {
+			t.Fatalf("import tags: %s", imported.Plugin.Tags)
+		}
+		store.plugins[imported.Plugin.ID] = imported.Plugin
+		reuploaded, err := service.ReuploadContainer(context.Background(), adminCaller, imported.Plugin.ID, params)
+		if err != nil {
+			t.Fatalf("%s reupload: %v", filename, err)
+		}
+		if string(reuploaded.Plugin.Tags) != `["research"]` {
+			t.Fatalf("reupload tags: %s", reuploaded.Plugin.Tags)
+		}
 	}
 }

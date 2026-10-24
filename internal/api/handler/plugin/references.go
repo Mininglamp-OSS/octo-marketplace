@@ -103,7 +103,7 @@ func (h *AdminHandler) ReferenceDependents(c *gin.Context) { readDependents(c, h
 
 // ReferenceCandidates godoc
 // @Summary List authorized plugin reference candidates
-// @Description Returns independently published resources compatible with the source audience. Already bound targets and missing release baselines are explicitly unselectable; placements never determine eligibility.
+// @Description Returns independently published resources compatible with the source audience. Already bound targets and missing release baselines are explicitly unselectable; placements never determine eligibility. Owners and admins see editable bindings; other readers see bindings from the published snapshot.
 // @Tags plugin
 // @ID plugin.references.list
 // @Produce json
@@ -117,6 +117,7 @@ func (h *AdminHandler) ReferenceDependents(c *gin.Context) { readDependents(c, h
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
+// @Failure 409 {object} apiresponse.Error "CONFLICT: release baseline required"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /plugins/{plugin_id}/reference_candidates [get]
 func (h *Handler) ReferenceCandidates(c *gin.Context) {

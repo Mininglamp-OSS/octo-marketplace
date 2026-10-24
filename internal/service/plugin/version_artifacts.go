@@ -18,6 +18,8 @@ import (
 // freezeVersionArtifacts detaches saved bytes from mutable caller upload keys.
 // It completes before the DB transaction. Version objects are never reclaimed
 // on failure: another concurrent save may already reference the same content.
+// Caller-supplied mutable keys are retained unless the outer ingestion flow has
+// tracked their creation; same-Space access does not prove exclusive ownership.
 // Unreferenced objects can be audited later; this PR introduces no physical GC.
 func (s *Service) freezeVersionArtifacts(ctx context.Context, typ model.PluginType, docs *CanonicalDocuments, spaceID string) error {
 	if typ == model.PluginTypeConnector {
@@ -86,6 +88,9 @@ func (s *Service) freezeVersionArtifacts(ctx context.Context, typ model.PluginTy
 					return err
 				}
 
+				// Missing legacy metadata establishes a baseline for this NEW
+				// save only. It does not validate or rewrite historical releases.
+				// Once present, digest and size are mandatory matching assertions.
 				var expectedHash string
 				var expectedSize int64
 				if value, ok := ref[field+"_hash"]; ok {

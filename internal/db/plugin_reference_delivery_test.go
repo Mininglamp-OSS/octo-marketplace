@@ -248,3 +248,58 @@ func TestReferenceDeliveryUnknownIndexFailsClosed(t *testing.T) {
 		t.Fatalf("corrupt coverage marker accepted: %v", err)
 	}
 }
+
+func TestReferenceCandidatesKeepDraftBindingsPrivate(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database).WithVersionManagement(true).WithReferences(true)
+	for _, p := range []seedPlugin{{id: "skill", typ: "skill", visibility: "space", listingState: "published"}, {id: "expert", typ: "expert", visibility: "space", listingState: "published"}} {
+		seed(t, database, p)
+		seedVersionRow(t, database, p.id+"-v1", p.id, "1")
+		if _, err := database.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES (?,?,'1.0.0','user-1',NOW(3))`, p.id, p.id+"-v1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`UPDATE plugins SET published_version_id=? WHERE plugin_id=?`, p.id+"-v1", p.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertBinding := func(scope pluginrepo.Scope, want bool) {
+		t.Helper()
+		rows, n, err := repo.ReferenceCandidates(context.Background(), scope, "expert", "expert_skill", 20, 0)
+		if err != nil || n != 1 || len(rows) != 1 {
+			t.Fatalf("candidates=%+v n=%d err=%v", rows, n, err)
+		}
+		if rows[0].AlreadyBound != want || rows[0].IsSelectable == want {
+			t.Fatalf("binding leaked or lost: %+v want bound=%v", rows[0], want)
+		}
+	}
+	reader := pluginrepo.Scope{CallerUID: "other", SpaceID: "space-a"}
+	assertBinding(reader, false)
+	if _, err := database.Exec(`INSERT INTO plugin_relations(relation_id,source_plugin_id,target_plugin_id,relation_type,target_version_id,status,created_by,created_at,updated_at) VALUES ('draft-edge','expert','skill','expert_skill','skill-v1',1,'user-1',NOW(3),NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	assertBinding(tenantScope(), true)
+	assertBinding(reader, false)
+	// A released binding remains visible even when a later draft removes it.
+	version := "skill-v1"
+	raw, err := model.EncodeSnapshotRelations([]model.PluginRelation{{ID: "released-edge", SourcePluginID: "expert", TargetPluginID: "skill", Type: "expert_skill", TargetVersionID: &version, Status: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec(`UPDATE plugin_versions SET relations_json=? WHERE version_id='expert-v1'`, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec(`DELETE FROM plugin_relations WHERE relation_id='draft-edge'`); err != nil {
+		t.Fatal(err)
+	}
+	assertBinding(tenantScope(), false)
+	assertBinding(reader, true)
+	if _, _, err = repo.ReferenceCandidates(context.Background(), pluginrepo.Scope{CallerUID: "other", SpaceID: "space-b"}, "expert", "expert_skill", 20, 0); !errors.Is(err, pluginrepo.ErrNotFound) {
+		t.Fatalf("cross-space: %v", err)
+	}
+	if _, err = database.Exec(`UPDATE plugins SET published_version_id=NULL WHERE plugin_id='expert'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = repo.ReferenceCandidates(context.Background(), reader, "expert", "expert_skill", 20, 0); !errors.Is(err, pluginrepo.ErrVersionBaselineUnavailable) {
+		t.Fatalf("unknown baseline: %v", err)
+	}
+}

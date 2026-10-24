@@ -247,3 +247,49 @@ func TestCorruptedContentAddressedImportIsNeverOverwritten(t *testing.T) {
 		t.Fatal("rewrote an existing historical object")
 	}
 }
+
+func TestFreezeLegacyBaselineRetainsSharedSourceAndRejectsChangedMetadata(t *testing.T) {
+	ctx := context.Background()
+	blobs := storage.NewLocal(t.TempDir(), "http://localhost")
+	svc := New(&fakeStore{}, blobs)
+	key := "plugins/space-a/attachments/shared-legacy.md"
+	data := "shared bytes"
+	if err := blobs.PutObject(ctx, key, strings.NewReader(data), int64(len(data)), ""); err != nil {
+		t.Fatal(err)
+	}
+	docs := &CanonicalDocuments{Manifest: json.RawMessage(`{}`), Package: packageWith(rawAtt("SKILL.md", "stub"), rawAtt("skill/ref.json", `{"object_key":"`+key+`"}`))}
+	if err := svc.freezeVersionArtifacts(ctx, model.PluginTypeSkill, docs, "space-a"); err != nil {
+		t.Fatal(err)
+	}
+	body, err := blobs.GetObject(ctx, key)
+	if err != nil {
+		t.Fatalf("deleted potentially shared caller source: %v", err)
+	}
+	body.Close()
+	original := string(docs.Package)
+	if err := svc.freezeVersionArtifacts(ctx, model.PluginTypeSkill, docs, "space-a"); err != nil {
+		t.Fatalf("baseline replay: %v", err)
+	}
+	if string(docs.Package) != original {
+		t.Fatal("baseline changed on replay")
+	}
+	raw, _ := rawAttachmentContent(docs.Package, "skill/ref.json")
+	var ref map[string]any
+	_ = json.Unmarshal([]byte(raw), &ref)
+	for _, field := range []string{"object_key_hash", "object_key_size"} {
+		modified := map[string]any{}
+		for k, v := range ref {
+			modified[k] = v
+		}
+		if field == "object_key_hash" {
+			modified[field] = "sha256:wrong"
+		} else {
+			modified[field] = 999
+		}
+		descriptor, _ := json.Marshal(modified)
+		bad := &CanonicalDocuments{Manifest: json.RawMessage(`{}`), Package: packageWith(rawAtt("SKILL.md", "stub"), rawAtt("skill/ref.json", string(descriptor)))}
+		if err := svc.freezeVersionArtifacts(ctx, model.PluginTypeSkill, bad, "space-a"); !errors.Is(err, ErrIntegrity) {
+			t.Fatalf("accepted changed %s: %v", field, err)
+		}
+	}
+}
