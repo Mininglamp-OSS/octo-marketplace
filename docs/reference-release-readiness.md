@@ -1,0 +1,25 @@
+# Reference release readiness
+
+Local implementation is not deployment approval. Default configuration keeps version management, reference writes and pinned installation disabled. No production migration, real-tenant inventory or feature activation is performed by the tools or tests.
+
+## Delivery order
+
+1. Land version/release foundations (PR124), then R1–R4. Preserve append-only release identities and historical files.
+2. Land the installation/M1/M3 delivery. Inspect the read-only inventory and migration exceptions on a separately authorized environment before any data operation.
+3. Rehearse migration on an isolated copy: verify inherited owner/Space/visibility/listing, dependency pins, repeated runs, interruption and pointer rollback. Unresolved exceptions block apply; do not guess latest or clear secrets.
+4. Verify installed Fleet rows/bindings and Daemon files against the exact prepared plan. Actual provider discovery, online dispatch and MCP execution need separate acceptance; a successful HTTP response alone is insufficient.
+5. Only after acceptance, authorize an explicit deployment change. `PLUGIN_REFERENCES_ENABLED` requires version management; pinned installation requires both. Server startup rejects an inconsistent combination.
+
+## Coverage and compatibility
+
+Historical index preview proves exact edges and explicit empty graphs. A coverage marker is written in the same transaction as verified facts. Unknown legacy pins remain exceptions; a migrated container's new version does not prove the old version's dependencies. Dependents queries return an index-incomplete conflict rather than claiming no consumers when authorized history lacks verified coverage. This diagnostic limitation does not decide deletion permissions.
+
+New container uploads use reference format. An old-format archive is rejected when reference writes are enabled. Existing legacy rows require the dedicated migration tool; there is no automatic import/conversion fallback. Connector IDs resolve current configuration and have no versions. Existing pinned references may retain delisted dependencies, while new references require listed, authorized resources.
+
+## Rollback boundaries
+
+Stop new reference writes and new installation attempts first. Do not blindly switch all reads back to editable current rows: saved unpublished changes could become visible, and the old embedded-only installer cannot reconstruct independent references. Prefer a compatible forward fix or restore the reviewed application build while retaining the published-version read path.
+
+Migration rollback restores recorded pointers/listing and preserves all new rows, releases and files. Do not run destructive Down migrations or delete shared dependencies. Previously installed Fleet instances keep their own IDs and content; rolling back Marketplace does not uninstall them.
+
+Persisted uncertain installation attempts must be reconciled with Fleet under the same key and payload. After the remote receipt window, do not issue an automatic fresh key or fall back to the non-idempotent installer.

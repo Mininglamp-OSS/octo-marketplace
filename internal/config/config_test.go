@@ -463,3 +463,21 @@ func TestPinnedInstallationRequiresVersionManagement(t *testing.T) {
 		t.Fatalf("missing version prerequisite: %v", err)
 	}
 }
+
+func TestReferenceRolloutPrerequisites(t *testing.T) {
+	t.Setenv("PLUGIN_REFERENCES_ENABLED", "")
+	if Load().PluginReferencesEnabled {
+		t.Fatal("reference writes enabled by default")
+	}
+	for _, tc := range []struct {
+		cfg     Config
+		setting string
+	}{
+		{Config{PluginReferencesEnabled: true}, "PLUGIN_VERSION_MANAGEMENT_ENABLED"},
+		{Config{PluginVersionManagementEnabled: true, PluginPinnedInstallationEnabled: true}, "PLUGIN_REFERENCES_ENABLED"},
+	} {
+		if err := tc.cfg.ValidateAPI(); err == nil || !strings.Contains(err.Error(), tc.setting) {
+			t.Fatalf("missing prerequisite %s: %v", tc.setting, err)
+		}
+	}
+}
