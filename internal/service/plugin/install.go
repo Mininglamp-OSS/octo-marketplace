@@ -55,6 +55,9 @@ type InstallParams struct {
 	WorkspaceID string
 	RuntimeID   string
 	CustomEnv   map[string]string
+	// IdempotencyKey is optional on the legacy A31 route. When absent a fresh
+	// key is generated for that single legacy call; A32 always supplies one.
+	IdempotencyKey string
 	// Token is the caller's forwarded credential, re-read from the request
 	// header by the handler because middleware discards it.
 	Token string
@@ -71,15 +74,24 @@ func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p
 	if validateCaller(caller) != nil {
 		return nil, ErrInvalidRequest
 	}
+	if s.pinnedInstallation && s.capabilityInstaller != nil {
+		key := strings.TrimSpace(p.IdempotencyKey)
+		if key == "" {
+			key = s.id()
+		}
+		out, err := s.createPinnedInstallation(ctx, caller, pluginID, InstallationParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv, IdempotencyKey: key, Token: p.Token})
+		if err != nil {
+			return nil, err
+		}
+		return &InstallOutcome{AgentID: out.AgentID, SquadID: out.SquadID}, nil
+	}
 	if s.provisioner == nil {
 		return nil, expertsvc.ErrFleetNotConfigured
 	}
 	if strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.RuntimeID) == "" {
 		return nil, ErrInvalidRequest
 	}
-	if s.pinnedInstallation {
-		return s.installPinnedLegacy(ctx, caller, pluginID, p)
-	}
+
 	detail, err := s.resolveInstallDetail(ctx, caller, pluginID)
 	if err != nil {
 		return nil, err

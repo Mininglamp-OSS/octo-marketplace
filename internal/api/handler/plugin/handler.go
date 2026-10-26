@@ -818,6 +818,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		// and reason so the browser can show the user which input to fix,
 		// instead of collapsing every cause into {"field":"body","reason":"invalid"}.
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, "Correct the request and try again.")
+	case errors.Is(err, pluginsvc.ErrAttemptExpired):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "installation attempt expired", map[string]any{"reason": "installation_attempt_expired"}, "Check the workspace for an existing resource; do not reuse the expired idempotency key.")
 	case errors.Is(err, pluginsvc.ErrDependencyUnavailable):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a dependency is not available in the current published graph", map[string]any{"reason": "dependency_unavailable"}, "Refresh the plugin and ask the publisher to repair the dependency.")
 	// A manual review window is only valid for the dependency releases observed at

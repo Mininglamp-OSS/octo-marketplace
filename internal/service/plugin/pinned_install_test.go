@@ -359,14 +359,8 @@ func TestLegacyAndCapabilityUseSameFrozenBindings(t *testing.T) {
 	if _, err := s.Install(context.Background(), testCaller, "team", InstallParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID}); err != nil {
 		t.Fatal(err)
 	}
-	if legacy.squad == nil || len(legacy.squad.Members) != 2 {
-		t.Fatalf("legacy %+v", legacy)
-	}
-	for i, e := range remote.in.Definition.Experts {
-		member := legacy.squad.Members[i]
-		if member.Instruction != e.Instructions || len(member.Skills) != len(e.SkillNames) || member.Skills[0].Name != e.SkillNames[0] {
-			t.Fatal("entrypoints differ")
-		}
+	if remote.calls != 2 || legacy.squad != nil {
+		t.Fatalf("legacy route did not use the shared install coordinator: calls=%d legacy=%+v", remote.calls, legacy)
 	}
 }
 

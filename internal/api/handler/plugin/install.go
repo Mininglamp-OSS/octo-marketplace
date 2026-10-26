@@ -59,9 +59,10 @@ func (h *Handler) Install(c *gin.Context) {
 		return
 	}
 	outcome, err := h.svc.Install(c.Request.Context(), caller, req.PluginID, pluginsvc.InstallParams{
-		WorkspaceID: strings.TrimSpace(req.WorkspaceID),
-		RuntimeID:   strings.TrimSpace(req.RuntimeID),
-		CustomEnv:   req.CustomEnv,
+		WorkspaceID:    strings.TrimSpace(req.WorkspaceID),
+		RuntimeID:      strings.TrimSpace(req.RuntimeID),
+		CustomEnv:      req.CustomEnv,
+		IdempotencyKey: c.GetHeader("Idempotency-Key"),
 		// The token is forwarded to fleet; middleware discarded it, so re-read it.
 		Token: marketmiddleware.Token(c),
 	})
