@@ -106,19 +106,19 @@ type adminHistoricalFake struct {
 	helperVersion string
 }
 
-func (f *adminHistoricalFake) AdminVersionSkillMarkdown(_ context.Context, c pluginsvc.Caller, _, vid string) (string, error) {
+func (f *adminHistoricalFake) AdminSkillMarkdown(_ context.Context, c pluginsvc.Caller, _, vid string) (*pluginsvc.SkillMarkdownResult, error) {
 	f.helperVersion = vid
 	f.gotCaller = c
-	return "historical", nil
+	return &pluginsvc.SkillMarkdownResult{Content: "historical", VersionID: "v1"}, nil
 }
-func (f *adminHistoricalFake) AdminOpenVersionSkillPackage(_ context.Context, c pluginsvc.Caller, _, vid string) (*pluginsvc.SkillPackageStream, error) {
+func (f *adminHistoricalFake) AdminOpenSkillPackage(_ context.Context, c pluginsvc.Caller, _, vid string) (*pluginsvc.SkillPackageStream, error) {
 	f.helperVersion = vid
 	f.gotCaller = c
-	return &pluginsvc.SkillPackageStream{FileName: "history.zip", Write: func(w io.Writer) error { _, e := io.WriteString(w, "zip"); return e }}, nil
+	return &pluginsvc.SkillPackageStream{FileName: "history.zip", VersionID: "v1", Write: func(w io.Writer) error { _, e := io.WriteString(w, "zip"); return e }}, nil
 }
 func TestAdminHistoricalContractAndRemovedOperations(t *testing.T) {
 	label := "1.0.0"
-	f := &adminHistoricalFake{fakeAdminService: &fakeAdminService{}, versionServiceFake: &versionServiceFake{fakeService: &fakeService{}, version: model.PluginVersion{ID: "v1", PluginID: "skill", PluginType: model.PluginTypeSkill, Version: "1", DeclaredVersion: &label, Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[{"path":"SKILL.md","mime_type":"text/markdown"}]}`), Relations: json.RawMessage(`[]`)}}}
+	f := &adminHistoricalFake{fakeAdminService: &fakeAdminService{}, versionServiceFake: &versionServiceFake{fakeService: &fakeService{}, version: model.PluginVersion{ID: "v1", PluginID: "skill", PluginType: model.PluginTypeSkill, Version: "1", DeclaredVersion: &label, Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{"attachments":[{"path":"SKILL.md","mime_type":"text/markdown"}]}`), Relations: json.RawMessage(`[]`), Release: &model.PluginVersionRelease{VersionLabel: label}, IsPublished: true}}}
 	r := adminTestEngine(f, nil)
 	for _, tc := range []struct{ method, path string }{{"GET", "/versions"}, {"GET", "/versions/v1/file"}, {"POST", "/versions/v1/restore"}, {"POST", "/publish"}} {
 		rec := httptest.NewRecorder()
@@ -138,15 +138,18 @@ func TestAdminHistoricalContractAndRemovedOperations(t *testing.T) {
 	if e := json.Unmarshal(rec.Body.Bytes(), &envelope); e != nil {
 		t.Fatal(e)
 	}
-	for _, k := range []string{"plugin_id", "version_id", "revision_no", "version_label", "files", "relations", "relation_digest"} {
+	for _, k := range []string{"plugin_id", "version_id", "revision_no", "version_label", "is_released", "is_published", "created_by", "files", "relations", "relation_digest", "plugin_json"} {
 		if _, ok := envelope.Data[k]; !ok {
 			t.Errorf("missing %s", k)
 		}
 	}
-	for _, k := range []string{"release", "version", "published_version_id", "plugin_json"} {
+	for _, k := range []string{"release", "version", "published_version_id"} {
 		if _, ok := envelope.Data[k]; ok {
 			t.Errorf("unexpected %s", k)
 		}
+	}
+	if envelope.Data["is_released"] != true || envelope.Data["is_published"] != true {
+		t.Errorf("version release flags missing: %v", envelope.Data)
 	}
 	for _, route := range []string{"skill_md", "download"} {
 		rec = httptest.NewRecorder()
@@ -154,5 +157,60 @@ func TestAdminHistoricalContractAndRemovedOperations(t *testing.T) {
 		if rec.Code != 200 || f.helperVersion != "v1" || !f.gotCaller.IsSystemAdmin {
 			t.Fatalf("helper %s: %d %s", route, rec.Code, rec.Body.String())
 		}
+		if route == "skill_md" {
+			if !strings.Contains(rec.Body.String(), `"version_id":"v1"`) {
+				t.Fatalf("skill_md must expose the actual version: %s", rec.Body.String())
+			}
+		} else if rec.Header().Get("X-Plugin-Version-Id") != "v1" {
+			t.Fatalf("download missing actual version header: %v", rec.Header())
+		}
+	}
+}
+
+func TestAdminVersionConnectorUnsupportedTypeIs400(t *testing.T) {
+	f := &adminHistoricalFake{
+		fakeAdminService:   &fakeAdminService{},
+		versionServiceFake: &versionServiceFake{fakeService: &fakeService{}, versionErr: &pluginsvc.ReviewFieldError{Field: "plugin_type", Reason: "unsupported_type", Err: pluginsvc.ErrInvalidRequest}},
+	}
+	rec := httptest.NewRecorder()
+	adminTestEngine(f, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/connector-1/versions/v1", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Error struct {
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Details["field"] != "plugin_type" || envelope.Error.Details["reason"] != "unsupported_type" {
+		t.Fatalf("details=%v", envelope.Error.Details)
+	}
+}
+
+func TestAdminVersionWireRedactsStorageLocations(t *testing.T) {
+	key := "plugins/private-space/attachments/versions/private-object"
+	rawRef, _ := json.Marshal(map[string]any{"object_key": key, "zip_object_key": key, "file_url": key})
+	pkg, _ := json.Marshal(map[string]any{"attachments": []any{
+		map[string]any{"path": "skill/ref.json", "content_type": "raw", "raw_content": string(rawRef)},
+		map[string]any{"path": "file.bin", "content_type": "storage", "storage_uri": key, "content_size": 3, "content_hash": "sha256:abc"},
+	}})
+	label := "1.0.0"
+	f := &adminHistoricalFake{fakeAdminService: &fakeAdminService{}, versionServiceFake: &versionServiceFake{fakeService: &fakeService{}, version: model.PluginVersion{ID: "v1", PluginID: "skill", PluginType: model.PluginTypeSkill, Version: "1", DeclaredVersion: &label, Manifest: json.RawMessage(`{}`), Package: pkg, Relations: json.RawMessage(`[]`)}}}
+	rec := httptest.NewRecorder()
+	adminTestEngine(f, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/skill/versions/v1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, secret := range []string{key, `"storage_uri"`, `\"object_key\"`, `\"zip_object_key\"`, `\"file_url\"`} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("private location exposed: %s", body)
+		}
+	}
+	if !strings.Contains(body, `"plugin_json"`) || !strings.Contains(body, `"content_hash":"sha256:abc"`) {
+		t.Fatalf("public plugin_json metadata missing: %s", body)
 	}
 }

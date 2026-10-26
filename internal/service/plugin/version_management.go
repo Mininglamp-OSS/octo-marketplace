@@ -231,7 +231,9 @@ func (s *Service) ManagedVersion(ctx context.Context, caller Caller, pluginID, v
 		return nil, mapStoreError(err)
 	}
 	if p.Type == model.PluginTypeConnector {
-		return nil, ErrNotFound
+		// Connectors have no business Version/release. A22/A05 must reject the
+		// exact-version read instead of disguising it as a missing history row.
+		return nil, &ReviewFieldError{Field: "plugin_type", Reason: "unsupported_type", Err: ErrInvalidRequest}
 	}
 	v, err := store.GetManagedVersion(ctx, sc, pid, versionID)
 	if err != nil {
@@ -375,7 +377,7 @@ func (s *Service) AdminPublishVersion(ctx context.Context, caller Caller, plugin
 	if !caller.IsSystemAdmin {
 		return nil, ErrNotFound
 	}
-	d, err := s.AdminDetail(ctx, caller, pluginID, true)
+	d, err := s.AdminDetail(ctx, caller, pluginID, true, "")
 	if err != nil {
 		return nil, err
 	}

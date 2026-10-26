@@ -30,6 +30,9 @@ type importRequest struct {
 
 type skillMarkdownResponse struct {
 	Content string `json:"content"`
+	// VersionID is the immutable snapshot actually read (A23). It is omitted on
+	// the public A06 path, which does not carry a version identity today.
+	VersionID string `json:"version_id,omitempty"`
 }
 
 // Import godoc

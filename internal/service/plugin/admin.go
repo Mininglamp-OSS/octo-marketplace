@@ -36,9 +36,122 @@ func validAdminListSort(sort string) bool {
 	}
 }
 
+// adminListProjectionView validates A21's list projection. The Admin list is a
+// management read of editable content: editing is the default and the only
+// accepted value. effective is a Connector DETAIL escape hatch only, so asking
+// for it on a list (or asking for the public published view) is a 400
+// view_invalid, never a silent fallback.
+func adminListProjectionView(raw string) (model.PluginView, error) {
+	switch strings.TrimSpace(raw) {
+	case "", string(model.PluginViewEditing):
+		return model.PluginViewEditing, nil
+	default:
+		return "", &ReviewFieldError{Field: "view", Reason: "view_invalid", Err: ErrInvalidRequest}
+	}
+}
+
+// adminDetailProjectionView validates A21's detail view. effective is accepted
+// here only so the Connector check can run after the row is loaded (the view is
+// invalid for every versioned type).
+func adminDetailProjectionView(raw string) (model.PluginView, error) {
+	switch strings.TrimSpace(raw) {
+	case "", string(model.PluginViewEditing):
+		return model.PluginViewEditing, nil
+	case string(model.PluginViewEffective):
+		return model.PluginViewEffective, nil
+	default:
+		return "", &ReviewFieldError{Field: "view", Reason: "view_invalid", Err: ErrInvalidRequest}
+	}
+}
+
+// adminProjectionStore is the optional batched version/release read used by the
+// A21 projection. It stays optional so the legacy Store contract and its
+// existing fakes remain compatible; without it the service falls back to the
+// current pointer already present on the row.
+type adminProjectionStore interface {
+	ListPluginReadMetas(context.Context, pluginrepo.Scope, []string) (map[string]pluginrepo.PluginReadMeta, error)
+}
+
+type adminConnectorEffectiveStore interface {
+	GetConnectorEffective(context.Context, pluginrepo.Scope, string) (*model.Plugin, error)
+}
+
+// adminReadMetas loads the A21 version/release metadata for a page in one
+// statement. A store without the optional read returns an empty map.
+func (s *Service) adminReadMetas(ctx context.Context, sc pluginrepo.Scope, ids []string) (map[string]pluginrepo.PluginReadMeta, error) {
+	store, ok := s.repo.(adminProjectionStore)
+	if !ok {
+		return map[string]pluginrepo.PluginReadMeta{}, nil
+	}
+	metas, err := store.ListPluginReadMetas(ctx, sc, ids)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if metas == nil {
+		metas = map[string]pluginrepo.PluginReadMeta{}
+	}
+	return metas, nil
+}
+
+// applyAdminProjection stamps the A21 read fields on a row. Versioned resources
+// default to editing/current; Connectors have no version identity, so their
+// version fields are omitted and their effective revision/digest are exposed.
+// The published pointer is retained only for server-side derivation — the JSON
+// DTO deliberately has no field for it.
+func applyAdminProjection(p *model.Plugin, meta pluginrepo.PluginReadMeta, hasMeta bool, view model.PluginView) {
+	if p == nil {
+		return
+	}
+	p.View = view
+	p.DeclaredVisibility = p.Visibility
+	if p.Type == model.PluginTypeConnector {
+		p.CurrentVersionID = nil
+		p.CurrentVersion = nil
+		p.SelectedVersionID = nil
+		p.VersionLabel = nil
+		p.RevisionNo = nil
+		p.PublishedVersionID = nil
+		if hasMeta {
+			p.EffectiveRevision = meta.EffectiveRevision
+			p.EffectiveDigest = meta.EffectiveDigest
+			p.IsPublished = meta.EffectiveRevision != nil
+		}
+		return
+	}
+	current := p.CurrentVersionID
+	published := p.PublishedVersionID
+	label := p.CurrentVersion
+	revision := p.RevisionNo
+	if hasMeta {
+		current = meta.CurrentVersionID
+		if current == nil {
+			current = p.CurrentVersionID
+		}
+		published = meta.PublishedVersionID
+		if meta.CurrentVersionLabel != nil {
+			label = meta.CurrentVersionLabel
+		} else {
+			label = p.CurrentVersion
+		}
+		revision = meta.CurrentRevisionNo
+	}
+	p.CurrentVersionID = current
+	p.SelectedVersionID = current
+	p.VersionLabel = label
+	p.RevisionNo = revision
+	p.PublishedVersionID = published
+	p.IsPublished = published != nil
+	// current非空且与published不同. Both empty is not a change.
+	p.HasUnpublishedChanges = current != nil && (published == nil || *current != *published)
+}
+
 // AdminList lists plugins of one type across all Spaces, optionally narrowed to
 // a visibility class (e.g. system connectors, system skills).
 func (s *Service) AdminList(ctx context.Context, caller Caller, typ model.PluginType, visibility model.PluginVisibility, p ListParams) ([]model.Plugin, int64, error) {
+	view, err := adminListProjectionView(p.View)
+	if err != nil {
+		return nil, 0, err
+	}
 	if !validPluginType(typ) {
 		return nil, 0, ErrInvalidRequest
 	}
@@ -58,7 +171,8 @@ func (s *Service) AdminList(ctx context.Context, caller Caller, typ model.Plugin
 	if err != nil {
 		return nil, 0, err
 	}
-	items, total, err := s.repo.List(ctx, adminScope(caller), pluginrepo.ListFilter{
+	sc := adminScope(caller)
+	items, total, err := s.repo.List(ctx, sc, pluginrepo.ListFilter{
 		Type: typ, Visibility: visibility, AllSpaces: true,
 		CategoryID: p.CategoryID, Tags: tags, Keyword: p.Keyword, Sort: p.Sort, Limit: p.Limit, Offset: p.Offset,
 	})
@@ -72,22 +186,136 @@ func (s *Service) AdminList(ctx context.Context, caller Caller, typ model.Plugin
 	if err != nil {
 		return nil, 0, mapStoreError(err)
 	}
+	ids := make([]string, len(items))
 	for i := range items {
+		ids[i] = items[i].ID
 		items[i].DependencyIssues = issues[items[i].ID]
+	}
+	metas, err := s.adminReadMetas(ctx, sc, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	digests, err := s.connectorContentDigests(ctx, sc, items)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range items {
+		meta, ok := metas[items[i].ID]
+		applyAdminProjection(&items[i], meta, ok, view)
+		if ok && items[i].Type == model.PluginTypeConnector {
+			if digest, supported := digests[items[i].ID]; supported {
+				// Connector "unpublished changes" compares the complete editing
+				// content with the complete effective row, not a counter.
+				items[i].HasUnpublishedChanges = digest.EffectiveDigest == nil || digest.EditingDigest != *digest.EffectiveDigest
+			}
+		}
 		items[i].IconURL = s.resolveIcon(ctx, items[i].Icon)
 	}
 	return items, total, nil
 }
 
+// connectorContentDigestStore is the optional batched read used to compare a
+// Connector's complete editing content with its complete effective content. A
+// summary row omits plugin_json, so neither digest can be computed from the
+// list row itself.
+type connectorContentDigestStore interface {
+	ListConnectorContentDigests(context.Context, pluginrepo.Scope, []string) (map[string]pluginrepo.ConnectorContentDigests, error)
+}
+
+// connectorContentDigests loads complete editing/effective payload digests for
+// the Connector rows of a page. Rows whose store does not expose the batched
+// read are simply absent from the map.
+func (s *Service) connectorContentDigests(ctx context.Context, sc pluginrepo.Scope, items []model.Plugin) (map[string]pluginrepo.ConnectorContentDigests, error) {
+	store, ok := s.repo.(connectorContentDigestStore)
+	if !ok {
+		return map[string]pluginrepo.ConnectorContentDigests{}, nil
+	}
+	ids := make([]string, 0, len(items))
+	for i := range items {
+		if items[i].Type == model.PluginTypeConnector {
+			ids = append(ids, items[i].ID)
+		}
+	}
+	if len(ids) == 0 {
+		return map[string]pluginrepo.ConnectorContentDigests{}, nil
+	}
+	out, err := store.ListConnectorContentDigests(ctx, sc, ids)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if out == nil {
+		out = map[string]pluginrepo.ConnectorContentDigests{}
+	}
+	return out, nil
+}
+
 // AdminDetail returns any plugin's full detail by id, ignoring Space scope.
-func (s *Service) AdminDetail(ctx context.Context, caller Caller, pluginID string, includeRelations bool) (*Detail, error) {
+//
+// A21 view rules: editing/current is the default; effective is accepted only for
+// a Connector detail and is never synthesized from current. An invalid value or
+// combination is a 400 view_invalid (details.field=view), never a fallback.
+func (s *Service) AdminDetail(ctx context.Context, caller Caller, pluginID string, includeRelations bool, rawView string) (*Detail, error) {
+	view, err := adminDetailProjectionView(rawView)
+	if err != nil {
+		return nil, err
+	}
 	storageID, err := parseStorageID(pluginID)
 	if err != nil {
 		return nil, err
 	}
-	p, rels, err := s.repo.GetWithRelations(ctx, adminScope(caller), storageID)
+	sc := adminScope(caller)
+	p, rels, err := s.repo.GetWithRelations(ctx, sc, storageID)
 	if err != nil {
 		return nil, mapStoreError(err)
+	}
+	if view == model.PluginViewEffective {
+		if p.Type != model.PluginTypeConnector {
+			return nil, &ReviewFieldError{Field: "view", Reason: "view_invalid", Err: ErrInvalidRequest}
+		}
+		store, ok := s.repo.(adminConnectorEffectiveStore)
+		if !ok {
+			return nil, ErrInvalidRequest
+		}
+		// Keep the editing row to derive whether the effective payload is stale;
+		// the response itself must carry effective content, never current.
+		effective, err := store.GetConnectorEffective(ctx, sc, storageID)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		effective.View = model.PluginViewEffective
+		effective.DeclaredVisibility = effective.Visibility
+		effective.SelectedVersionID = nil
+		effective.VersionLabel = nil
+		effective.RevisionNo = nil
+		effective.CurrentVersionID = nil
+		effective.CurrentVersion = nil
+		effective.PublishedVersionID = nil
+		effective.IsPublished = effective.EffectiveRevision != nil
+		effective.HasUnpublishedChanges = model.EffectiveDigest(*p) != model.EffectiveDigest(*effective)
+		effective.IconURL = s.resolveIcon(ctx, effective.Icon)
+		if !includeRelations {
+			rels = []model.PluginRelation{}
+		} else {
+			for i := range rels {
+				rels[i].SourcePluginType = effective.Type
+			}
+		}
+		return &Detail{Plugin: effective, Relations: rels}, nil
+	}
+	metas, err := s.adminReadMetas(ctx, sc, []string{p.ID})
+	if err != nil {
+		return nil, err
+	}
+	meta, hasMeta := metas[p.ID]
+	applyAdminProjection(p, meta, hasMeta, view)
+	if hasMeta && p.Type == model.PluginTypeConnector {
+		digests, err := s.connectorContentDigests(ctx, sc, []model.Plugin{*p})
+		if err != nil {
+			return nil, err
+		}
+		if digest, supported := digests[p.ID]; supported {
+			p.HasUnpublishedChanges = digest.EffectiveDigest == nil || digest.EditingDigest != *digest.EffectiveDigest
+		}
 	}
 	p.IconURL = s.resolveIcon(ctx, p.Icon)
 	issues, err := s.repo.DependencyIssues(ctx, adminScope(caller), []model.Plugin{*p})

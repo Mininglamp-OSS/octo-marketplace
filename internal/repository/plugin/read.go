@@ -738,3 +738,194 @@ func (r *Repo) GetPublishedVersionID(ctx context.Context, sc Scope, pluginID str
 	}
 	return err
 }
+
+// PluginReadMeta is the version/release half of the Admin read projection
+// (A21/A22). It intentionally carries the published pointer for server-side
+// derivation only: the Admin wire DTO must not serialize it.
+type PluginReadMeta struct {
+	CurrentVersionID      *string
+	CurrentVersionLabel   *string
+	CurrentRevisionNo     *uint64
+	PublishedVersionID    *string
+	PublishedVersionLabel *string
+	PublishedRevisionNo   *uint64
+	EffectiveRevision     *uint64
+	EffectiveDigest       *string
+}
+
+// projectionMetaColumns selects the current/published identities and the
+// Connector effective metadata in one read. The joins are PK lookups, so a page
+// of Admin rows costs one statement rather than per-row version reads.
+const projectionMetaColumns = `p.plugin_id,p.current_version_id,p.published_version_id,
+ cv.version,cv.declared_version,pv.version,pv.declared_version,
+ ce.effective_revision,ce.effective_digest`
+
+func projectionMetaFrom() string {
+	return ` FROM plugins p
+ LEFT JOIN plugin_versions cv ON cv.plugin_id=p.plugin_id AND cv.version_id=p.current_version_id
+ LEFT JOIN plugin_versions pv ON pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id
+ LEFT JOIN plugin_connector_effective ce ON ce.plugin_id=p.plugin_id`
+}
+
+// scanPluginReadMeta scans projectionMetaColumns. The plugin_id is returned
+// separately because the caller keys the map by it.
+func scanPluginReadMeta(s interface{ Scan(...any) error }) (string, PluginReadMeta, error) {
+	var (
+		meta                               PluginReadMeta
+		id                                 string
+		currentID, currentLabel            sql.NullString
+		publishedID, publishedLabel        sql.NullString
+		currentRevision, publishedRevision sql.NullInt64
+		effectiveRevision                  sql.NullInt64
+		effectiveDigest                    sql.NullString
+	)
+	dest := []any{&id, &currentID, &publishedID, &currentRevision, &currentLabel, &publishedRevision, &publishedLabel, &effectiveRevision, &effectiveDigest}
+	if err := s.Scan(dest...); err != nil {
+		return "", meta, err
+	}
+	meta.CurrentVersionID = nullString(currentID)
+	meta.CurrentVersionLabel = nullString(currentLabel)
+	meta.PublishedVersionID = nullString(publishedID)
+	meta.PublishedVersionLabel = nullString(publishedLabel)
+	meta.EffectiveDigest = nullString(effectiveDigest)
+	if currentRevision.Valid {
+		n := uint64(currentRevision.Int64)
+		meta.CurrentRevisionNo = &n
+	}
+	if publishedRevision.Valid {
+		n := uint64(publishedRevision.Int64)
+		meta.PublishedRevisionNo = &n
+	}
+	if effectiveRevision.Valid {
+		n := uint64(effectiveRevision.Int64)
+		meta.EffectiveRevision = &n
+	}
+	return id, meta, nil
+}
+
+// ListPluginReadMetas loads the current/published/effective identities for a
+// page of plugins in one statement. Only live rows under the caller's scope are
+// returned; the caller decides how to treat ids that are absent.
+func (r *Repo) ListPluginReadMetas(ctx context.Context, sc Scope, pluginIDs []string) (map[string]PluginReadMeta, error) {
+	out := make(map[string]PluginReadMeta, len(pluginIDs))
+	if len(pluginIDs) == 0 {
+		return out, nil
+	}
+	args := stringSliceAsAny(pluginIDs)
+	query := `SELECT ` + projectionMetaColumns + projectionMetaFrom() +
+		` WHERE p.plugin_id IN (` + placeholders(len(pluginIDs)) + `) AND p.status=1 AND p.deleted_at IS NULL`
+	if !sc.Admin {
+		query += ` AND ` + visibilitySQL
+		args = append(args, sc.SpaceID, sc.CallerUID)
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapped("list plugin read metas", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		id, meta, err := scanPluginReadMeta(rows)
+		if err != nil {
+			return nil, wrapped("scan plugin read meta", err)
+		}
+		out[id] = meta
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapped("iterate plugin read metas", err)
+	}
+	return out, nil
+}
+
+// GetPluginReadMeta is the single-row form of ListPluginReadMetas.
+func (r *Repo) GetPluginReadMeta(ctx context.Context, sc Scope, pluginID string) (*PluginReadMeta, error) {
+	metas, err := r.ListPluginReadMetas(ctx, sc, []string{pluginID})
+	if err != nil {
+		return nil, err
+	}
+	meta, ok := metas[pluginID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &meta, nil
+}
+
+// ConnectorContentDigests pairs the complete editable-content digest with the
+// complete effective-content digest for one Connector. Both are computed from
+// content loaded back from MySQL, so the comparison is representation-neutral:
+// the stored effective_digest was produced by the write path from request bytes,
+// while MySQL normalizes JSON on read. Comparing stored-vs-read digests would
+// report a change for every Connector with a normalized JSON object.
+type ConnectorContentDigests struct {
+	EditingDigest   string
+	EffectiveDigest *string
+}
+
+// ListConnectorContentDigests loads both content payloads for the Connector rows
+// of a page and computes their complete effective-codec digests. A summary list
+// row omits plugin_json, so has_unpublished_changes cannot be derived from the
+// page row itself.
+func (r *Repo) ListConnectorContentDigests(ctx context.Context, sc Scope, pluginIDs []string) (map[string]ConnectorContentDigests, error) {
+	out := make(map[string]ConnectorContentDigests, len(pluginIDs))
+	if len(pluginIDs) == 0 {
+		return out, nil
+	}
+	args := stringSliceAsAny(pluginIDs)
+	query := `SELECT p.plugin_id,p.plugin_name,p.tags_json,p.tool_count,p.manifest_json,p.plugin_json,
+ p.attachment_keys_json,p.manifest_hash,p.plugin_hash,p.current_version,p.visibility,
+ ce.effective_revision,ce.plugin_name,ce.tags_json,ce.tool_count,ce.manifest_json,ce.plugin_json,
+ ce.attachment_keys_json,ce.manifest_hash,ce.plugin_hash,ce.current_version,ce.visibility
+ FROM plugins p LEFT JOIN plugin_connector_effective ce ON ce.plugin_id=p.plugin_id
+ WHERE p.plugin_id IN (` + placeholders(len(pluginIDs)) + `) AND p.plugin_type='connector'
+ AND p.status=1 AND p.deleted_at IS NULL`
+	if !sc.Admin {
+		query += ` AND ` + visibilitySQL
+		args = append(args, sc.SpaceID, sc.CallerUID)
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapped("list connector content digests", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id, name, manifestHash, pluginHash                  string
+			visibility                                          model.PluginVisibility
+			toolCount                                           int
+			tags, manifest, pkg, keys                           []byte
+			version                                             sql.NullString
+			effectiveRevision                                   sql.NullInt64
+			effectiveName, effectiveManifestHash, effectiveHash sql.NullString
+			effectiveTags, effectiveManifest, effectivePkg      []byte
+			effectiveKeys                                       []byte
+			effectiveVersion, effectiveVisibility               sql.NullString
+			effectiveToolCount                                  sql.NullInt64
+		)
+		if err := rows.Scan(&id, &name, &tags, &toolCount, &manifest, &pkg, &keys, &manifestHash, &pluginHash, &version, &visibility,
+			&effectiveRevision, &effectiveName, &effectiveTags, &effectiveToolCount, &effectiveManifest, &effectivePkg,
+			&effectiveKeys, &effectiveManifestHash, &effectiveHash, &effectiveVersion, &effectiveVisibility); err != nil {
+			return nil, wrapped("scan connector content digest", err)
+		}
+		editing := model.Plugin{
+			ID: id, Name: name, Type: model.PluginTypeConnector, Tags: cloneJSON(tags),
+			ToolCount: toolCount, Manifest: cloneJSON(manifest), Package: cloneJSON(pkg),
+			AttachmentKeys: cloneJSON(keys), ManifestHash: manifestHash, PluginHash: pluginHash,
+			CurrentVersion: nullString(version), Visibility: visibility,
+		}
+		digests := ConnectorContentDigests{EditingDigest: model.EffectiveDigest(editing)}
+		if effectiveRevision.Valid {
+			effective := model.Plugin{
+				ID: id, Name: effectiveName.String, Type: model.PluginTypeConnector, Tags: cloneJSON(effectiveTags),
+				ToolCount: int(effectiveToolCount.Int64), Manifest: cloneJSON(effectiveManifest), Package: cloneJSON(effectivePkg),
+				AttachmentKeys: cloneJSON(effectiveKeys), ManifestHash: effectiveManifestHash.String, PluginHash: effectiveHash.String,
+				CurrentVersion: nullString(effectiveVersion), Visibility: model.PluginVisibility(effectiveVisibility.String),
+			}
+			digest := model.EffectiveDigest(effective)
+			digests.EffectiveDigest = &digest
+		}
+		out[id] = digests
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapped("iterate connector content digests", err)
+	}
+	return out, nil
+}

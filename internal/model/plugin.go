@@ -25,6 +25,17 @@ const (
 	PluginVisibilitySystem  PluginVisibility = "system"
 )
 
+// PluginView is the version a read projection selected for its content: the
+// current formal release, the editable current save, or the Connector's last
+// effective payload. It is a read-time choice, never stored on the row.
+type PluginView string
+
+const (
+	PluginViewPublished PluginView = "published"
+	PluginViewEditing   PluginView = "editing"
+	PluginViewEffective PluginView = "effective"
+)
+
 // PluginListingState is the listing lifecycle axis, independent of review state.
 //
 // visibility says WHO should see a Plugin once it is listed (a declared intent);
@@ -199,10 +210,24 @@ type Plugin struct {
 	PluginHash       string
 	CurrentVersionID *string
 	CurrentVersion   *string
-	Status           int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        *time.Time
+	// PublishedVersionID is the current formal-release pointer. It is read for
+	// the Admin projection (selected/current/has_unpublished_changes) and MUST
+	// NOT be serialized by the Admin DTO — the wire contract omits it, including
+	// a null placeholder.
+	PublishedVersionID *string
+	// Admin read projection (A21). These values are derived per request and are
+	// never persisted on the row; other read surfaces leave them zero.
+	View                  PluginView
+	SelectedVersionID     *string
+	VersionLabel          *string
+	RevisionNo            *uint64
+	HasUnpublishedChanges bool
+	IsPublished           bool
+	DeclaredVisibility    PluginVisibility
+	Status                int
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	DeletedAt             *time.Time
 }
 
 // DependencyIssue explains why a listed expert or team is hidden from the

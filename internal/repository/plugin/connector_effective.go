@@ -56,8 +56,8 @@ func overlayConnectorEffective(ctx context.Context, tx *sql.Tx, p *model.Plugin)
 	var manifest, pkg, tags, keys []byte
 	var version sql.NullString
 	var revision uint64
-	var digest string
-	err := tx.QueryRowContext(ctx, `SELECT effective_revision,effective_digest,plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version FROM plugin_connector_effective WHERE plugin_id=?`, p.ID).Scan(&revision, &digest, &p.Name, &tags, &p.ToolCount, &manifest, &pkg, &keys, &p.ManifestHash, &p.PluginHash, &version)
+	var digest, visibility string
+	err := tx.QueryRowContext(ctx, `SELECT effective_revision,effective_digest,plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility FROM plugin_connector_effective WHERE plugin_id=?`, p.ID).Scan(&revision, &digest, &p.Name, &tags, &p.ToolCount, &manifest, &pkg, &keys, &p.ManifestHash, &p.PluginHash, &version, &visibility)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrVersionBaselineUnavailable
 	}
@@ -72,6 +72,9 @@ func overlayConnectorEffective(ctx context.Context, tx *sql.Tx, p *model.Plugin)
 	p.AttachmentKeys = cloneJSON(keys)
 	p.CurrentVersion = nullString(version)
 	p.CurrentVersionID = nil
+	// The effective row owns the published audience; a later editing
+	// visibility change must not leak into an effective projection.
+	p.Visibility = model.PluginVisibility(visibility)
 	return nil
 }
 

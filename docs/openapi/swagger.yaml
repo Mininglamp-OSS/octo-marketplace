@@ -1758,15 +1758,23 @@ components:
       properties:
         created_at:
           type: string
+        created_by:
+          type: string
         files:
           items:
             $ref: '#/components/schemas/internal_api_handler_plugin.adminVersionFileResponse'
           type: array
           uniqueItems: false
+        is_published:
+          type: boolean
+        is_released:
+          type: boolean
         manifest_json:
           type: object
         plugin_id:
           type: string
+        plugin_json:
+          type: object
         relation_digest:
           type: string
         relations:
@@ -1776,7 +1784,7 @@ components:
           type: array
           uniqueItems: false
         revision_no:
-          type: string
+          type: integer
         version_id:
           type: string
         version_label:
@@ -1806,6 +1814,10 @@ components:
       type: object
     internal_api_handler_plugin.adminVersionFileResponse:
       properties:
+        content_hash:
+          type: string
+        content_size:
+          type: integer
         is_text:
           type: boolean
         mime_type:
@@ -2016,6 +2028,8 @@ components:
           type: string
         current_version_id:
           type: string
+        declared_visibility:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
         dependency_issues:
           items:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue'
@@ -2031,6 +2045,8 @@ components:
           type: string
         effective_revision:
           type: integer
+        has_unpublished_changes:
+          type: boolean
         icon:
           type: string
         icon_url:
@@ -2038,6 +2054,8 @@ components:
         install_count:
           type: integer
         is_embedded:
+          type: boolean
+        is_published:
           type: boolean
         listing_state:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginListingState'
@@ -2067,11 +2085,15 @@ components:
           - 'null'
         review_id:
           type: string
+        revision_no:
+          type: integer
         scene_codes:
           items:
             type: string
           type: array
           uniqueItems: false
+        selected_version_id:
+          type: string
         space_id:
           type: string
         status:
@@ -2084,6 +2106,14 @@ components:
         tool_count:
           type: integer
         updated_at:
+          type: string
+        version_label:
+          type: string
+        view:
+          description: 'Admin read projection (A21); see pluginResponse. published_version_id
+            is
+
+            intentionally not represented anywhere in the DTO.'
           type: string
         view_count:
           type: integer
@@ -2188,6 +2218,8 @@ components:
           type: string
         current_version_id:
           type: string
+        declared_visibility:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
         display_status:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
         download_count:
@@ -2198,6 +2230,8 @@ components:
           type: string
         effective_revision:
           type: integer
+        has_unpublished_changes:
+          type: boolean
         icon:
           description: 'Icon is the stored write-canonical value clients must echo
             on updates;
@@ -2210,6 +2244,8 @@ components:
         install_count:
           type: integer
         is_embedded:
+          type: boolean
+        is_published:
           type: boolean
         listing_state:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginListingState'
@@ -2239,6 +2275,10 @@ components:
           - 'null'
         review_id:
           type: string
+        revision_no:
+          type: integer
+        selected_version_id:
+          type: string
         space_id:
           type: string
         status:
@@ -2251,6 +2291,18 @@ components:
         tool_count:
           type: integer
         updated_at:
+          type: string
+        version_label:
+          type: string
+        view:
+          description: 'Admin read projection (A21). view/selected/current/revision
+            are populated
+
+            only by Admin reads; public reads leave them empty and publish their own
+
+            view semantics. published_version_id is deliberately ABSENT: the Admin
+
+            wire contract requires it to be omitted entirely, including null.'
           type: string
         view_count:
           type: integer
@@ -2667,6 +2719,12 @@ components:
     internal_api_handler_plugin.skillMarkdownResponse:
       properties:
         content:
+          type: string
+        version_id:
+          description: 'VersionID is the immutable snapshot actually read (A23). It
+            is omitted on
+
+            the public A06 path, which does not carry a version identity today.'
           type: string
       type: object
     internal_api_handler_plugin.updateReviewPolicyRequest:
@@ -3869,6 +3927,11 @@ paths:
         name: sort
         schema:
           type: string
+      - description: Projection view; Admin list accepts editing (default) only
+        in: query
+        name: view
+        schema:
+          type: string
       - description: Page number, default 1
         in: query
         name: page
@@ -4036,6 +4099,11 @@ paths:
         name: include_relations
         schema:
           type: boolean
+      - description: 'Projection view: editing (default) or effective (Connector only)'
+        in: query
+        name: view
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -4043,6 +4111,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailResponse'
           description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
         '401':
           content:
             application/json:
@@ -4246,6 +4320,11 @@ paths:
                 type: string
                 format: binary
           description: Skill package zip
+          headers:
+            X-Plugin-Version-Id:
+              description: Immutable snapshot actually served
+              schema:
+                type: string
         '400':
           content:
             application/json:

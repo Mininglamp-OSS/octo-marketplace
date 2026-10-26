@@ -238,8 +238,12 @@ type ListParams struct {
 	Keyword       string
 	Mine          bool
 	Sort          string
-	Limit         int
-	Offset        int
+	// View selects the read projection. Public list/Detail callers leave it
+	// empty; Admin reads accept editing (default) and, on a Connector detail,
+	// effective. Validation is owned by the service, not the handler.
+	View   string
+	Limit  int
+	Offset int
 }
 
 type Detail struct {

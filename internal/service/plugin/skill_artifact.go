@@ -40,10 +40,13 @@ const maxSkillZipEntries = 4096
 // SkillPackageStream is an authorized skill package emitted lazily: a download
 // filename plus a callback that writes the zip bytes. The zip is either a stored
 // object copied through or reconstructed from the attachment tree, so its total
-// size is unknown ahead of time (no Content-Length).
+// size is unknown ahead of time (no Content-Length). VersionID is the immutable
+// snapshot actually served; A23 exposes it to the caller (the Admin download
+// response is a ZIP stream, so its only place is a response header).
 type SkillPackageStream struct {
-	FileName string
-	Write    func(io.Writer) error
+	FileName  string
+	VersionID string
+	Write     func(io.Writer) error
 }
 
 // attachmentView is the read projection of one package attachment. content_size
@@ -105,18 +108,6 @@ func (s *Service) SkillMarkdown(ctx context.Context, caller Caller, pluginID str
 	return s.skillMarkdown(ctx, scope(caller), pluginID)
 }
 
-// AdminSkillMarkdown returns the SKILL.md text of any skill Plugin by id, resolved
-// cross-Space under the admin scope (no X-Space-Id). It reads the same unified
-// plugins.plugin_json attachment tree as the tenant read, so an embedded skill's
-// SKILL.md is legitimately viewable through this admin surface. Callers reach it
-// only through the admin-gated route, so the route gate is the authorization.
-func (s *Service) AdminSkillMarkdown(ctx context.Context, caller Caller, pluginID string) (string, error) {
-	if strings.TrimSpace(caller.UID) == "" {
-		return "", ErrInvalidRequest
-	}
-	return s.skillMarkdown(ctx, adminScope(caller), pluginID)
-}
-
 // skillMarkdown reads a skill Plugin's SKILL.md under the given scope. The
 // authoritative document is the object referenced by skill/ref.json when it
 // exists (snapshot skills inline only a stub entry file); the inlined raw
@@ -167,18 +158,6 @@ func (s *Service) OpenSkillPackage(ctx context.Context, caller Caller, pluginID 
 		return nil, ErrInvalidRequest
 	}
 	return s.openSkillPackage(ctx, scope(caller), pluginID)
-}
-
-// AdminOpenSkillPackage resolves any skill Plugin's package by id, cross-Space
-// under the admin scope (no X-Space-Id). It reconstructs the zip from the same
-// unified plugins.plugin_json attachment tree the tenant read serves, so an
-// embedded skill's package is legitimately downloadable through this admin
-// surface. Callers reach it only through the admin-gated route.
-func (s *Service) AdminOpenSkillPackage(ctx context.Context, caller Caller, pluginID string) (*SkillPackageStream, error) {
-	if strings.TrimSpace(caller.UID) == "" || s.storage == nil {
-		return nil, ErrInvalidRequest
-	}
-	return s.openSkillPackage(ctx, adminScope(caller), pluginID)
 }
 
 // openSkillPackage reconstructs or copies through a skill Plugin's package under

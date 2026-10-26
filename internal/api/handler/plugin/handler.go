@@ -209,9 +209,20 @@ type pluginResponse struct {
 	PluginHash       string          `json:"plugin_hash"`
 	CurrentVersionID *string         `json:"current_version_id,omitempty"`
 	CurrentVersion   *string         `json:"current_version,omitempty"`
-	Status           int             `json:"status"`
-	CreatedAt        time.Time       `json:"created_at" swaggertype:"string,date-time"`
-	UpdatedAt        time.Time       `json:"updated_at" swaggertype:"string,date-time"`
+	// Admin read projection (A21). view/selected/current/revision are populated
+	// only by Admin reads; public reads leave them empty and publish their own
+	// view semantics. published_version_id is deliberately ABSENT: the Admin
+	// wire contract requires it to be omitted entirely, including null.
+	View                  string                 `json:"view,omitempty"`
+	SelectedVersionID     *string                `json:"selected_version_id,omitempty"`
+	VersionLabel          *string                `json:"version_label,omitempty"`
+	RevisionNo            *uint64                `json:"revision_no,omitempty"`
+	HasUnpublishedChanges *bool                  `json:"has_unpublished_changes,omitempty"`
+	IsPublished           *bool                  `json:"is_published,omitempty"`
+	DeclaredVisibility    model.PluginVisibility `json:"declared_visibility,omitempty"`
+	Status                int                    `json:"status"`
+	CreatedAt             time.Time              `json:"created_at" swaggertype:"string,date-time"`
+	UpdatedAt             time.Time              `json:"updated_at" swaggertype:"string,date-time"`
 }
 
 // listItemResponse is the list-page projection: it carries the manifest for
@@ -255,9 +266,18 @@ type listItemResponse struct {
 	PluginHash       string                    `json:"plugin_hash"`
 	CurrentVersionID *string                   `json:"current_version_id,omitempty"`
 	CurrentVersion   *string                   `json:"current_version,omitempty"`
-	Status           int                       `json:"status"`
-	CreatedAt        time.Time                 `json:"created_at" swaggertype:"string,date-time"`
-	UpdatedAt        time.Time                 `json:"updated_at" swaggertype:"string,date-time"`
+	// Admin read projection (A21); see pluginResponse. published_version_id is
+	// intentionally not represented anywhere in the DTO.
+	View                  string                 `json:"view,omitempty"`
+	SelectedVersionID     *string                `json:"selected_version_id,omitempty"`
+	VersionLabel          *string                `json:"version_label,omitempty"`
+	RevisionNo            *uint64                `json:"revision_no,omitempty"`
+	HasUnpublishedChanges *bool                  `json:"has_unpublished_changes,omitempty"`
+	IsPublished           *bool                  `json:"is_published,omitempty"`
+	DeclaredVisibility    model.PluginVisibility `json:"declared_visibility,omitempty"`
+	Status                int                    `json:"status"`
+	CreatedAt             time.Time              `json:"created_at" swaggertype:"string,date-time"`
+	UpdatedAt             time.Time              `json:"updated_at" swaggertype:"string,date-time"`
 }
 
 type relationResponse struct {
@@ -907,13 +927,30 @@ func pluginDTO(p *model.Plugin) pluginResponse {
 	if p == nil {
 		return pluginResponse{}
 	}
-	return pluginResponse{EditRevision: p.EditRevision, EffectiveRevision: p.EffectiveRevision, EffectiveDigest: p.EffectiveDigest, PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	view, selected, label, revision, changes, published, declared := adminProjectionFields(p)
+	return pluginResponse{EditRevision: p.EditRevision, EffectiveRevision: p.EffectiveRevision, EffectiveDigest: p.EffectiveDigest, PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, View: view, SelectedVersionID: selected, VersionLabel: label, RevisionNo: revision, HasUnpublishedChanges: changes, IsPublished: published, DeclaredVisibility: declared, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 func listItemDTO(p *model.Plugin) listItemResponse {
 	if p == nil {
 		return listItemResponse{}
 	}
-	return listItemResponse{EditRevision: p.EditRevision, EffectiveRevision: p.EffectiveRevision, EffectiveDigest: p.EffectiveDigest, PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	view, selected, label, revision, changes, published, declared := adminProjectionFields(p)
+	return listItemResponse{EditRevision: p.EditRevision, EffectiveRevision: p.EffectiveRevision, EffectiveDigest: p.EffectiveDigest, PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, View: view, SelectedVersionID: selected, VersionLabel: label, RevisionNo: revision, HasUnpublishedChanges: changes, IsPublished: published, DeclaredVisibility: declared, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+}
+
+// adminProjectionFields maps the A21-only projection onto the shared response
+// structs. The zero view means a public read: those fields stay absent rather
+// than advertising an editing projection the public contract does not provide.
+func adminProjectionFields(p *model.Plugin) (string, *string, *string, *uint64, *bool, *bool, model.PluginVisibility) {
+	if p == nil || p.View == "" {
+		return "", nil, nil, nil, nil, nil, ""
+	}
+	hasChanges, isPublished := p.HasUnpublishedChanges, p.IsPublished
+	declared := p.DeclaredVisibility
+	if declared == "" {
+		declared = p.Visibility
+	}
+	return string(p.View), p.SelectedVersionID, p.VersionLabel, p.RevisionNo, &hasChanges, &isPublished, declared
 }
 
 func nonNilStrings(values []string) []string {

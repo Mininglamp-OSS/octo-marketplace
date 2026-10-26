@@ -23,7 +23,7 @@ import (
 // admin (cross-Space, no ownership check) operations.
 type AdminService interface {
 	AdminList(context.Context, pluginsvc.Caller, model.PluginType, model.PluginVisibility, pluginsvc.ListParams) ([]model.Plugin, int64, error)
-	AdminDetail(context.Context, pluginsvc.Caller, string, bool) (*pluginsvc.Detail, error)
+	AdminDetail(context.Context, pluginsvc.Caller, string, bool, string) (*pluginsvc.Detail, error)
 	AdminCreate(context.Context, pluginsvc.Caller, pluginsvc.WriteRequest) (*pluginsvc.Detail, error)
 	AdminImportContainer(context.Context, pluginsvc.Caller, pluginsvc.ContainerImportParams) (*pluginsvc.Detail, error)
 	AdminReuploadContainer(context.Context, pluginsvc.Caller, string, pluginsvc.ContainerImportParams) (*pluginsvc.Detail, error)
@@ -31,8 +31,8 @@ type AdminService interface {
 	AdminUpdate(context.Context, pluginsvc.Caller, string, pluginsvc.WriteRequest) (*pluginsvc.Detail, error)
 	AdminUpdateRating(context.Context, pluginsvc.Caller, string, *int) (*model.Plugin, error)
 	AdminDelete(context.Context, pluginsvc.Caller, string) error
-	AdminSkillMarkdown(context.Context, pluginsvc.Caller, string) (string, error)
-	AdminOpenSkillPackage(context.Context, pluginsvc.Caller, string) (*pluginsvc.SkillPackageStream, error)
+	AdminSkillMarkdown(context.Context, pluginsvc.Caller, string, string) (*pluginsvc.SkillMarkdownResult, error)
+	AdminOpenSkillPackage(context.Context, pluginsvc.Caller, string, string) (*pluginsvc.SkillPackageStream, error)
 	// MaxArchiveBytes is the hard ceiling the service enforces on an uploaded
 	// container archive; the handler caps the multipart body at the same value so
 	// the transport and service limits are one number (MAX_UPLOAD_MB-driven).
@@ -119,6 +119,7 @@ func adminCaller(c *gin.Context) (pluginsvc.Caller, bool) {
 // @Param q query string false "Search keyword"
 // @Param category_id query string false "Category id"
 // @Param sort query string false "Sort mode"
+// @Param view query string false "Projection view; Admin list accepts editing (default) only"
 // @Param page query int false "Page number, default 1"
 // @Param page_size query int false "Page size, default 20, max 100"
 // @Success 200 {object} apiresponse.OffsetList[listItemResponse]
@@ -144,7 +145,7 @@ func (h *AdminHandler) List(c *gin.Context) {
 		return
 	}
 	items, total, err := h.svc.AdminList(c.Request.Context(), caller, pluginType, model.PluginVisibility(c.Query("visibility")), pluginsvc.ListParams{
-		CategoryID: c.Query("category_id"), Tags: splitQuery(c.QueryArray("tag")), Keyword: c.Query("q"), Sort: c.Query("sort"), Limit: pageSize, Offset: (page - 1) * pageSize,
+		CategoryID: c.Query("category_id"), Tags: splitQuery(c.QueryArray("tag")), Keyword: c.Query("q"), Sort: c.Query("sort"), View: c.Query("view"), Limit: pageSize, Offset: (page - 1) * pageSize,
 	})
 	if err != nil {
 		writeServiceError(c, err, "plugin.admin.list")
@@ -166,7 +167,9 @@ func (h *AdminHandler) List(c *gin.Context) {
 // @Security Bearer
 // @Param plugin_id path string true "Plugin ID"
 // @Param include_relations query bool false "Include one-level relations (default true)"
+// @Param view query string false "Projection view: editing (default) or effective (Connector only)"
 // @Success 200 {object} apiresponse.Data[detailResponse]
+// @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
@@ -187,7 +190,7 @@ func (h *AdminHandler) Get(c *gin.Context) {
 			return
 		}
 	}
-	v, err := h.svc.AdminDetail(c.Request.Context(), caller, c.Param("plugin_id"), includeRelations)
+	v, err := h.svc.AdminDetail(c.Request.Context(), caller, c.Param("plugin_id"), includeRelations, c.Query("view"))
 	if err != nil {
 		writeServiceError(c, err, "plugin.admin.get")
 		return
@@ -219,23 +222,12 @@ func (h *AdminHandler) SkillMarkdown(c *gin.Context) {
 		unauthorized(c)
 		return
 	}
-	var content string
-	var err error
-	if versionID := c.Query("version_id"); versionID != "" {
-		v, ok := h.svc.(adminVersionSkillService)
-		if !ok {
-			writeServiceError(c, pluginsvc.ErrNotFound, "plugin.admin.skill_md")
-			return
-		}
-		content, err = v.AdminVersionSkillMarkdown(c.Request.Context(), caller, c.Param("plugin_id"), versionID)
-	} else {
-		content, err = h.svc.AdminSkillMarkdown(c.Request.Context(), caller, c.Param("plugin_id"))
-	}
+	result, err := h.svc.AdminSkillMarkdown(c.Request.Context(), caller, c.Param("plugin_id"), c.Query("version_id"))
 	if err != nil {
 		writeServiceError(c, err, "plugin.admin.skill_md")
 		return
 	}
-	apiresponse.OK(c, skillMarkdownResponse{Content: content})
+	apiresponse.OK(c, skillMarkdownResponse{Content: result.Content, VersionID: result.VersionID})
 }
 
 // DownloadSkillPackage godoc
@@ -249,6 +241,7 @@ func (h *AdminHandler) SkillMarkdown(c *gin.Context) {
 // @Param plugin_id path string true "Plugin ID"
 // @Param version_id query string false "Fixed snapshot ID; omitted reads current editable content"
 // @Success 200 {file} binary "Skill package zip"
+// @Header 200 {string} X-Plugin-Version-Id "Immutable snapshot actually served"
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
@@ -263,18 +256,7 @@ func (h *AdminHandler) DownloadSkillPackage(c *gin.Context) {
 		unauthorized(c)
 		return
 	}
-	var result *pluginsvc.SkillPackageStream
-	var err error
-	if versionID := c.Query("version_id"); versionID != "" {
-		v, ok := h.svc.(adminVersionSkillService)
-		if !ok {
-			writeServiceError(c, pluginsvc.ErrNotFound, "plugin.admin.download")
-			return
-		}
-		result, err = v.AdminOpenVersionSkillPackage(c.Request.Context(), caller, c.Param("plugin_id"), versionID)
-	} else {
-		result, err = h.svc.AdminOpenSkillPackage(c.Request.Context(), caller, c.Param("plugin_id"))
-	}
+	result, err := h.svc.AdminOpenSkillPackage(c.Request.Context(), caller, c.Param("plugin_id"), c.Query("version_id"))
 	if err != nil {
 		writeServiceError(c, err, "plugin.admin.download")
 		return
@@ -287,6 +269,11 @@ func (h *AdminHandler) DownloadSkillPackage(c *gin.Context) {
 	if err := result.Write(&buf); err != nil {
 		writeServiceError(c, err, "plugin.admin.download")
 		return
+	}
+	// A ZIP success has no JSON envelope, so the actual immutable snapshot must
+	// travel in a header; omitting it would force callers to infer "latest".
+	if result.VersionID != "" {
+		c.Header("X-Plugin-Version-Id", result.VersionID)
 	}
 	c.Header("Content-Type", "application/zip")
 	c.Header("Content-Disposition", contentDisposition(result.FileName))
@@ -826,8 +813,7 @@ func (h *AdminHandler) DeleteCategory(c *gin.Context) {
 	apiresponse.Empty(c)
 }
 
-// Explicit historical helpers leave the legacy/current AdminService compatible.
-type adminVersionSkillService interface {
-	AdminVersionSkillMarkdown(context.Context, pluginsvc.Caller, string, string) (string, error)
-	AdminOpenVersionSkillPackage(context.Context, pluginsvc.Caller, string, string) (*pluginsvc.SkillPackageStream, error)
-}
+// Historical skill helpers are folded into AdminService: both the default
+// current read and an explicit version_id must return the snapshot id, so there
+// is a single A23 path instead of a legacy/published fallback plus an optional
+// historical interface.

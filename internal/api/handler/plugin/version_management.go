@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -195,8 +196,10 @@ func (h *AdminHandler) GetVersion(c *gin.Context) {
 	}
 	var pkg struct {
 		Attachments []struct {
-			Path string `json:"path"`
-			MIME string `json:"mime_type"`
+			Path        string `json:"path"`
+			MIME        string `json:"mime_type"`
+			ContentSize int64  `json:"content_size"`
+			ContentHash string `json:"content_hash"`
 		} `json:"attachments"`
 	}
 	if json.Unmarshal(result.Package, &pkg) != nil {
@@ -211,7 +214,7 @@ func (h *AdminHandler) GetVersion(c *gin.Context) {
 		// is_text is advisory metadata for rendering controls, never an instruction
 		// to inject the bytes as HTML. File downloads use application/octet-stream
 		// with nosniff; clients must still escape text in an HTML context.
-		files = append(files, adminVersionFileResponse{Path: a.Path, MIMEType: a.MIME, IsText: strings.HasPrefix(a.MIME, "text/") || a.MIME == "application/json"})
+		files = append(files, adminVersionFileResponse{Path: a.Path, MIMEType: a.MIME, ContentSize: a.ContentSize, ContentHash: a.ContentHash, IsText: strings.HasPrefix(a.MIME, "text/") || a.MIME == "application/json"})
 	}
 	rels := versionRelationSlice(result.PluginID, result.ID, result.Relations)
 	canonical, err := json.Marshal(rels)
@@ -224,23 +227,37 @@ func (h *AdminHandler) GetVersion(c *gin.Context) {
 	if result.DeclaredVersion != nil {
 		label = *result.DeclaredVersion
 	}
+	// revision_no is the per-plugin save sequence, i.e. a number in the Version
+	// contract. Reject a malformed snapshot rather than shipping a non-numeric
+	// value under a numeric field.
+	revisionNo, err := strconv.ParseUint(result.Version, 10, 64)
+	if err != nil {
+		writeServiceError(c, pluginsvc.ErrIntegrity, "admin_plugin.version.get")
+		return
+	}
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
-	apiresponse.OK(c, adminHistoricalVersionResponse{PluginID: result.PluginID, VersionID: result.ID, RevisionNo: result.Version, VersionLabel: label, CreatedAt: result.CreatedAt, ManifestJSON: normalizedObjectRaw(result.Manifest), Files: files, Relations: rels, RelationDigest: hex.EncodeToString(digest[:])})
+	apiresponse.OK(c, adminHistoricalVersionResponse{PluginID: result.PluginID, VersionID: result.ID, RevisionNo: revisionNo, VersionLabel: label, IsReleased: result.Release != nil, IsPublished: result.IsPublished, CreatedBy: result.CreatedBy, CreatedAt: result.CreatedAt, ManifestJSON: normalizedObjectRaw(result.Manifest), PluginJSON: publicVersionPackage(result.Package), Files: files, Relations: rels, RelationDigest: hex.EncodeToString(digest[:])})
 }
 
 type adminVersionFileResponse struct {
-	Path     string `json:"path"`
-	MIMEType string `json:"mime_type"`
-	IsText   bool   `json:"is_text"`
+	Path        string `json:"path"`
+	MIMEType    string `json:"mime_type"`
+	ContentSize int64  `json:"content_size"`
+	ContentHash string `json:"content_hash"`
+	IsText      bool   `json:"is_text"`
 }
 type adminHistoricalVersionResponse struct {
 	PluginID       string                     `json:"plugin_id"`
 	VersionID      string                     `json:"version_id"`
-	RevisionNo     string                     `json:"revision_no"`
+	RevisionNo     uint64                     `json:"revision_no"`
 	VersionLabel   string                     `json:"version_label"`
+	IsReleased     bool                       `json:"is_released"`
+	IsPublished    bool                       `json:"is_published"`
+	CreatedBy      string                     `json:"created_by"`
 	CreatedAt      time.Time                  `json:"created_at" swaggertype:"string,date-time"`
 	ManifestJSON   json.RawMessage            `json:"manifest_json" swaggertype:"object"`
+	PluginJSON     json.RawMessage            `json:"plugin_json" swaggertype:"object"`
 	Files          []adminVersionFileResponse `json:"files"`
 	Relations      []map[string]any           `json:"relations"`
 	RelationDigest string                     `json:"relation_digest"`

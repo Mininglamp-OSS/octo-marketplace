@@ -32,8 +32,12 @@ type fakeAdminService struct {
 	skillParams     pluginsvc.ImportParams
 	deletedID       string
 	skillMD         string
+	skillMDVersion  string
 	download        *pluginsvc.SkillPackageStream
 	artifactID      string
+	artifactVersion string
+	detailView      string
+	includeRels     bool
 	ratingID        string
 	rating          *int
 	maxArchiveBytes int64
@@ -44,8 +48,8 @@ func (f *fakeAdminService) AdminList(_ context.Context, c pluginsvc.Caller, typ 
 	f.caller, f.listType, f.listVis, f.listParams = c, typ, vis, p
 	return f.list, int64(len(f.list)), f.err
 }
-func (f *fakeAdminService) AdminDetail(_ context.Context, c pluginsvc.Caller, _ string, _ bool) (*pluginsvc.Detail, error) {
-	f.caller = c
+func (f *fakeAdminService) AdminDetail(_ context.Context, c pluginsvc.Caller, _ string, includeRelations bool, view string) (*pluginsvc.Detail, error) {
+	f.caller, f.includeRels, f.detailView = c, includeRelations, view
 	return f.detail, f.err
 }
 func (f *fakeAdminService) AdminCreate(_ context.Context, c pluginsvc.Caller, r pluginsvc.WriteRequest) (*pluginsvc.Detail, error) {
@@ -79,12 +83,15 @@ func (f *fakeAdminService) AdminDelete(_ context.Context, c pluginsvc.Caller, id
 	f.caller, f.deletedID = c, id
 	return f.err
 }
-func (f *fakeAdminService) AdminSkillMarkdown(_ context.Context, c pluginsvc.Caller, id string) (string, error) {
-	f.caller, f.artifactID = c, id
-	return f.skillMD, f.err
+func (f *fakeAdminService) AdminSkillMarkdown(_ context.Context, c pluginsvc.Caller, id, versionID string) (*pluginsvc.SkillMarkdownResult, error) {
+	f.caller, f.artifactID, f.artifactVersion = c, id, versionID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &pluginsvc.SkillMarkdownResult{Content: f.skillMD, VersionID: f.skillMDVersion}, nil
 }
-func (f *fakeAdminService) AdminOpenSkillPackage(_ context.Context, c pluginsvc.Caller, id string) (*pluginsvc.SkillPackageStream, error) {
-	f.caller, f.artifactID = c, id
+func (f *fakeAdminService) AdminOpenSkillPackage(_ context.Context, c pluginsvc.Caller, id, versionID string) (*pluginsvc.SkillPackageStream, error) {
+	f.caller, f.artifactID, f.artifactVersion = c, id, versionID
 	if f.err != nil {
 		return nil, f.err
 	}
