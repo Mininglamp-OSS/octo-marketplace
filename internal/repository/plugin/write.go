@@ -126,6 +126,11 @@ func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err = r.lockReferences(ctx, tx, scope, p, m.Relations, nil); err != nil {
 		return nil, err
 	}
+	// Admin create IS a publication, so its Skill/Expert relations cannot reach
+	// the released snapshot without authoritative pins.
+	if err = r.freezePublishedPins(ctx, tx, scope, p, m.Relations); err != nil {
+		return nil, err
+	}
 	if err = insertPlugin(ctx, tx, now, p); err != nil {
 		return nil, err
 	}
@@ -314,6 +319,11 @@ func (r *Repo) CreateGraph(ctx context.Context, scope Scope, nodes []Mutation) (
 	for i := range nodes {
 		p := nodes[i].Plugin
 		if err = r.lockReferences(ctx, tx, scope, p, nodes[i].Relations, inGraph); err != nil {
+			return nil, err
+		}
+		// An admin container import publishes its top node immediately; freeze its
+		// Skill/Expert pins before the edges and snapshot are written.
+		if err = r.freezePublishedPins(ctx, tx, scope, p, nodes[i].Relations); err != nil {
 			return nil, err
 		}
 		created, err := insertRelations(ctx, tx, r.id, now, p.ID, nodes[i].OperatorID, nodes[i].Relations)
@@ -703,6 +713,16 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	}
 	if err = r.lockReferences(ctx, tx, scope, p, m.Relations, owned); err != nil {
 		return nil, err
+	}
+	// An admin save of an already-published resource IS a publication (the same
+	// transaction records the new formal release), so its Skill/Expert edges must
+	// carry pins before the snapshot and reverse index are written. A visibility
+	// reset drops the row back to draft and is not a publication.
+	if r.versionManagement && r.references && scope.Admin &&
+		before.ListingState == model.PluginListingStatePublished && !resetListing && versioned(&p) {
+		if err = FreezeRelationPins(ctx, tx, p, m.Relations); err != nil {
+			return nil, err
+		}
 	}
 	// getOwnedForUpdate already proved existence under lock; RowsAffected reports
 	// changed rows, so a byte-identical resubmit must not surface as not found.

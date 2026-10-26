@@ -26,6 +26,15 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if err = r.lockReferences(ctx, tx, owner, *current, rels, live); err != nil {
 		return nil, err
 	}
+	// A review submitted before pin freezing existed can still carry omitted
+	// Skill/Expert pins. Approval is a publication, so resolve them now rather
+	// than writing a released snapshot with NULL pins. The P model only exists
+	// when reference writes are enabled.
+	if r.references {
+		if err = FreezeRelationPins(ctx, tx, *current, rels); err != nil {
+			return nil, err
+		}
+	}
 	now := p.Now
 	if now.IsZero() {
 		now = r.now()

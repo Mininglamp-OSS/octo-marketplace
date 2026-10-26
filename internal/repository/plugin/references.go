@@ -247,7 +247,18 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 	if err != nil {
 		return ErrInvalidRelation
 	}
-	return validateReferenceTree(ctx, tx, p, p, rels, map[string]bool{}, 0)
+	if err = validateReferenceTree(ctx, tx, p, p, rels, map[string]bool{}, 0); err != nil {
+		return err
+	}
+	// P model release invariant: every Skill/Expert edge in a published source
+	// snapshot carries an authoritative pin. Drafts may omit them; every writer
+	// that publishes freezes them first (FreezeRelationPins), so reaching this
+	// point without one means the release path failed to freeze, not that the
+	// pin is optional.
+	if missingRelationPins(p.Type, rels) {
+		return ErrInvalidRelation
+	}
+	return nil
 }
 
 func (r *Repo) rejectPublishedMutation(ctx context.Context, tx *sql.Tx, p *model.Plugin) error {

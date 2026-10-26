@@ -200,7 +200,14 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 	if pending != "" {
 		return nil, ErrReviewPending
 	}
-	if err = r.recordRelease(ctx, tx, current, *current.CurrentVersionID, *current.CurrentVersion, p.OperatorID, r.now()); err != nil {
+	// Publish is the moment a missing Skill/Expert pin becomes authoritative. The
+	// selected draft snapshot is immutable, so a newly resolved graph is written
+	// as a replacement snapshot before the release row points at it.
+	versionID := *current.CurrentVersionID
+	if err = r.freezePublishedSnapshotForRelease(ctx, tx, r.id, current, &versionID, p.OperatorID); err != nil {
+		return nil, err
+	}
+	if err = r.recordRelease(ctx, tx, current, versionID, *current.CurrentVersion, p.OperatorID, r.now()); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET listing_state='published',updated_at=? WHERE plugin_id=?`, r.now(), current.ID); err != nil {
@@ -313,6 +320,9 @@ func (r *Repo) AdoptPublishedBaseline(ctx context.Context, scope Scope, p AdoptP
 		if !scope.Admin {
 			return nil, ErrNotFound
 		}
+	}
+	if err = r.freezePublishedSnapshotForRelease(ctx, tx, r.id, current, &p.ExpectedVersionID, p.OperatorID); err != nil {
+		return nil, err
 	}
 	if err = r.recordRelease(ctx, tx, current, p.ExpectedVersionID, declared.String, p.OperatorID, r.now()); err != nil {
 		return nil, err

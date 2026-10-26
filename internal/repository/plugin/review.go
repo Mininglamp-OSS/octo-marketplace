@@ -270,6 +270,14 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 		if err := validateReferenceTree(ctx, tx, *current, *current, relations, map[string]bool{}, 0); err != nil {
 			return err
 		}
+		// Submit is a publication boundary under the P model: the review document
+		// must carry the exact released target versions a reviewer is deciding on.
+		// A pin omitted in a draft is resolved once, here, against the target's
+		// current formal release; approval then persists these frozen pins and must
+		// not re-resolve them.
+		if err := FreezeRelationPins(ctx, tx, *current, relations); err != nil {
+			return err
+		}
 	}
 	relationsJSON, err := model.EncodeSnapshotRelations(relations)
 	if err != nil {
