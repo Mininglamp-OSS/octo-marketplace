@@ -150,6 +150,10 @@ func writeInstallationError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "安装参数不正确。", map[string]any{"field": field.Field, "reason": field.Reason}, "请检查工作区、运行环境、名称和环境变量后重试。")
 	case errors.Is(err, expertsvc.ErrFleetNotConfigured):
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装服务尚未配置，请联系管理员。", map[string]any{"upstream": "fleet", "reason": "not_configured"}, installationRetryHint)
+	case errors.Is(err, pluginsvc.ErrConflict):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装请求与首次提交的参数或依赖状态不一致，或原安装凭证已过期。", nil, "请先核对工作区已有资源和依赖状态，不要直接更换幂等键重复安装。")
+	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "插件缺少可安装的正式版本。", nil, "请联系发布者完成版本发布后重试。")
 	case errors.Is(err, pluginsvc.ErrNotFound):
 		apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "插件不存在或不可访问。", nil, "请刷新插件列表后重试。")
 	case errors.Is(err, pluginsvc.ErrDependencyHidden):

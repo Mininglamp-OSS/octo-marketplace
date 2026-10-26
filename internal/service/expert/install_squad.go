@@ -98,9 +98,9 @@ func (s *Service) provisionSquad(ctx context.Context, in InstallInput, m *model.
 	// failure here leaves only the *earlier* members to unwind.
 	created := make([]createdAgent, 0, len(m.Members))
 	memberAgentIDs := make([]string, len(m.Members))
-	// Fleet skill names are workspace-wide. Keep the first packaged skill with a
-	// given normalized name and skip later duplicates across squad members.
-	seenSkillNames := make(map[string]struct{})
+	// Fleet skill names are workspace-wide. Reuse the first created skill ID for each name, binding it to every
+	// member that declares it. Rollback tracks creations separately from bindings.
+	seenSkillNames := make(map[string]string)
 	for i := range m.Members {
 		agentID, skillIDs, err := s.provisionAgent(ctx, in, agentProvisionSpec{
 			Name:        m.Members[i].Name,

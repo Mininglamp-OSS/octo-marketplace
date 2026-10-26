@@ -130,6 +130,9 @@ func (s *Service) CreateInstallation(ctx context.Context, caller Caller, pluginI
 	}
 	ctx, cancel := context.WithTimeout(ctx, fleet.CapabilityInstallTimeout)
 	defer cancel()
+	if s.pinnedInstallation {
+		return s.createPinnedInstallation(ctx, caller, pluginID, p)
+	}
 	in, err := s.buildCapabilityInstall(ctx, caller, pluginID, p)
 	if err != nil {
 		return nil, err

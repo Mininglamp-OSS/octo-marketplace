@@ -80,15 +80,27 @@ func isolatedTestDB(t *testing.T) *sql.DB {
 	return database
 }
 
-// TestRunMigrationsUpDown executes all migrations Up, asserts representative
-// marketplace tables exist, then runs Down and asserts they are dropped.
-func TestRunMigrationsUpDown(t *testing.T) {
+// Keep destructive Up/Down coverage for the reversible schema before the stock
+// audit boundary. Later audit migrations are tested separately for refusal and
+// history retention, rather than bypassing their production safety guard.
+func TestReversibleMigrationsUpDownBeforeStockAudit(t *testing.T) {
 	database := isolatedTestDB(t)
 
-	source := &migrate.EmbedFileSystemMigrationSource{
+	fullSource := &migrate.EmbedFileSystemMigrationSource{
 		FileSystem: migrationsql.FS,
 		Root:       ".",
 	}
+	all, err := fullSource.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reversible []*migrate.Migration
+	for _, migration := range all {
+		if migration.Id < "20261024-03-stock-migration-batches.sql" {
+			reversible = append(reversible, migration)
+		}
+	}
+	source := &migrate.MemoryMigrationSource{Migrations: reversible}
 	// Integration tests share the configured database and run in shuffled
 	// order in CI. Always normalize the starting state explicitly.
 	if _, err := migrate.Exec(database, "mysql", source, migrate.Down); err != nil {

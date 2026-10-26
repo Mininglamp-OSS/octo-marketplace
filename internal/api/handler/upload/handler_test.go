@@ -64,6 +64,55 @@ func TestLocalUploadProxy(t *testing.T) {
 	}
 }
 
+func TestLocalProxyURLsRoundTripReservedCharacters(t *testing.T) {
+	ctx := context.Background()
+	for _, key := range []string{"skills/a/file name.zip", "skills/a/测试#draft?.zip", "skills/a/literal%2F+name.zip"} {
+		t.Run(key, func(t *testing.T) {
+			ls := storage.NewLocal(t.TempDir(), "http://localhost:8092/")
+			r, _ := testRouter(ls)
+			publicURL, err := ls.PublicURL(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			putURL, _, err := ls.PresignPut(ctx, key, "application/zip", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const content = "exact object bytes"
+			req := httptest.NewRequest(http.MethodPut, putURL, strings.NewReader(content))
+			req.RemoteAddr = "127.0.0.1:12345"
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("upload status=%d body=%s", w.Code, w.Body.String())
+			}
+			// Check the actual key so symmetric encoding mistakes cannot pass.
+			stored, err := ls.GetObject(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(stored)
+			stored.Close()
+			if err != nil || string(got) != content {
+				t.Fatalf("stored body=%q err=%v", got, err)
+			}
+			getURL, err := ls.PresignGet(ctx, key, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, downloadURL := range []string{getURL, publicURL} {
+				req = httptest.NewRequest(http.MethodGet, downloadURL, nil)
+				req.RemoteAddr = "127.0.0.1:12345"
+				w = httptest.NewRecorder()
+				r.ServeHTTP(w, req)
+				if w.Code != http.StatusOK || w.Body.String() != content {
+					t.Fatalf("download status=%d body=%q", w.Code, w.Body.String())
+				}
+			}
+		})
+	}
+}
+
 func TestLocalProxyNotMountedWhenAuthEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	ls := storage.NewLocal(tmpDir, "http://localhost:8092")

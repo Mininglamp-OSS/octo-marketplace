@@ -232,7 +232,7 @@ func (s *Service) ProvisionAgentFromSpec(ctx context.Context, in InstallInput, s
 // rolls back everything IT created (skills + agent) and returns the error, so
 // the caller has nothing to unwind for this agent. Shared by InstallExpert (one
 // agent) and InstallSquad (one per member).
-func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget, seenSkillNames map[string]struct{}) (string, []string, error) {
+func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget, seenSkillNames map[string]string) (string, []string, error) {
 	agentSpec := fleet.AgentSpec{
 		Name:         spec.Name,
 		Description:  spec.Summary,
@@ -251,14 +251,14 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 
 	// From here on, roll back the created agent (and any skills) on failure so a
 	// partial provision never leaves an orphaned agent behind.
-	skillIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget, seenSkillNames)
+	skillIDs, boundIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget, seenSkillNames)
 	if err != nil {
 		s.rollbackAgent(ctx, in, agentID, skillIDs)
 		return "", nil, err
 	}
 
-	if len(skillIDs) > 0 {
-		if err := s.fleet.SetAgentSkills(ctx, in.Token, in.SpaceID, in.WorkspaceID, agentID, skillIDs); err != nil {
+	if len(boundIDs) > 0 {
+		if err := s.fleet.SetAgentSkills(ctx, in.Token, in.SpaceID, in.WorkspaceID, agentID, boundIDs); err != nil {
 			s.rollbackAgent(ctx, in, agentID, skillIDs)
 			return "", nil, err
 		}
@@ -272,8 +272,9 @@ func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agen
 // returning the new skill ids. Name-only skills (no ObjectKey) carry nothing to
 // install and are skipped. On the first failure it deletes the skills it already
 // created and returns the error, so the caller only has the agent left to unwind.
-func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget, seenSkillNames map[string]struct{}) ([]string, error) {
+func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget, seenSkillNames map[string]string) ([]string, []string, error) {
 	created := make([]string, 0, len(skills))
+	bound := make([]string, 0, len(skills))
 	for i := range skills {
 		if skills[i].ObjectKey == "" && skills[i].Markdown == "" {
 			continue
@@ -283,14 +284,15 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 		// remain distinct packaged Skills and must both be installed.
 		nameKey := skills[i].Name
 		if seenSkillNames != nil {
-			if _, exists := seenSkillNames[nameKey]; exists {
+			if id, exists := seenSkillNames[nameKey]; exists {
+				bound = append(bound, id)
 				continue
 			}
 		}
 		content, err := s.readSkillContent(ctx, skills, i)
 		if err != nil {
 			s.deleteSkills(ctx, in, created)
-			return nil, err
+			return nil, nil, err
 		}
 		skillID, err := s.fleet.CreateSkill(ctx, in.Token, in.SpaceID, in.WorkspaceID, fleet.SkillSpec{
 			Name:        skills[i].Name,
@@ -299,19 +301,20 @@ func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, su
 		})
 		if err != nil {
 			s.deleteSkills(ctx, in, created)
-			return nil, err
+			return nil, nil, err
 		}
 		// Track before attaching files so a file failure also unwinds this skill.
 		created = append(created, skillID)
+		bound = append(bound, skillID)
 		if err := s.attachSkillFiles(ctx, in, skills[i], skillID, budget); err != nil {
 			s.deleteSkills(ctx, in, created)
-			return nil, err
+			return nil, nil, err
 		}
 		if seenSkillNames != nil {
-			seenSkillNames[nameKey] = struct{}{}
+			seenSkillNames[nameKey] = skillID
 		}
 	}
-	return created, nil
+	return created, bound, nil
 }
 
 // attachSkillFiles pushes the packaged skill's supporting files (everything but
