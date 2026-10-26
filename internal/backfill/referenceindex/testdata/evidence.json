@@ -1,0 +1,18 @@
+{
+  "resources": [
+    {"id":"expert","type":"expert","embedded":false},
+    {"id":"skill","type":"skill","embedded":false},
+    {"id":"connector","type":"connector","embedded":false}
+  ],
+  "snapshots": [
+    {"plugin_id":"skill","version_id":"skill-v1","relations":[]},
+    {"plugin_id":"expert","version_id":"expert-v1","relations":[
+      {"relation_id":"skill-edge","source_plugin_id":"expert","source_plugin_type":"expert","target_plugin_id":"skill","target_plugin_type":"skill","target_version_id":"skill-v1","relation_type":"expert_skill","status":1},
+      {"relation_id":"connector-edge","source_plugin_id":"expert","source_plugin_type":"expert","target_plugin_id":"connector","target_plugin_type":"connector","relation_type":"expert_connector","status":1}
+    ]},
+    {"plugin_id":"expert","version_id":"legacy-unpinned","relations":[
+      {"relation_id":"old-edge","source_plugin_id":"expert","source_plugin_type":"expert","target_plugin_id":"skill","target_plugin_type":"skill","relation_type":"expert_skill","status":1}
+    ]}
+  ],
+  "releases": [{"plugin_id":"skill","version_id":"skill-v1"}]
+}

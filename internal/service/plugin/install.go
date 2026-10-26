@@ -77,6 +77,9 @@ func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p
 	if strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.RuntimeID) == "" {
 		return nil, ErrInvalidRequest
 	}
+	if s.pinnedInstallation {
+		return s.installPinnedLegacy(ctx, caller, pluginID, p)
+	}
 	detail, err := s.resolveInstallDetail(ctx, caller, pluginID)
 	if err != nil {
 		return nil, err

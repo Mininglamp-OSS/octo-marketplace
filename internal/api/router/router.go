@@ -43,24 +43,25 @@ type Pinger interface {
 
 // StorageConfig holds configuration for the skill archive storage layer.
 type StorageConfig struct {
-	PluginVersionManagementEnabled bool
-	PluginReferencesEnabled        bool
-	Driver                         string // "local" or "oss"
-	LocalDir                       string
-	BaseURL                        string
-	MaxMB                          int
-	OSSEndpoint                    string
-	OSSBucket                      string
-	OSSAccessKey                   string
-	OSSSecretKey                   string
-	OSSRegion                      string
-	OSSKeyPrefix                   string
-	OSSPathStyle                   bool
-	OSSPublicEndpoint              string
-	OSSPublicPathStyle             bool
-	OSSSigningHost                 string
-	OSSDownloadSigned              bool
-	CORSAllowedOrigins             []string
+	PluginVersionManagementEnabled  bool
+	PluginPinnedInstallationEnabled bool
+	Driver                          string // "local" or "oss"
+	LocalDir                        string
+	BaseURL                         string
+	MaxMB                           int
+	OSSEndpoint                     string
+	OSSBucket                       string
+	OSSAccessKey                    string
+	OSSSecretKey                    string
+	OSSRegion                       string
+	OSSKeyPrefix                    string
+	OSSPathStyle                    bool
+	OSSPublicEndpoint               string
+	OSSPublicPathStyle              bool
+	OSSSigningHost                  string
+	OSSDownloadSigned               bool
+	CORSAllowedOrigins              []string
+	PluginReferencesEnabled         bool
 }
 
 // ParseConfig holds parse worker/service configuration passed from the caller.
@@ -176,7 +177,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			panic("unsupported STORAGE_DRIVER: " + storageCfg.Driver)
 		}
 
-		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled).WithReferences(storageCfg.PluginReferencesEnabled)
+		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled).WithReferences(storageCfg.PluginReferencesEnabled).WithPinnedInstallation(storageCfg.PluginPinnedInstallationEnabled)
 		pluginSvc.SetArtifactLimits(int64(storageCfg.MaxMB) << 20)
 		// Space review IM integration. A disabled notifier keeps the review
 		// endpoints fully functional and simply sends no approval card. Partial

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,12 +121,12 @@ func (s *LocalStorage) PresignPut(_ context.Context, key string, contentType str
 		return "", nil, fmt.Errorf("local storage: mkdir: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/_storage/upload/%s", s.baseURL, key)
+	uploadURL := s.proxyURL("upload", key)
 	h := http.Header{}
 	if contentType != "" {
 		h.Set("Content-Type", contentType)
 	}
-	return url, h, nil
+	return uploadURL, h, nil
 }
 
 // PresignGet returns a URL from which the client can GET the file.
@@ -140,8 +141,7 @@ func (s *LocalStorage) PresignGet(_ context.Context, key string, _ time.Duration
 	if _, err := os.Stat(full); err != nil {
 		return "", fmt.Errorf("local storage: file not found: %w", err)
 	}
-	url := fmt.Sprintf("%s/api/v1/_storage/download/%s", s.baseURL, key)
-	return url, nil
+	return s.proxyURL("download", key), nil
 }
 
 // PublicURL returns the persistent proxy URL for a key without checking
@@ -155,7 +155,15 @@ func (s *LocalStorage) PublicURL(_ context.Context, key string) (string, error) 
 	if _, err := s.safePath(key); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s/api/v1/_storage/download/%s", s.baseURL, key), nil
+	return s.proxyURL("download", key), nil
+}
+
+func (s *LocalStorage) proxyURL(operation, key string) string {
+	parts := strings.Split(key, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return fmt.Sprintf("%s/api/v1/_storage/%s/%s", strings.TrimRight(s.baseURL, "/"), operation, strings.Join(parts, "/"))
 }
 
 // GetObject opens the local file for reading.

@@ -1,0 +1,53 @@
+package execenv
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestMarketplacePinnedMaterializationRehearsal(t *testing.T) {
+	raw, err := os.ReadFile(os.Getenv("MARKETPLACE_REHEARSAL_STORED"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var skills []SkillContextForEnv
+	if err = json.Unmarshal(raw, &skills); err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 3 {
+		t.Fatal("expected3 persisted Fleet skills")
+	}
+	dir := t.TempDir()
+	if err = writeSkillFiles(dir, skills, &sidecarManifest{}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("directories=%d want3", len(entries))
+	}
+	seen := map[string]bool{}
+	for _, skill := range skills {
+		if seen[skill.Name] || sanitizeSkillName(skill.Name) != skill.Name {
+			t.Fatal("runtime name collision")
+		}
+		seen[skill.Name] = true
+		body, err := os.ReadFile(filepath.Join(dir, skill.Name, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), "name: "+skill.Name) || !strings.Contains(string(body), strings.Split(skill.Content, "Fixture ")[1]) {
+			t.Fatal("runtime metadata/body changed")
+		}
+		guide, err := os.ReadFile(filepath.Join(dir, skill.Name, "references", "guide.md"))
+		if err != nil || string(guide) != skill.Files[0].Content {
+			t.Fatal("runtime supporting file changed")
+		}
+	}
+	t.Log("real Daemon writeSkillFiles: 3 distinct directories/frontmatter names, preserved body and supporting files passed")
+}

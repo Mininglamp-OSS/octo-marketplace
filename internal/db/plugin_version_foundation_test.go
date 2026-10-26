@@ -20,7 +20,8 @@ import (
 
 func TestPluginVersionFoundationMigrationAndReleaseOwnershipMySQL(t *testing.T) {
 	db := isolatedTestDB(t)
-	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	// Exercise historical reversibility before the immutable audit boundary.
+	source := migrationSourceThrough(t, "20261024-02-plugin-install-attempts.sql")
 	migrations, err := source.FindMigrations()
 	if err != nil {
 		t.Fatal(err)

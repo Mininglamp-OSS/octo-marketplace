@@ -1,0 +1,20 @@
+name: marketplace-inventory-delivery
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_DATABASE: marketplace_fixture
+      MYSQL_USER: inventory
+      MYSQL_PASSWORD: ${HARNESS_PASSWORD:?run ./run.sh up first}
+      MYSQL_ROOT_PASSWORD: ${HARNESS_ROOT_PASSWORD:?run ./run.sh up first}
+    ports:
+      - "127.0.0.1:33394:3306"
+    tmpfs:
+      - /var/lib/mysql
+    volumes:
+      - ./fixture.sql:/docker-entrypoint-initdb.d/10-fixture.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -h 127.0.0.1 -uinventory marketplace_fixture -Nse 'SELECT COUNT(*) FROM plugins' | grep -qx 8"]
+      interval: 2s
+      timeout: 3s
+      retries: 45

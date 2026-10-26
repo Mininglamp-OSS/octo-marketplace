@@ -1,0 +1,172 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// This test calls the unmodified real handler and real Postgres. Only verified
+// middleware identity and runtime fixture IDs are injected, as in Fleet's tests.
+func TestMarketplacePinnedInstallRehearsal(t *testing.T) {
+	raw, err := os.ReadFile(os.Getenv("MARKETPLACE_REHEARSAL_REQUEST"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input CapabilityInstallationRequest
+	if err = json.Unmarshal(raw, &input); err != nil {
+		t.Fatal(err)
+	}
+	if len(input.Definition.Skills) != 3 || len(input.Definition.Experts) != 2 {
+		t.Fatal("unexpected fixture shape")
+	}
+	for i := range input.Bindings.Experts {
+		input.Bindings.Experts[i].RuntimeID = testRuntimeID
+	}
+	names := map[string]bool{}
+	for _, skill := range input.Definition.Skills {
+		if names[skill.Name] || !strings.Contains(skill.Name, "-mk1-") {
+			t.Fatal("nonunique installation names")
+		}
+		names[skill.Name] = true
+	}
+	rec := httptest.NewRecorder()
+	request := capabilityInstallRequest(t, input, capabilityTestMember(t))
+	key := request.Header.Get("Idempotency-Key")
+	testHandler.CreateCapabilityInstallation(rec, request)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("real Fleet install status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out CapabilityInstallationResponse
+	if err = json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Skills) != 3 || len(out.Experts) != 2 || out.ExpertTeamID == "" {
+		t.Fatalf("incorrect installed graph %+v", out)
+	}
+	type File struct {
+		Path    string
+		Content string
+	}
+	type Skill struct {
+		Name        string
+		Description string
+		Content     string
+		Files       []File
+	}
+	stored := []Skill{}
+	measuredExperts, measuredBindings := 0, 0
+	seenStored := map[string]bool{}
+	for _, skill := range out.Skills {
+		var record Skill
+		if err = testPool.QueryRow(context.Background(), `SELECT name,COALESCE(description,''),content FROM skill WHERE id=$1`, skill.SkillID).Scan(&record.Name, &record.Description, &record.Content); err != nil {
+			t.Fatal(err)
+		}
+		if !names[record.Name] || seenStored[record.Name] || !strings.Contains(record.Content, "name: "+record.Name) {
+			t.Fatal("stored name/frontmatter mismatch")
+		}
+		seenStored[record.Name] = true
+		rows, err := testPool.Query(context.Background(), `SELECT path,content FROM skill_file WHERE skill_id=$1 ORDER BY path`, skill.SkillID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var f File
+			if err = rows.Scan(&f.Path, &f.Content); err != nil {
+				t.Fatal(err)
+			}
+			record.Files = append(record.Files, f)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(record.Files) != 1 || record.Files[0].Path != "references/guide.md" {
+			t.Fatal("supporting file lost")
+		}
+		stored = append(stored, record)
+	}
+	for _, expert := range out.Experts {
+		rows, err := testPool.Query(context.Background(), `SELECT s.name FROM agent_skill a JOIN skill s ON s.id=a.skill_id WHERE a.agent_id=$1 ORDER BY s.name`, expert.ExpertID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rows.Next() {
+			var name string
+			if err = rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, name)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want []string
+		for _, definition := range input.Definition.Experts {
+			if definition.Name == expert.Name {
+				want = append(want, definition.SkillNames...)
+			}
+		}
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("wrong pinned bindings: %s got=%v want=%v", expert.Name, got, want)
+		}
+		measuredBindings += len(got)
+	}
+	var memberCount int
+	if err = testPool.QueryRow(context.Background(), `SELECT COUNT(*) FROM squad_member WHERE squad_id=$1`, out.ExpertTeamID).Scan(&memberCount); err != nil || memberCount != 2 {
+		t.Fatalf("team member graph count=%d err=%v", memberCount, err)
+	}
+	// A real same-key replay must reuse all installed IDs, without duplicate rows.
+	replay := httptest.NewRecorder()
+	retry := capabilityInstallRequest(t, input, capabilityTestMember(t))
+	retry.Header.Set("Idempotency-Key", key)
+	testHandler.CreateCapabilityInstallation(replay, retry)
+	if replay.Code != http.StatusOK {
+		t.Fatalf("replay status=%d", replay.Code)
+	}
+	var again CapabilityInstallationResponse
+	if json.Unmarshal(replay.Body.Bytes(), &again) != nil || again.ExpertTeamID != out.ExpertTeamID {
+		t.Fatal("same-key replay changed team")
+	}
+	sort.Slice(stored, func(i, j int) bool { return stored[i].Name < stored[j].Name })
+	encoded, err := json.MarshalIndent(stored, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(os.Getenv("MARKETPLACE_REHEARSAL_STORED"), encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var measuredTeams int
+	if err = testPool.QueryRow(context.Background(), `SELECT COUNT(DISTINCT squad_id) FROM squad_member WHERE squad_id=$1`, out.ExpertTeamID).Scan(&measuredTeams); err != nil {
+		t.Fatal(err)
+	}
+	var expertIDs []any
+	var placeholders []string
+	for i, expert := range out.Experts {
+		expertIDs = append(expertIDs, expert.ExpertID)
+		placeholders = append(placeholders, "$"+strconv.Itoa(i+1))
+	}
+	if err = testPool.QueryRow(context.Background(), `SELECT COUNT(DISTINCT agent_id) FROM agent_skill WHERE agent_id IN (`+strings.Join(placeholders, ",")+`)`, expertIDs...).Scan(&measuredExperts); err != nil {
+		t.Fatal(err)
+	}
+	measurements, err := json.Marshal(map[string]int{"skills": len(stored), "experts": measuredExperts, "bindings": measuredBindings, "teams": measuredTeams})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(os.Getenv("MARKETPLACE_REHEARSAL_MEASUREMENTS"), measurements, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("real Fleet handler/Postgres: %d skills, %d experts, %d bindings, %d teams; same-key receipt replay passed", len(stored), measuredExperts, measuredBindings, measuredTeams)
+}
