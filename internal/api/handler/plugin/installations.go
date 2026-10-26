@@ -100,7 +100,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 		installationValidation(c, "X-Workspace-Id")
 		return
 	}
-	if req.WorkspaceID != "" && req.WorkspaceID != workspaceID {
+	if req.WorkspaceID != "" && !strings.EqualFold(req.WorkspaceID, workspaceID) {
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "X-Workspace-Id 与请求体 workspace_id 不一致。", map[string]any{"field": "workspace_id", "reason": "mismatch"}, "请使用同一个工作区 ID 重试。")
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/jcs"
 	"strconv"
 	"strings"
 )
@@ -49,11 +50,16 @@ func EffectiveDigest(p Plugin) string {
 	// would make an ordinary write differ from the later read, so the effective
 	// digest uses stable scalar identity plus the immutable content hashes. JSON
 	// payload changes are already covered by ManifestHash/PluginHash.
+	tags := string(p.Tags)
+	if canonical, err := jcs.CanonicalizeJSON(p.Tags); err == nil {
+		tags = string(canonical)
+	}
 	parts := []string{
 		"v3",
 		p.ManifestHash,
 		p.PluginHash,
 		p.Name,
+		tags,
 		strconv.Itoa(p.ToolCount),
 		version,
 		string(p.Visibility),
