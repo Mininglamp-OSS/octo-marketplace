@@ -169,6 +169,61 @@ func TestDependencyTeamUsesPinnedMemberVersion(t *testing.T) {
 	}
 }
 
+func TestDependencySnapshotHandlesUnpinnedEdges(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	if _, err := db.Exec(`DELETE FROM plugin_version_relation_refs`); err != nil {
+		t.Fatal(err)
+	}
+	setDependencySnapshotRelations(t, db, "expert", "expert-v1", []model.PluginRelation{{ID: "es", SourcePluginID: "expert", TargetPluginID: "skill", Type: "expert_skill", Status: 1}})
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(false)
+	ctx := context.Background()
+	sc := pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}
+	blocked, err := repo.HasUnavailableDependencies(ctx, sc, "expert")
+	if err != nil || blocked {
+		t.Fatalf("healthy unpinned edge blocked=%v err=%v", blocked, err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err = repo.HasUnavailableDependencies(ctx, sc, "expert")
+	if err != nil || !blocked {
+		t.Fatalf("delisted unpinned target blocked=%v err=%v", blocked, err)
+	}
+}
+
+func TestDependencySnapshotHandlesHistoricalFieldNames(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	if _, err := db.Exec(`DELETE FROM plugin_version_relation_refs`); err != nil {
+		t.Fatal(err)
+	}
+	// Historical Go field names are still accepted by model.DecodeSnapshotRelations.
+	historical := []byte(`[{"ID":"es","SourcePluginID":"expert","TargetPluginID":"skill","TargetVersionID":"skill-v1","Type":"expert_skill","Status":1}]`)
+	if _, err := db.Exec(`UPDATE plugin_versions SET relations_json=? WHERE plugin_id='expert' AND version_id='expert-v1'`, historical); err != nil {
+		t.Fatal(err)
+	}
+	teamHistorical := []byte(`[{"ID":"te","SourcePluginID":"team","TargetPluginID":"expert","TargetVersionID":"expert-v1","Type":"expert_team_expert","Status":1}]`)
+	if _, err := db.Exec(`UPDATE plugin_versions SET relations_json=? WHERE plugin_id='team' AND version_id='team-v1'`, teamHistorical); err != nil {
+		t.Fatal(err)
+	}
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(false)
+	ctx := context.Background()
+	sc := pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}
+	if blocked, err := repo.HasUnavailableDependencies(ctx, sc, "team"); err != nil || blocked {
+		t.Fatalf("healthy historical team blocked=%v err=%v", blocked, err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"expert", "team"} {
+		blocked, err := repo.HasUnavailableDependencies(ctx, sc, id)
+		if err != nil || !blocked {
+			t.Fatalf("historical %s blocked=%v err=%v", id, blocked, err)
+		}
+	}
+}
+
 func TestDependencyDelistingHidesCatalogButNotOwnerOrAdmin(t *testing.T) {
 	db := reviewDB(t)
 	dependencyFixture(t, db)

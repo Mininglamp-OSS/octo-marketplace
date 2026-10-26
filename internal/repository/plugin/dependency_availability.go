@@ -29,37 +29,57 @@ func (a availabilityAlias) sql() string {
 }
 
 const snapshotRelationColumns = `relation_type VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.relation_type',
+ relation_type_legacy VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.Type',
  target_plugin_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.target_plugin_id',
+ target_plugin_id_legacy VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.TargetPluginID',
  target_version_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.target_version_id',
+ target_version_id_legacy VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.TargetVersionID',
  status INT PATH '$.status',
- deleted_at VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.deleted_at'`
+ status_legacy INT PATH '$.Status',
+ deleted_at VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.deleted_at',
+ deleted_at_legacy VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.DeletedAt'`
 
-// snapshotTargetUnavailableSQL is shared by the root and the pinned member
-// snapshot. A team edge is handled by snapshotMemberUnavailableSQL in addition
-// to the normal target/release checks.
-func snapshotTargetUnavailableSQL(edge, target string) string {
-	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
+// snapshotField accepts both the canonical snake_case snapshot document and the
+// historical Go field names still accepted by model.DecodeSnapshotRelations.
+func snapshotField(alias, name string) string {
+	return `COALESCE(` + alias + `.` + name + `,` + alias + `.` + name + `_legacy)`
 }
 
-func snapshotMemberUnavailableSQL(edge string) string {
+// snapshotTargetUnavailableSQL is shared by the root and the pinned member
+// snapshot. An unpinned edge (supported when references are disabled) is
+// checked against the target's published release, matching diagnostics.
+func snapshotTargetUnavailableSQL(edge, target string) string {
+	edgeType := snapshotField(edge, "relation_type")
+	edgeTarget := snapshotField(edge, "target_plugin_id")
+	edgePin := snapshotField(edge, "target_version_id")
+	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edgeType + ` IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edgeTarget + ` AND dep_release.version_id=COALESCE(` + edgePin + `,` + target + `.published_version_id))))`
+}
+
+func snapshotMemberUnavailableSQL(edge, target string) string {
+	edgeTarget := snapshotField(edge, "target_plugin_id")
+	edgePin := snapshotField(edge, "target_version_id")
+	memberType := snapshotField("member_edge", "relation_type")
 	return `EXISTS (SELECT 1 FROM plugin_versions member_version
  JOIN JSON_TABLE(member_version.relations_json, '$[*]' COLUMNS (` + snapshotRelationColumns + `)) member_edge
- LEFT JOIN plugins member_target ON member_target.plugin_id=member_edge.target_plugin_id
- WHERE member_version.plugin_id=` + edge + `.target_plugin_id
-   AND member_version.version_id=` + edge + `.target_version_id
-   AND member_edge.relation_type IN ('expert_skill','expert_connector')
-   AND COALESCE(member_edge.status,1)=1 AND member_edge.deleted_at IS NULL
+ LEFT JOIN plugins member_target ON member_target.plugin_id=` + snapshotField("member_edge", "target_plugin_id") + `
+ WHERE member_version.plugin_id=` + edgeTarget + `
+   AND member_version.version_id=COALESCE(` + edgePin + `,` + target + `.published_version_id)
+   AND ` + memberType + ` IN ('expert_skill','expert_connector')
+   AND COALESCE(member_edge.status,member_edge.status_legacy,1)=1
+   AND COALESCE(member_edge.deleted_at,member_edge.deleted_at_legacy) IS NULL
    AND ` + snapshotTargetUnavailableSQL("member_edge", "member_target") + `)`
 }
 
 func unavailableSnapshotSQL(sourceID, sourceVersion string) string {
+	edgeType := snapshotField("edge", "relation_type")
 	return `EXISTS (SELECT 1 FROM plugin_versions source_version
  JOIN JSON_TABLE(source_version.relations_json, '$[*]' COLUMNS (` + snapshotRelationColumns + `)) edge
- LEFT JOIN plugins target ON target.plugin_id=edge.target_plugin_id
+ LEFT JOIN plugins target ON target.plugin_id=` + snapshotField("edge", "target_plugin_id") + `
  WHERE source_version.plugin_id=` + sourceID + ` AND source_version.version_id=` + sourceVersion + `
-   AND edge.relation_type IN ('expert_skill','expert_connector','expert_team_expert')
-   AND COALESCE(edge.status,1)=1 AND edge.deleted_at IS NULL
-   AND (` + snapshotTargetUnavailableSQL("edge", "target") + ` OR (edge.relation_type='expert_team_expert' AND ` + snapshotMemberUnavailableSQL("edge") + `)))`
+   AND ` + edgeType + ` IN ('expert_skill','expert_connector','expert_team_expert')
+   AND COALESCE(edge.status,edge.status_legacy,1)=1
+   AND COALESCE(edge.deleted_at,edge.deleted_at_legacy) IS NULL
+   AND (` + snapshotTargetUnavailableSQL("edge", "target") + ` OR (` + edgeType + `='expert_team_expert' AND ` + snapshotMemberUnavailableSQL("edge", "target") + `)))`
 }
 
 func liveTargetUnavailableSQL(edge, target string) string {
