@@ -564,6 +564,10 @@ func (s *Service) currentDetail(ctx context.Context, caller Caller, pluginID str
 // that needs a team's member count can count expert_team_expert edges in the
 // returned relation slice, which is also the only count consistent with the
 // caller's visibility.
+// DetailGraph is the public reader graph. A blocked published root returns 404
+// for non-owners; admins diagnose via the admin list/detail endpoints (which
+// include dependency_issues) rather than a public graph bypass. Keeping the
+// bypass out of this endpoint avoids widening the public graph surface.
 func (s *Service) DetailGraph(ctx context.Context, caller Caller, pluginID string) (*DetailGraph, error) {
 	if s.versionManagement {
 		id, err := parseStorageID(pluginID)

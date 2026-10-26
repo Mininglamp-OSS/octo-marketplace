@@ -14,14 +14,27 @@ import (
 // without a published version pointer use their current live relations. In
 // particular, a later draft edit must not change a listed release's audience.
 func unavailableDirectSQL(source string) string {
-	refBad := unavailableTargetSQL("ref", "target")
-	liveBad := unavailableTargetSQL("live", "target")
+	// The helper is internal and receives only fixed aliases. Reject anything
+	// else so a future caller cannot turn the concatenation into an injection
+	// surface; both SQL fragments below are composed from these constants.
+	if source != "p" && source != "member" {
+		panic("unsupported dependency availability source alias")
+	}
+	refBad := unavailableTargetSQL("ref", "target", true)
+	liveBad := unavailableTargetSQL("live", "target", false)
 	return `(EXISTS (SELECT 1 FROM plugin_version_relation_refs ref LEFT JOIN plugins target ON target.plugin_id=ref.target_plugin_id WHERE ref.source_plugin_id=` + source + `.plugin_id AND ref.source_version_id=` + source + `.published_version_id AND ` + refBad + `)
  OR (` + source + `.published_version_id IS NULL AND EXISTS (SELECT 1 FROM plugin_relations live LEFT JOIN plugins target ON target.plugin_id=live.target_plugin_id WHERE live.source_plugin_id=` + source + `.plugin_id AND live.status=1 AND live.deleted_at IS NULL AND live.relation_type IN ('expert_skill','expert_connector','expert_team_expert') AND ` + liveBad + `)))`
 }
 
-func unavailableTargetSQL(edge, target string) string {
-	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
+func unavailableTargetSQL(edge, target string, formal bool) string {
+	releaseMissing := edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)`
+	if formal {
+		// A released reference without a pin is checked against the target's
+		// published release, matching dependencyEdges'
+		// COALESCE(edge.target_version_id,target.published_version_id) join.
+		releaseMissing = edge + `.relation_type IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=COALESCE(` + edge + `.target_version_id,` + target + `.published_version_id))`
+	}
+	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + releaseMissing + `))`
 }
 
 // unavailableDependencySQL is used by the catalog list, tag and category
@@ -80,7 +93,7 @@ func (r *Repo) dependencyEdges(ctx context.Context, ids []string) ([]dependencyE
  target.plugin_id IS NOT NULL,COALESCE(target.status=1 AND target.deleted_at IS NULL,0),COALESCE(target.listing_state='published',0),
  dep_release.version_id IS NOT NULL,edge.formal,
  CASE WHEN edge.relation_type='expert_connector' THEN COALESCE(target.plugin_name,'')
- ELSE COALESCE(JSON_UNQUOTE(JSON_EXTRACT(snapshot.manifest_json,'$.plugin_name')),'') END
+ ELSE COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot.manifest_json,'$.plugin_name')),''),target.plugin_name,'') END
  FROM (
  SELECT ref.source_plugin_id,ref.target_plugin_id,ref.target_version_id,ref.relation_type,1 AS formal
  FROM plugin_version_relation_refs ref JOIN plugins src ON src.plugin_id=ref.source_plugin_id AND src.published_version_id=ref.source_version_id
