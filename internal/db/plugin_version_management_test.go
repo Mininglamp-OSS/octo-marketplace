@@ -1,6 +1,8 @@
 package db
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -235,13 +237,13 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 	svc := pluginsvc.New(repo, store).WithVersionManagement(true)
 	ctx := context.Background()
 	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
-	d, err := svc.AdminCreate(ctx, admin, managedWrite("1.0.0", "public v1", model.PluginVisibilitySystem))
+	d, err := svc.AdminCreate(ctx, admin, managedAdminSkillWrite("1.0.0", "public v1", model.PluginVisibilitySystem))
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := d.Plugin.ID
 	v1 := *d.Plugin.CurrentVersionID
-	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedWrite("2.0.0", "admin draft", model.PluginVisibilitySystem))); err != nil {
+	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedAdminSkillWrite("2.0.0", "admin draft", model.PluginVisibilitySystem))); err != nil {
 		t.Fatal(err)
 	}
 	reader := managedOwner()
@@ -272,7 +274,7 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 	pkg, _ := json.Marshal(map[string]any{"attachments": []any{map[string]any{"path": "old.bin", "content_type": "storage", "content_size": len("historical bytes"), "content_hash": digest}}})
 	keys, _ := json.Marshal(map[string]string{"old.bin": key})
 	// Tenant fixture so the own-Space object namespace is authoritative.
-	tenant, err := svc.Create(ctx, reader, managedWrite("1.0.0", "fixture", model.PluginVisibilityPrivate))
+	tenant, err := svc.Create(ctx, reader, managedAdminSkillWrite("1.0.0", "fixture", model.PluginVisibilityPrivate))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +311,7 @@ func TestManagedAdminDelistedSystemUpdateOnlySaves(t *testing.T) {
 	svc := pluginsvc.New(repo).WithVersionManagement(true)
 	ctx := context.Background()
 	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
-	d, err := svc.AdminCreate(ctx, admin, managedWrite("1.0.0", "listed", model.PluginVisibilitySystem))
+	d, err := svc.AdminCreate(ctx, admin, managedAdminSkillWrite("1.0.0", "listed", model.PluginVisibilitySystem))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +320,7 @@ func TestManagedAdminDelistedSystemUpdateOnlySaves(t *testing.T) {
 	if _, err = database.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id=?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedWrite("2.0.0", "later edit", model.PluginVisibilitySystem))); err != nil {
+	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedAdminSkillWrite("2.0.0", "later edit", model.PluginVisibilitySystem))); err != nil {
 		t.Fatal(err)
 	}
 	var publishedID, currentID string
@@ -337,37 +339,185 @@ func TestManagedAdminDelistedSystemUpdateOnlySaves(t *testing.T) {
 	}
 }
 
-// The publish-on-write exception is limited to system resources: an admin edit of
-// a tenant resource preserves the tenant's published version.
-func TestManagedAdminTenantUpdateOnlySaves(t *testing.T) {
-	database := reviewDB(t)
-	repo := pluginrepo.New(database)
-	svc := pluginsvc.New(repo).WithVersionManagement(true)
-	ctx := context.Background()
-	owner := managedOwner()
-	d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "tenant v1", model.PluginVisibilityPrivate))
-	if err != nil {
-		t.Fatal(err)
+// Admin edits retain their existing direct effect for listed tenant assets,
+// including Spaces with manual review. Ordinary Tenant saves remain drafts.
+func TestManagedAdminTenantUpdatePublishesWithoutReview(t *testing.T) {
+	for _, visibility := range []model.PluginVisibility{model.PluginVisibilityPrivate, model.PluginVisibilitySpace} {
+		t.Run(string(visibility), func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			svc := pluginsvc.New(repo).WithVersionManagement(true)
+			ctx := context.Background()
+			owner := managedOwner()
+			if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, owner.UID, owner.Name); err != nil {
+				t.Fatal(err)
+			}
+			d, err := svc.Create(ctx, owner, managedAdminSkillWrite("1.0.0", "tenant v1", visibility))
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := d.Plugin.ID
+			published, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if published.Review != nil {
+				if _, err = svc.ApproveReview(ctx, managedReviewer(), published.Review.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var v1 string
+			if err = database.QueryRow(`SELECT published_version_id FROM plugins WHERE plugin_id=?`, id).Scan(&v1); err != nil {
+				t.Fatal(err)
+			}
+			var versionsBefore, releasesBefore int
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id=?`, id).Scan(&versionsBefore); err != nil {
+				t.Fatal(err)
+			}
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_version_releases WHERE plugin_id=?`, id).Scan(&releasesBefore); err != nil {
+				t.Fatal(err)
+			}
+			countReviews := func() int {
+				t.Helper()
+				var n int
+				if err := database.QueryRow(`SELECT COUNT(*) FROM plugin_review_requests WHERE plugin_id=?`, id).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			reviewsBefore := countReviews()
+			admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
+			req := editingWrite(t, database, id, managedAdminSkillWrite("2.0.0", "tenant v2", visibility))
+			if _, err = svc.AdminUpdate(ctx, admin, id, req); err != nil {
+				t.Fatal(err)
+			}
+			var publishedID, currentID, ownerID, spaceID, actualVisibility, listing string
+			if err = database.QueryRow(`SELECT published_version_id,current_version_id,owner_uid,space_id,visibility,listing_state FROM plugins WHERE plugin_id=?`, id).Scan(&publishedID, &currentID, &ownerID, &spaceID, &actualVisibility, &listing); err != nil {
+				t.Fatal(err)
+			}
+			if publishedID != currentID || currentID == v1 {
+				t.Fatalf("published=%s current=%s, want new snapshot formally published", publishedID, currentID)
+			}
+			if ownerID != owner.UID || spaceID != owner.SpaceID || actualVisibility != string(visibility) || listing != "published" {
+				t.Fatalf("Admin changed provenance/audience/listing: %s %s %s %s", ownerID, spaceID, actualVisibility, listing)
+			}
+			reader := owner
+			if visibility == model.PluginVisibilitySpace {
+				reader.UID = "space-member"
+			}
+			view, err := svc.Detail(ctx, reader, id, true)
+			if err != nil || !strings.Contains(string(view.Plugin.Package), "tenant v2") {
+				t.Fatalf("Admin save not publicly effective: %+v %v", view, err)
+			}
+			old, err := svc.ManagedVersion(ctx, owner, id, v1, false)
+			if err != nil || old.Release == nil || old.IsPublished || !strings.Contains(string(old.Package), "tenant v1") {
+				t.Fatalf("historical release changed: %+v %v", old, err)
+			}
+			if countReviews() != reviewsBefore {
+				t.Fatal("Admin save created a review")
+			}
+			// A stale editing token and reusing a released label must both fail
+			// without replacing the release or leaving a partial snapshot behind.
+			if _, err = svc.AdminUpdate(ctx, admin, id, req); !errors.Is(err, pluginsvc.ErrEditConflict) {
+				t.Fatalf("stale Admin save: %v", err)
+			}
+			req = editingWrite(t, database, id, managedAdminSkillWrite("2.0.0", "overwrite v2", visibility))
+			if _, err = svc.AdminUpdate(ctx, admin, id, req); err == nil {
+				t.Fatal("same release label accepted changed content")
+			}
+			req = editingWrite(t, database, id, managedAdminSkillWrite("", "missing new label", visibility))
+			if _, err = svc.AdminUpdate(ctx, admin, id, req); err == nil {
+				t.Fatal("changed content accepted without an explicit new label")
+			}
+			var versions, releases int
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id=?`, id).Scan(&versions); err != nil {
+				t.Fatal(err)
+			}
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_version_releases WHERE plugin_id=?`, id).Scan(&releases); err != nil {
+				t.Fatal(err)
+			}
+			if versions != versionsBefore+1 || releases != releasesBefore+1 {
+				t.Fatalf("versions=%d releases=%d; failed saves must roll back", versions, releases)
+			}
+			if _, err = svc.Detail(ctx, pluginsvc.Caller{UID: owner.UID, SpaceID: "space-b"}, id, true); !errors.Is(err, pluginsvc.ErrNotFound) {
+				t.Fatalf("cross-Space published content leaked: %v", err)
+			}
+		})
 	}
-	id := d.Plugin.ID
-	v1 := *d.Plugin.CurrentVersionID
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
-		t.Fatal(err)
-	}
-	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
-	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedWrite("2.0.0", "tenant v2", model.PluginVisibilityPrivate))); err != nil {
-		t.Fatal(err)
-	}
-	var publishedID, currentID string
-	if err = database.QueryRow(`SELECT published_version_id,current_version_id FROM plugins WHERE plugin_id=?`, id).Scan(&publishedID, &currentID); err != nil {
-		t.Fatal(err)
-	}
-	if publishedID != v1 || currentID == v1 {
-		t.Fatalf("published=%s current=%s, want published kept at %s", publishedID, currentID, v1)
-	}
-	view, err := svc.Detail(ctx, owner, id, true)
-	if err != nil || !strings.Contains(string(view.Plugin.Package), "tenant v1") {
-		t.Fatalf("tenant release drifted: %+v %v", view, err)
+}
+
+// Schema2 reuploads use the same Admin release transaction as Skill saves.
+func TestManagedAdminTenantContainerReuploadPublishes(t *testing.T) {
+	for _, typ := range []model.PluginType{model.PluginTypeExpert, model.PluginTypeExpertTeam} {
+		t.Run(string(typ), func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+			ctx := context.Background()
+			owner := managedOwner()
+			req := managedWrite("1.0.0", "tenant original", model.PluginVisibilityPrivate)
+			doc := map[string]any{"schema_version": "2", "kind": "agent", "name": "updated-expert", "instruction": "admin replacement"}
+			filename := "expert.json"
+			if typ == model.PluginTypeExpertTeam {
+				member, err := svc.Create(ctx, owner, managedWrite("1.0.0", "member instructions", model.PluginVisibilityPrivate))
+				if err != nil {
+					t.Fatal(err)
+				}
+				publishManaged(t, svc, owner, member.Plugin.ID)
+				memberVersion := *member.Plugin.CurrentVersionID
+				req.Type = typ
+				req.Manifest = json.RawMessage(strings.ReplaceAll(string(req.Manifest), `"expert"`, `"expert_team"`))
+				req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: member.Plugin.ID, TargetVersionID: &memberVersion, Type: "expert_team_expert", Data: json.RawMessage(`{"member_key":"leader","is_leader":true}`)}}
+				filename = "squad.json"
+				doc["kind"] = "squad"
+				doc["members"] = []any{map[string]any{"id": member.Plugin.ID, "version_id": memberVersion, "member_key": "leader", "is_leader": true}}
+			}
+			d, err := svc.Create(ctx, owner, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := d.Plugin.ID
+			publishManaged(t, svc, owner, id)
+			var oldID, oldPackage string
+			if err = database.QueryRow(`SELECT p.published_version_id,v.plugin_json FROM plugins p JOIN plugin_versions v ON v.version_id=p.published_version_id WHERE p.plugin_id=?`, id).Scan(&oldID, &oldPackage); err != nil {
+				t.Fatal(err)
+			}
+			revision, err := repo.GetEditRevision(ctx, tenantScope(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(doc)
+			var archive bytes.Buffer
+			writer := zip.NewWriter(&archive)
+			file, err := writer.Create(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = file.Write(raw); err != nil {
+				t.Fatal(err)
+			}
+			if err = writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
+			if _, err = svc.ReuploadContainer(ctx, admin, id, pluginsvc.ContainerImportParams{SchemaVersion: "2", Version: "2.0.0", ExpectedEditRevision: &revision, Archive: archive.Bytes()}); err != nil {
+				t.Fatal(err)
+			}
+			var publishedID, currentID, savedPackage string
+			if err = database.QueryRow(`SELECT published_version_id,current_version_id FROM plugins WHERE plugin_id=?`, id).Scan(&publishedID, &currentID); err != nil {
+				t.Fatal(err)
+			}
+			if publishedID == oldID || publishedID != currentID {
+				t.Fatalf("ZIP reupload did not publish: old=%s published=%s current=%s", oldID, publishedID, currentID)
+			}
+			if err = database.QueryRow(`SELECT plugin_json FROM plugin_versions WHERE version_id=?`, oldID).Scan(&savedPackage); err != nil || savedPackage != oldPackage {
+				t.Fatalf("ZIP reupload changed history: %v", err)
+			}
+			view, err := svc.Detail(ctx, owner, id, true)
+			if err != nil || !strings.Contains(string(view.Plugin.Package), "admin replacement") {
+				t.Fatalf("ZIP replacement not effective: %+v %v", view, err)
+			}
+		})
 	}
 }
 
@@ -488,7 +638,7 @@ func TestManagedAdminAdoptsLegacySystemBaseline(t *testing.T) {
 	svc := pluginsvc.New(repo).WithVersionManagement(true)
 	ctx := context.Background()
 	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
-	d, err := svc.AdminCreate(ctx, admin, managedWrite("1.0.0", "system v1", model.PluginVisibilitySystem))
+	d, err := svc.AdminCreate(ctx, admin, managedAdminSkillWrite("1.0.0", "system v1", model.PluginVisibilitySystem))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,6 +850,14 @@ func (p *installStubProvisioner) ProvisionAgentFromSpec(context.Context, experts
 func (p *installStubProvisioner) ProvisionSquadFromSpec(context.Context, expertsvc.InstallInput, *model.Squad) (expertsvc.InstallSquadResult, error) {
 	p.agents++
 	return expertsvc.InstallSquadResult{SquadID: "squad-1"}, nil
+}
+
+// Admin JSON writes accept Skill/Connector; Expert/Team use schema2 ZIP.
+func managedAdminSkillWrite(label, content string, visibility model.PluginVisibility) pluginsvc.WriteRequest {
+	req := managedSkillWrite(label, "managed-skill", visibility)
+	raw, _ := json.Marshal(content)
+	req.Package = json.RawMessage(`{"$schema":"cowork-plugin-package-2.0.json","attachments":[{"path":"SKILL.md","content_type":"raw","mime_type":"text/markdown","raw_content":` + string(raw) + `}]}`)
+	return req
 }
 
 func managedSkillWrite(label, name string, visibility model.PluginVisibility) pluginsvc.WriteRequest {

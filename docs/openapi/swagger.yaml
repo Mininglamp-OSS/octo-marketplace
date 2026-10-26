@@ -1859,6 +1859,8 @@ components:
         runtime_id:
           format: uuid
           type: string
+        workspace_id:
+          type: string
       required:
       - runtime_id
       type: object
@@ -4009,7 +4011,11 @@ paths:
       tags:
       - admin_plugin
     patch:
-      description: Update any plugin by id, ignoring owner/Space. Admin only.
+      description: Update any plugin by id, ignoring owner/Space. Admin only. Changes
+        to an already-listed versioned asset, including tenant-owned assets, create
+        an immutable formal release without a separate review/publish step and require
+        a new version label. Ownership, Space, visibility and listing are preserved;
+        draft/delisted assets are not re-listed.
       operationId: admin_plugin.update
       parameters:
       - description: Plugin ID
@@ -7187,7 +7193,7 @@ paths:
           type: string
       - description: Target Workspace ID
         in: header
-        name: X-Workspace-ID
+        name: X-Workspace-Id
         required: true
         schema:
           type: string

@@ -568,7 +568,7 @@ func (h *AdminHandler) SkillReupload(c *gin.Context) {
 
 // Update godoc
 // @Summary Update plugin (admin)
-// @Description Update any plugin by id, ignoring owner/Space. Admin only.
+// @Description Update any plugin by id, ignoring owner/Space. Admin only. Changes to an already-listed versioned asset, including tenant-owned assets, create an immutable formal release without a separate review/publish step and require a new version label. Ownership, Space, visibility and listing are preserved; draft/delisted assets are not re-listed.
 // @Tags admin_plugin
 // @ID admin_plugin.update
 // @Accept json

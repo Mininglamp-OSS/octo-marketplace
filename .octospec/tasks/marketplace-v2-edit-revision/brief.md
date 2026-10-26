@@ -4,6 +4,7 @@ Goal: implement the approved Marketplace v2 B-model contracts in one combined co
 
 Load-bearing behavior:
 - Editable revisions use transactional CAS independently of immutable versions. Connector editing and effective payloads are distinct; Admin changes take effect without review.
+- Admin saves of already-listed versioned assets, including tenant-owned assets, append a snapshot and advance the formal release atomically. They preserve owner, Space, visibility and placements, require an explicit unused forward label for changed published content, and never add a review/publish step. Draft/delisted saves do not re-list; Tenant-user saves retain their review policy.
 - Expert→Skill and Team→Expert resolve latest formal releases; Connector references resolve complete effective rows. Graph reads share a consistent snapshot and never fall back to older releases.
 - Lifecycle checks protect live, published and indirect references while allowing unreferenced previously published assets to be deleted. Review observations remain frozen across conflicts.
 - A34 returns complete verified original content with a JCS digest and bounded response. Installation preserves market names/files, freezes the initial plan for retries, and never treats uncertainty as failure.
