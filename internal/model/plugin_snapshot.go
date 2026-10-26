@@ -44,6 +44,7 @@ type SnapshotRelation struct {
 	SourcePluginID   string          `json:"source_plugin_id"`
 	SourcePluginType PluginType      `json:"source_plugin_type"`
 	TargetPluginID   string          `json:"target_plugin_id"`
+	TargetVersionID  *string         `json:"target_version_id,omitempty"`
 	TargetPluginType PluginType      `json:"target_plugin_type"`
 	Type             string          `json:"relation_type"`
 	SortOrder        int             `json:"sort_order"`
@@ -63,6 +64,7 @@ func EncodeSnapshotRelations(relations []PluginRelation) (json.RawMessage, error
 			SourcePluginID:   r.SourcePluginID,
 			SourcePluginType: r.SourcePluginType,
 			TargetPluginID:   r.TargetPluginID,
+			TargetVersionID:  r.TargetVersionID,
 			TargetPluginType: r.TargetPluginType,
 			Type:             r.Type,
 			SortOrder:        r.SortOrder,
@@ -81,12 +83,15 @@ func EncodeSnapshotRelations(relations []PluginRelation) (json.RawMessage, error
 // Go field names without ever rewriting historical JSON. A mixed document with
 // conflicting spellings is refused rather than choosing an ambiguous target.
 func DecodeSnapshotRelations(raw json.RawMessage) ([]PluginRelation, error) {
+	if err := ValidateUniqueJSONFields(raw); err != nil {
+		return nil, err
+	}
 	var rows []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, err
 	}
 	out := make([]PluginRelation, 0, len(rows))
-	aliases := map[string]string{"ID": "relation_id", "SourcePluginID": "source_plugin_id", "SourcePluginType": "source_plugin_type", "TargetPluginID": "target_plugin_id", "TargetPluginType": "target_plugin_type", "Type": "relation_type", "SortOrder": "sort_order", "Data": "data", "Status": "status", "CreatedBy": "created_by", "CreatedAt": "created_at", "UpdatedAt": "updated_at", "DeletedAt": "deleted_at"}
+	aliases := map[string]string{"ID": "relation_id", "SourcePluginID": "source_plugin_id", "SourcePluginType": "source_plugin_type", "TargetPluginID": "target_plugin_id", "TargetVersionID": "target_version_id", "TargetPluginType": "target_plugin_type", "Type": "relation_type", "SortOrder": "sort_order", "Data": "data", "Status": "status", "CreatedBy": "created_by", "CreatedAt": "created_at", "UpdatedAt": "updated_at", "DeletedAt": "deleted_at"}
 	for _, row := range rows {
 		if row == nil {
 			return nil, errors.New("null snapshot relation")
@@ -108,7 +113,7 @@ func DecodeSnapshotRelations(raw json.RawMessage) ([]PluginRelation, error) {
 		if err = json.Unmarshal(b, &r); err != nil {
 			return nil, err
 		}
-		out = append(out, PluginRelation{ID: r.ID, SourcePluginID: r.SourcePluginID, SourcePluginType: r.SourcePluginType, TargetPluginID: r.TargetPluginID, TargetPluginType: r.TargetPluginType, Type: r.Type, SortOrder: r.SortOrder, Data: r.Data, Status: r.Status, CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, DeletedAt: r.DeletedAt})
+		out = append(out, PluginRelation{ID: r.ID, SourcePluginID: r.SourcePluginID, SourcePluginType: r.SourcePluginType, TargetPluginID: r.TargetPluginID, TargetVersionID: r.TargetVersionID, TargetPluginType: r.TargetPluginType, Type: r.Type, SortOrder: r.SortOrder, Data: r.Data, Status: r.Status, CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, DeletedAt: r.DeletedAt})
 	}
 	return out, nil
 }

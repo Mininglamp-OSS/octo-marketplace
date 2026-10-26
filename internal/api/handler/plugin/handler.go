@@ -84,6 +84,8 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	rg.GET("/plugin_categories", h.ListCategories)
 	rg.GET("/plugin_tags", h.ListTags)
 	plugins := rg.Group("/plugins")
+	plugins.GET("/:plugin_id/dependents", h.ReferenceDependents)
+	plugins.GET("/:plugin_id/reference_candidates", h.ReferenceCandidates)
 	plugins.GET("/detail", h.Get)
 	plugins.GET("/detail_graph", h.GetGraph)
 	plugins.POST("/upsert", h.Upsert)
@@ -114,12 +116,13 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 }
 
 type relationRequest struct {
-	RelationID     string          `json:"relation_id,omitempty"`
-	SourcePluginID string          `json:"source_plugin_id,omitempty"`
-	TargetPluginID string          `json:"target_plugin_id"`
-	RelationType   string          `json:"relation_type"`
-	SortOrder      int             `json:"sort_order"`
-	Data           json.RawMessage `json:"data,omitempty" swaggertype:"object"`
+	RelationID      string          `json:"relation_id,omitempty"`
+	SourcePluginID  string          `json:"source_plugin_id,omitempty"`
+	TargetPluginID  string          `json:"target_plugin_id"`
+	TargetVersionID *string         `json:"target_version_id,omitempty"`
+	RelationType    string          `json:"relation_type"`
+	SortOrder       int             `json:"sort_order"`
+	Data            json.RawMessage `json:"data,omitempty" swaggertype:"object"`
 }
 
 type pluginWriteRequest struct {
@@ -147,7 +150,7 @@ type upsertRequest struct {
 func (r upsertRequest) serviceRequest() pluginsvc.WriteRequest {
 	relations := make([]pluginsvc.RelationRequest, len(r.Relations))
 	for i, x := range r.Relations {
-		relations[i] = pluginsvc.RelationRequest{ID: x.RelationID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, Type: x.RelationType, SortOrder: x.SortOrder, Data: x.Data}
+		relations[i] = pluginsvc.RelationRequest{ID: x.RelationID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, Type: x.RelationType, SortOrder: x.SortOrder, Data: x.Data}
 	}
 	return pluginsvc.WriteRequest{Name: r.Plugin.PluginName, Type: r.Plugin.PluginType, CategoryID: r.Plugin.CategoryID, Tags: rawJSON(r.Plugin.Tags), Publisher: r.Plugin.Publisher, Icon: r.Plugin.Icon, Visibility: r.Plugin.Visibility, Version: r.Plugin.Version, Manifest: r.Plugin.ManifestJSON, Package: r.Plugin.PluginJSON, Relations: relations}
 }
@@ -246,12 +249,13 @@ type listItemResponse struct {
 }
 
 type relationResponse struct {
-	RelationID     string          `json:"relation_id"`
-	SourcePluginID string          `json:"source_plugin_id"`
-	TargetPluginID string          `json:"target_plugin_id"`
-	RelationType   string          `json:"relation_type"`
-	SortOrder      int             `json:"sort_order"`
-	Data           json.RawMessage `json:"data,omitempty" swaggertype:"object"`
+	RelationID      string          `json:"relation_id"`
+	SourcePluginID  string          `json:"source_plugin_id"`
+	TargetPluginID  string          `json:"target_plugin_id"`
+	TargetVersionID *string         `json:"target_version_id,omitempty"`
+	RelationType    string          `json:"relation_type"`
+	SortOrder       int             `json:"sort_order"`
+	Data            json.RawMessage `json:"data,omitempty" swaggertype:"object"`
 }
 
 type detailResponse struct {
@@ -830,6 +834,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin graph exceeds the size cap", map[string]any{"max_nodes": pluginsvc.MaxGraphNodes(), "max_edges": pluginsvc.MaxGraphEdges()}, "The plugin references too many related plugins; contact the publisher to reduce the graph size.")
 	case errors.Is(err, pluginsvc.ErrRelationInUse):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is referenced by another live plugin", map[string]any{"conflict_reason": "relation_in_use"}, "Remove the referencing plugin relation and try again.")
+	case errors.Is(err, pluginsvc.ErrReferenceIndexIncomplete):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "historical reference indexes require verification", map[string]any{"reason": "reference_index_incomplete", "conflict_reason": "reference_index_incomplete"}, "Run the verified historical reference index backfill before querying impact.")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "version history migration is required", map[string]any{"reason": "version_migration_required"}, "Establish a verified publication baseline before enabling managed edits for this legacy resource.")
 	case errors.Is(err, pluginsvc.ErrConflict):
@@ -905,7 +911,7 @@ func detailDTO(d *pluginsvc.Detail) detailResponse {
 		if sourceType == "" && d.Plugin != nil && x.SourcePluginID == d.Plugin.ID {
 			sourceType = d.Plugin.Type
 		}
-		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
+		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
 	}
 	out := detailResponse{Plugin: pluginDTO(d.Plugin), Relations: rels}
 	if d.RelationResult != nil {
@@ -919,7 +925,7 @@ func detailGraphDTO(d *pluginsvc.DetailGraph) detailGraphResponse {
 	}
 	rels := make([]relationResponse, len(d.Relations))
 	for i, x := range d.Relations {
-		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
+		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
 	}
 	related := make([]listItemResponse, len(d.Related))
 	for i, p := range d.Related {
@@ -1002,10 +1008,11 @@ func rfc5987Escape(s string) string {
 }
 
 func versionRelationSlice(pluginID, versionID string, raw json.RawMessage) []map[string]any {
-	if len(raw) == 0 {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return []map[string]any{}
 	}
-	relations, err := model.DecodeSnapshotRelations(raw)
+	relations, err := model.DecodeSnapshotRelations(trimmed)
 	if err != nil {
 		// Keep the historical page-loading behavior, but make corruption visible
 		// in logs instead of silently rendering an empty relation list.
@@ -1021,12 +1028,13 @@ func versionRelationSlice(pluginID, versionID string, raw json.RawMessage) []map
 	out := make([]map[string]any, 0, len(relations))
 	for _, relation := range relations {
 		out = append(out, map[string]any{
-			"relation_id":      relation.ID,
-			"source_plugin_id": relation.SourcePluginID,
-			"target_plugin_id": relation.TargetPluginID,
-			"relation_type":    relation.Type,
-			"sort_order":       relation.SortOrder,
-			"data":             normalizedObjectRaw(relation.Data),
+			"relation_id":       relation.ID,
+			"source_plugin_id":  relation.SourcePluginID,
+			"target_plugin_id":  relation.TargetPluginID,
+			"target_version_id": relation.TargetVersionID,
+			"relation_type":     relation.Type,
+			"sort_order":        relation.SortOrder,
+			"data":              normalizedObjectRaw(relation.Data),
 		})
 	}
 	return out

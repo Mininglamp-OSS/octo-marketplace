@@ -43,6 +43,7 @@ import (
 // @description does not apply in the plugin's current state), `relation_in_use` (another live
 // @description plugin still references this one; remove that relation first), `deadlock` (transient lock
 // @description contention; also sets `retryable: true`, so retry the request unchanged), and
+// @description `reference_index_incomplete` (historical reference indexes need verified backfill),
 // @description `state` (a generic raced state change; refresh and retry).
 // @contact.name OCTO API Team
 // @contact.url https://github.com/Mininglamp-OSS/octo-marketplace
@@ -219,6 +220,7 @@ func main() {
 		Addr: ":" + cfg.APIPort,
 		Handler: router.Public(database, authenticator, adminAuth, router.StorageConfig{
 			PluginVersionManagementEnabled: cfg.PluginVersionManagementEnabled,
+			PluginReferencesEnabled:        cfg.PluginReferencesEnabled,
 			Driver:                         cfg.StorageDriver,
 			LocalDir:                       cfg.LocalStorageDir,
 			BaseURL:                        publicBaseURL(cfg),

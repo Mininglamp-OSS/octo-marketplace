@@ -445,6 +445,11 @@ func (s *Service) freezeSubmission(ctx context.Context, caller Caller, detail *D
 		// attachments no longer carry an inline key (it lives in the host sidecar).
 		// Re-inject the stored key for unchanged storage content so the round trip is
 		// not rejected, exactly as Service.update does.
+		if s.references {
+			if err := rejectInlineCapabilities(plugin.Type, params.Package); err != nil {
+				return pluginrepo.FrozenSnapshot{}, err
+			}
+		}
 		pkg := reinjectUpdateStorageKeys(params.Package, plugin.Package, plugin.AttachmentKeys)
 		docs, err := CanonicalizeDocuments(plugin.Name, plugin.Type, plugin.Tags, params.Manifest, pkg, caller.SpaceID)
 		if err != nil {
@@ -473,6 +478,14 @@ func (s *Service) freezeSubmission(ctx context.Context, caller Caller, detail *D
 			return pluginrepo.FrozenSnapshot{}, err
 		}
 		snap.Relations = rels
+	}
+	if s.references {
+		if err := rejectInlineCapabilities(plugin.Type, snap.Manifest); err != nil {
+			return pluginrepo.FrozenSnapshot{}, err
+		}
+		if err := rejectInlineCapabilities(plugin.Type, snap.Package); err != nil {
+			return pluginrepo.FrozenSnapshot{}, err
+		}
 	}
 	docs := &CanonicalDocuments{Manifest: snap.Manifest, Package: snap.Package, PluginHash: snap.PluginHash, AttachmentKeys: snap.AttachmentKeys}
 	if err := s.freezeVersionArtifacts(ctx, plugin.Type, docs, caller.SpaceID); err != nil {
