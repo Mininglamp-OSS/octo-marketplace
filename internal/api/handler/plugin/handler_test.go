@@ -591,3 +591,38 @@ func TestGetGraphReturns413WhenTooLarge(t *testing.T) {
 		t.Fatalf("want max_edges in details: %s", rec.Body.String())
 	}
 }
+
+// Artifact conditions are permanent data states, not transient server faults:
+// the author needs an actionable conflict rather than an opaque 500.
+func TestWriteServiceErrorMapsArtifactConditions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"legacy snapshot", pluginsvc.ErrLegacySnapshot, "legacy_snapshot_requires_resubmit"},
+		{"artifact integrity", pluginsvc.ErrIntegrity, "artifact_integrity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			writeServiceError(c, tc.err, "test")
+			if w.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+			}
+			var env struct {
+				Error struct {
+					Code    string         `json:"code"`
+					Details map[string]any `json:"details"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+				t.Fatal(err)
+			}
+			if env.Error.Code != "CONFLICT" || env.Error.Details["conflict_reason"] != tc.reason {
+				t.Fatalf("envelope = %s", w.Body.String())
+			}
+		})
+	}
+}

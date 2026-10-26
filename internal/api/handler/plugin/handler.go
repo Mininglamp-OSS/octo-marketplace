@@ -20,6 +20,7 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // maxBodyBytes caps a plugin write body. `maxReviewBodyBytes` (review.go) is
@@ -90,6 +91,9 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	plugins.POST("/publish", h.Publish)
 	plugins.POST("/delist", h.Delist)
 	plugins.GET("/versions", h.ListVersions)
+	plugins.GET("/:plugin_id/draft", h.GetDraft)
+	plugins.GET("/:plugin_id/versions/:version_id", h.GetVersion)
+	plugins.GET("/:plugin_id/versions/:version_id/file", h.DownloadVersionFile)
 	plugins.POST("/install", h.Install)
 	plugins.POST("/:plugin_id/installations", h.CreateInstallation)
 	plugins.POST("/import", h.Import)
@@ -277,15 +281,19 @@ type relationResultResponse struct {
 // visible (incl. system) plugin. Callers get the label, hashes, changelog and
 // timestamp per row; full content is fetched from the plugin detail.
 type versionResponse struct {
-	VersionID    string           `json:"version_id"`
-	PluginID     string           `json:"plugin_id"`
-	Version      string           `json:"version"`
-	ManifestHash string           `json:"manifest_hash"`
-	PluginHash   string           `json:"plugin_hash"`
-	Relations    []map[string]any `json:"relations"`
-	Changelog    *string          `json:"changelog,omitempty"`
-	CreatedBy    string           `json:"created_by"`
-	CreatedAt    time.Time        `json:"created_at" swaggertype:"string,date-time"`
+	DeclaredVersion *string                 `json:"declared_version,omitempty"`
+	Release         *versionReleaseResponse `json:"release,omitempty"`
+	IsCurrent       bool                    `json:"is_current"`
+	IsPublished     bool                    `json:"is_published"`
+	VersionID       string                  `json:"version_id"`
+	PluginID        string                  `json:"plugin_id"`
+	Version         string                  `json:"version"`
+	ManifestHash    string                  `json:"manifest_hash"`
+	PluginHash      string                  `json:"plugin_hash"`
+	Relations       []map[string]any        `json:"relations"`
+	Changelog       *string                 `json:"changelog,omitempty"`
+	CreatedBy       string                  `json:"created_by"`
+	CreatedAt       time.Time               `json:"created_at" swaggertype:"string,date-time"`
 }
 
 type categoryResponse struct {
@@ -525,7 +533,7 @@ func (h *Handler) Delete(c *gin.Context) {
 
 // ListVersions godoc
 // @Summary List plugin versions
-// @Description List a visible Plugin's version history (one immutable snapshot per save, newest first) using offset pagination. Each row is metadata only (label, hashes, changelog, timestamp); full manifest/package content is fetched from the plugin detail, so intermediate/rolled-back saves are not exposed in bulk.
+// @Description List a visible Plugin's version history using offset pagination. With version management enabled, authors see saved snapshots and readers see formal releases only; metadata identifies current and published heads. Full content and original files use the version-specific endpoints. With the rollout disabled, the legacy metadata projection applies.
 // @Tags plugin
 // @ID plugin.version.list
 // @Accept json
@@ -822,6 +830,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "plugin graph exceeds the size cap", map[string]any{"max_nodes": pluginsvc.MaxGraphNodes(), "max_edges": pluginsvc.MaxGraphEdges()}, "The plugin references too many related plugins; contact the publisher to reduce the graph size.")
 	case errors.Is(err, pluginsvc.ErrRelationInUse):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin is referenced by another live plugin", map[string]any{"conflict_reason": "relation_in_use"}, "Remove the referencing plugin relation and try again.")
+	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "version history migration is required", map[string]any{"reason": "version_migration_required"}, "Establish a verified publication baseline before enabling managed edits for this legacy resource.")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin state conflicts with an existing resource", map[string]any{"conflict_reason": "state"}, "Refresh the resource and try again.")
 	// Transient InnoDB lock contention (a deadlock victim, or a lock-wait timeout)
@@ -834,6 +844,17 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 	// instruction to a client, and splitting it would move the wire contract.
 	case errors.Is(err, pluginsvc.ErrDeadlock):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "the request conflicted with a concurrent change", map[string]any{"conflict_reason": "deadlock", "retryable": true}, "Please retry the request.")
+	// A pending request created before immutable artifacts were enforced still
+	// points at ordinary upload keys (or carries legacy ref metadata without a
+	// digest). Approving it would either fail opaquely or enshrine mutable bytes as
+	// history, so refuse it with the one action that fixes it.
+	case errors.Is(err, pluginsvc.ErrLegacySnapshot):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "this review request was created before file freezing was enabled", map[string]any{"conflict_reason": "legacy_snapshot_requires_resubmit"}, "Cancel the pending request and submit it again; the new submission freezes its files.")
+	// A stored file is missing or no longer matches the digest recorded when it was
+	// saved. This is a permanent data condition on one row, not a transient server
+	// fault; tell the author to re-upload instead of returning an opaque 500.
+	case errors.Is(err, pluginsvc.ErrIntegrity):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a stored artifact is missing or does not match its recorded digest", map[string]any{"conflict_reason": "artifact_integrity"}, "Re-upload the affected file and retry; files lost before the version rollout cannot be recovered.")
 	default:
 		apiresponse.Internal(c, err, operation)
 	}
@@ -907,7 +928,11 @@ func detailGraphDTO(d *pluginsvc.DetailGraph) detailGraphResponse {
 	return detailGraphResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, RelatedPlugins: related}
 }
 func versionDTO(x model.PluginVersion) versionResponse {
-	return versionResponse{VersionID: x.ID, PluginID: x.PluginID, Version: x.Version, ManifestHash: x.ManifestHash, PluginHash: x.PluginHash, Relations: versionRelationSlice(x.Relations), Changelog: x.Changelog, CreatedBy: x.CreatedBy, CreatedAt: x.CreatedAt}
+	var release *versionReleaseResponse
+	if x.Release != nil {
+		release = &versionReleaseResponse{VersionLabel: x.Release.VersionLabel, ReleasedBy: x.Release.ReleasedBy, ReleasedAt: x.Release.ReleasedAt}
+	}
+	return versionResponse{DeclaredVersion: x.DeclaredVersion, Release: release, IsCurrent: x.IsCurrent, IsPublished: x.IsPublished, VersionID: x.ID, PluginID: x.PluginID, Version: x.Version, ManifestHash: x.ManifestHash, PluginHash: x.PluginHash, Relations: versionRelationSlice(x.PluginID, x.ID, x.Relations), Changelog: x.Changelog, CreatedBy: x.CreatedBy, CreatedAt: x.CreatedAt}
 }
 
 func rawJSON(value any) json.RawMessage {
@@ -976,9 +1001,21 @@ func rfc5987Escape(s string) string {
 	return b.String()
 }
 
-func versionRelationSlice(raw json.RawMessage) []map[string]any {
-	var relations []model.PluginRelation
-	if len(raw) == 0 || json.Unmarshal(raw, &relations) != nil || relations == nil {
+func versionRelationSlice(pluginID, versionID string, raw json.RawMessage) []map[string]any {
+	if len(raw) == 0 {
+		return []map[string]any{}
+	}
+	relations, err := model.DecodeSnapshotRelations(raw)
+	if err != nil {
+		// Keep the historical page-loading behavior, but make corruption visible
+		// in logs instead of silently rendering an empty relation list.
+		logging.Warn("plugin: malformed version relation snapshot",
+			zap.String("plugin_id", pluginID),
+			zap.String("version_id", versionID),
+			zap.Error(err))
+		return []map[string]any{}
+	}
+	if relations == nil {
 		return []map[string]any{}
 	}
 	out := make([]map[string]any, 0, len(relations))

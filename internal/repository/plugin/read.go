@@ -84,6 +84,15 @@ WHERE p.plugin_id=? AND p.status=1 AND p.deleted_at IS NULL AND `+visibilitySQL,
 // List returns one page and the total number of rows matching the same scoped filters.
 func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plugin, int64, error) {
 	from, where, args := buildListQuery(scope, f)
+	project := func(s string) string { return s }
+	if r.versionManagement && !f.Mine && !f.AllSpaces {
+		// Join the published snapshot once per row. The previous projection used
+		// correlated subqueries in SELECT, WHERE and ORDER BY, multiplying the
+		// lookup per row and defeating keyword/sort indexes.
+		from += publishedVersionJoin
+		project = publishedListProjection
+		where = project(where)
+	}
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.plugin_id) `+from+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -107,7 +116,7 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	if f.IncludeReviewState {
 		reviewState = pluginReviewStateColumns
 	}
-	q := `SELECT ` + pluginSummaryColumns + pluginMetricColumns + reviewState + from + where + group + listOrder(f) + ` LIMIT ? OFFSET ?`
+	q := `SELECT ` + project(pluginSummaryColumns) + pluginMetricColumns + reviewState + from + where + group + project(listOrder(f)) + ` LIMIT ? OFFSET ?`
 	rows, err := r.db.QueryContext(ctx, q, queryArgs...)
 	if err != nil {
 		return nil, 0, err

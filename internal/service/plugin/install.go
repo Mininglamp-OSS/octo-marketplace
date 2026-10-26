@@ -143,14 +143,45 @@ func (s *Service) resolveInstallDetail(ctx context.Context, caller Caller, plugi
 	if err != nil {
 		return nil, err
 	}
-	declared, err := s.repo.CountDeclaredRelations(ctx, detail.Plugin.ID)
+	declared, err := s.declaredRelationCount(ctx, caller, detail)
 	if err != nil {
-		return nil, mapStoreError(err)
+		return nil, err
 	}
 	if declared > len(detail.Relations) {
 		return nil, ErrDependencyHidden
 	}
 	return detail, nil
+}
+
+// declaredRelationCount returns the number of relations install must be able to
+// see. In managed mode the public graph is the released snapshot, so the count
+// must come from that same snapshot: a later unpublished draft must never make
+// an unchanged release uninstallable, while a hidden released dependency is still
+// detected. Legacy resources without a release keep the live current-state count.
+func (s *Service) declaredRelationCount(ctx context.Context, caller Caller, d *Detail) (int, error) {
+	if s.versionManagement && d.Plugin.Type != model.PluginTypeConnector {
+		store, err := s.versionStore()
+		if err != nil {
+			return 0, err
+		}
+		sc := scope(caller)
+		state, err := store.GetVersionState(ctx, sc, d.Plugin.ID)
+		if err != nil {
+			return 0, mapStoreError(err)
+		}
+		if state.PublishedVersionID != nil {
+			v, err := store.GetManagedVersion(ctx, sc, d.Plugin.ID, *state.PublishedVersionID)
+			if err != nil {
+				return 0, mapStoreError(err)
+			}
+			rels, err := model.DecodeSnapshotRelations(v.Relations)
+			if err != nil {
+				return 0, ErrIntegrity
+			}
+			return len(rels), nil
+		}
+	}
+	return s.repo.CountDeclaredRelations(ctx, d.Plugin.ID)
 }
 
 // agentSpecFromPlugin materializes one expert Plugin into a provisioning spec:

@@ -15,17 +15,9 @@ import (
 // express: the grandfathering the add-column default produces, the enum's value
 // set, and a clean Down.
 //
-// The flow deliberately goes Up -> Down 3 -> seed -> Up 3 rather than seeding
-// before the first Up: migrate.Exec applies the whole chain at once, so the only
-// way to observe the backfill acting on pre-existing rows is to roll the tail
-// migrations back, insert rows the old schema would have produced, and re-apply
-// them. That also proves the Down leaves a re-appliable schema behind.
-//
-// listing_state ships as FOUR files (add-column / backfill / reindex /
-// review-submitted-index, see 20260902-00's header for why). One newer review-
-// policy migration, plugin-rating migration, and plugin-scene migration now
-// follow them, so Down must take 7 steps to reach the listing files; Up then
-// reapplies those same 7 tail migrations.
+// Roll back to the first listing_state migration, seed legacy rows, and reapply
+// the tail. Derive the tail length from migration IDs so new migrations cannot
+// silently change which schema this regression test exercises.
 func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 	database := isolatedTestDB(t)
 	source := &migrate.EmbedFileSystemMigrationSource{
@@ -37,11 +29,12 @@ func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 		t.Fatalf("migrate Up: %v", err)
 	}
 
-	// Roll back scenes + rating + policy plus the four listing_state migrations.
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 7); err != nil {
+	// Roll back the listing feature and all newer migrations.
+	steps := migrationTailCount(t, source, "20260902-00-plugin-listing-state.sql")
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, steps); err != nil {
 		t.Fatalf("migrate Down: %v", err)
-	} else if n != 7 {
-		t.Fatalf("migrate Down applied %d migrations, want 7", n)
+	} else if n != steps {
+		t.Fatalf("migrate Down applied %d migrations, want %d", n, steps)
 	}
 	if got := columnCount(t, database, "plugins", "listing_state"); got != 0 {
 		t.Fatal("listing_state column still exists after Down")
@@ -78,10 +71,10 @@ func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 		}
 	}
 
-	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Up, 7); err != nil {
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Up, steps); err != nil {
 		t.Fatalf("re-apply migrate Up after Down: %v", err)
-	} else if n != 7 {
-		t.Fatalf("re-apply applied %d migrations, want 7", n)
+	} else if n != steps {
+		t.Fatalf("re-apply applied %d migrations, want %d", n, steps)
 	}
 
 	// Grandfathering: a live row keeps the reach it had, a soft-deleted row stays

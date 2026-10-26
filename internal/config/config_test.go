@@ -434,3 +434,14 @@ func TestValidateAPIOctoSecrets(t *testing.T) {
 		})
 	}
 }
+
+func TestPluginVersionManagementRolloutDefaultsOff(t *testing.T) {
+	t.Setenv("PLUGIN_VERSION_MANAGEMENT_ENABLED", "")
+	if Load().PluginVersionManagementEnabled {
+		t.Fatal("version management enabled without explicit rollout")
+	}
+	t.Setenv("PLUGIN_VERSION_MANAGEMENT_ENABLED", "true")
+	if !Load().PluginVersionManagementEnabled {
+		t.Fatal("explicit local rollout ignored")
+	}
+}

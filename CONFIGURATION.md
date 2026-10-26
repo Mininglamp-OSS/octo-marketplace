@@ -215,3 +215,21 @@ Standard error codes:
 - `err.marketplace.category_in_use` — Category has skills, cannot delete (HTTP 409)
 - `err.marketplace.conflict` — Resource conflict (HTTP 409)
 - `err.marketplace.internal_error` — Internal server error (HTTP 500)
+
+## Expert and skill version management (local staged rollout)
+
+`PLUGIN_VERSION_MANAGEMENT_ENABLED` defaults to `false`. Enable it only in the
+V2 isolated test environment. It activates formal release identities,
+explicit draft reads, historical detail/file endpoints, and release-only
+public content reads. Existing connectors keep current-state behavior.
+
+A published expert/skill needs a formal release baseline before saving a new
+draft. Complete PR1 snapshots may be explicitly published; older records lacking
+required metadata/evidence return `version_migration_required` until the separately
+planned data migration. No release history is inferred from saved snapshots.
+The switch is a local rollout gate, not a production rollback mechanism: turning
+it off restores legacy reads, which expect current content. Do not switch it off
+on a database with unpublished managed drafts; production rollback is part of the
+later migration/cutover plan. Old-format container ZIP import/reupload is rejected; the new format is
+delivered with R1.
+The old compatibility path remains available with the rollout disabled.

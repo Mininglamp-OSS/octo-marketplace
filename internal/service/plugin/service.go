@@ -41,6 +41,10 @@ var (
 	// content_hash/content_size recorded for it at publish time — a
 	// content-addressed object must never be served under a mismatched digest.
 	ErrIntegrity = errors.New("plugin artifact integrity check failed")
+	// ErrLegacySnapshot is returned when a review request created before the
+	// immutable-artifact rollout still points at mutable files. It is a one-time
+	// compatibility condition: the applicant cancels and resubmits.
+	ErrLegacySnapshot = errors.New("legacy snapshot artifacts require resubmission")
 	// ErrGraphTooLarge is returned when a plugin's transitive relation closure
 	// exceeds the per-request node or edge cap; the detail_graph endpoint fails
 	// closed so a caller never renders a partially-missing squad or agent.
@@ -116,6 +120,7 @@ type Store interface {
 var _ Store = (*pluginrepo.Repo)(nil)
 
 type Service struct {
+	versionManagement   bool
 	repo                Store
 	storage             storage.Storage
 	provisioner         Provisioner
@@ -249,6 +254,7 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
+	expectedCurrentVersionID string
 	// grandfatheredVersion is the plugin's STORED version label, set only by
 	// Service.update. A label minted before the format was tightened (v999,
 	// 1.0.0lll) no longer passes validVersion, and every save re-sends the stored
@@ -459,6 +465,21 @@ func normalizeListTags(raw []string) ([]string, error) {
 }
 
 func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, includeRelations bool) (*Detail, error) {
+	d, err := s.currentDetail(ctx, caller, pluginID, true)
+	if err != nil {
+		return nil, err
+	}
+	d, err = s.publishedDetail(ctx, scope(caller), d.Plugin, d.Relations)
+	if err != nil {
+		return nil, err
+	}
+	if !includeRelations {
+		d.Relations = []model.PluginRelation{}
+	}
+	return d, nil
+}
+
+func (s *Service) currentDetail(ctx context.Context, caller Caller, pluginID string, includeRelations bool) (*Detail, error) {
 	if validateCaller(caller) != nil {
 		return nil, ErrInvalidRequest
 	}
@@ -508,6 +529,13 @@ func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, in
 // returned relation slice, which is also the only count consistent with the
 // caller's visibility.
 func (s *Service) DetailGraph(ctx context.Context, caller Caller, pluginID string) (*DetailGraph, error) {
+	if s.versionManagement {
+		id, err := parseStorageID(pluginID)
+		if err != nil {
+			return nil, err
+		}
+		return s.publishedGraph(ctx, caller, id)
+	}
 	if err := validateCaller(caller); err != nil {
 		return nil, ErrInvalidRequest
 	}
@@ -675,7 +703,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 		if !validVisibility(req.Visibility, false) {
 			return nil, ErrInvalidRequest
 		}
-		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace {
+		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace && !(s.versionManagement && old.Type != model.PluginTypeConnector) {
 			return nil, ErrListedRequiresReview
 		}
 		// While a review is pending, the frozen snapshot is what the reviewer will
@@ -729,6 +757,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m := mutation(*p, rels, audit)
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
+	m.ExpectedCurrentVersionID = req.expectedCurrentVersionID
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
 	// restate it against the row it locks, for the same reason the two listing
 	// decisions below are re-derived: an approval that publishes a frozen label can
@@ -848,7 +877,17 @@ func (s *Service) ListVersions(ctx context.Context, caller Caller, pluginID stri
 	if err != nil {
 		return nil, 0, mapStoreError(err)
 	}
-	items, total, err := s.repo.ListVersions(ctx, scope(caller), storageID, limit, offset)
+	var items []model.PluginVersion
+	var total int64
+	if s.versionManagement {
+		store, e := s.versionStore()
+		if e != nil {
+			return nil, 0, e
+		}
+		items, total, err = store.ListManagedVersions(ctx, scope(caller), storageID, limit, offset)
+	} else {
+		items, total, err = s.repo.ListVersions(ctx, scope(caller), storageID, limit, offset)
+	}
 	for i := range items {
 		items[i].PluginType = p.Type
 	}
@@ -889,6 +928,10 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := s.freezeVersionArtifacts(ctx, req.Type, docs, c.SpaceID); err != nil {
+		return nil, nil, err
+	}
+	p.Package, p.PluginHash, p.AttachmentKeys = docs.Package, docs.PluginHash, docs.AttachmentKeys
 	return p, rels, nil
 }
 
@@ -991,12 +1034,16 @@ func mapStoreError(err error) error {
 		return ErrReviewPending
 	case errors.Is(err, pluginrepo.ErrListedRequiresReview):
 		return ErrListedRequiresReview
+	case errors.Is(err, pluginrepo.ErrVersionBaselineUnavailable):
+		return ErrVersionBaselineUnavailable
 	case errors.Is(err, pluginrepo.ErrVersionRegressed):
 		return ErrVersionRegressed
 	case errors.Is(err, pluginrepo.ErrLabelTaken):
 		return ErrLabelTaken
 	case errors.Is(err, pluginrepo.ErrReviewContentRequired):
 		return ErrReviewContentRequired
+	case errors.Is(err, pluginrepo.ErrLegacySnapshotArtifacts):
+		return ErrLegacySnapshot
 	case errors.Is(err, pluginrepo.ErrInvalidRelation), errors.Is(err, pluginrepo.ErrInvalidCategory), errors.Is(err, pluginrepo.ErrInvalidPlacement):
 		return ErrInvalidRequest
 	default:

@@ -29,10 +29,11 @@ func mustChangeState(res sql.Result) error {
 
 // PublishParams carries one owner-driven publish of an unlisted plugin.
 type PublishParams struct {
-	PluginID     string
-	OperatorID   string
-	OperatorName string
-	RequestID    string
+	ExpectedVersionID string
+	PluginID          string
+	OperatorID        string
+	OperatorName      string
+	RequestID         string
 }
 
 // DelistParams carries one Space-admin takedown of a listed plugin.

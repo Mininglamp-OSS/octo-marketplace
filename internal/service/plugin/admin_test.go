@@ -302,10 +302,12 @@ func TestAdminUpdateAcceptsStorageAttachmentUnderRowSpace(t *testing.T) {
 	manifest := json.RawMessage(`{"$schema":"cowork-plugin-manifest-2.0.json","plugin_name":"Tenant Skill","plugin_type":"skill","name":"tenant-skill","description":"d","labels":[],"examples":[]}`)
 	pkg := json.RawMessage(`{"$schema":"cowork-plugin-package-2.0.json","attachments":[` +
 		`{"path":"SKILL.md","content_type":"raw","mime_type":"text/markdown","raw_content":"# Tenant Skill"},` +
-		`{"path":"assets/logo.bin","content_type":"storage","mime_type":"application/octet-stream","content_size":10,"content_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","storage_uri":"plugins/tenant-space/attachments/skill-skill-1-deadbeefdeadbeef.bin"}` +
+		`{"path":"assets/logo.bin","content_type":"storage","mime_type":"application/octet-stream","content_size":10,"content_hash":"sha256:84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882","storage_uri":"plugins/tenant-space/attachments/skill-skill-1-deadbeefdeadbeef.bin"}` +
 		`]}`)
 	req := WriteRequest{Name: "Tenant Skill", Type: model.PluginTypeSkill, Tags: json.RawMessage(`[]`), Manifest: manifest, Package: pkg}
-	if _, err := fixedService(f).AdminUpdate(context.Background(), adminCaller, "skill-1", req); err != nil {
+	svc := fixedService(f)
+	svc.storage = &importStorage{objects: map[string][]byte{"plugins/tenant-space/attachments/skill-skill-1-deadbeefdeadbeef.bin": []byte("0123456789")}}
+	if _, err := svc.AdminUpdate(context.Background(), adminCaller, "skill-1", req); err != nil {
 		t.Fatalf("AdminUpdate with storage attachment under row space failed: %v", err)
 	}
 	if f.update == nil || f.update.SpaceID == nil || *f.update.SpaceID != tenantSpace {

@@ -1498,3 +1498,69 @@ func TestApproveSelfHealsTheDefaultPlacement(t *testing.T) {
 		}
 	})
 }
+
+// A connector is a current-state resource: approval must not mint a version row,
+// but it must stamp the reviewer-approved display label. Skipping the label is
+// the regression where the API answers with a version the row never stored.
+func TestConnectorApprovalStampsLabelWithoutVersionRow(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	ctx := context.Background()
+	seed(t, database, seedPlugin{id: "connector-1", typ: "connector", visibility: "space", listingState: "draft", currentVersion: "1.0.0"})
+	req := newRequest("connector-1", "2.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{}`, `{"attachments":[]}`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{
+		ReviewID: req.ID, ReviewerUID: "admin-1", ReviewerName: "Adam",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var label string
+	var currentID sql.NullString
+	if err := database.QueryRow(`SELECT current_version,current_version_id FROM plugins WHERE plugin_id='connector-1'`).Scan(&label, &currentID); err != nil {
+		t.Fatal(err)
+	}
+	if label != "2.0.0" {
+		t.Fatalf("current_version = %q, want 2.0.0", label)
+	}
+	if currentID.Valid {
+		t.Fatalf("connector current_version_id = %q, want NULL", currentID.String)
+	}
+	var versions int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id='connector-1'`).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 0 {
+		t.Fatalf("connector versions = %d, want 0", versions)
+	}
+}
+
+// A pending request created before file freezing may still point at a mutable
+// upload key. Approving it would record mutable bytes as historical content, so
+// the decision must fail closed and leave the request pending.
+func TestApproveRefusesUnfrozenLegacySnapshot(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	ctx := context.Background()
+	seed(t, database, seedPlugin{id: "skill-1", visibility: "space", listingState: "draft", currentVersion: "1.0.0", currentVersionID: "ver-1"})
+	digest := "sha256:" + strings.Repeat("a", 64)
+	snap := snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[{"path":"assets/a.bin","content_type":"storage","content_size":1,"content_hash":"`+digest+`"}]}`, nil)
+	snap.AttachmentKeys = json.RawMessage(`{"assets/a.bin":"plugins/space-a/attachments/upload.bin"}`)
+	req := newRequest("skill-1", "2.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snap); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{
+		ReviewID: req.ID, ReviewerUID: "admin-1", ReviewerName: "Adam",
+	}); !errors.Is(err, pluginrepo.ErrLegacySnapshotArtifacts) {
+		t.Fatalf("approve = %v, want ErrLegacySnapshotArtifacts", err)
+	}
+	var status string
+	if err := database.QueryRow(`SELECT status FROM plugin_review_requests WHERE review_id=?`, req.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(model.ReviewStatusPending) {
+		t.Fatalf("request status = %q, want pending", status)
+	}
+}

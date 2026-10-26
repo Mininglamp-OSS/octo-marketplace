@@ -126,12 +126,16 @@ func (s *Service) skillMarkdown(ctx context.Context, sc pluginrepo.Scope, plugin
 	if err != nil {
 		return "", err
 	}
-	p, _, err := s.repo.GetWithRelations(ctx, sc, storageID)
+	p, err := s.publishedPlugin(ctx, sc, storageID)
 	if err != nil {
 		return "", mapStoreError(err)
 	}
 	if p.Type != model.PluginTypeSkill {
 		return "", ErrInvalidRequest
+	}
+	if s.versionManagement && !sc.Admin {
+		data, err := s.versionFileBytes(ctx, p, &model.PluginVersion{Package: p.Package, AttachmentKeys: p.AttachmentKeys}, "SKILL.md")
+		return string(data), err
 	}
 	ref := s.skillRef(p)
 	if s.storage != nil && trustedArtifactKey(ref.ObjectKey, p.SpaceID) {
@@ -189,12 +193,17 @@ func (s *Service) openSkillPackage(ctx context.Context, sc pluginrepo.Scope, plu
 	if err != nil {
 		return nil, err
 	}
-	p, _, err := s.repo.GetWithRelations(ctx, sc, storageID)
+	p, err := s.publishedPlugin(ctx, sc, storageID)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
 	if p.Type != model.PluginTypeSkill {
 		return nil, ErrInvalidRequest
+	}
+	if s.versionManagement && !sc.Admin {
+		if err = s.verifyVersionFiles(ctx, p, &model.PluginVersion{Package: p.Package, AttachmentKeys: p.AttachmentKeys}); err != nil {
+			return nil, err
+		}
 	}
 	ref := s.skillRef(p)
 

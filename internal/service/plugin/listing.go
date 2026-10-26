@@ -64,7 +64,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		return nil, ErrInvalidRequest
 	}
 
-	detail, err := s.Detail(ctx, caller, params.PluginID, true)
+	detail, err := s.currentDetail(ctx, caller, params.PluginID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	if detail.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
-	if detail.Plugin.ListingState == model.PluginListingStatePublished {
+	if detail.Plugin.ListingState == model.PluginListingStatePublished && !(s.versionManagement && detail.Plugin.Type != model.PluginTypeConnector) {
 		return nil, ErrAlreadyPublished
 	}
 	pending, err := s.repo.HasPendingReview(ctx, scope(caller), detail.Plugin.ID)
@@ -86,6 +86,20 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	}
 	if pending {
 		return nil, ErrReviewPending
+	}
+	// A listed resource published before managed releases existed has no formal
+	// release identity. Re-publishing it adopts the already-approved snapshot as
+	// the baseline; submitting a review would only collide with the label that
+	// approval evidence already occupies. (nil, nil) means a release exists and the
+	// ordinary flow below applies.
+	if s.versionManagement && detail.Plugin.ListingState == model.PluginListingStatePublished {
+		adopted, err := s.adoptPublishedBaseline(ctx, caller, detail)
+		if err != nil {
+			return nil, err
+		}
+		if adopted != nil {
+			return &PublishResult{Plugin: adopted}, nil
+		}
 	}
 
 	if detail.Plugin.Visibility == model.PluginVisibilitySpace {
@@ -130,6 +144,27 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	// stamped published on create.
 	if detail.Plugin.Visibility != model.PluginVisibilityPrivate {
 		return nil, ErrInvalidRequest
+	}
+	if s.versionManagement && detail.Plugin.Type != model.PluginTypeConnector {
+		store, e := s.versionStore()
+		if e != nil {
+			return nil, e
+		}
+		if detail.Plugin.CurrentVersionID == nil {
+			return nil, ErrVersionBaselineUnavailable
+		}
+		v, e := s.ManagedVersion(ctx, caller, detail.Plugin.ID, *detail.Plugin.CurrentVersionID, false)
+		if e != nil {
+			return nil, e
+		}
+		if e = s.verifyVersionFiles(ctx, detail.Plugin, v); e != nil {
+			return nil, e
+		}
+		published, e := store.PublishManaged(ctx, scope(caller), pluginrepo.PublishParams{PluginID: detail.Plugin.ID, ExpectedVersionID: v.ID, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
+		if e != nil {
+			return nil, mapStoreError(e)
+		}
+		return &PublishResult{Plugin: &Detail{Plugin: published, Relations: detail.Relations}}, nil
 	}
 	published, err := s.repo.PublishPlugin(ctx, scope(caller), pluginrepo.PublishParams{
 		PluginID:     detail.Plugin.ID,
