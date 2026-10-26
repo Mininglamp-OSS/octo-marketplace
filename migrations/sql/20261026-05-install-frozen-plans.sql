@@ -11,7 +11,7 @@ ALTER TABLE plugin_install_attempts
  ADD CONSTRAINT chk_install_attempt_state CHECK (attempt_state IN ('PREPARED','DISPATCHING','SUCCEEDED','FAILED','UNKNOWN','EXPIRED'));
 -- Existing attempts have no frozen payload. Retain uncertainty; never infer
 -- a replacement plan from today's mutable catalog.
-UPDATE plugin_install_attempts SET attempt_state='SUCCEEDED' WHERE completed=TRUE;
+UPDATE plugin_install_attempts SET attempt_state='UNKNOWN' WHERE completed=TRUE;
 
 -- +migrate Down
 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Frozen installation plan downgrade refused';
