@@ -503,7 +503,11 @@ func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.
 	}
 	for _, e := range edges {
 		if reason := e.reason(); reason != "" {
-			result[e.RootID] = append(result[e.RootID], model.DependencyIssue{TargetPluginID: e.TargetID, TargetName: e.TargetName, RelationType: e.RelationType, Reason: reason, Via: e.Via})
+			via := e.Via
+			if via == nil {
+				via = []string{}
+			}
+			result[e.RootID] = append(result[e.RootID], model.DependencyIssue{TargetPluginID: e.TargetID, TargetName: e.TargetName, RelationType: e.RelationType, Reason: reason, Via: via})
 		}
 	}
 	for id := range result {

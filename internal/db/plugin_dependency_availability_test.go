@@ -529,6 +529,9 @@ func TestDependencyDelistingHidesCatalogButNotOwnerOrAdmin(t *testing.T) {
 	if len(ownedDetail.Relations) != 0 {
 		t.Fatalf("owner diagnostics leaked hidden relation content: %+v", ownedDetail.Relations)
 	}
+	if ownedDetail.DependencyIssues[0].Via == nil {
+		t.Fatal("root dependency diagnostic Via must serialize as [] not null")
+	}
 }
 
 func TestDependencyConnectorAndMissingRelease(t *testing.T) {
