@@ -146,10 +146,9 @@ func TestPublishFreezesOmittedSkillPinMySQL(t *testing.T) {
 	}
 }
 
-// An explicit pin is author evidence: publish validates and preserves it even
-// when the target has released a newer head, and does not mint a replacement
-// snapshot for an already-complete graph.
-func TestPublishPreservesExplicitPinMySQL(t *testing.T) {
+// P-model decision: republish refreshes every Expert/Team pin to the target's
+// then-current formal release, even if the draft carried an older explicit pin.
+func TestPublishRefreshesExplicitPinMySQL(t *testing.T) {
 	database := reviewDB(t)
 	ctx := context.Background()
 	repo := pluginrepo.New(database)
@@ -172,14 +171,14 @@ func TestPublishPreservesExplicitPinMySQL(t *testing.T) {
 	if err != nil || state.PublishedVersionID == nil {
 		t.Fatalf("published state: %+v %v", state, err)
 	}
-	if *state.PublishedVersionID != *draft.Plugin.CurrentVersionID {
-		t.Fatalf("publish minted a replacement snapshot for a fully pinned graph: %s -> %s", *draft.Plugin.CurrentVersionID, *state.PublishedVersionID)
+	if *state.PublishedVersionID == *draft.Plugin.CurrentVersionID {
+		t.Fatal("republish should materialize a refreshed-pin snapshot")
 	}
-	if got := snapshotTargetPin(t, database, *state.PublishedVersionID, "skill"); got == nil || *got != "skill-v1" {
-		t.Fatalf("explicit pin = %v, want skill-v1", got)
+	if got := snapshotTargetPin(t, database, *state.PublishedVersionID, "skill"); got == nil || *got != "skill-v2" {
+		t.Fatalf("explicit pin = %v, want refreshed skill-v2", got)
 	}
-	if got := referenceIndexPin(t, database, *state.PublishedVersionID, "skill"); !got.Valid || got.String != "skill-v1" {
-		t.Fatalf("reference index pin = %+v, want skill-v1", got)
+	if got := referenceIndexPin(t, database, *state.PublishedVersionID, "skill"); !got.Valid || got.String != "skill-v2" {
+		t.Fatalf("reference index pin = %+v, want skill-v2", got)
 	}
 }
 

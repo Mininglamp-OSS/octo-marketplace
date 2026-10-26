@@ -37,11 +37,12 @@ func missingRelationPins(source model.PluginType, rels []model.PluginRelation) b
 // snapshot to an authoritative release identity.
 //
 // P model: a draft may omit target_version_id, but a released source snapshot
-// may not. For each missing pin this loads the target row under the caller's
+// may not. On every publication it loads each target row under the caller's
 // write transaction (status/deleted/embedded/listing/audience are re-checked),
 // takes the target's CURRENT formal release (published_version_id) and proves
-// that release row still exists. An explicit pin is validated against the same
-// target and release and preserved. Connector edges must stay unpinned.
+// that release row still exists. P-model decision: republish refreshes ALL
+// Expert/Team pins to the then-current formal release, including an explicit
+// older pin. Connector edges must stay unpinned.
 //
 // Callers MUST hold the write transaction and MUST have locked the target rows
 // (lockReferences / validateReferenceTree) so the resolution and the snapshot
@@ -92,12 +93,6 @@ func FreezeRelationPins(ctx context.Context, tx *sql.Tx, source model.Plugin, re
 			return referenceFieldError(i, 0, "target_plugin_id", "released_version_required")
 		}
 		pin := strings.TrimSpace(published.String)
-		if edge.TargetVersionID != nil && strings.TrimSpace(*edge.TargetVersionID) != "" {
-			// Explicit pins are evidence the author selected that release. They are
-			// validated and preserved even when the target has since released a
-			// newer version.
-			pin = strings.TrimSpace(*edge.TargetVersionID)
-		}
 		var found string
 		err = tx.QueryRowContext(ctx, `SELECT version_id FROM plugin_version_releases WHERE plugin_id=? AND version_id=? FOR UPDATE`, target.ID, pin).Scan(&found)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -143,11 +138,6 @@ func (r *Repo) freezePublishedSnapshotForRelease(ctx context.Context, tx *sql.Tx
 	rels, err := model.DecodeSnapshotRelations(v.Relations)
 	if err != nil {
 		return ErrInvalidRelation
-	}
-	if !missingRelationPins(current.Type, rels) {
-		// Still validate explicit pins/connectors at the publication boundary; the
-		// release transaction re-reads the stored snapshot and rejects drift.
-		return FreezeRelationPins(ctx, tx, *current, rels)
 	}
 	if err = FreezeRelationPins(ctx, tx, *current, rels); err != nil {
 		return err
