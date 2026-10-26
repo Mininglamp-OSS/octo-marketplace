@@ -464,7 +464,10 @@ func TestManagedAdminTenantContainerReuploadPublishes(t *testing.T) {
 					t.Fatal(err)
 				}
 				publishManaged(t, svc, owner, member.Plugin.ID)
-				memberVersion := *member.Plugin.CurrentVersionID
+				var memberVersion string
+				if err := database.QueryRow(`SELECT published_version_id FROM plugins WHERE plugin_id=?`, member.Plugin.ID).Scan(&memberVersion); err != nil {
+					t.Fatal(err)
+				}
 				req.Type = typ
 				req.Manifest = json.RawMessage(strings.ReplaceAll(string(req.Manifest), `"expert"`, `"expert_team"`))
 				req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: member.Plugin.ID, TargetVersionID: &memberVersion, Type: "expert_team_expert", Data: json.RawMessage(`{"member_key":"leader","is_leader":true}`)}}
