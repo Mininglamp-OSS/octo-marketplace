@@ -3,50 +3,104 @@ package plugin
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"errors"
 	"sort"
 	"strings"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
-// A released resource uses its immutable reference index. Legacy resources
-// without a published version pointer use their current live relations. In
-// particular, a later draft edit must not change a listed release's audience.
-func unavailableDirectSQL(source string) string {
-	// The helper is internal and receives only fixed aliases. Reject anything
-	// else so a future caller cannot turn the concatenation into an injection
-	// surface; both SQL fragments below are composed from these constants.
-	if source != "p" && source != "member" {
+// Dependency availability reads the immutable relations snapshot of the
+// released root (and of the team's pinned member version), so it works even
+// when the optional reference index was never built. Legacy resources without
+// a published pointer use their current live relations.
+type availabilityAlias string
+
+const (
+	availabilityRoot   availabilityAlias = "p"
+	availabilityMember availabilityAlias = "member"
+)
+
+func (a availabilityAlias) sql() string {
+	if a != availabilityRoot && a != availabilityMember {
 		panic("unsupported dependency availability source alias")
 	}
-	refBad := unavailableTargetSQL("ref", "target", true)
-	liveBad := unavailableTargetSQL("live", "target", false)
-	return `(EXISTS (SELECT 1 FROM plugin_version_relation_refs ref LEFT JOIN plugins target ON target.plugin_id=ref.target_plugin_id WHERE ref.source_plugin_id=` + source + `.plugin_id AND ref.source_version_id=` + source + `.published_version_id AND ` + refBad + `)
- OR (` + source + `.published_version_id IS NULL AND EXISTS (SELECT 1 FROM plugin_relations live LEFT JOIN plugins target ON target.plugin_id=live.target_plugin_id WHERE live.source_plugin_id=` + source + `.plugin_id AND live.status=1 AND live.deleted_at IS NULL AND live.relation_type IN ('expert_skill','expert_connector','expert_team_expert') AND ` + liveBad + `)))`
+	return string(a)
 }
 
-func unavailableTargetSQL(edge, target string, formal bool) string {
-	releaseMissing := edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)`
-	if formal {
-		// A released reference without a pin is checked against the target's
-		// published release, matching dependencyEdges'
-		// COALESCE(edge.target_version_id,target.published_version_id) join.
-		releaseMissing = edge + `.relation_type IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=COALESCE(` + edge + `.target_version_id,` + target + `.published_version_id))`
-	}
-	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + releaseMissing + `))`
+const snapshotRelationColumns = `relation_type VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.relation_type',
+ target_plugin_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.target_plugin_id',
+ target_version_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.target_version_id',
+ status INT PATH '$.status',
+ deleted_at VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PATH '$.deleted_at'`
+
+// snapshotTargetUnavailableSQL is shared by the root and the pinned member
+// snapshot. A team edge is handled by snapshotMemberUnavailableSQL in addition
+// to the normal target/release checks.
+func snapshotTargetUnavailableSQL(edge, target string) string {
+	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
 }
 
-// unavailableDependencySQL is used by the catalog list, tag and category
-// counts. The fixed relation matrix permits only expert -> skill/connector and
-// team -> expert, so two levels cover every published dependency path.
-func unavailableDependencySQL(source string) string {
-	member := `(EXISTS (SELECT 1 FROM plugin_version_relation_refs member_ref WHERE member_ref.source_plugin_id=` + source + `.plugin_id AND member_ref.source_version_id=` + source + `.published_version_id AND member_ref.relation_type='expert_team_expert' AND member_ref.target_plugin_id=member.plugin_id)
- OR (` + source + `.published_version_id IS NULL AND EXISTS (SELECT 1 FROM plugin_relations member_live WHERE member_live.source_plugin_id=` + source + `.plugin_id AND member_live.relation_type='expert_team_expert' AND member_live.target_plugin_id=member.plugin_id AND member_live.status=1 AND member_live.deleted_at IS NULL)))`
-	return `(` + source + `.plugin_type IN ('expert','expert_team') AND (` + unavailableDirectSQL(source) + ` OR (` + source + `.plugin_type='expert_team' AND EXISTS (SELECT 1 FROM plugins member WHERE ` + member + ` AND ` + unavailableDirectSQL("member") + `))))`
+func snapshotMemberUnavailableSQL(edge string) string {
+	return `EXISTS (SELECT 1 FROM plugin_versions member_version
+ JOIN JSON_TABLE(member_version.relations_json, '$[*]' COLUMNS (` + snapshotRelationColumns + `)) member_edge
+ LEFT JOIN plugins member_target ON member_target.plugin_id=member_edge.target_plugin_id
+ WHERE member_version.plugin_id=` + edge + `.target_plugin_id
+   AND member_version.version_id=` + edge + `.target_version_id
+   AND member_edge.relation_type IN ('expert_skill','expert_connector')
+   AND COALESCE(member_edge.status,1)=1 AND member_edge.deleted_at IS NULL
+   AND ` + snapshotTargetUnavailableSQL("member_edge", "member_target") + `)`
 }
 
-func dependencyAvailabilitySQL() string { return ` AND NOT ` + unavailableDependencySQL("p") }
+func unavailableSnapshotSQL(sourceID, sourceVersion string) string {
+	return `EXISTS (SELECT 1 FROM plugin_versions source_version
+ JOIN JSON_TABLE(source_version.relations_json, '$[*]' COLUMNS (` + snapshotRelationColumns + `)) edge
+ LEFT JOIN plugins target ON target.plugin_id=edge.target_plugin_id
+ WHERE source_version.plugin_id=` + sourceID + ` AND source_version.version_id=` + sourceVersion + `
+   AND edge.relation_type IN ('expert_skill','expert_connector','expert_team_expert')
+   AND COALESCE(edge.status,1)=1 AND edge.deleted_at IS NULL
+   AND (` + snapshotTargetUnavailableSQL("edge", "target") + ` OR (edge.relation_type='expert_team_expert' AND ` + snapshotMemberUnavailableSQL("edge") + `)))`
+}
+
+func liveTargetUnavailableSQL(edge, target string) string {
+	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
+}
+
+// A legacy team member is an expert, so its live graph is only skills and
+// connectors. Keeping this fragment separate avoids recursively embedding the
+// team branch while building unavailableLiveSQL.
+func unavailableMemberLiveSQL(source availabilityAlias) string {
+	s := source.sql()
+	return `EXISTS (SELECT 1 FROM plugin_relations live
+ LEFT JOIN plugins target ON target.plugin_id=live.target_plugin_id
+ WHERE live.source_plugin_id=` + s + `.plugin_id AND live.status=1 AND live.deleted_at IS NULL
+   AND live.relation_type IN ('expert_skill','expert_connector')
+   AND ` + liveTargetUnavailableSQL("live", "target") + `)`
+}
+
+func unavailableLiveSQL(source availabilityAlias) string {
+	s := source.sql()
+	member := `EXISTS (SELECT 1 FROM plugins member WHERE member.plugin_id=live.target_plugin_id AND ((member.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "member.published_version_id") + `) OR (member.published_version_id IS NULL AND ` + unavailableMemberLiveSQL(availabilityMember) + `)))`
+	return `EXISTS (SELECT 1 FROM plugin_relations live
+ LEFT JOIN plugins target ON target.plugin_id=live.target_plugin_id
+ WHERE live.source_plugin_id=` + s + `.plugin_id AND live.status=1 AND live.deleted_at IS NULL
+   AND live.relation_type IN ('expert_skill','expert_connector','expert_team_expert')
+   AND (` + liveTargetUnavailableSQL("live", "target") + ` OR (live.relation_type='expert_team_expert' AND ` + member + `)))`
+}
+
+// unavailableDependencySQL is used by catalog list, tag/category counts, detail
+// and graph. Released roots use their frozen snapshot; only legacy roots without
+// a published pointer inspect editable live relations. The fixed relation matrix
+// permits expert -> skill/connector and team -> expert, so two levels cover every
+// published dependency path.
+func unavailableDependencySQL(source availabilityAlias) string {
+	s := source.sql()
+	return `(` + s + `.plugin_type IN ('expert','expert_team') AND ((` + s + `.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL(s+".plugin_id", s+".published_version_id") + `) OR (` + s + `.published_version_id IS NULL AND ` + unavailableLiveSQL(source) + `)))`
+}
+
+func dependencyAvailabilitySQL() string {
+	return ` AND NOT ` + unavailableDependencySQL(availabilityRoot)
+}
 
 // HasUnavailableDependencies is the name-free public detail gate. It checks
 // the same predicate as catalog pagination without reading target metadata.
@@ -57,15 +111,15 @@ func (r *Repo) HasUnavailableDependencies(ctx context.Context, scope Scope, plug
 		args = append(args, scope.SpaceID, scope.CallerUID)
 	}
 	var blocked bool
-	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM plugins p WHERE `+where+` AND `+unavailableDependencySQL("p")+`)`, args...).Scan(&blocked)
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM plugins p WHERE `+where+` AND `+unavailableDependencySQL(availabilityRoot)+`)`, args...).Scan(&blocked)
 	return blocked, err
 }
 
 type dependencyEdge struct {
-	SourceID, TargetID, RelationType, TargetName string
-	TargetVersionID                              *string
-	TargetExists, TargetActive, TargetListed     bool
-	ReleaseExists, Formal                        bool
+	TargetID, RelationType, TargetName  string
+	TargetVersionID                     *string
+	TargetExists, TargetActive          bool
+	TargetListed, ReleaseExists, Formal bool
 }
 
 func (e dependencyEdge) reason() string {
@@ -81,48 +135,59 @@ func (e dependencyEdge) reason() string {
 	}
 }
 
-// dependencyEdges reads one bounded wave for a page of already-authorized
-// source plugins. A released name is selected from the target's published
-// snapshot; mutable target names never leak through this diagnostic response.
-func (r *Repo) dependencyEdges(ctx context.Context, ids []string) ([]dependencyEdge, error) {
-	if len(ids) == 0 {
+// loadDependencyEdges reads a source's immutable released snapshot, falling
+// back to editable live relations only for a legacy row without a published
+// pointer. It never depends on the optional reference index.
+func (r *Repo) loadDependencyEdges(ctx context.Context, sourceID string) ([]dependencyEdge, error) {
+	var published sql.NullString
+	err := r.db.QueryRowContext(ctx, `SELECT published_version_id FROM plugins WHERE plugin_id=? AND status=1 AND deleted_at IS NULL`, sourceID).Scan(&published)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	qMarks := placeholders(len(ids))
-	query := `SELECT edge.source_plugin_id,edge.target_plugin_id,edge.target_version_id,edge.relation_type,
- target.plugin_id IS NOT NULL,COALESCE(target.status=1 AND target.deleted_at IS NULL,0),COALESCE(target.listing_state='published',0),
- dep_release.version_id IS NOT NULL,edge.formal,
- CASE WHEN edge.relation_type='expert_connector' THEN COALESCE(target.plugin_name,'')
- ELSE COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot.manifest_json,'$.plugin_name')),''),target.plugin_name,'') END
- FROM (
- SELECT ref.source_plugin_id,ref.target_plugin_id,ref.target_version_id,ref.relation_type,1 AS formal
- FROM plugin_version_relation_refs ref JOIN plugins src ON src.plugin_id=ref.source_plugin_id AND src.published_version_id=ref.source_version_id
- WHERE ref.source_plugin_id IN (` + qMarks + `) AND ref.relation_type IN ('expert_skill','expert_connector','expert_team_expert')
- UNION ALL
- SELECT live.source_plugin_id,live.target_plugin_id,live.target_version_id,live.relation_type,0 AS formal
- FROM plugin_relations live JOIN plugins src ON src.plugin_id=live.source_plugin_id AND src.published_version_id IS NULL
- WHERE live.source_plugin_id IN (` + qMarks + `) AND live.status=1 AND live.deleted_at IS NULL AND live.relation_type IN ('expert_skill','expert_connector','expert_team_expert')
- ) edge LEFT JOIN plugins target ON target.plugin_id=edge.target_plugin_id
- LEFT JOIN plugin_version_releases dep_release ON dep_release.plugin_id=target.plugin_id AND dep_release.version_id=COALESCE(edge.target_version_id,target.published_version_id)
- LEFT JOIN plugin_versions snapshot ON snapshot.plugin_id=dep_release.plugin_id AND snapshot.version_id=dep_release.version_id
- ORDER BY edge.source_plugin_id,edge.relation_type,edge.target_plugin_id`
-	args := make([]any, 0, 2*len(ids))
-	for i := 0; i < 2; i++ {
-		for _, id := range ids {
-			args = append(args, id)
-		}
-	}
-	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read dependency edges: %w", err)
+		return nil, err
+	}
+	if published.Valid && published.String != "" {
+		return r.loadSnapshotEdges(ctx, sourceID, published.String)
+	}
+	return r.loadLiveEdges(ctx, sourceID)
+}
+
+func (r *Repo) loadSnapshotEdges(ctx context.Context, sourceID, versionID string) ([]dependencyEdge, error) {
+	var raw []byte
+	err := r.db.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, sourceID, versionID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rels, err := model.DecodeSnapshotRelations(raw)
+	if err != nil {
+		return nil, err
+	}
+	out := []dependencyEdge{}
+	for _, rel := range rels {
+		if rel.Status != 1 || rel.DeletedAt != nil || (rel.Type != "expert_skill" && rel.Type != "expert_connector" && rel.Type != "expert_team_expert") {
+			continue
+		}
+		out = append(out, dependencyEdge{TargetID: rel.TargetPluginID, RelationType: rel.Type, TargetVersionID: rel.TargetVersionID, Formal: true})
+	}
+	return out, nil
+}
+
+func (r *Repo) loadLiveEdges(ctx context.Context, sourceID string) ([]dependencyEdge, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT target_plugin_id,target_version_id,relation_type FROM plugin_relations WHERE source_plugin_id=? AND status=1 AND deleted_at IS NULL AND relation_type IN ('expert_skill','expert_connector','expert_team_expert')`, sourceID)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	out := []dependencyEdge{}
 	for rows.Next() {
 		var e dependencyEdge
 		var pin sql.NullString
-		if err := rows.Scan(&e.SourceID, &e.TargetID, &pin, &e.RelationType, &e.TargetExists, &e.TargetActive, &e.TargetListed, &e.ReleaseExists, &e.Formal, &e.TargetName); err != nil {
-			return nil, fmt.Errorf("scan dependency edge: %w", err)
+		if err := rows.Scan(&e.TargetID, &pin, &e.RelationType); err != nil {
+			return nil, err
 		}
 		e.TargetVersionID = nullString(pin)
 		out = append(out, e)
@@ -130,19 +195,42 @@ func (r *Repo) dependencyEdges(ctx context.Context, ids []string) ([]dependencyE
 	return out, rows.Err()
 }
 
+// dependencyTargetInfo resolves target existence/state, release presence and a
+// released name. When no released name can be established the name stays empty;
+// mutable target names are never exposed through diagnostics.
+func (r *Repo) dependencyTargetInfo(ctx context.Context, e *dependencyEdge) error {
+	var exists, active, listed, release int
+	var pin any
+	if e.TargetVersionID != nil {
+		pin = *e.TargetVersionID
+	}
+	err := r.db.QueryRowContext(ctx, `SELECT p.plugin_id IS NOT NULL,
+ COALESCE(p.status=1 AND p.deleted_at IS NULL,0),
+ COALESCE(p.listing_state='published',0),
+ COALESCE(EXISTS(SELECT 1 FROM plugin_version_releases dr WHERE dr.plugin_id=p.plugin_id AND dr.version_id=COALESCE(?,p.published_version_id)),0),
+ CASE WHEN p.plugin_id IS NULL THEN '' WHEN p.plugin_type='connector' THEN COALESCE(p.plugin_name,'') ELSE COALESCE(JSON_UNQUOTE(JSON_EXTRACT(snapshot.manifest_json,'$.plugin_name')),'') END
+ FROM (SELECT ? AS plugin_id) x
+ LEFT JOIN plugins p ON p.plugin_id=x.plugin_id
+ LEFT JOIN plugin_versions snapshot ON snapshot.plugin_id=p.plugin_id AND snapshot.version_id=p.published_version_id`, pin, e.TargetID).Scan(&exists, &active, &listed, &release, &e.TargetName)
+	e.TargetExists = exists != 0
+	e.TargetActive = active != 0
+	e.TargetListed = listed != 0
+	e.ReleaseExists = release != 0
+	return err
+}
+
 // DependencyIssues returns diagnostics only for roots already selected under
 // the caller's Scope. The caller supplies no arbitrary child IDs; the second
-// wave follows only member edges from those roots.
+// wave follows only member edges from those roots, using the team's pinned
+// member version when one exists.
 func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.Plugin) (map[string][]model.DependencyIssue, error) {
 	result := make(map[string][]model.DependencyIssue, len(roots))
 	ids := make([]string, 0, len(roots))
-	teams := map[string]bool{}
 	for _, p := range roots {
 		if p.ListingState != model.PluginListingStatePublished || (p.Type != model.PluginTypeExpert && p.Type != model.PluginTypeExpertTeam) {
 			continue
 		}
 		ids = append(ids, p.ID)
-		teams[p.ID] = p.Type == model.PluginTypeExpertTeam
 	}
 	if len(ids) > 0 && !scope.Admin {
 		// The diagnostic query reads even delisted/deleted targets. Re-check only
@@ -161,34 +249,41 @@ func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.
 			return nil, ErrNotFound
 		}
 	}
-	first, err := r.dependencyEdges(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	members := map[string][]string{}
-	for _, e := range first {
-		if reason := e.reason(); reason != "" {
-			result[e.SourceID] = append(result[e.SourceID], model.DependencyIssue{TargetPluginID: e.TargetID, TargetName: e.TargetName, RelationType: e.RelationType, Reason: reason, Via: []string{}})
+	for _, root := range roots {
+		if root.ListingState != model.PluginListingStatePublished || (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) {
+			continue
 		}
-		if teams[e.SourceID] && e.RelationType == "expert_team_expert" && e.TargetExists && e.TargetActive {
-			members[e.TargetID] = append(members[e.TargetID], e.SourceID)
-		}
-	}
-	memberIDs := make([]string, 0, len(members))
-	for id := range members {
-		memberIDs = append(memberIDs, id)
-	}
-	sort.Strings(memberIDs)
-	for start := 0; start < len(memberIDs); start += 100 {
-		end := min(start+100, len(memberIDs))
-		second, err := r.dependencyEdges(ctx, memberIDs[start:end])
+		edges, err := r.loadDependencyEdges(ctx, root.ID)
 		if err != nil {
 			return nil, err
 		}
-		for _, e := range second {
+		for i := range edges {
+			e := &edges[i]
+			if err = r.dependencyTargetInfo(ctx, e); err != nil {
+				return nil, err
+			}
 			if reason := e.reason(); reason != "" {
-				for _, rootID := range members[e.SourceID] {
-					result[rootID] = append(result[rootID], model.DependencyIssue{TargetPluginID: e.TargetID, TargetName: e.TargetName, RelationType: e.RelationType, Reason: reason, Via: []string{e.SourceID}})
+				result[root.ID] = append(result[root.ID], model.DependencyIssue{TargetPluginID: e.TargetID, TargetName: e.TargetName, RelationType: e.RelationType, Reason: reason, Via: []string{}})
+			}
+			if root.Type != model.PluginTypeExpertTeam || e.RelationType != "expert_team_expert" || !e.TargetExists || !e.TargetActive {
+				continue
+			}
+			var memberEdges []dependencyEdge
+			if e.TargetVersionID != nil {
+				memberEdges, err = r.loadSnapshotEdges(ctx, e.TargetID, *e.TargetVersionID)
+			} else {
+				memberEdges, err = r.loadDependencyEdges(ctx, e.TargetID)
+			}
+			if err != nil {
+				return nil, err
+			}
+			for j := range memberEdges {
+				me := &memberEdges[j]
+				if err = r.dependencyTargetInfo(ctx, me); err != nil {
+					return nil, err
+				}
+				if reason := me.reason(); reason != "" {
+					result[root.ID] = append(result[root.ID], model.DependencyIssue{TargetPluginID: me.TargetID, TargetName: me.TargetName, RelationType: me.RelationType, Reason: reason, Via: []string{e.TargetID}})
 				}
 			}
 		}

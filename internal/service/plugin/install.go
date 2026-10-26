@@ -139,7 +139,15 @@ func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p
 // done: that would copy a private dependency's content into any caller's agent,
 // a confidentiality decision the owner must take explicitly.
 func (s *Service) resolveInstallDetail(ctx context.Context, caller Caller, pluginID string) (*Detail, error) {
-	detail, err := s.Detail(ctx, caller, pluginID, true)
+	// Install must distinguish a hidden dependency (ErrDependencyHidden) from a
+	// resource the caller cannot read at all. The public Detail gate returns
+	// ErrNotFound before the historical-relation check, so resolve the released
+	// detail without that catalog gate and let checkHistoricalRelations decide.
+	detail, err := s.currentDetail(ctx, caller, pluginID, true)
+	if err != nil {
+		return nil, err
+	}
+	detail, err = s.publishedDetail(ctx, scope(caller), detail.Plugin, detail.Relations, false)
 	if err != nil {
 		return nil, err
 	}

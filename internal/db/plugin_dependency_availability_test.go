@@ -83,6 +83,92 @@ func TestDependencyFormalRefNullPinRejected(t *testing.T) {
 	}
 }
 
+func setDependencySnapshotRelations(t *testing.T, db *sql.DB, pluginID, versionID string, rels []model.PluginRelation) {
+	t.Helper()
+	raw, err := model.EncodeSnapshotRelations(rels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE plugin_versions SET relations_json=? WHERE plugin_id=? AND version_id=?`, raw, pluginID, versionID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDependencySnapshotDoesNotNeedReferenceIndex(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	if _, err := db.Exec(`DELETE FROM plugin_version_relation_refs`); err != nil {
+		t.Fatal(err)
+	}
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(true)
+	ctx := context.Background()
+	sc := pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := repo.HasUnavailableDependencies(ctx, sc, "expert")
+	if err != nil || !blocked {
+		t.Fatalf("snapshot fallback blocked=%v err=%v", blocked, err)
+	}
+	issues, err := repo.DependencyIssues(ctx, pluginrepo.Scope{CallerUID: "user-1", SpaceID: "space-a"}, []model.Plugin{{ID: "expert", Type: model.PluginTypeExpert, ListingState: model.PluginListingStatePublished}})
+	if err != nil || len(issues["expert"]) != 1 || issues["expert"][0].TargetName != "Released Skill" || issues["expert"][0].Reason != "delisted" {
+		t.Fatalf("snapshot diagnostics issues=%+v err=%v", issues["expert"], err)
+	}
+}
+
+func TestDependencyTeamUsesPinnedMemberVersion(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	seed(t, db, seedPlugin{id: "skill2", typ: "skill", visibility: "space", listingState: "published"})
+	seedVersionRow(t, db, "skill2-v1", "skill2", "1")
+	if _, err := db.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('skill2','skill2-v1','1.0.0','user-1',NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET published_version_id='skill2-v1' WHERE plugin_id='skill2'`); err != nil {
+		t.Fatal(err)
+	}
+	seedVersionRow(t, db, "expert-v2", "expert", "2")
+	if _, err := db.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('expert','expert-v2','2.0.0','user-1',NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	pin := "skill2-v1"
+	setDependencySnapshotRelations(t, db, "expert", "expert-v2", []model.PluginRelation{{ID: "es2", SourcePluginID: "expert", TargetPluginID: "skill2", Type: "expert_skill", TargetVersionID: &pin, Status: 1}})
+	if _, err := db.Exec(`UPDATE plugins SET published_version_id='expert-v2' WHERE plugin_id='expert'`); err != nil {
+		t.Fatal(err)
+	}
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(true)
+	ctx := context.Background()
+	sc := pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}
+	// expert-v2's skill is delisted; the team still pins expert-v1, whose skill is healthy.
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill2'`); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := repo.HasUnavailableDependencies(ctx, sc, "team")
+	if err != nil || blocked {
+		t.Fatalf("team false-hide blocked=%v err=%v", blocked, err)
+	}
+	ownerScope := pluginrepo.Scope{CallerUID: "user-1", SpaceID: "space-a"}
+	issues, err := repo.DependencyIssues(ctx, ownerScope, []model.Plugin{{ID: "team", Type: model.PluginTypeExpertTeam, ListingState: model.PluginListingStatePublished}})
+	if err != nil || len(issues["team"]) != 0 {
+		t.Fatalf("team false-hide diagnostics=%+v err=%v", issues["team"], err)
+	}
+	// v1's actual skill is delisted; the team must hide despite expert-v2 being healthy.
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='published' WHERE plugin_id='skill2'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err = repo.HasUnavailableDependencies(ctx, sc, "team")
+	if err != nil || !blocked {
+		t.Fatalf("team false-show blocked=%v err=%v", blocked, err)
+	}
+	issues, err = repo.DependencyIssues(ctx, ownerScope, []model.Plugin{{ID: "team", Type: model.PluginTypeExpertTeam, ListingState: model.PluginListingStatePublished}})
+	if err != nil || len(issues["team"]) != 1 || issues["team"][0].TargetPluginID != "skill" || len(issues["team"][0].Via) != 1 || issues["team"][0].Via[0] != "expert" {
+		t.Fatalf("team false-show diagnostics=%+v err=%v", issues["team"], err)
+	}
+}
+
 func TestDependencyDelistingHidesCatalogButNotOwnerOrAdmin(t *testing.T) {
 	db := reviewDB(t)
 	dependencyFixture(t, db)

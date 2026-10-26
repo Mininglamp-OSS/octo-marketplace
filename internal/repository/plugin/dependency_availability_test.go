@@ -5,22 +5,24 @@ import (
 	"testing"
 )
 
-func TestUnavailableDirectSQLRejectsUnknownAlias(t *testing.T) {
+func TestAvailabilityAliasRejectsUnknown(t *testing.T) {
 	defer func() {
 		if recover() == nil {
 			t.Fatal("unknown source alias must panic instead of being concatenated")
 		}
 	}()
-	unavailableDirectSQL("p; DROP TABLE plugins")
+	availabilityAlias("p; DROP TABLE plugins").sql()
 }
 
-func TestUnavailableTargetSQLFormalNullPinUsesPublishedRelease(t *testing.T) {
-	formal := unavailableTargetSQL("ref", "target", true)
-	if !strings.Contains(formal, "COALESCE(ref.target_version_id,target.published_version_id)") {
-		t.Fatalf("formal release check missing published fallback: %s", formal)
+func TestSnapshotAvailabilityUsesPinnedMemberVersion(t *testing.T) {
+	snapshot := unavailableSnapshotSQL("p.plugin_id", "p.published_version_id")
+	if !strings.Contains(snapshot, "JSON_TABLE(source_version.relations_json") {
+		t.Fatalf("root snapshot not read: %s", snapshot)
 	}
-	live := unavailableTargetSQL("live", "target", false)
-	if strings.Contains(live, "COALESCE(") || !strings.Contains(live, "live.target_version_id IS NOT NULL") {
-		t.Fatalf("live release check must keep the explicit-pin rule: %s", live)
+	if !strings.Contains(snapshot, "member_version.version_id=edge.target_version_id") {
+		t.Fatalf("team member pin not carried: %s", snapshot)
+	}
+	if !strings.Contains(snapshot, "member_edge.relation_type IN ('expert_skill','expert_connector')") {
+		t.Fatalf("member snapshot edges not checked: %s", snapshot)
 	}
 }
