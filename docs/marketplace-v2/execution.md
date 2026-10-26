@@ -15,3 +15,16 @@
 | REL-01 | 切换门禁和真实联调 | 后端与客户端完成 | 证据验收，不用文档/单测代替 |
 
 任务可按独立可验证提交细拆 PR；后继 PR 基于前置分支，合并顺序遵从依赖，不在 main 临时放通不完整的新入口。不自动合并 PR、不执行生产迁移。未完成任务保持 open。
+
+## 远端任务映射
+
+| 切片 | Issue | 前置 issue | 状态 |
+|---|---|---|---|
+| MP-01 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/131 | 无 | 待实现 |
+| MP-02 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/132 | #131 | 待实现 |
+| MP-03 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/133 | #132 | 待实现 |
+| MP-04 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/134 | #132 | 待实现 |
+| CL-01 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/135 | #132 | 待实现 |
+| CL-02 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/136 | #132, #133 | 待实现 |
+| CL-03 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/137 | #133 | 待实现 |
+| REL-01 | https://github.com/Mininglamp-OSS/octo-marketplace/issues/138 | #133, #134, #135, #136, #137 | 待实现 |

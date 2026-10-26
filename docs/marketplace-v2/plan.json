@@ -115,7 +115,8 @@
       "owns_new_tables": [
         "plugin_version_releases",
         "plugin_connector_effective"
-      ]
+      ],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/131"
     },
     {
       "id": "MP-02",
@@ -151,7 +152,8 @@
       "owns_new_tables": [
         "plugin_version_relation_refs",
         "plugin_mutation_receipts"
-      ]
+      ],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/132"
     },
     {
       "id": "MP-03",
@@ -177,7 +179,8 @@
       ],
       "owns_new_tables": [
         "plugin_install_attempts"
-      ]
+      ],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/133"
     },
     {
       "id": "MP-04",
@@ -196,7 +199,8 @@
       ],
       "owns_new_tables": [
         "plugin_dependency_migration_map"
-      ]
+      ],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/134"
     },
     {
       "id": "CL-01",
@@ -219,7 +223,8 @@
         "A26",
         "A27"
       ],
-      "owns_new_tables": []
+      "owns_new_tables": [],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/135"
     },
     {
       "id": "CL-02",
@@ -259,7 +264,8 @@
         "A32",
         "A34"
       ],
-      "owns_new_tables": []
+      "owns_new_tables": [],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/136"
     },
     {
       "id": "CL-03",
@@ -284,7 +290,8 @@
         "A31",
         "A34"
       ],
-      "owns_new_tables": []
+      "owns_new_tables": [],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/137"
     },
     {
       "id": "REL-01",
@@ -309,7 +316,8 @@
         "octo-fleet"
       ],
       "owns_api_ids": [],
-      "owns_new_tables": []
+      "owns_new_tables": [],
+      "issue_url": "https://github.com/Mininglamp-OSS/octo-marketplace/issues/138"
     }
   ],
   "api_catalog_ids": [
