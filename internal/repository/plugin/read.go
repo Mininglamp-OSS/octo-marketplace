@@ -254,6 +254,7 @@ func buildListQuery(scope Scope, f ListFilter) (string, string, []any) {
 		// which backs 我的发布 — deliberately shows every state. The admin listing
 		// (AllSpaces) manages rows in all states and is exempt.
 		where += listedSQL
+		where += dependencyAvailabilitySQL()
 	}
 	return from, where, args
 }

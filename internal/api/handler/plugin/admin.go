@@ -109,7 +109,7 @@ func adminCaller(c *gin.Context) (pluginsvc.Caller, bool) {
 
 // List godoc
 // @Summary List plugins (admin)
-// @Description List plugins of one type across all Spaces, optionally narrowed to a visibility class (e.g. system connectors). Admin only.
+// @Description List plugins of one type across all Spaces, including experts hidden from the ordinary catalog by unavailable dependencies. Such rows carry dependency_issues. Admin only.
 // @Tags admin_plugin
 // @ID admin_plugin.list
 // @Produce json
@@ -159,7 +159,7 @@ func (h *AdminHandler) List(c *gin.Context) {
 
 // Get godoc
 // @Summary Get plugin (admin)
-// @Description Return any plugin's full detail by id, ignoring Space scope. Admin only.
+// @Description Return any plugin's full detail by id, including dependency_issues for unavailable published dependencies. Admin only.
 // @Tags admin_plugin
 // @ID admin_plugin.get
 // @Produce json

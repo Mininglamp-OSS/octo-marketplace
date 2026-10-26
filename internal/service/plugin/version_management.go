@@ -104,7 +104,7 @@ func (s *Service) adoptPublishedBaseline(ctx context.Context, caller Caller, d *
 
 // publishedDetail overlays only immutable content. Current permissions, listing,
 // and moderation metadata remain authoritative; a draft cannot freeze access.
-func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *model.Plugin, rels []model.PluginRelation) (*Detail, error) {
+func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *model.Plugin, rels []model.PluginRelation, allowUnavailable bool) (*Detail, error) {
 	if !s.versionManagement || p.Type == model.PluginTypeConnector {
 		return &Detail{Plugin: p, Relations: rels}, nil
 	}
@@ -121,7 +121,21 @@ func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *m
 		// readable only by their authorized editor through the current-state path.
 		return &Detail{Plugin: p, Relations: rels}, nil
 	}
-	v, err := store.GetManagedVersion(ctx, sc, p.ID, *state.PublishedVersionID)
+	return s.publishedDetailAt(ctx, sc, p, rels, *state.PublishedVersionID, allowUnavailable)
+}
+
+// publishedDetailAt overlays a specific released snapshot. Graph traversal uses
+// it for a pinned team member so the member's later release cannot mask the
+// version the team actually published.
+func (s *Service) publishedDetailAt(ctx context.Context, sc pluginrepo.Scope, p *model.Plugin, rels []model.PluginRelation, versionID string, allowUnavailable bool) (*Detail, error) {
+	if !s.versionManagement || p.Type == model.PluginTypeConnector {
+		return &Detail{Plugin: p, Relations: rels}, nil
+	}
+	store, err := s.versionStore()
+	if err != nil {
+		return nil, err
+	}
+	v, err := store.GetManagedVersion(ctx, sc, p.ID, versionID)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -132,8 +146,10 @@ func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *m
 	if err != nil {
 		return nil, ErrIntegrity
 	}
-	if err = s.checkHistoricalRelations(ctx, sc, frozen); err != nil {
-		return nil, err
+	if !allowUnavailable {
+		if err = s.checkHistoricalRelations(ctx, sc, frozen); err != nil {
+			return nil, err
+		}
 	}
 	copy := *p
 	copy.Manifest = v.Manifest
@@ -420,7 +436,7 @@ func (s *Service) publishedPlugin(ctx context.Context, sc pluginrepo.Scope, id s
 	if sc.Admin {
 		return p, nil
 	}
-	d, err := s.publishedDetail(ctx, sc, p, rels)
+	d, err := s.publishedDetail(ctx, sc, p, rels, false)
 	if err != nil {
 		return nil, err
 	}
@@ -435,8 +451,14 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 	if err != nil {
 		return nil, err
 	}
+	if len(root.DependencyIssues) > 0 {
+		// The author can diagnose a broken published graph without traversing a
+		// deleted target. Ordinary readers were already rejected by Detail.
+		return &DetailGraph{Plugin: root.Plugin, Relations: root.Relations, Related: []*model.Plugin{}, DependencyIssues: root.DependencyIssues}, nil
+	}
 	out := &DetailGraph{Plugin: root.Plugin, Relations: []model.PluginRelation{}, Related: []*model.Plugin{}}
 	seen := map[string]bool{id: true}
+	omitted := map[string]bool{}
 	queue := []*Detail{root}
 	for len(queue) > 0 {
 		d := queue[0]
@@ -453,7 +475,13 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 			if len(seen) > pluginrepo.MaxGraphNodes() {
 				return nil, ErrGraphTooLarge
 			}
-			next, err := s.Detail(ctx, caller, r.TargetPluginID, true)
+			next, err := s.publishedGraphDetail(ctx, caller, r.TargetPluginID, r.TargetVersionID)
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrDependencyHidden) {
+				// Match GetGraphClosure: omit a blocked node and its edges rather
+				// than failing the whole graph request.
+				omitted[r.TargetPluginID] = true
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -464,7 +492,31 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 			queue = append(queue, next)
 		}
 	}
+	if len(omitted) > 0 {
+		kept := out.Relations[:0]
+		for _, rel := range out.Relations {
+			if !omitted[rel.TargetPluginID] {
+				kept = append(kept, rel)
+			}
+		}
+		out.Relations = kept
+	}
 	return out, nil
+}
+
+// publishedGraphDetail resolves a related node without the public catalog gate.
+// When the parent edge carries a version pin, it overlays that exact release so
+// a later member release cannot hide the version the team published.
+func (s *Service) publishedGraphDetail(ctx context.Context, caller Caller, pluginID string, versionID *string) (*Detail, error) {
+	d, err := s.currentDetail(ctx, caller, pluginID, true)
+	if err != nil {
+		return nil, err
+	}
+	sc := scope(caller)
+	if versionID != nil && s.versionManagement && d.Plugin.Type != model.PluginTypeConnector {
+		return s.publishedDetailAt(ctx, sc, d.Plugin, d.Relations, *versionID, false)
+	}
+	return s.publishedDetail(ctx, sc, d.Plugin, d.Relations, false)
 }
 
 func legacyVersionPointer(v *model.PluginVersion, filePath string) (key string, size int64, digest string, ok bool, err error) {
