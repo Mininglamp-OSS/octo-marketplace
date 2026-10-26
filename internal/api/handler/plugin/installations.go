@@ -79,7 +79,15 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	}
 	// This route uses only the explicit Workspace ID. Reject the legacy slug
 	// selector rather than silently ignoring a conflicting second target.
-	if c.GetHeader("X-Workspace-Slug") != "" || len(c.Request.Header.Values("X-Workspace-ID")) != 1 || len(c.Request.Header.Values("Idempotency-Key")) != 1 {
+	// X-Workspace-Id is the documented spelling; X-Workspace-ID is kept as a
+	// backward-compatible alias. Exactly one occurrence across both is required.
+	var workspaceHeaders []string
+	for key, values := range c.Request.Header {
+		if strings.EqualFold(key, "X-Workspace-Id") {
+			workspaceHeaders = append(workspaceHeaders, values...)
+		}
+	}
+	if c.GetHeader("X-Workspace-Slug") != "" || len(workspaceHeaders) != 1 || len(c.Request.Header.Values("Idempotency-Key")) != 1 {
 		installationValidation(c, "headers")
 		return
 	}
@@ -87,7 +95,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	if !decodeInstallation(c, &req) {
 		return
 	}
-	workspaceID := c.GetHeader("X-Workspace-ID")
+	workspaceID := workspaceHeaders[0]
 	if !workspaceUUID.MatchString(workspaceID) {
 		installationValidation(c, "X-Workspace-Id")
 		return
