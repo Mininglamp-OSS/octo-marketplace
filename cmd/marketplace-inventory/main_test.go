@@ -30,8 +30,14 @@ func TestFixtureEndToEndIsReadOnly(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Resources) != 3 || report.Counts["listed_publication_unknown"] != 2 || report.ObjectVerification != "not_checked" {
-		t.Fatalf("unexpected report: %+v", report)
+	if got := len(report.Resources); got != 3 {
+		t.Fatalf("resource count=%d, want 3", got)
+	}
+	if got := report.Counts["listed_publication_unknown"]; got != 2 {
+		t.Fatalf("listed_publication_unknown=%d, want 2", got)
+	}
+	if got := report.ObjectVerification; got != "not_checked" {
+		t.Fatalf("object verification=%q, want not_checked", got)
 	}
 	wantDistribution := []inventory.Distribution{
 		{Visibility: "private", Listing: "draft", Identity: "top_level", Count: 1},

@@ -18,6 +18,6 @@ CREATE TABLE plugin_stock_migration_roots (
  CONSTRAINT fk_stock_migration_batch FOREIGN KEY(batch_id) REFERENCES plugin_stock_migration_batches(batch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- +migrate Down
--- Isolated test databases only. Production rollback retains audit/history.
-DROP TABLE plugin_stock_migration_roots;
-DROP TABLE plugin_stock_migration_batches;
+-- Audit history and its migration receipt must survive every rollback path.
+-- Use the stock migration rollback command to restore data pointers instead.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Stock migration audit schema downgrade refused';

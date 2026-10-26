@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	migrate "github.com/rubenv/sql-migrate"
-
-	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
 )
 
 // TestPluginListingStateMigrationUpDownMySQL pins the three things the
@@ -20,10 +18,8 @@ import (
 // silently change which schema this regression test exercises.
 func TestPluginListingStateMigrationUpDownMySQL(t *testing.T) {
 	database := isolatedTestDB(t)
-	source := &migrate.EmbedFileSystemMigrationSource{
-		FileSystem: migrationsql.FS,
-		Root:       ".",
-	}
+	// Exercise historical reversibility before the immutable audit boundary.
+	source := migrationSourceThrough(t, "20261024-02-plugin-install-attempts.sql")
 
 	if _, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil {
 		t.Fatalf("migrate Up: %v", err)
