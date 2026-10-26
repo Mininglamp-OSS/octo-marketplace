@@ -88,10 +88,11 @@ var (
 	// content, not identity; a rename must go through an upsert after delisting.
 	ErrReviewNameMismatch = errors.New("zip package name does not match the plugin")
 	// ErrDependencyChanged means the pending request's frozen dependency
-	// observations no longer match the latest formal releases (or the graph can
-	// no longer be resolved). Approval is refused with 409 so the reviewer never
-	// ships dependency versions the applicant did not submit against; the
-	// applicant cancels and resubmits to capture fresh observations.
+	// evidence can no longer be confirmed: a pinned target release is
+	// deleted/delisted/unreleased, its target is unavailable, or a Connector's
+	// effective revision/digest moved. Approval is refused with 409 so the
+	// reviewer never ships dependency versions the applicant did not submit
+	// against; the applicant cancels and resubmits to capture fresh evidence.
 	ErrDependencyChanged = errors.New("review dependency observations changed")
 )
 
@@ -1154,8 +1155,8 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 		case errors.Is(mapped, ErrVersionRegressed), errors.Is(mapped, ErrLabelTaken), errors.Is(mapped, ErrDependencyChanged):
 			// All three are permanent on a still-pending row: the label is either
 			// behind current (draft label moved), already-taken (concurrent label
-			// collision), or a frozen dependency observation no longer matches the
-			// latest formal release. Ack as a handled refusal; display.reason
+			// collision), or a frozen dependency pin/effective payload can no longer
+			// be confirmed. Ack as a handled refusal; display.reason
 			// distinguishes them for a future richer renderer. The applicant cancels
 			// and resubmits to capture fresh observations.
 			//

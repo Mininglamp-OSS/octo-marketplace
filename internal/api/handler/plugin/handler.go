@@ -302,7 +302,8 @@ type detailResponse struct {
 	Plugin           pluginResponse          `json:"plugin"`
 	Relations        []relationResponse      `json:"relations"`
 	DependencyIssues []model.DependencyIssue `json:"dependency_issues,omitempty"`
-	// Resolved is the A25 import-time observation of each final direct relation.
+	// Resolved is the A25 import-time observation of each final direct relation,
+	// carrying the version pins this import froze (never a latest-resolution read).
 	// Omitted on ordinary reads; explicit [] when the import had no dependencies.
 	Resolved *[]resolvedDependencyResponse `json:"resolved,omitempty"`
 	// RelationResult reports upsert relation target-state synchronization:

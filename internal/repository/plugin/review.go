@@ -284,10 +284,13 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 		return err
 	}
 
-	// A15: freeze the latest formal-release identities of the submitted graph in
-	// the same transaction that validates and stores it. Resolution failure is a
-	// submit failure, never an empty graph: an unresolved dependency would make
-	// approval unable to distinguish "no dependencies" from "could not verify".
+	// A15: record the dependency evidence of the submitted graph in the same
+	// transaction that validates and stores it. This MUST run after
+	// FreezeRelationPins above: the observations are the pins this submit just
+	// froze (plus the Connectors' live effective revision/digest), never a second
+	// latest-release resolution. Resolution failure is a submit failure, never an
+	// empty graph: an unresolved dependency would make approval unable to
+	// distinguish "no dependencies" from "could not verify".
 	var dependencyObservations, connectorObservations any
 	if r.observationsEnabled() {
 		obs, err := resolveReviewObservations(ctx, tx, *current, relations)
@@ -583,11 +586,14 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	}
 	// A15: the frozen observations are the review window's consistency evidence.
 	// Re-resolve the SAME frozen graph here, under the request/plugin locks, and
-	// refuse the approval if any observed version or effective revision moved.
-	// This runs before any write, so a mismatch leaves the request pending — the
-	// applicant cancels and resubmits instead of shipping an unseen dependency
-	// change. Requests created before observations existed have NULL columns and
-	// keep the legacy decision path.
+	// refuse the approval only when the evidence can no longer be confirmed:
+	// a pinned target release is deleted/delisted/unreleased or its target is
+	// unavailable, or a Connector's effective revision/digest moved. A target
+	// publishing a newer release does not change the frozen pin and must not
+	// block approval. This runs before any write, so a conflict leaves the
+	// request pending — the applicant cancels and resubmits instead of shipping an
+	// unseen dependency change. Requests created before observations existed have
+	// NULL columns and keep the legacy decision path.
 	if stored, present, err := decodeStoredReviewObservations(dependencyObservations, connectors); err != nil {
 		return nil, err
 	} else if present {
@@ -597,9 +603,10 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		}
 		fresh, err := resolveReviewObservations(ctx, tx, *current, frozenForCheck)
 		if err != nil {
-			// A dependency that vanished/unpublished (or an undecodable graph) can no
-			// longer be confirmed, which is exactly the dependency-changed condition.
-			// Transient store errors still surface as internal failures.
+			// A pinned dependency that vanished/unlisted/unreleased (or an
+			// undecodable graph) can no longer be confirmed, which is exactly the
+			// dependency-changed condition. Transient store errors still surface as
+			// internal failures.
 			return nil, observationResolutionError(err)
 		}
 		if !reviewObservationsEqual(stored, fresh) {

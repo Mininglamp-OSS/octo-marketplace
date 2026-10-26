@@ -115,3 +115,31 @@ func TestTaggedReferenceContainerPassesCanonicalWriteValidation(t *testing.T) {
 		}
 	}
 }
+
+// A25 resolved[] reports the pin the import froze, never the target's current
+// published head. The store's target head is v2 while the archive submits v1.
+func TestReferenceContainerResolvedUsesSubmittedPinNotTargetHead(t *testing.T) {
+	head := "skill-v2"
+	store := &fakeStore{plugins: map[string]*model.Plugin{
+		"skill":  {ID: "skill", Type: model.PluginTypeSkill, Visibility: model.PluginVisibilitySystem, CurrentVersionID: &head},
+		"expert": {ID: "expert", Type: model.PluginTypeExpert, Visibility: model.PluginVisibilitySystem, CurrentVersionID: &head},
+	}}
+	service := fixedService(store).WithVersionManagement(true).WithReferences(true)
+	expertDoc := `{"schema_version":"2","kind":"agent","name":"reviewer","instruction":"Review","skills":[{"id":"skill","version_id":"skill-v1"}]}`
+	imported, err := service.ImportContainer(context.Background(), adminCaller, ContainerImportParams{SchemaVersion: "2", Archive: referenceArchive(t, map[string]string{"expert.json": expertDoc})})
+	if err != nil {
+		t.Fatalf("expert import: %v", err)
+	}
+	if len(imported.Resolved) != 1 || imported.Resolved[0].TargetPluginID != "skill" || imported.Resolved[0].TargetVersionID == nil || *imported.Resolved[0].TargetVersionID != "skill-v1" {
+		t.Fatalf("expert resolved = %+v, want skill-v1 (not head %s)", imported.Resolved, head)
+	}
+
+	teamDoc := `{"schema_version":"2","kind":"squad","name":"team","instruction":"Review","members":[{"id":"expert","version_id":"expert-v1","member_key":"lead","is_leader":true}]}`
+	imported, err = service.ImportContainer(context.Background(), adminCaller, ContainerImportParams{SchemaVersion: "2", Archive: referenceArchive(t, map[string]string{"squad.json": teamDoc})})
+	if err != nil {
+		t.Fatalf("team import: %v", err)
+	}
+	if len(imported.Resolved) != 1 || imported.Resolved[0].TargetPluginID != "expert" || imported.Resolved[0].TargetVersionID == nil || *imported.Resolved[0].TargetVersionID != "expert-v1" {
+		t.Fatalf("team resolved = %+v, want expert-v1", imported.Resolved)
+	}
+}

@@ -183,7 +183,10 @@ func TestReferenceDeliveryApprovalRevalidatesFrozenPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	params := pluginrepo.ApproveReviewParams{ReviewID: req.ID, ReviewerUID: "admin-1", ReviewerName: "Reviewer"}
-	if _, err := repo.ApproveReview(context.Background(), reviewerScope(), params); !errors.Is(err, pluginrepo.ErrInvalidRelation) {
+	// A delisted target makes the frozen pin unconfirmable: the A15 conflict, not
+	// a generic reference error, keeps the reviewer's decision from shipping an
+	// unreachable dependency.
+	if _, err := repo.ApproveReview(context.Background(), reviewerScope(), params); !errors.Is(err, pluginrepo.ErrDependencyChanged) {
 		t.Fatalf("approval accepted delisted dependency: %v", err)
 	}
 	var status string

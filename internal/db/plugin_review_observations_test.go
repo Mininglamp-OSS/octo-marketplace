@@ -174,19 +174,21 @@ func TestReviewSubmitStoresLatestDependencyObservations(t *testing.T) {
 	}
 }
 
-// A Team's observation set follows the frozen members into their CURRENT
-// published releases, dedupes a skill shared by two members, and records the
-// members' Connector targets too.
+// A Team's observation set follows the FROZEN member Expert pins into the
+// released snapshots those pins select, dedupes a skill shared by two members,
+// and records the members' Connector targets too. A newer member head must not
+// change the set.
 func TestReviewTeamObservationsExpandMemberExpertGraph(t *testing.T) {
 	database, repo := reviewObservationRepo(t)
 	ctx := context.Background()
 
 	seedReleasedDependency(t, database, "skill-shared", "skill", "skill-shared-v1", "1.0.0", nil)
 	seedConnectorWithEffective(t, database, "connector-shared", "published", 2, "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	skillPin := "skill-shared-v1"
 	memberRels := []model.PluginRelation{
-		{ID: "ma-skill", SourcePluginID: "member-a", TargetPluginID: "skill-shared", Type: "expert_skill", TargetPluginType: "skill", Status: 1},
+		{ID: "ma-skill", SourcePluginID: "member-a", TargetPluginID: "skill-shared", Type: "expert_skill", TargetPluginType: "skill", TargetVersionID: &skillPin, Status: 1},
 		{ID: "ma-conn", SourcePluginID: "member-a", TargetPluginID: "connector-shared", Type: "expert_connector", TargetPluginType: "connector", Status: 1},
-		{ID: "mb-skill", SourcePluginID: "member-b", TargetPluginID: "skill-shared", Type: "expert_skill", TargetPluginType: "skill", Status: 1},
+		{ID: "mb-skill", SourcePluginID: "member-b", TargetPluginID: "skill-shared", Type: "expert_skill", TargetPluginType: "skill", TargetVersionID: &skillPin, Status: 1},
 	}
 	seed(t, database, seedPlugin{id: "member-a", typ: "expert", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
 	seedReleasedVersion(t, database, "member-a", "member-a-v1", "1.0.0", memberRels[:2])
@@ -252,105 +254,264 @@ func approvePending(t *testing.T, repo *pluginrepo.Repo, reviewID string) (*mode
 	})
 }
 
-// A changed Skill release or Connector effective revision invalidates the
-// review window; an unchanged graph approves normally.
-func TestReviewApproveRejectsChangedDependencyObservations(t *testing.T) {
-	t.Run("changed skill release", func(t *testing.T) {
-		database, repo := reviewObservationRepo(t)
-		ctx := context.Background()
-		seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
-		seedReleasedVersion(t, database, "skill-a", "skill-a-v2", "2.0.0", nil)
-		seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
-		rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
-		req := newRequest("expert-src", "1.0.0")
-		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
-			t.Fatal(err)
-		}
-		setPublishedVersion(t, database, "skill-a", "skill-a-v2")
-		if _, err := approvePending(t, repo, req.ID); !errors.Is(err, pluginrepo.ErrDependencyChanged) {
-			t.Fatalf("approve = %v, want ErrDependencyChanged", err)
-		}
-		var status, listing string
-		if err := database.QueryRow(`SELECT status FROM plugin_review_requests WHERE review_id=?`, req.ID).Scan(&status); err != nil || status != "pending" {
-			t.Fatalf("request status=%q err=%v, want pending", status, err)
-		}
-		if err := database.QueryRow(`SELECT listing_state FROM plugins WHERE plugin_id='expert-src'`).Scan(&listing); err != nil || listing != "draft" {
-			t.Fatalf("source listing=%q err=%v, want draft", listing, err)
-		}
-	})
+// publishedVersionOf returns the plugin's released snapshot id under the
+// tenant owner's read scope.
+func publishedVersionOf(t *testing.T, repo *pluginrepo.Repo, pluginID string) string {
+	t.Helper()
+	state, err := repo.GetVersionState(context.Background(), tenantScope(), pluginID)
+	if err != nil {
+		t.Fatalf("version state %s: %v", pluginID, err)
+	}
+	if state.PublishedVersionID == nil {
+		t.Fatalf("%s has no published version", pluginID)
+	}
+	return *state.PublishedVersionID
+}
 
-	t.Run("changed team member release", func(t *testing.T) {
-		database, repo := reviewObservationRepo(t)
-		ctx := context.Background()
-		seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
-		memberRels := []model.PluginRelation{{ID: "m-skill", SourcePluginID: "member-a", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
-		seedReleasedDependency(t, database, "member-a", "expert", "member-a-v1", "1.0.0", memberRels)
-		seedReleasedVersion(t, database, "member-a", "member-a-v2", "2.0.0", memberRels)
-		seed(t, database, seedPlugin{id: "team-src", typ: "expert_team", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
-		teamRels := []model.PluginRelation{{ID: "t-a", SourcePluginID: "team-src", TargetPluginID: "member-a", Type: "expert_team_expert", TargetPluginType: "expert", Status: 1, Data: json.RawMessage(`{"member_key":"a","is_leader":true}`)}}
-		req := newRequest("team-src", "1.0.0")
-		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Team"}`, `{"attachments":[]}`, teamRels)); err != nil {
-			t.Fatal(err)
-		}
-		setPublishedVersion(t, database, "member-a", "member-a-v2")
-		if _, err := approvePending(t, repo, req.ID); !errors.Is(err, pluginrepo.ErrDependencyChanged) {
-			t.Fatalf("approve = %v, want ErrDependencyChanged", err)
-		}
-	})
+// P model: a target publishing a NEWER release must not invalidate the review.
+// The submitted graph already pins v1, approval succeeds, and both the released
+// snapshot and the stored observations stay on v1.
+func TestReviewApproveKeepsFrozenPinWhenTargetReleasesNewer(t *testing.T) {
+	database, repo := reviewObservationRepo(t)
+	ctx := context.Background()
+	seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
+	seedReleasedVersion(t, database, "skill-a", "skill-a-v2", "2.0.0", nil)
+	seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+	rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
+	req := newRequest("expert-src", "1.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
+		t.Fatal(err)
+	}
+	// Submit froze the Skill v1 pin even though v2 exists as a release; v2 then
+	// becomes the target's published head.
+	setPublishedVersion(t, database, "skill-a", "skill-a-v2")
 
-	t.Run("changed connector effective", func(t *testing.T) {
-		database, repo := reviewObservationRepo(t)
-		ctx := context.Background()
-		seedConnectorWithEffective(t, database, "connector-c", "published", 1, "sha256:111111111111111111111111111111111111111111111111111111111111111")
-		seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
-		rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "connector-c", Type: "expert_connector", TargetPluginType: "connector", Status: 1}}
-		req := newRequest("expert-src", "1.0.0")
-		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
-			t.Fatal(err)
-		}
-		bumpConnectorEffective(t, database, "connector-c", 2, "sha256:222222222222222222222222222222222222222222222222222222222222222")
-		if _, err := approvePending(t, repo, req.ID); !errors.Is(err, pluginrepo.ErrDependencyChanged) {
-			t.Fatalf("approve = %v, want ErrDependencyChanged", err)
-		}
-	})
+	if _, err := approvePending(t, repo, req.ID); err != nil {
+		t.Fatalf("approve after newer target release: %v", err)
+	}
+	var status, listing string
+	if err := database.QueryRow(`SELECT status FROM plugin_review_requests WHERE review_id=?`, req.ID).Scan(&status); err != nil || status != "approved" {
+		t.Fatalf("request status=%q err=%v, want approved", status, err)
+	}
+	if err := database.QueryRow(`SELECT listing_state FROM plugins WHERE plugin_id='expert-src'`).Scan(&listing); err != nil || listing != "published" {
+		t.Fatalf("source listing=%q err=%v, want published", listing, err)
+	}
+	approved := publishedVersionOf(t, repo, "expert-src")
+	if pin := snapshotTargetPin(t, database, approved, "skill-a"); pin == nil || *pin != "skill-a-v1" {
+		t.Fatalf("approved snapshot pin = %v, want skill-a-v1", pin)
+	}
+	deps, _, present := storedReviewObservations(t, database, req.ID)
+	if !present || len(deps) != 1 || deps[0].PluginID != "skill-a" || deps[0].VersionID != "skill-a-v1" {
+		t.Fatalf("stored observations = %+v present=%v, want skill-a-v1", deps, present)
+	}
+}
 
-	t.Run("unchanged graph approves", func(t *testing.T) {
-		database, repo := reviewObservationRepo(t)
-		ctx := context.Background()
-		seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
-		seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
-		rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
-		req := newRequest("expert-src", "1.0.0")
-		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := approvePending(t, repo, req.ID); err != nil {
-			t.Fatalf("approve with unchanged observations: %v", err)
-		}
-		var status, listing string
-		if err := database.QueryRow(`SELECT status FROM plugin_review_requests WHERE review_id=?`, req.ID).Scan(&status); err != nil || status != "approved" {
-			t.Fatalf("status=%q err=%v", status, err)
-		}
-		if err := database.QueryRow(`SELECT listing_state FROM plugins WHERE plugin_id='expert-src'`).Scan(&listing); err != nil || listing != "published" {
-			t.Fatalf("listing=%q err=%v", listing, err)
-		}
-	})
+// The same rule applies to a Team member Expert: the Team pins member v1, a
+// newer member release and newer member Skill release land, and approval still
+// freezes member v1 (whose own snapshot pins Skill v1).
+func TestReviewApproveKeepsFrozenTeamMemberPin(t *testing.T) {
+	database, repo := reviewObservationRepo(t)
+	ctx := context.Background()
+	seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
+	skillPin := "skill-a-v1"
+	memberRels := []model.PluginRelation{{ID: "m-skill", SourcePluginID: "member-a", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", TargetVersionID: &skillPin, Status: 1}}
+	seedReleasedDependency(t, database, "member-a", "expert", "member-a-v1", "1.0.0", memberRels)
+	seedReleasedVersion(t, database, "member-a", "member-a-v2", "2.0.0", memberRels)
+	seedReleasedVersion(t, database, "skill-a", "skill-a-v2", "2.0.0", nil)
+	seed(t, database, seedPlugin{id: "team-src", typ: "expert_team", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+	teamRels := []model.PluginRelation{{ID: "t-a", SourcePluginID: "team-src", TargetPluginID: "member-a", Type: "expert_team_expert", TargetPluginType: "expert", Status: 1, Data: json.RawMessage(`{"member_key":"a","is_leader":true}`)}}
+	req := newRequest("team-src", "1.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Team"}`, `{"attachments":[]}`, teamRels)); err != nil {
+		t.Fatal(err)
+	}
+	setPublishedVersion(t, database, "member-a", "member-a-v2")
+	setPublishedVersion(t, database, "skill-a", "skill-a-v2")
 
-	t.Run("cross space approve stays hidden", func(t *testing.T) {
-		database, repo := reviewObservationRepo(t)
-		ctx := context.Background()
-		seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
-		seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
-		rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
-		req := newRequest("expert-src", "1.0.0")
-		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
-			t.Fatal(err)
+	if _, err := approvePending(t, repo, req.ID); err != nil {
+		t.Fatalf("approve after newer member/skill release: %v", err)
+	}
+	approved := publishedVersionOf(t, repo, "team-src")
+	if pin := snapshotTargetPin(t, database, approved, "member-a"); pin == nil || *pin != "member-a-v1" {
+		t.Fatalf("approved team member pin = %v, want member-a-v1", pin)
+	}
+	if pin := snapshotTargetPin(t, database, "member-a-v1", "skill-a"); pin == nil || *pin != "skill-a-v1" {
+		t.Fatalf("pinned member snapshot skill pin = %v, want skill-a-v1", pin)
+	}
+	deps, _, present := storedReviewObservations(t, database, req.ID)
+	want := map[string]string{"member-a": "member-a-v1", "skill-a": "skill-a-v1"}
+	if !present || len(deps) != len(want) {
+		t.Fatalf("stored observations = %+v present=%v", deps, present)
+	}
+	for _, obs := range deps {
+		if want[obs.PluginID] != obs.VersionID {
+			t.Fatalf("stored observation %s = %s, want %q", obs.PluginID, obs.VersionID, want[obs.PluginID])
 		}
-		other := pluginrepo.Scope{CallerUID: "admin-2", SpaceID: "space-b"}
-		if _, err := repo.ApproveReview(ctx, other, pluginrepo.ApproveReviewParams{ReviewID: req.ID, ReviewerUID: "admin-2"}); !errors.Is(err, pluginrepo.ErrNotFound) {
-			t.Fatalf("cross-Space approve = %v, want ErrNotFound", err)
-		}
-	})
+	}
+}
+
+// Approval must validate the PINNED member snapshot, not whatever the member's
+// current head selects. Here the newer member head points at a Skill release
+// that no longer exists; the Team pinned member-v1 (whose Skill pin is still a
+// release), so approval must still succeed and freeze member-v1.
+func TestReviewApproveValidatesPinnedMemberSnapshotNotNewerHead(t *testing.T) {
+	database, repo := reviewObservationRepo(t)
+	ctx := context.Background()
+	seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
+	seedReleasedVersion(t, database, "skill-a", "skill-a-v2", "2.0.0", nil)
+	skillV1, skillV2 := "skill-a-v1", "skill-a-v2"
+	memberV1Rels := []model.PluginRelation{{ID: "m-skill-v1", SourcePluginID: "member-a", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", TargetVersionID: &skillV1, Status: 1}}
+	memberV2Rels := []model.PluginRelation{{ID: "m-skill-v2", SourcePluginID: "member-a", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", TargetVersionID: &skillV2, Status: 1}}
+	seedReleasedDependency(t, database, "member-a", "expert", "member-a-v1", "1.0.0", memberV1Rels)
+	seedReleasedVersion(t, database, "member-a", "member-a-v2", "2.0.0", memberV2Rels)
+	setPublishedVersion(t, database, "member-a", "member-a-v2")
+	seed(t, database, seedPlugin{id: "team-src", typ: "expert_team", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+	// Explicit member pin: the Team's frozen member snapshot is v1 even though the
+	// member itself has moved on to v2.
+	memberV1 := "member-a-v1"
+	teamRels := []model.PluginRelation{{ID: "t-a", SourcePluginID: "team-src", TargetPluginID: "member-a", TargetVersionID: &memberV1, Type: "expert_team_expert", TargetPluginType: "expert", Status: 1, Data: json.RawMessage(`{"member_key":"a","is_leader":true}`)}}
+	req := newRequest("team-src", "1.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Team"}`, `{"attachments":[]}`, teamRels)); err != nil {
+		t.Fatal(err)
+	}
+	// The newer head's Skill release is gone. The pinned member-v1 snapshot does
+	// not select it, so this must not block the Team's approval.
+	if _, err := database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id='skill-a' AND version_id='skill-a-v2'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approvePending(t, repo, req.ID); err != nil {
+		t.Fatalf("approve validating newer head instead of frozen member pin: %v", err)
+	}
+	approved := publishedVersionOf(t, repo, "team-src")
+	if pin := snapshotTargetPin(t, database, approved, "member-a"); pin == nil || *pin != "member-a-v1" {
+		t.Fatalf("approved team member pin = %v, want member-a-v1", pin)
+	}
+	if pin := snapshotTargetPin(t, database, "member-a-v1", "skill-a"); pin == nil || *pin != "skill-a-v1" {
+		t.Fatalf("pinned member skill pin = %v, want skill-a-v1", pin)
+	}
+}
+
+// A pin whose target is no longer listed/visible or whose release no longer
+// exists can no longer be confirmed: approval is refused with the A15 conflict
+// and the request stays pending.
+func TestReviewApproveRejectsUnavailablePinnedDependency(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		break_ func(t *testing.T, database *sql.DB)
+	}{
+		{
+			name: "target delisted",
+			break_: func(t *testing.T, database *sql.DB) {
+				t.Helper()
+				if _, err := database.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill-a'`); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "target deleted",
+			break_: func(t *testing.T, database *sql.DB) {
+				t.Helper()
+				if _, err := database.Exec(`UPDATE plugins SET deleted_at=NOW(3) WHERE plugin_id='skill-a'`); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "pin release deleted",
+			break_: func(t *testing.T, database *sql.DB) {
+				t.Helper()
+				// The published head must stop pointing at v1 before its release
+				// row can be removed (the plugin FK references the release).
+				if _, err := database.Exec(`UPDATE plugins SET published_version_id='skill-a-v2' WHERE plugin_id='skill-a'`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id='skill-a' AND version_id='skill-a-v1'`); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, repo := reviewObservationRepo(t)
+			ctx := context.Background()
+			seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
+			seedReleasedVersion(t, database, "skill-a", "skill-a-v2", "2.0.0", nil)
+			seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+			rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
+			req := newRequest("expert-src", "1.0.0")
+			if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
+				t.Fatal(err)
+			}
+			tc.break_(t, database)
+			if _, err := approvePending(t, repo, req.ID); !errors.Is(err, pluginrepo.ErrDependencyChanged) {
+				t.Fatalf("approve = %v, want ErrDependencyChanged", err)
+			}
+			var status, listing string
+			if err := database.QueryRow(`SELECT status FROM plugin_review_requests WHERE review_id=?`, req.ID).Scan(&status); err != nil || status != "pending" {
+				t.Fatalf("request status=%q err=%v, want pending", status, err)
+			}
+			if err := database.QueryRow(`SELECT listing_state FROM plugins WHERE plugin_id='expert-src'`).Scan(&listing); err != nil || listing != "draft" {
+				t.Fatalf("source listing=%q err=%v, want draft", listing, err)
+			}
+		})
+	}
+}
+
+// A Connector's effective revision/digest is still live evidence: it is not a
+// pin, so drift between submit and approve is the A15 conflict.
+func TestReviewApproveRejectsConnectorEffectiveDrift(t *testing.T) {
+	database, repo := reviewObservationRepo(t)
+	ctx := context.Background()
+	seedConnectorWithEffective(t, database, "connector-c", "published", 1, "sha256:111111111111111111111111111111111111111111111111111111111111111")
+	seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+	rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "connector-c", Type: "expert_connector", TargetPluginType: "connector", Status: 1}}
+	req := newRequest("expert-src", "1.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
+		t.Fatal(err)
+	}
+	bumpConnectorEffective(t, database, "connector-c", 2, "sha256:222222222222222222222222222222222222222222222222222222222222222")
+	if _, err := approvePending(t, repo, req.ID); !errors.Is(err, pluginrepo.ErrDependencyChanged) {
+		t.Fatalf("approve = %v, want ErrDependencyChanged", err)
+	}
+}
+
+// An unchanged graph approves normally (the control for the conflict cases).
+func TestReviewApproveAcceptsUnchangedGraph(t *testing.T) {
+	database, repo := reviewObservationRepo(t)
+	ctx := context.Background()
+	seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
+	seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+	rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
+	req := newRequest("expert-src", "1.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approvePending(t, repo, req.ID); err != nil {
+		t.Fatalf("approve with unchanged observations: %v", err)
+	}
+	var status, listing string
+	if err := database.QueryRow(`SELECT status FROM plugin_review_requests WHERE review_id=?`, req.ID).Scan(&status); err != nil || status != "approved" {
+		t.Fatalf("status=%q err=%v", status, err)
+	}
+	if err := database.QueryRow(`SELECT listing_state FROM plugins WHERE plugin_id='expert-src'`).Scan(&listing); err != nil || listing != "published" {
+		t.Fatalf("listing=%q err=%v", listing, err)
+	}
+}
+
+func TestReviewApproveCrossSpaceStaysHidden(t *testing.T) {
+	database, repo := reviewObservationRepo(t)
+	ctx := context.Background()
+	seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
+	seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+	rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
+	req := newRequest("expert-src", "1.0.0")
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
+		t.Fatal(err)
+	}
+	other := pluginrepo.Scope{CallerUID: "admin-2", SpaceID: "space-b"}
+	if _, err := repo.ApproveReview(ctx, other, pluginrepo.ApproveReviewParams{ReviewID: req.ID, ReviewerUID: "admin-2"}); !errors.Is(err, pluginrepo.ErrNotFound) {
+		t.Fatalf("cross-Space approve = %v, want ErrNotFound", err)
+	}
 }
 
 // A Connector's own review observes its effective baseline; editing changes
@@ -460,24 +621,24 @@ func autoReviewFixture(t *testing.T, afterInsert, afterRefresh func()) (*sql.DB,
 	return database, racing, svc
 }
 
-func seedAutoReviewExpert(t *testing.T, database *sql.DB) {
+func seedAutoReviewConnector(t *testing.T, database *sql.DB) {
 	t.Helper()
-	seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
-	seedReleasedVersion(t, database, "skill-a", "skill-a-v2", "2.0.0", nil)
-	seedReleasedVersion(t, database, "skill-a", "skill-a-v3", "3.0.0", nil)
+	seedConnectorWithEffective(t, database, "connector-c", "published", 1, "sha256:111111111111111111111111111111111111111111111111111111111111111")
 	seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
-	seedRelation(t, database, "expert-skill", "expert-src", "skill-a", "expert_skill")
+	seedRelation(t, database, "expert-connector", "expert-src", "connector-c", "expert_connector")
 }
 
 // The automatic path must re-resolve once instead of surfacing a routine 409
-// when a dependency published a new release between submit and approve.
+// when a Connector's effective revision moves between submit and approve. A
+// Skill/Expert publishing a newer release is NOT drift under the P model: the
+// submitted pin already froze the version the reviewer saw.
 func TestAutoApproveRetriesOnceAfterDependencyChange(t *testing.T) {
 	var database *sql.DB
 	database, _, svc := autoReviewFixture(t, func() {
-		// The dependency moved between the insert and the policy decision.
-		setPublishedVersion(t, database, "skill-a", "skill-a-v2")
+		// The Connector's effective payload moved between insert and decision.
+		bumpConnectorEffective(t, database, "connector-c", 2, "sha256:222222222222222222222222222222222222222222222222222222222222222")
 	}, nil)
-	seedAutoReviewExpert(t, database)
+	seedAutoReviewConnector(t, database)
 
 	review, err := svc.SubmitReview(context.Background(), managedOwner(), pluginsvc.ReviewSubmitParams{PluginID: "expert-src", Version: "1.0.0"})
 	if err != nil {
@@ -486,9 +647,9 @@ func TestAutoApproveRetriesOnceAfterDependencyChange(t *testing.T) {
 	if review.Status != model.ReviewStatusApproved {
 		t.Fatalf("status = %q, want approved after retry", review.Status)
 	}
-	deps, _, present := storedReviewObservations(t, database, review.ID)
-	if !present || len(deps) != 1 || deps[0].VersionID != "skill-a-v2" {
-		t.Fatalf("refreshed observations = %+v present=%v, want skill-a-v2", deps, present)
+	_, conns, present := storedReviewObservations(t, database, review.ID)
+	if !present || len(conns) != 1 || conns[0].EffectiveRevision == nil || *conns[0].EffectiveRevision != 2 {
+		t.Fatalf("refreshed connector observations = %+v present=%v, want revision 2", conns, present)
 	}
 	var listing string
 	if err := database.QueryRow(`SELECT listing_state FROM plugins WHERE plugin_id='expert-src'`).Scan(&listing); err != nil || listing != "published" {
@@ -496,16 +657,17 @@ func TestAutoApproveRetriesOnceAfterDependencyChange(t *testing.T) {
 	}
 }
 
-// The retry is exactly one attempt: if the graph moves again between refresh
-// and the retried approve, the request must not be silently approved.
+// The retry is exactly one attempt: if the effective payload moves again
+// between refresh and the retried approve, the request must not be silently
+// approved.
 func TestAutoApproveRetryExhaustionReturnsDependencyChanged(t *testing.T) {
 	var database *sql.DB
 	database, _, svc := autoReviewFixture(t, func() {
-		setPublishedVersion(t, database, "skill-a", "skill-a-v2")
+		bumpConnectorEffective(t, database, "connector-c", 2, "sha256:222222222222222222222222222222222222222222222222222222222222222")
 	}, func() {
-		setPublishedVersion(t, database, "skill-a", "skill-a-v3")
+		bumpConnectorEffective(t, database, "connector-c", 3, "sha256:333333333333333333333333333333333333333333333333333333333333333")
 	})
-	seedAutoReviewExpert(t, database)
+	seedAutoReviewConnector(t, database)
 
 	_, err := svc.SubmitReview(context.Background(), managedOwner(), pluginsvc.ReviewSubmitParams{PluginID: "expert-src", Version: "1.0.0"})
 	if !errors.Is(err, pluginsvc.ErrDependencyChanged) {
@@ -521,19 +683,22 @@ func TestAutoApproveRetryExhaustionReturnsDependencyChanged(t *testing.T) {
 }
 
 // Manual approval surfaces the conflict through the service boundary so the
-// handler can answer 409 dependency_changed; the request stays pending.
+// handler can answer 409 dependency_changed; the request stays pending. A pin
+// whose target is no longer listed is exactly that conflict (a newer target
+// release, by contrast, is accepted).
 func TestManualApproveMapsDependencyChanged(t *testing.T) {
 	database, repo := reviewObservationRepo(t)
 	ctx := context.Background()
 	seedReleasedDependency(t, database, "skill-a", "skill", "skill-a-v1", "1.0.0", nil)
-	seedReleasedVersion(t, database, "skill-a", "skill-a-v2", "2.0.0", nil)
 	seed(t, database, seedPlugin{id: "expert-src", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
 	rels := []model.PluginRelation{{ID: "r1", SourcePluginID: "expert-src", TargetPluginID: "skill-a", Type: "expert_skill", TargetPluginType: "skill", Status: 1}}
 	req := newRequest("expert-src", "1.0.0")
 	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, rels)); err != nil {
 		t.Fatal(err)
 	}
-	setPublishedVersion(t, database, "skill-a", "skill-a-v2")
+	if _, err := database.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill-a'`); err != nil {
+		t.Fatal(err)
+	}
 
 	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
 	reviewer := managedOwner()

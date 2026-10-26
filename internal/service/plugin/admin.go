@@ -444,6 +444,12 @@ func (s *Service) AdminCreate(ctx context.Context, caller Caller, req WriteReque
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
 	}
+	if sync != nil && sync.Relations != nil {
+		// The repository froze the publication pins in place; return those final
+		// rows so callers (the A25 import receipt) observe what was actually
+		// written instead of the pre-freeze request.
+		rels = sync.Relations
+	}
 	return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
 }
 
@@ -599,6 +605,10 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	}
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
+	}
+	if sync != nil && sync.Relations != nil {
+		// Return the frozen publication pins the repository actually wrote.
+		rels = sync.Relations
 	}
 	return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
 }

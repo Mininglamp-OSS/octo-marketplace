@@ -49,10 +49,12 @@ type PluginReviewPolicy struct {
 // per-request reason; the web reject modal requires an explicit one.
 const DefaultIMDenyReason = "管理员在消息卡片中拒绝,未填写原因"
 
-// ReviewDependencyObservation is the latest formal release a Skill/Expert
-// dependency resolved to when a review request was submitted (or last
-// re-resolved). It is audit evidence for the review window, never a pin: the
-// approved resource keeps following the newest releases afterwards.
+// ReviewDependencyObservation is the released target snapshot a Skill/Expert
+// dependency was PINNED to when the review request was submitted (or last
+// re-resolved). Under the P model this is the frozen pin the submission carries:
+// a later target release must not move it, and approval rejects only a pin whose
+// target release has become unavailable. The approved resource keeps following
+// this pin, not the newest release.
 type ReviewDependencyObservation struct {
 	PluginID   string     `json:"plugin_id"`
 	PluginType PluginType `json:"plugin_type"`
@@ -120,10 +122,11 @@ type PluginReviewRequest struct {
 	// snapshot (SKILL.md and friends) — the text a reviewer is actually deciding
 	// on. Populated on the detail read only.
 	ReadmeContent string `json:"readme_content,omitempty"`
-	// ResolvedDependencyObservations and ConnectorObservations are the latest
-	// formal-release identities captured at submit time (and refreshed by the
-	// automatic-review retry). They are small enough for the list projection and
-	// are stored as JSON columns so neither read has to rebuild the graph.
+	// ResolvedDependencyObservations and ConnectorObservations are the frozen
+	// dependency evidence captured at submit time (Skill/Expert pins plus Connector
+	// effective revision/digest, refreshed by the automatic-review retry for the
+	// latter). They are small enough for the list projection and are stored as
+	// JSON columns so neither read has to rebuild the graph.
 	// ObservationsPresent distinguishes "this request predates observations"
 	// (omitted from the wire) from "resolved to no dependencies" (renders []).
 	ResolvedDependencyObservations []ReviewDependencyObservation `json:"-"`

@@ -12,10 +12,10 @@ import (
 )
 
 // ErrDependencyChanged reports that a pending review's frozen dependency
-// observations no longer match the current latest formal releases (or that the
-// graph can no longer be resolved at all). The request is NOT auto-settled: the
-// applicant/reviewer must cancel it and submit a new request with fresh
-// observations.
+// evidence can no longer be confirmed: a pinned target release is gone,
+// unreleased or no longer listed, or a Connector's effective revision/digest
+// moved. The request is NOT auto-settled: the applicant/reviewer must cancel it
+// and submit a new request with fresh observations.
 var ErrDependencyChanged = errors.New("review dependency observations changed")
 
 // reviewObservations is the set A15 records for one frozen review graph.
@@ -25,21 +25,27 @@ type reviewObservations struct {
 }
 
 // resolveReviewObservations walks a FROZEN relation graph and records the
-// current latest formal release of every followable dependency:
+// dependency evidence the reviewer is deciding on:
 //
-//   - Skill/Expert targets resolve to plugins.published_version_id (deduped by
-//     plugin_id), and a Team additionally expands each member Expert's published
-//     release to record that Expert's own Skill/Connector targets.
+//   - Skill/Expert targets resolve to the `target_version_id` pinned in the
+//     frozen snapshot (deduped by plugin_id), and a Team additionally expands
+//     each pinned member Expert's released snapshot to record that Expert's own
+//     pinned Skill/Connector targets. The target's CURRENT
+//     plugins.published_version_id is never consulted: under the P model a
+//     released source graph carries authoritative pins, and a target publishing
+//     a newer release must not move the evidence.
 //   - Connector targets resolve to their current plugin_connector_effective row.
 //   - A Connector reviewing itself has no relation targets; its observation is
 //     its own effective baseline, which is null/null only for a first submission
 //     that has not produced an effective row yet.
 //
-// This deliberately reads the same canonical pointers the latest-graph resolver
-// and the reference validator read (published_version_id + connector effective);
-// it does not introduce a competing "latest" definition. Availability/audience
-// are NOT checked here — the existing publish/reference validation owns those
-// errors — so an unavailable target cannot be mistaken for a version change.
+// The resolver deliberately validates pin availability here (target listed, not
+// embedded/deleted, and the pinned version still an existing formal release)
+// rather than leaving it to the later write path: approval must answer the A15
+// 409 dependency_changed conflict, not a generic reference/validation error.
+// ResolveReviewObservations is called after FreezeRelationPins at submit and
+// against the stored frozen graph at approve, so a missing pin means the
+// snapshot predates P-model freezing and cannot be confirmed.
 func resolveReviewObservations(ctx context.Context, tx *sql.Tx, root model.Plugin, rels []model.PluginRelation) (reviewObservations, error) {
 	out := reviewObservations{
 		Dependencies: []model.ReviewDependencyObservation{},
@@ -64,12 +70,11 @@ func resolveReviewObservations(ctx context.Context, tx *sql.Tx, root model.Plugi
 
 	deps := map[string]model.ReviewDependencyObservation{}
 	connectors := map[string]model.ReviewConnectorObservation{}
-	nodes := map[string]struct{}{}
-	expanded := map[string]struct{}{}
+	pins := map[string]string{}
 	edges := 0
 
-	var walk func([]model.PluginRelation, int) error
-	walk = func(edgesIn []model.PluginRelation, depth int) error {
+	var walk func([]model.PluginRelation, model.PluginType, int) error
+	walk = func(edgesIn []model.PluginRelation, sourceType model.PluginType, depth int) error {
 		if depth > 2 {
 			return ErrInvalidRelation
 		}
@@ -82,21 +87,53 @@ func resolveReviewObservations(ctx context.Context, tx *sql.Tx, root model.Plugi
 			if id == "" || id == root.ID {
 				return ErrInvalidRelation
 			}
-			if _, ok := nodes[id]; !ok {
-				if len(nodes) >= maxGraphNodes {
-					return ErrGraphTooLarge
+			var pin string
+			switch edge.Type {
+			case "expert_connector":
+				// Connectors are resolved by ID + effective payload. A stored
+				// version on a Connector edge is corruption, not a pin.
+				if edge.TargetVersionID != nil {
+					return ErrInvalidRelation
 				}
-				nodes[id] = struct{}{}
+				if _, ok := pins[id]; ok {
+					return ErrInvalidRelation
+				}
+				if _, done := connectors[id]; done {
+					continue
+				}
+			case "expert_skill", "expert_team_expert":
+				if edge.TargetVersionID == nil {
+					return ErrDependencyUnavailable
+				}
+				pin = strings.TrimSpace(*edge.TargetVersionID)
+				if pin == "" {
+					return ErrDependencyUnavailable
+				}
+				if prev, ok := pins[id]; ok {
+					// The observation shape can carry only one version per
+					// plugin. Two different pins in one closure is ambiguous, so
+					// refuse it instead of silently keeping whichever was walked
+					// first (PinnedGraph applies the same rule).
+					if prev != pin {
+						return ErrInvalidRelation
+					}
+					continue
+				}
+				if _, ok := connectors[id]; ok {
+					return ErrInvalidRelation
+				}
+			default:
+				return ErrInvalidRelation
 			}
-			if _, done := deps[id]; done {
-				continue
-			}
-			if _, done := connectors[id]; done {
-				continue
+			if len(pins)+len(connectors) >= maxGraphNodes {
+				return ErrGraphTooLarge
 			}
 			target, err := loadObservationTarget(ctx, tx, id)
 			if err != nil {
 				return err
+			}
+			if !validPersistedRelation(edge.Type, sourceType, target.Type) {
+				return ErrInvalidRelation
 			}
 			if target.Type == model.PluginTypeConnector {
 				revision, digest, err := readConnectorEffectiveIdentity(ctx, tx, target.ID)
@@ -113,33 +150,33 @@ func resolveReviewObservations(ctx context.Context, tx *sql.Tx, root model.Plugi
 				}
 				continue
 			}
-			if !target.PublishedVersionID.Valid || target.PublishedVersionID.String == "" {
-				return ErrDependencyUnavailable
+			// The pin was frozen by FreezeRelationPins for this released source
+			// snapshot; prove it is still an existing formal release of the same
+			// target. A deleted/unreleased pin is a dependency conflict even when
+			// the target's current published head happens to be a newer release.
+			if err := observationPinReleased(ctx, tx, id, pin); err != nil {
+				return err
 			}
+			pins[id] = pin
 			deps[id] = model.ReviewDependencyObservation{
 				PluginID:   id,
 				PluginType: target.Type,
-				VersionID:  target.PublishedVersionID.String,
+				VersionID:  pin,
 			}
 			if target.Type != model.PluginTypeExpert || depth >= 2 {
 				continue
 			}
-			key := id + "\x00" + target.PublishedVersionID.String
-			if _, ok := expanded[key]; ok {
-				continue
-			}
-			expanded[key] = struct{}{}
-			children, err := loadPublishedReleaseRelations(ctx, tx, id, target.PublishedVersionID.String)
+			children, err := loadPinnedReleaseRelations(ctx, tx, id, pin)
 			if err != nil {
 				return err
 			}
-			if err := walk(children, depth+1); err != nil {
+			if err := walk(children, target.Type, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk(rels, 0); err != nil {
+	if err := walk(rels, root.Type, 0); err != nil {
 		return reviewObservations{}, err
 	}
 	for _, obs := range deps {
@@ -158,21 +195,21 @@ func resolveReviewObservations(ctx context.Context, tx *sql.Tx, root model.Plugi
 }
 
 type observationTarget struct {
-	ID                 string
-	Type               model.PluginType
-	PublishedVersionID sql.NullString
+	ID   string
+	Type model.PluginType
 }
 
-// loadObservationTarget reads the canonical published pointer of a frozen
-// graph node. The row lock keeps the observation consistent with the submit or
-// approve transaction that is about to persist/compare it.
+// loadObservationTarget proves a frozen graph node is still a listed,
+// non-embedded target. The row lock keeps the observation consistent with the
+// submit or approve transaction that is about to persist/compare it.
 func loadObservationTarget(ctx context.Context, tx *sql.Tx, id string) (observationTarget, error) {
 	var target observationTarget
 	var typ string
 	err := tx.QueryRowContext(ctx,
-		`SELECT plugin_id,plugin_type,published_version_id FROM plugins
-		  WHERE plugin_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`, id).
-		Scan(&target.ID, &typ, &target.PublishedVersionID)
+		`SELECT plugin_id,plugin_type FROM plugins
+		  WHERE plugin_id=? AND status=1 AND deleted_at IS NULL
+		    AND is_embedded=0 AND listing_state='published' FOR UPDATE`, id).
+		Scan(&target.ID, &typ)
 	if errors.Is(err, sql.ErrNoRows) {
 		return observationTarget{}, ErrDependencyUnavailable
 	}
@@ -183,9 +220,25 @@ func loadObservationTarget(ctx context.Context, tx *sql.Tx, id string) (observat
 	return target, nil
 }
 
-// loadPublishedReleaseRelations reads the release a member Expert's published
-// pointer selects, using the same versions+releases join as ResolveLatestGraph.
-func loadPublishedReleaseRelations(ctx context.Context, tx *sql.Tx, pluginID, versionID string) ([]model.PluginRelation, error) {
+// observationPinReleased proves the frozen pin is still a formal release of the
+// target. A missing row means the release was deleted or never a release (an
+// unpinned target head is NOT accepted as a substitute).
+func observationPinReleased(ctx context.Context, tx *sql.Tx, pluginID, versionID string) error {
+	var found string
+	err := tx.QueryRowContext(ctx,
+		`SELECT version_id FROM plugin_version_releases
+		  WHERE plugin_id=? AND version_id=? FOR UPDATE`, pluginID, versionID).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrDependencyUnavailable
+	}
+	return err
+}
+
+// loadPinnedReleaseRelations reads exactly the released snapshot a member
+// Expert's pin selects. The join on plugin_version_releases proves the row is a
+// formal release; a missing snapshot is an unavailable dependency, never a cue
+// to fall back to the member's current published head.
+func loadPinnedReleaseRelations(ctx context.Context, tx *sql.Tx, pluginID, versionID string) ([]model.PluginRelation, error) {
 	var raw []byte
 	err := tx.QueryRowContext(ctx,
 		`SELECT v.relations_json FROM plugin_versions v
@@ -215,10 +268,10 @@ func readConnectorEffectiveIdentity(ctx context.Context, tx *sql.Tx, pluginID st
 }
 
 // observationResolutionError classifies a failed resolution during approval or
-// the auto-review refresh. A dependency that is gone/unpublished or a graph that
-// can no longer be decoded is the A15 conflict; a transient database error is
-// NOT a conflict and must keep flowing as an internal/retryable error instead of
-// telling the applicant to resubmit.
+// the auto-review refresh. A pinned dependency that is gone/unlisted/unreleased
+// or a graph that can no longer be decoded is the A15 conflict; a transient
+// database error is NOT a conflict and must keep flowing as an
+// internal/retryable error instead of telling the applicant to resubmit.
 func observationResolutionError(err error) error {
 	if err == nil {
 		return nil
@@ -325,6 +378,11 @@ func (r *Repo) observationsEnabled() bool { return r.versionManagement && r.refe
 // rewrites its observation columns. It is the single internal retry step the
 // automatic-review path may perform once between submit and approve; it never
 // changes the frozen content, status, or reviewer fields.
+//
+// Under the P model a target publishing a newer release does not change the
+// observation (the frozen pin is unchanged). The refresh therefore exists for
+// the evidence that does move independently: a Connector's effective
+// revision/digest.
 func (r *Repo) RefreshReviewObservations(ctx context.Context, scope Scope, reviewID string) (err error) {
 	defer func() { err = classifyDeadlock(err) }()
 	tx, err := r.db.BeginTx(ctx, nil)

@@ -129,12 +129,12 @@ type reviewRequestResponse struct {
 	// endpoint must not reach back to the live plugin table to enrich frozen
 	// data with mutable state.
 	FrozenRelations *[]reviewRelationResponse `json:"frozen_relations,omitempty"`
-	// ResolvedDependencyObservations and ConnectorObservations are the latest
-	// formal releases observed when the request was submitted. They are audit
-	// evidence for the review window, not pins, and are stored alongside the
-	// request so neither list nor detail has to resolve the graph while reading.
-	// Omitted only for requests created before observations existed; a resolved
-	// graph with no dependencies renders as [].
+	// ResolvedDependencyObservations and ConnectorObservations are the frozen
+	// dependency evidence captured when the request was submitted: Skill/Expert
+	// target version pins plus Connector effective revision/digest. They are
+	// stored alongside the request so neither list nor detail has to resolve the
+	// graph while reading. Omitted only for requests created before observations
+	// existed; a resolved graph with no dependencies renders as [].
 	ResolvedDependencyObservations *[]reviewDependencyObservationResponse `json:"resolved_dependency_observations,omitempty"`
 	ConnectorObservations          *[]reviewConnectorObservationResponse  `json:"connector_observations,omitempty"`
 }
@@ -351,7 +351,7 @@ func reviewListDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 // SubmitReview submits a plugin for Space visibility review.
 //
 // @Summary Submit a plugin for Space review
-// @Description Freezes the reviewed content under a caller-supplied version label and records the frozen graph's current latest formal dependency releases (`resolved_dependency_observations`, `connector_observations`). When the authenticated Space's automatic-review policy is enabled (the default), the request is approved immediately and the published Plugin is updated; otherwise it remains pending for a Space owner/admin. Content is supplied one of three ways: (1) parse_task_id for a skill zip upload processed server-side; (2) manifest_json and plugin_json together for declared JSON documents; (3) neither, which snapshots the live draft row and is valid only while the plugin is private. Only the plugin owner may submit, only one request per plugin may be pending, and a version label already published for that plugin is refused.
+// @Description Freezes the reviewed content under a caller-supplied version label and records the frozen graph's dependency evidence: the Skill/Expert target version pins the submission froze (`resolved_dependency_observations`) and the Connectors' effective revision/digest (`connector_observations`). When the authenticated Space's automatic-review policy is enabled (the default), the request is approved immediately and the published Plugin is updated; otherwise it remains pending for a Space owner/admin. Content is supplied one of three ways: (1) parse_task_id for a skill zip upload processed server-side; (2) manifest_json and plugin_json together for declared JSON documents; (3) neither, which snapshots the live draft row and is valid only while the plugin is private. Only the plugin owner may submit, only one request per plugin may be pending, and a version label already published for that plugin is refused.
 // @Tags plugin
 // @ID plugin.review_request.create
 // @Accept json

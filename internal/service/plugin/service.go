@@ -5,7 +5,6 @@ package plugin
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -255,12 +254,14 @@ type Detail struct {
 	// RelationResult reports upsert relation synchronization; nil on reads.
 	RelationResult *RelationResult
 	// Resolved is the A25 import-time observation of each final direct relation.
-	// It is not a pin and is omitted from reads.
+	// It reports the version pins this import actually froze (never a fresh
+	// latest-resolution read) and is omitted from reads.
 	Resolved []ResolvedDependency
 }
 
 // ResolvedDependency is the A25 observation value for one final direct relation.
-// Connector targets omit TargetVersionID.
+// Skill/Expert targets carry the pin frozen for this import; Connector targets
+// omit TargetVersionID.
 type ResolvedDependency struct {
 	SourcePluginID  string
 	RelationID      string
@@ -1119,33 +1120,28 @@ func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, sour
 	return out, nil
 }
 
-func (s *Service) resolveImportDependencies(ctx context.Context, caller Caller, rels []model.PluginRelation) ([]ResolvedDependency, error) {
+// resolveImportDependencies reports the A25 import-time observation for each
+// final direct relation. Under the P model those are exactly the pins the
+// repository froze while writing this import's snapshot — never a fresh read of
+// the target's current published head. A Skill/Expert edge without a pin means
+// the write did not freeze (for example references enabled without managed
+// releases), and reporting a head there would be the latest-resolution bug this
+// surface exists to avoid, so it fails closed.
+func (s *Service) resolveImportDependencies(rels []model.PluginRelation) ([]ResolvedDependency, error) {
 	out := make([]ResolvedDependency, 0, len(rels))
 	for _, rel := range rels {
 		item := ResolvedDependency{SourcePluginID: rel.SourcePluginID, RelationID: rel.ID, RelationType: rel.Type, TargetPluginID: rel.TargetPluginID, SortOrder: rel.SortOrder}
-		target, _, err := s.repo.GetWithRelations(ctx, adminScope(caller), rel.TargetPluginID)
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
-		if target.Type == model.PluginTypeConnector {
+		if rel.Type == "expert_connector" {
+			// Connectors are resolved by ID + effective payload and never carry
+			// a version pin.
 			out = append(out, item)
 			continue
 		}
-		reader, ok := s.repo.(interface {
-			GetPublishedVersionID(context.Context, pluginrepo.Scope, string, *sql.NullString) error
-		})
-		if !ok {
-			return nil, ErrVersionBaselineUnavailable
-		}
-		var published sql.NullString
-		if err := reader.GetPublishedVersionID(ctx, adminScope(caller), rel.TargetPluginID, &published); err != nil {
-			return nil, mapStoreError(err)
-		}
-		if !published.Valid || published.String == "" {
+		if rel.TargetVersionID == nil || strings.TrimSpace(*rel.TargetVersionID) == "" {
 			return nil, ErrDependencyUnavailable
 		}
-		v := published.String
-		item.TargetVersionID = &v
+		pin := strings.TrimSpace(*rel.TargetVersionID)
+		item.TargetVersionID = &pin
 		out = append(out, item)
 	}
 	sort.SliceStable(out, func(i, j int) bool {

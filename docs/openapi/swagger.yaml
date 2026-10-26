@@ -1945,7 +1945,10 @@ components:
           uniqueItems: false
         resolved:
           description: 'Resolved is the A25 import-time observation of each final
-            direct relation.
+            direct relation,
+
+            carrying the version pins this import froze (never a latest-resolution
+            read).
 
             Omitted on ordinary reads; explicit [] when the import had no dependencies.'
           items:
@@ -2657,17 +2660,18 @@ components:
           type: string
         resolved_dependency_observations:
           description: 'ResolvedDependencyObservations and ConnectorObservations are
-            the latest
+            the frozen
 
-            formal releases observed when the request was submitted. They are audit
+            dependency evidence captured when the request was submitted: Skill/Expert
 
-            evidence for the review window, not pins, and are stored alongside the
+            target version pins plus Connector effective revision/digest. They are
 
-            request so neither list nor detail has to resolve the graph while reading.
+            stored alongside the request so neither list nor detail has to resolve
+            the
 
-            Omitted only for requests created before observations existed; a resolved
+            graph while reading. Omitted only for requests created before observations
 
-            graph with no dependencies renders as [].'
+            existed; a resolved graph with no dependencies renders as [].'
           items:
             $ref: '#/components/schemas/internal_api_handler_plugin.reviewDependencyObservationResponse'
           type: array
@@ -8328,16 +8332,17 @@ paths:
       - plugin
     post:
       description: 'Freezes the reviewed content under a caller-supplied version label
-        and records the frozen graph''s current latest formal dependency releases
-        (`resolved_dependency_observations`, `connector_observations`). When the authenticated
-        Space''s automatic-review policy is enabled (the default), the request is
-        approved immediately and the published Plugin is updated; otherwise it remains
-        pending for a Space owner/admin. Content is supplied one of three ways: (1)
-        parse_task_id for a skill zip upload processed server-side; (2) manifest_json
-        and plugin_json together for declared JSON documents; (3) neither, which snapshots
-        the live draft row and is valid only while the plugin is private. Only the
-        plugin owner may submit, only one request per plugin may be pending, and a
-        version label already published for that plugin is refused.'
+        and records the frozen graph''s dependency evidence: the Skill/Expert target
+        version pins the submission froze (`resolved_dependency_observations`) and
+        the Connectors'' effective revision/digest (`connector_observations`). When
+        the authenticated Space''s automatic-review policy is enabled (the default),
+        the request is approved immediately and the published Plugin is updated; otherwise
+        it remains pending for a Space owner/admin. Content is supplied one of three
+        ways: (1) parse_task_id for a skill zip upload processed server-side; (2)
+        manifest_json and plugin_json together for declared JSON documents; (3) neither,
+        which snapshots the live draft row and is valid only while the plugin is private.
+        Only the plugin owner may submit, only one request per plugin may be pending,
+        and a version label already published for that plugin is refused.'
       operationId: plugin.review_request.create
       requestBody:
         content:
