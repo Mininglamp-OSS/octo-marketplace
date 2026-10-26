@@ -660,49 +660,49 @@ func (s *Service) withContainerReceipt(ctx context.Context, caller Caller, opera
 		return nil, ErrInvalidRequest
 	}
 	store, ok := s.repo.(interface {
-		GetContainerImportReceipt(context.Context, string, string, string, string) (*pluginrepo.ContainerImportReceipt, error)
-		InsertContainerImportReceipt(context.Context, pluginrepo.ContainerImportReceipt, time.Time) (bool, error)
+		ClaimContainerImportReceipt(context.Context, pluginrepo.ContainerImportReceipt, time.Time) (*pluginrepo.ContainerImportReceipt, bool, error)
+		CompleteContainerImportReceipt(context.Context, pluginrepo.ContainerImportReceipt) error
+		ReleaseContainerImportReceipt(context.Context, string, string, string, string, string) error
 	})
 	if !ok {
 		return do()
 	}
 	digest := containerImportDigest(operation, pluginID, p)
-	rec, err := store.GetContainerImportReceipt(ctx, caller.UID, operation, pluginID, p.IdempotencyKey)
+	claim := pluginrepo.ContainerImportReceipt{ScopeUID: caller.UID, Operation: operation, PluginID: pluginID, IdempotencyKey: p.IdempotencyKey, InputDigest: digest}
+	rec, won, err := store.ClaimContainerImportReceipt(ctx, claim, s.now())
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
-	if rec != nil {
-		if rec.InputDigest != digest {
+	if !won {
+		if rec == nil || rec.InputDigest != digest {
 			return nil, ErrIdempotencyConflict
 		}
-		var out Detail
-		if json.Unmarshal([]byte(rec.ResponseJSON), &out) != nil {
+		if rec.State != "completed" || rec.ResponseJSON == "" {
+			return nil, ErrIdempotencyInProgress
+		}
+		var replay Detail
+		if json.Unmarshal([]byte(rec.ResponseJSON), &replay) != nil {
 			return nil, ErrIntegrity
 		}
-		return &out, nil
+		return &replay, nil
 	}
 	out, err := do()
 	if err != nil {
+		// A failed operation may retry with the same key; release only this claim.
+		_ = store.ReleaseContainerImportReceipt(context.WithoutCancel(ctx), claim.ScopeUID, claim.Operation, claim.PluginID, claim.IdempotencyKey, claim.InputDigest)
 		return nil, err
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return nil, ErrIntegrity
 	}
-	inserted, err := store.InsertContainerImportReceipt(ctx, pluginrepo.ContainerImportReceipt{ScopeUID: caller.UID, Operation: operation, PluginID: pluginID, IdempotencyKey: p.IdempotencyKey, InputDigest: digest, ResponseJSON: string(raw)}, s.now())
-	if err != nil || inserted {
-		return out, err
+	claim.ResponseJSON = string(raw)
+	if err := store.CompleteContainerImportReceipt(context.WithoutCancel(ctx), claim); err != nil {
+		// The graph mutation is already committed. Keep the claim reserved so a
+		// same-key retry fails closed instead of importing a second root.
+		return nil, mapStoreError(err)
 	}
-	// A concurrent identical request won the unique key: replay its frozen response.
-	rec, err = store.GetContainerImportReceipt(ctx, caller.UID, operation, pluginID, p.IdempotencyKey)
-	if err != nil || rec == nil || rec.InputDigest != digest {
-		return nil, ErrIdempotencyConflict
-	}
-	var replay Detail
-	if json.Unmarshal([]byte(rec.ResponseJSON), &replay) != nil {
-		return nil, ErrIntegrity
-	}
-	return &replay, nil
+	return out, nil
 }
 
 func containerImportDigest(operation, pluginID string, p ContainerImportParams) string {

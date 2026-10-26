@@ -45,16 +45,16 @@ func EffectiveDigest(p Plugin) string {
 	if p.CurrentVersion != nil {
 		version = *p.CurrentVersion
 	}
+	// JSON columns are normalized by MySQL on write/read. Hashing their raw bytes
+	// would make an ordinary write differ from the later read, so the effective
+	// digest uses stable scalar identity plus the immutable content hashes. JSON
+	// payload changes are already covered by ManifestHash/PluginHash.
 	parts := []string{
-		"v2",
+		"v3",
 		p.ManifestHash,
 		p.PluginHash,
 		p.Name,
-		string(p.Tags),
 		strconv.Itoa(p.ToolCount),
-		string(p.Manifest),
-		string(p.Package),
-		string(p.AttachmentKeys),
 		version,
 		string(p.Visibility),
 	}

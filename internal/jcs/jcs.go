@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -121,7 +122,7 @@ func appendValue(out *bytes.Buffer, value any) error {
 			}
 			keys = append(keys, key)
 		}
-		sort.Strings(keys) // Go string ordering is UTF-8 byte ordering.
+		sort.Slice(keys, func(i, j int) bool { return lessUTF16(keys[i], keys[j]) })
 		out.WriteByte('{')
 		for i, key := range keys {
 			if i > 0 {
@@ -140,6 +141,19 @@ func appendValue(out *bytes.Buffer, value any) error {
 		return fmt.Errorf("%w: %T", ErrUnsupported, value)
 	}
 	return nil
+}
+
+// lessUTF16 implements RFC 8785 §3.2.3 property ordering: unsigned UTF-16
+// code-unit order, not Go's UTF-8 byte order. Supplementary characters sort
+// after U+E000 because their high surrogate is 0xD800-range.
+func lessUTF16(a, b string) bool {
+	au, bu := utf16.Encode([]rune(a)), utf16.Encode([]rune(b))
+	for i := 0; i < len(au) && i < len(bu); i++ {
+		if au[i] != bu[i] {
+			return au[i] < bu[i]
+		}
+	}
+	return len(au) < len(bu)
 }
 
 func appendString(out *bytes.Buffer, value string) error {

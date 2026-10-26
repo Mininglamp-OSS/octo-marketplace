@@ -26,6 +26,7 @@ var (
 	ErrDependencyUnavailable = errors.New("plugin dependency unavailable")
 	ErrAttemptExpired        = errors.New("installation attempt expired")
 	ErrIdempotencyConflict   = errors.New("idempotency key reused with different input")
+	ErrIdempotencyInProgress = errors.New("idempotency key operation is still in progress")
 	ErrConflict              = errors.New("plugin conflict")
 	ErrEditConflict          = errors.New("plugin edit conflict")
 	ErrRelationInUse         = errors.New("plugin is referenced by another live plugin")

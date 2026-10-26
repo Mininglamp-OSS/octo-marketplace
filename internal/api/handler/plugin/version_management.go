@@ -237,7 +237,7 @@ func (h *AdminHandler) GetVersion(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
-	apiresponse.OK(c, adminHistoricalVersionResponse{PluginID: result.PluginID, VersionID: result.ID, RevisionNo: revisionNo, VersionLabel: label, IsReleased: result.Release != nil, IsPublished: result.IsPublished, CreatedBy: result.CreatedBy, CreatedAt: result.CreatedAt, ManifestJSON: normalizedObjectRaw(result.Manifest), PluginJSON: publicVersionPackage(result.Package), Files: files, Relations: rels, RelationDigest: hex.EncodeToString(digest[:])})
+	apiresponse.OK(c, adminHistoricalVersionResponse{PluginID: result.PluginID, VersionID: result.ID, RevisionNo: strconv.FormatUint(revisionNo, 10), Revision: revisionNo, VersionLabel: label, IsReleased: result.Release != nil, IsPublished: result.IsPublished, CreatedBy: result.CreatedBy, CreatedAt: result.CreatedAt, ManifestJSON: normalizedObjectRaw(result.Manifest), PluginJSON: publicVersionPackage(result.Package), Files: files, Relations: rels, RelationDigest: hex.EncodeToString(digest[:])})
 }
 
 type adminVersionFileResponse struct {
@@ -250,7 +250,8 @@ type adminVersionFileResponse struct {
 type adminHistoricalVersionResponse struct {
 	PluginID       string                     `json:"plugin_id"`
 	VersionID      string                     `json:"version_id"`
-	RevisionNo     uint64                     `json:"revision_no"`
+	RevisionNo     string                     `json:"revision_no"`
+	Revision       uint64                     `json:"revision"`
 	VersionLabel   string                     `json:"version_label"`
 	IsReleased     bool                       `json:"is_released"`
 	IsPublished    bool                       `json:"is_published"`

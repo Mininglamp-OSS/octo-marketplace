@@ -304,7 +304,7 @@ type detailResponse struct {
 	DependencyIssues []model.DependencyIssue `json:"dependency_issues,omitempty"`
 	// Resolved is the A25 import-time observation of each final direct relation.
 	// Omitted on ordinary reads; explicit [] when the import had no dependencies.
-	Resolved []resolvedDependencyResponse `json:"resolved,omitempty"`
+	Resolved *[]resolvedDependencyResponse `json:"resolved,omitempty"`
 	// RelationResult reports upsert relation target-state synchronization:
 	// empty relation_id created, known relation_id with changes updated, live
 	// relations omitted from the submission deleted. Absent on reads.
@@ -818,6 +818,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		// and reason so the browser can show the user which input to fix,
 		// instead of collapsing every cause into {"field":"body","reason":"invalid"}.
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, "Correct the request and try again.")
+	case errors.Is(err, pluginsvc.ErrIdempotencyInProgress):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "the idempotency key is still being processed", map[string]any{"reason": "idempotency_in_progress"}, "Wait for the original request to finish, then retry with the same key.")
 	case errors.Is(err, pluginsvc.ErrIdempotencyConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "idempotency key was reused with different input", map[string]any{"reason": "idempotency_input_mismatch"}, "Use a new Idempotency-Key for the changed request.")
 	case errors.Is(err, pluginsvc.ErrAttemptExpired):
@@ -994,10 +996,11 @@ func detailDTO(d *pluginsvc.Detail) detailResponse {
 	}
 	out := detailResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, DependencyIssues: d.DependencyIssues}
 	if d.Resolved != nil {
-		out.Resolved = make([]resolvedDependencyResponse, len(d.Resolved))
+		list := make([]resolvedDependencyResponse, len(d.Resolved))
 		for i, x := range d.Resolved {
-			out.Resolved[i] = resolvedDependencyResponse{SourcePluginID: x.SourcePluginID, RelationID: x.RelationID, RelationType: x.RelationType, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID}
+			list[i] = resolvedDependencyResponse{SourcePluginID: x.SourcePluginID, RelationID: x.RelationID, RelationType: x.RelationType, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID}
 		}
+		out.Resolved = &list
 	}
 	if d.RelationResult != nil {
 		out.RelationResult = &relationResultResponse{Created: d.RelationResult.Created, Updated: d.RelationResult.Updated, Deleted: d.RelationResult.Deleted}

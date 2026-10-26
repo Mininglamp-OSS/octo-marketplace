@@ -78,3 +78,16 @@ func TestCanonicalizeRejectsTrailingAndUnsupportedValues(t *testing.T) {
 		t.Fatalf("infinite number: %v", err)
 	}
 }
+
+func TestCanonicalJSONUTF16PropertyOrder(t *testing.T) {
+	// RFC 8785 compares UTF-16 code units, so U+1F600 (surrogate pair 0xD83D
+	// 0xDE00) sorts before U+E000 (0xE000), opposite of UTF-8 byte ordering.
+	got, err := Canonicalize(map[string]any{"\U0001F600": 1, "\uE000": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"\U0001F600\":1,\"\uE000\":2}"
+	if string(got) != want {
+		t.Fatalf("canonical=%s want=%s", got, want)
+	}
+}
