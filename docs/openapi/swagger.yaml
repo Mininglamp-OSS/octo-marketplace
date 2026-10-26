@@ -1929,6 +1929,15 @@ components:
             $ref: '#/components/schemas/internal_api_handler_plugin.relationResponse'
           type: array
           uniqueItems: false
+        resolved:
+          description: 'Resolved is the A25 import-time observation of each final
+            direct relation.
+
+            Omitted on ordinary reads; explicit [] when the import had no dependencies.'
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.resolvedDependencyResponse'
+          type: array
+          uniqueItems: false
       type: object
     internal_api_handler_plugin.historicalVersionResponse:
       properties:
@@ -2433,6 +2442,19 @@ components:
             type: string
           type: array
           uniqueItems: false
+      type: object
+    internal_api_handler_plugin.resolvedDependencyResponse:
+      properties:
+        relation_id:
+          type: string
+        relation_type:
+          type: string
+        source_plugin_id:
+          type: string
+        target_plugin_id:
+          type: string
+        target_version_id:
+          type: string
       type: object
     internal_api_handler_plugin.reviewConnectorObservationResponse:
       properties:
