@@ -56,6 +56,15 @@ func dependencyFixture(t *testing.T, db *sql.DB) {
 			t.Fatal(err)
 		}
 	}
+	// Foundation (#139) makes the complete Connector effective row the read
+	// evidence for published connectors. The fixture bypasses the write path, so
+	// seed it explicitly instead of leaving the connector without an effective row.
+	if _, err := db.Exec(`INSERT INTO plugin_connector_effective
+		(plugin_id,effective_revision,effective_digest,plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,updated_by,updated_at)
+		SELECT plugin_id,1,CONCAT('sha256:',SHA2(CONCAT('fixture',plugin_id),256)),plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,'fixture',NOW(3)
+		FROM plugins WHERE plugin_id='connector'`); err != nil {
+		t.Fatal(err)
+	}
 	for _, source := range []string{"expert", "team"} {
 		var edges []model.PluginRelation
 		if source == "expert" {
@@ -332,7 +341,7 @@ func TestFrontendRelistPublishNewVersionRestoresDependency(t *testing.T) {
 	if blocked, err := repo.HasUnavailableDependencies(ctx, pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}, "expert"); err != nil || !blocked {
 		t.Fatalf("precondition expert blocked=%v err=%v", blocked, err)
 	}
-	if _, err := svc.Update(ctx, owner, "skill", managedSkillWrite("2.0.0", "relisted skill v2", model.PluginVisibilitySpace)); err != nil {
+	if _, err := svc.Update(ctx, owner, "skill", editingWrite(t, db, "skill", managedSkillWrite("2.0.0", "relisted skill v2", model.PluginVisibilitySpace))); err != nil {
 		t.Fatalf("update skill: %v", err)
 	}
 	publishManaged(t, svc, owner, "skill")
@@ -497,7 +506,7 @@ func TestDependencyDelistingHidesCatalogButNotOwnerOrAdmin(t *testing.T) {
 	if err != nil || len(admin) != 1 || len(admin[0].DependencyIssues) != 1 {
 		t.Fatalf("admin list=%+v err=%v", admin, err)
 	}
-	adminDetail, err := svc.AdminDetail(ctx, pluginsvc.Caller{UID: "admin", IsSystemAdmin: true}, "expert", true)
+	adminDetail, err := svc.AdminDetail(ctx, pluginsvc.Caller{UID: "admin", IsSystemAdmin: true}, "expert", true, "")
 	if err != nil || len(adminDetail.DependencyIssues) != 1 {
 		t.Fatalf("admin detail=%+v err=%v", adminDetail, err)
 	}
