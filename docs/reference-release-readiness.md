@@ -8,7 +8,13 @@ Local implementation is not deployment approval. Default configuration keeps ver
 2. Land the installation/M1/M3 delivery. Inspect the read-only inventory and migration exceptions on a separately authorized environment before any data operation.
 3. Rehearse migration on an isolated copy: verify inherited owner/Space/visibility/listing, dependency pins, repeated runs, interruption and pointer rollback. Unresolved exceptions block apply; do not guess latest or clear secrets.
 4. Verify installed Fleet rows/bindings and Daemon files against the exact prepared plan. Actual provider discovery, online dispatch and MCP execution need separate acceptance; a successful HTTP response alone is insufficient.
-5. Only after acceptance, authorize an explicit deployment change. `PLUGIN_REFERENCES_ENABLED` requires version management; pinned installation requires both. Server startup rejects an inconsistent combination.
+5. Before activation, finish M1/M3 for all applicable roots with no unresolved
+   exceptions or remaining units and verify historical indexes. Run
+   `scripts/pinned-release-readiness.sql` with a SELECT-only account; require
+   `pinned_readiness_blockers=0`, then complete the runtime acceptance above.
+   Keep pinned off during partial migration. Follow the executable checklist in
+   `docs/pinned-installation.md`; startup only checks flag dependencies.
+6. Only after acceptance, authorize an explicit deployment change. `PLUGIN_REFERENCES_ENABLED` requires version management; pinned installation requires both. Server startup rejects an inconsistent combination.
 
 ## Coverage and compatibility
 

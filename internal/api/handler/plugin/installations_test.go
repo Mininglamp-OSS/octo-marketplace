@@ -10,14 +10,44 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
+	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type noRootInstaller struct{ calls int }
+
+func (f *noRootInstaller) InstallCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	f.calls++
+	return nil, errors.New("unexpected Fleet call")
+}
+
+func TestPinnedInvisibleRootReturns404ThroughRealService(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	mock.ExpectQuery("SELECT .* FROM plugin_install_attempts").WillReturnRows(sqlmock.NewRows([]string{"plugin_id"}))
+	mock.ExpectQuery("SELECT .* FROM plugins p WHERE p.plugin_id IN").WillReturnRows(sqlmock.NewRows([]string{"plugin_id"}))
+	remote := &noRootInstaller{}
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithPinnedInstallation(true).WithCapabilityInstaller(remote)
+	rec := httptest.NewRecorder()
+	testEngine(svc).ServeHTTP(rec, installationRequest(installationBody))
+	if rec.Code != http.StatusNotFound || remote.calls != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", rec.Code, remote.calls, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type fakeInstallationService struct {
 	*fakeService

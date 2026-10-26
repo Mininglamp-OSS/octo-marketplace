@@ -20,6 +20,9 @@ writer rejects inline bundles. Historical rows must remain immutable and readabl
   Unresolvable numeric bounds quarantine the root before any write.
 - Rebuild source evidence under transaction locks before apply. Atomic root units
   and immutable batch mappings support interruption and repeat without duplicates.
+- Resolve external file bytes before inventory locks, compare locked source
+  evidence exactly, and bind those frozen bytes to the preview digest. Full
+  bounded-inventory locks remain an explicit maintenance-window limitation.
 - Any unresolved exception blocks apply; operator must affirm G4 policy externally.
 - Rollback restores pointers, content and listing only if migration output is still
   current; keeps new rows/files/history and retires the batch against further apply.

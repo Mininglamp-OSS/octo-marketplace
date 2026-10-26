@@ -197,6 +197,19 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 	if !validID(batch) || !validID(root) || len(digest) != 64 {
 		return 0, ErrConflict
 	}
+	// Resolve and freeze external bytes before acquiring inventory locks. The
+	// locked re-read must exactly match the source evidence used by the resolver.
+	var prepared Dataset
+	var sourceDigest string
+	if resolver != nil {
+		var err error
+		prepared, err = Read(ctx, db, limit)
+		if err != nil {
+			return 0, err
+		}
+		sourceDigest = hash(prepared)
+		prepared = Hydrate(ctx, prepared, resolver)
+	}
 	tx, e := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if e != nil {
 		return 0, ErrWrite
@@ -223,7 +236,13 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 	if e != nil {
 		return 0, e
 	}
-	d = Hydrate(ctx, d, resolver)
+	if resolver != nil {
+		if hash(d) != sourceDigest {
+			return 0, ErrConflict
+		}
+		d.ResolvedSkillFiles = prepared.ResolvedSkillFiles
+		d.FileExceptions = prepared.FileExceptions
+	}
 	plan := Build(d)
 	if plan.Digest != digest {
 		return 0, ErrConflict

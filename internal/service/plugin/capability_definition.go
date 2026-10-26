@@ -24,9 +24,6 @@ type capabilityBuilder struct {
 }
 
 func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, pluginID string, p InstallationParams) (*fleet.CapabilityInstallRequest, error) {
-	if s.pinnedInstallation {
-		return s.pinnedCapabilityRequest(ctx, caller, pluginID, p)
-	}
 	root, err := s.resolveInstallDetail(ctx, caller, pluginID)
 	if err != nil {
 		return nil, err

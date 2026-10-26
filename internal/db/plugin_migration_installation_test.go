@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -29,6 +30,22 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 	database := reviewDB(t)
 	ctx := context.Background()
 	seedStockRoot(t, database, "migration-install", "private", "published")
+	gateSQL, err := os.ReadFile("../../scripts/pinned-release-readiness.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkGate := func(wantClear bool) {
+		t.Helper()
+		var name string
+		var blockers int
+		if err := database.QueryRow(string(gateSQL)).Scan(&name, &blockers); err != nil {
+			t.Fatal(err)
+		}
+		if name != "pinned_readiness_blockers" || (blockers == 0) != wantClear {
+			t.Fatalf("gate=%s blockers=%d wantClear=%v", name, blockers, wantClear)
+		}
+	}
+	checkGate(false)
 	evidence, err := stockmigration.Read(ctx, database, 1000)
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +57,7 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 	if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "migration-install-batch", "migration-install", plan.Digest, true); err != nil {
 		t.Fatal(err)
 	}
+	checkGate(true)
 	remote := &migratedGraphInstaller{}
 	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(true).WithPinnedInstallation(true).WithCapabilityInstaller(remote)
 	out, err := svc.CreateInstallation(ctx, managedOwner(), "migration-install", pluginsvc.InstallationParams{WorkspaceID: "fixture-workspace", RuntimeID: "7f63db70-6b66-4c2d-a52f-fb6de1d78ad9", IdempotencyKey: "migration-install-attempt", Token: "fixture-token"})
@@ -63,4 +81,10 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 	if !d.ExpertTeam.Members[0].IsLeader || d.ExpertTeam.Members[0].ExpertName != d.Experts[0].Name {
 		t.Fatal("team role/member wiring lost")
 	}
+	// Probe a corrupt/legacy released member behind a healthy root. The gate
+	// must follow pinned versions, not merely inspect the root or live graph.
+	if _, err = database.Exec(`UPDATE plugin_versions v JOIN plugins p ON p.published_version_id=v.version_id SET v.plugin_json=JSON_SET(v.plugin_json,'$.mcp_config','legacy') WHERE p.plugin_type='expert' AND p.is_embedded=0`); err != nil {
+		t.Fatal(err)
+	}
+	checkGate(false)
 }

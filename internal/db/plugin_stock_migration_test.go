@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -19,6 +21,54 @@ import (
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
+
+func TestStockMigrationResolvesFilesBeforeLocksAndRejectsChangedSource(t *testing.T) {
+	for _, change := range []bool{false, true} {
+		t.Run(strconv.FormatBool(change), func(t *testing.T) {
+			database := reviewDB(t)
+			ctx := context.Background()
+			seedStockRoot(t, database, "prelock", "private", "published")
+			files := map[string]string{"SKILL.md": "---\nname: skill\ndescription: fixture\n---\nbody"}
+			resolver := func(context.Context, *model.Plugin) (map[string]string, error) { return files, nil }
+			d, err := stockmigration.ReadWithResolver(ctx, database, 1000, resolver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := stockmigration.Build(d)
+			calls := 0
+			applyResolver := func(ctx context.Context, _ *model.Plugin) (map[string]string, error) {
+				calls++
+				// A separate transaction must be able to lock/update source rows while
+				// file bytes are being resolved. This times out with the old ordering.
+				writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				defer cancel()
+				name := "prelock"
+				if change {
+					name = "concurrent edit"
+				}
+				if _, err := database.ExecContext(writeCtx, `UPDATE plugins SET plugin_name=? WHERE plugin_id='prelock'`, name); err != nil {
+					return nil, err
+				}
+				return files, nil
+			}
+			n, err := stockmigration.ApplyRootWithResolver(ctx, database, 1000, "prelock-batch", "prelock", plan.Digest, true, applyResolver)
+			if calls != 1 {
+				t.Fatalf("resolver calls=%d", calls)
+			}
+			if change {
+				if !errors.Is(err, stockmigration.ErrConflict) || n != 0 {
+					t.Fatalf("changed source: n=%d err=%v", n, err)
+				}
+				var records int
+				if err := database.QueryRow(`SELECT COUNT(*) FROM plugin_stock_migration_roots`).Scan(&records); err != nil || records != 0 {
+					t.Fatalf("audit count=%d err=%v", records, err)
+				}
+			} else if err != nil || n != 4 {
+				t.Fatalf("apply n=%d err=%v", n, err)
+			}
+		})
+	}
+}
 
 func TestStockMigrationRemainsEditableAndPublishable(t *testing.T) {
 	for _, tc := range []struct{ old, migrated, next string }{

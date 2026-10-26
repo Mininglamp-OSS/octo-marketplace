@@ -9,9 +9,13 @@ Refs #119 and #120. Builds on version management and versioned references. Featu
 ## Load-bearing list
 - Current caller scope and source audience remain authoritative; historical versions do not grant access.
 - Missing pins/releases/artifacts fail closed, with no fallback to latest or inline expert MCP.
+- Both entrypoints reject inline root/member capability snapshots before remote
+  mutation; missing/hidden roots keep the existing 404 contract.
 - Batched per-request reads, exact expert-to-skill bindings, stable skill aliases, bounded payloads.
 - Delisted dependencies remain usable through existing released pins; roots must remain listed.
 - No token, environment value or complete request persists in retry records.
+- Activation requires completed M1/M3 evidence and the read-only released-graph
+  check; expired-key reconciliation preserves durable key tombstones.
 
 ## Out of scope
 Production enablement, real tenant data, migration, Fleet protocol changes, executing skills or MCP processes.

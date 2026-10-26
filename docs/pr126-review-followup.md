@@ -23,14 +23,17 @@ The new forward migration installs these indexes on existing and fresh schemas:
 
 | Index columns | Access path |
 | --- | --- |
-| `plugin_install_attempts(space_id, plugin_id, created_at)` | Scoped operational resource/time lookup; exact retry lookup still uses the full existing PK |
-| `plugin_stock_migration_batches(state, batch_id)` | Active audited mappings, ordered by batch identity |
+| `plugin_install_attempts(space_id, plugin_id, created_at)` | Ops-only scoped resource/time inspection; application retry lookup uses the full existing PK |
+| `plugin_stock_migration_batches(state, batch_id)` | Ops-only batch/state inspection; the application's joined scan may use the batch PK instead |
 | `plugin_stock_migration_roots(batch_id, applied_at, root_plugin_id)` | Reverse apply order within a rollback batch, including the existing deterministic tie-break |
 
 For example, an operator inspecting one resource's receipts must constrain both
 `space_id` and `plugin_id` before filtering/ordering `created_at`. The index does
 not introduce a cross-Space query or API. Index creation uses guarded online DDL
 so a crash between DDL commits and the migration receipt can be replayed.
+The first two indexes are operational support, not demonstrated application hot
+paths; they add storage and insert/update maintenance cost and should be included
+in capacity planning. The root ordering index matches the actual rollback query.
 
 ## Historical evidence scan evidence
 
@@ -64,13 +67,18 @@ latency. The backfill's existing 10,000-row evidence cap remains in force.
   headers, credential URLs and known secret flags with literal values are
   quarantined; exception reports use fixed reason codes.
 - `internal/backfill/stockmigration/store.go`: traced batch/root identity, the G4
-  gate, locked inventory re-read and preview digest, one-root transactional writes,
+  gate, inventory re-read and preview digest, one-root transactional writes,
   immutable snapshot/release creation, audit insertion, interrupted replay and
   retirement. Rollback checks root and child version pointers, hashes, audience,
   lifecycle and deletion state under locks. Any later failure rolls back the
   transaction; extracted resources and historical versions are retained.
 
-No additional confirmed code defect was found in this inspection. Existing tests
+The earlier inspection missed the inline-MCP failure subsequently reproduced by
+Octo-Q at `639d1f1`; it is not a continuing claim of no defects. The replacement
+now refuses inline root/member capabilities and restores missing-root 404s.
+File hydration now runs before inventory locks, followed by exact locked-source
+and preview-digest checks. The full-inventory lock limit still applies and is
+documented in the stock migration runbook. Existing tests
 cover cross-Space/owner denial, release and artifact failures, current connector
 drift, same-key retries, failed apply transaction rollback, root/child edit CAS,
 audited resume, historical-byte retention and credential redaction. The requested

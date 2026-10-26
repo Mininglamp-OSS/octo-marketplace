@@ -20,7 +20,8 @@ func ReadWithResolver(ctx context.Context, db *sql.DB, limit int, resolver Skill
 }
 
 // Hydrate freezes successfully verified source bytes into the preview digest.
-// Apply re-reads them with source rows locked; only new packages contain copies.
+// Apply freezes bytes before locking, then compares the locked source evidence;
+// only new packages contain copies. No object I/O runs under inventory locks.
 func Hydrate(ctx context.Context, d Dataset, resolver SkillResolver) Dataset {
 	if resolver == nil {
 		return d

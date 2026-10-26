@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,7 +108,7 @@ func fixturePinned() (*Service, *pinnedFixtureStore, *fakeCapabilityInstaller) {
 	}
 	add("team", model.PluginTypeExpertTeam, "Team", "root-v1", packageWith(rawAtt("AGENTS.md", "team instructions")), []model.PluginRelation{rel("r1", "team", "expert-a", "expert_team_expert", "expert-v1", `{"member_key":"a","is_leader":true,"role":"leader"}`), rel("r2", "team", "expert-b", "expert_team_expert", "expert-v1", `{"member_key":"b","role":"reviewer"}`)})
 	for _, suffix := range []string{"a", "b"} {
-		add("expert-"+suffix, model.PluginTypeExpert, "Expert "+suffix, "expert-v1", packageWith(rawAtt("AGENTS.md", "old expert "+suffix), rawAtt("mcp.json", `{"mcpServers":{"forbidden-inline":{"command":"ignored"}}}`)), []model.PluginRelation{rel("s"+suffix, "expert-"+suffix, "skill-"+suffix, "expert_skill", "skill-v1", `{}`), rel("c"+suffix, "expert-"+suffix, "connector", "expert_connector", "", `{}`)})
+		add("expert-"+suffix, model.PluginTypeExpert, "Expert "+suffix, "expert-v1", packageWith(rawAtt("AGENTS.md", "old expert "+suffix)), []model.PluginRelation{rel("s"+suffix, "expert-"+suffix, "skill-"+suffix, "expert_skill", "skill-v1", `{}`), rel("c"+suffix, "expert-"+suffix, "connector", "expert_connector", "", `{}`)})
 		add("skill-"+suffix, model.PluginTypeSkill, "Search", "skill-v1", packageWith(rawAtt("SKILL.md", "---\nname: Search\ndescription: fixture\n---\nBody "+suffix), rawAtt("references/guide.md", "guide "+suffix)), nil)
 	}
 	add("connector", model.PluginTypeConnector, "Connector", "", packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"search-v1"}}}`)), nil)
@@ -130,7 +131,7 @@ func TestPinnedInstallationUsesFrozenFilesAndDistinctSameNames(t *testing.T) {
 		t.Fatal("same-name skills collapsed")
 	}
 	for _, e := range def.Experts {
-		if !strings.HasPrefix(e.Instructions, "old expert") || strings.Contains(string(e.MCPConfig), "forbidden-inline") || len(e.SkillNames) != 1 {
+		if !strings.HasPrefix(e.Instructions, "old expert") || !strings.Contains(string(e.MCPConfig), "search-v1") || len(e.SkillNames) != 1 {
 			t.Fatalf("mutable or embedded content leaked %+v", e)
 		}
 	}
@@ -139,6 +140,89 @@ func TestPinnedInstallationUsesFrozenFilesAndDistinctSameNames(t *testing.T) {
 	}
 	if !strings.Contains(string(f.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}].Package), "name: Search") {
 		t.Fatal("source was mutated")
+	}
+}
+
+func TestPinnedInstallRejectsInlineSnapshotsBeforeEitherInstaller(t *testing.T) {
+	for _, target := range []string{"expert", "member", "team"} {
+		for _, connector := range []bool{false, true} {
+			for _, path := range []string{"mcp.json", "expert/context.json", "skills/legacy/SKILL.md", "members/legacy/AGENTS.md"} {
+				t.Run(target+"/"+path+"/connector="+strconv.FormatBool(connector), func(t *testing.T) {
+					s, f, remote := fixturePinned()
+					legacy := &fakeProvisioner{}
+					id, pluginID, versionID := "team", "expert-a", "expert-v1"
+					if target == "expert" {
+						id = "expert-a"
+						f.state.PublishedVersionID = pin(versionID)
+					} else if target == "team" {
+						pluginID, versionID = "team", "root-v1"
+					}
+					v := f.versions[pluginrepo.InstallVersionKey{PluginID: pluginID, VersionID: versionID}]
+					v.Package = packageWith(rawAtt("AGENTS.md", "legacy instructions"), rawAtt(path, `{"mcpServers":{"legacy":{"command":"tool"}}}`))
+					if !connector {
+						for _, member := range []string{"expert-a", "expert-b"} {
+							v := f.versions[pluginrepo.InstallVersionKey{PluginID: member, VersionID: "expert-v1"}]
+							rels, err := model.DecodeSnapshotRelations(v.Relations)
+							if err != nil {
+								t.Fatal(err)
+							}
+							v.Relations, _ = model.EncodeSnapshotRelations(relationsOfType(rels, "expert_skill"))
+						}
+					}
+					s.WithProvisioner(legacy)
+					_, err := s.CreateInstallation(context.Background(), testCaller, id, installationParams())
+					var validation *InstallationValidationError
+					if !errors.As(err, &validation) || validation.Reason != "unsupported_inline_capabilities" || remote.calls != 0 {
+						t.Fatalf("capability err=%v calls=%d", err, remote.calls)
+					}
+					p := installationParams()
+					if _, err = s.Install(context.Background(), testCaller, id, InstallParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID}); !errors.As(err, &validation) {
+						t.Fatalf("legacy accepted inline snapshot: %v", err)
+					}
+					if legacy.agentSpec != nil || legacy.squad != nil {
+						t.Fatal("inline rejection reached legacy provisioner")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPinnedMissingRootIsNotFoundForBothEntrypoints(t *testing.T) {
+	for _, mode := range []string{"missing", "cross-space", "other-owner", "embedded", "deleted", "draft"} {
+		t.Run(mode, func(t *testing.T) {
+			s, f, remote := fixturePinned()
+			root := f.plugins["team"]
+			switch mode {
+			case "missing":
+				delete(f.plugins, "team")
+			case "cross-space":
+				root.SpaceID = pin("other-space")
+			case "other-owner":
+				root.OwnerUID = "other"
+			case "embedded":
+				root.IsEmbedded = true
+			case "deleted":
+				now := time.Now()
+				root.DeletedAt = &now
+			case "draft":
+				root.ListingState = model.PluginListingStateDraft
+			}
+			if _, err := s.CreateInstallation(context.Background(), testCaller, "team", installationParams()); !errors.Is(err, ErrNotFound) || remote.calls != 0 {
+				t.Fatalf("err=%v calls=%d", err, remote.calls)
+			}
+			s.WithProvisioner(&fakeProvisioner{})
+			p := installationParams()
+			if _, err := s.Install(context.Background(), testCaller, "team", InstallParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID}); !errors.Is(err, ErrNotFound) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPinnedLegacySkillLookupRejectsMissingNames(t *testing.T) {
+	if _, err := pinnedLegacySkillRefs(map[string]model.SkillRef{}, []string{"missing"}); !errors.Is(err, ErrIntegrity) {
+		t.Fatal(err)
 	}
 }
 func TestPinnedInstallRejectsBeforeFleet(t *testing.T) {

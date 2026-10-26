@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -61,14 +62,17 @@ func TestMarketplacePinnedInstallRehearsal(t *testing.T) {
 		Files       []File
 	}
 	stored := []Skill{}
+	measuredExperts, measuredBindings := 0, 0
+	seenStored := map[string]bool{}
 	for _, skill := range out.Skills {
 		var record Skill
 		if err = testPool.QueryRow(context.Background(), `SELECT name,COALESCE(description,''),content FROM skill WHERE id=$1`, skill.SkillID).Scan(&record.Name, &record.Description, &record.Content); err != nil {
 			t.Fatal(err)
 		}
-		if !names[record.Name] || !strings.Contains(record.Content, "name: "+record.Name) {
+		if !names[record.Name] || seenStored[record.Name] || !strings.Contains(record.Content, "name: "+record.Name) {
 			t.Fatal("stored name/frontmatter mismatch")
 		}
+		seenStored[record.Name] = true
 		rows, err := testPool.Query(context.Background(), `SELECT path,content FROM skill_file WHERE skill_id=$1 ORDER BY path`, skill.SkillID)
 		if err != nil {
 			t.Fatal(err)
@@ -118,6 +122,7 @@ func TestMarketplacePinnedInstallRehearsal(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("wrong pinned bindings: %s got=%v want=%v", expert.Name, got, want)
 		}
+		measuredBindings += len(got)
 	}
 	var memberCount int
 	if err = testPool.QueryRow(context.Background(), `SELECT COUNT(*) FROM squad_member WHERE squad_id=$1`, out.ExpertTeamID).Scan(&memberCount); err != nil || memberCount != 2 {
@@ -143,5 +148,25 @@ func TestMarketplacePinnedInstallRehearsal(t *testing.T) {
 	if err = os.WriteFile(os.Getenv("MARKETPLACE_REHEARSAL_STORED"), encoded, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("real Fleet handler/Postgres: 3 distinct pinned skills, 2 experts, 4 bindings, 1 team, same-key receipt replay passed")
+	var measuredTeams int
+	if err = testPool.QueryRow(context.Background(), `SELECT COUNT(DISTINCT squad_id) FROM squad_member WHERE squad_id=$1`, out.ExpertTeamID).Scan(&measuredTeams); err != nil {
+		t.Fatal(err)
+	}
+	var expertIDs []any
+	var placeholders []string
+	for i, expert := range out.Experts {
+		expertIDs = append(expertIDs, expert.ExpertID)
+		placeholders = append(placeholders, "$"+strconv.Itoa(i+1))
+	}
+	if err = testPool.QueryRow(context.Background(), `SELECT COUNT(DISTINCT agent_id) FROM agent_skill WHERE agent_id IN (`+strings.Join(placeholders, ",")+`)`, expertIDs...).Scan(&measuredExperts); err != nil {
+		t.Fatal(err)
+	}
+	measurements, err := json.Marshal(map[string]int{"skills": len(stored), "experts": measuredExperts, "bindings": measuredBindings, "teams": measuredTeams})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(os.Getenv("MARKETPLACE_REHEARSAL_MEASUREMENTS"), measurements, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("real Fleet handler/Postgres: %d skills, %d experts, %d bindings, %d teams; same-key receipt replay passed", len(stored), measuredExperts, measuredBindings, measuredTeams)
 }

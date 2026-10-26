@@ -233,3 +233,20 @@ on a database with unpublished managed drafts; production rollback is part of th
 later migration/cutover plan. Old-format container ZIP import/reupload is rejected; the new format is
 delivered with R1.
 The old compatibility path remains available with the rollout disabled.
+
+### Independent references and pinned installation
+
+`PLUGIN_REFERENCES_ENABLED=false` gates reference-format writes and requires
+`PLUGIN_VERSION_MANAGEMENT_ENABLED=true`. `PLUGIN_PINNED_INSTALLATION_ENABLED=false`
+gates both installation entrypoints and requires both earlier gates. These flags
+do not perform data migration; a valid flag combination does not prove readiness.
+
+Before enabling pinned installation, complete the M1 inventory, M3 conversion of
+all affected roots and historical-index verification without unresolved exceptions.
+Run the SELECT-only [released-graph check](scripts/pinned-release-readiness.sql):
+`pinned_readiness_blockers` must be zero. It follows the actual published roots
+and pinned versions, excluding unreachable old history that remains immutable.
+Then complete isolated Fleet/Daemon and provider acceptance. See
+[the executable cutover checklist](docs/pinned-installation.md#activation-checklist).
+Do not enable the flags during partial migration. The parser additionally rejects
+old inline capability snapshots before any installer mutation.

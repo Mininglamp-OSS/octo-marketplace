@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 
@@ -51,6 +52,9 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	}
 	r := pinnedInstallResolver{s: s, caller: caller, store: store, plugins: map[string]*model.Plugin{}, versions: map[pluginrepo.InstallVersionKey]*model.PluginVersion{}, loaded: map[pluginrepo.InstallVersionKey]*Detail{}, skills: map[pluginrepo.InstallVersionKey]PinnedSkillFiles{}, assets: capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes)}}
 	if err := r.load(ctx, []string{id}, nil); err != nil {
+		if errors.Is(err, ErrDependencyHidden) {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	root := r.plugins[id]
@@ -329,6 +333,9 @@ func (r *pinnedInstallResolver) detail(ctx context.Context, key pluginrepo.Insta
 	if err := r.s.verifyVersionFiles(ctx, p, v); err != nil {
 		return nil, err
 	}
+	if rejectInlineCapabilities(p.Type, v.Package) != nil || rejectInlineCapabilities(p.Type, v.Manifest) != nil {
+		return nil, installationInvalid("definition", "unsupported_inline_capabilities")
+	}
 	rels, err := model.DecodeSnapshotRelations(v.Relations)
 	if err != nil {
 		return nil, ErrIntegrity
@@ -380,14 +387,6 @@ func uniqueStrings(in []string) []string {
 	return out
 }
 
-func (s *Service) pinnedCapabilityRequest(ctx context.Context, caller Caller, id string, p InstallationParams) (*fleet.CapabilityInstallRequest, error) {
-	plan, err := s.resolvePinnedInstallation(ctx, caller, id, "")
-	if err != nil {
-		return nil, err
-	}
-	return pinnedPlanRequest(plan, p), nil
-}
-
 // The legacy provisioner consumes the SAME prepared bytes and exact per-expert
 // skill selection; it does not run a second live graph expansion.
 func (s *Service) installPinnedLegacy(ctx context.Context, caller Caller, id string, p InstallParams) (*InstallOutcome, error) {
@@ -411,13 +410,6 @@ func (s *Service) installPinnedLegacy(ctx context.Context, caller Caller, id str
 		}
 		skills[skill.Name] = ref
 	}
-	refs := func(names []string) []model.SkillRef {
-		out := make([]model.SkillRef, 0, len(names))
-		for _, name := range names {
-			out = append(out, skills[name])
-		}
-		return out
-	}
 	if team := plan.Definition.ExpertTeam; team != nil {
 		sq := &model.Squad{ID: id, Name: team.Name, Summary: team.Description, Instructions: team.Instructions}
 		byName := map[string]fleet.CapabilityExpert{}
@@ -425,8 +417,15 @@ func (s *Service) installPinnedLegacy(ctx context.Context, caller Caller, id str
 			byName[e.Name] = e
 		}
 		for _, m := range team.Members {
-			e := byName[m.ExpertName]
-			sq.Members = append(sq.Members, model.SquadMember{MemberKey: m.ExpertName, Name: e.Name, Role: m.Role, IsLeader: m.IsLeader, Instruction: e.Instructions, MCPConfig: string(e.MCPConfig), Skills: refs(e.SkillNames)})
+			e, ok := byName[m.ExpertName]
+			if !ok {
+				return nil, ErrIntegrity
+			}
+			selected, err := pinnedLegacySkillRefs(skills, e.SkillNames)
+			if err != nil {
+				return nil, err
+			}
+			sq.Members = append(sq.Members, model.SquadMember{MemberKey: m.ExpertName, Name: e.Name, Role: m.Role, IsLeader: m.IsLeader, Instruction: e.Instructions, MCPConfig: string(e.MCPConfig), Skills: selected})
 		}
 		result, err := s.provisioner.ProvisionSquadFromSpec(ctx, in, sq)
 		if err != nil {
@@ -436,10 +435,26 @@ func (s *Service) installPinnedLegacy(ctx context.Context, caller Caller, id str
 		return &InstallOutcome{SquadID: result.SquadID}, nil
 	}
 	e := plan.Definition.Experts[0]
-	agent, err := s.provisioner.ProvisionAgentFromSpec(ctx, in, expertsvc.ProvisionAgentSpec{Name: e.Name, Summary: e.Description, Instruction: e.Instructions, MCPConfig: string(e.MCPConfig), Skills: refs(e.SkillNames)})
+	selected, err := pinnedLegacySkillRefs(skills, e.SkillNames)
+	if err != nil {
+		return nil, err
+	}
+	agent, err := s.provisioner.ProvisionAgentFromSpec(ctx, in, expertsvc.ProvisionAgentSpec{Name: e.Name, Summary: e.Description, Instruction: e.Instructions, MCPConfig: string(e.MCPConfig), Skills: selected})
 	if err != nil {
 		return nil, err
 	}
 	s.trackInstall(ctx, id)
 	return &InstallOutcome{AgentID: agent}, nil
+}
+
+func pinnedLegacySkillRefs(skills map[string]model.SkillRef, names []string) ([]model.SkillRef, error) {
+	out := make([]model.SkillRef, 0, len(names))
+	for _, name := range names {
+		skill, ok := skills[name]
+		if !ok {
+			return nil, ErrIntegrity
+		}
+		out = append(out, skill)
+	}
+	return out, nil
 }

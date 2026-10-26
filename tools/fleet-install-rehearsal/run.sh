@@ -9,6 +9,8 @@ fleet_source=$(realpath "$1")
 daemon_source=$(realpath "$2")
 mkdir -p "$3"
 output_dir=$(realpath "$3")
+# A failed rerun must not leave an earlier PASS report looking current.
+rm -f "$output_dir/result.json" "$output_dir/fleet-measurements.json"
 tool_dir=$(cd "$(dirname "$0")" && pwd)
 repo_root=$(cd "$tool_dir/../.." && pwd)
 : "${DATABASE_URL:?Explicit isolated DATABASE_URL is required}"
@@ -24,6 +26,7 @@ command -v go >/dev/null
 python3 "$tool_dir/source_identity.py" "$fleet_source" "$daemon_source" > "$output_dir/source-before.json"
 export MARKETPLACE_REHEARSAL_REQUEST="$output_dir/request.json"
 export MARKETPLACE_REHEARSAL_STORED="$output_dir/fleet-stored-skills.json"
+export MARKETPLACE_REHEARSAL_MEASUREMENTS="$output_dir/fleet-measurements.json"
 python3 - "$tool_dir" "$fleet_source" "$daemon_source" "$output_dir" <<'PY'
 import json,pathlib,sys
 scripts,fleet,daemon,out=map(pathlib.Path,sys.argv[1:])
@@ -38,11 +41,4 @@ PY
 (cd "$daemon_source" && go test -mod=readonly -overlay "$output_dir/daemon-overlay.json" ./internal/daemon/execenv -run '^TestMarketplacePinnedMaterializationRehearsal$' -count=1 -v) > "$output_dir/daemon-test.log" 2>&1
 python3 "$tool_dir/source_identity.py" "$fleet_source" "$daemon_source" > "$output_dir/source-after.json"
 cmp "$output_dir/source-before.json" "$output_dir/source-after.json"
-python3 - "$fleet_source" "$daemon_source" "$output_dir" <<'PY'
-import json,pathlib,sys
-fleet,daemon,out=map(pathlib.Path,sys.argv[1:]);skills=json.loads((out/'fleet-stored-skills.json').read_text())
-source=json.loads((out/'source-after.json').read_text())
-report={'source_identity':source,'skills':len(skills),'experts':2,'bindings':4,'teams':1,'real_fleet_handler_and_postgres':True,'real_daemon_materialization':True,'online_daemon_dispatch':False,'llm_execution':False}
-(out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
-print('PASS: Marketplace aliases -> real Fleet/Postgres -> real Daemon materialization; 3 skills, 2 experts, 4 bindings, 1 team.')
-PY
+python3 "$tool_dir/report.py" "$output_dir"
