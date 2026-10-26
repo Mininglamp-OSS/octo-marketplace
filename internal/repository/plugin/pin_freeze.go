@@ -164,7 +164,7 @@ func (r *Repo) freezePublishedSnapshotForRelease(ctx context.Context, tx *sql.Tx
 	frozen.ManifestHash = v.ManifestHash
 	frozen.PluginHash = v.PluginHash
 	frozen.CurrentVersion = v.DeclaredVersion
-	frozenID, err := snapshotVersion(ctx, tx, newID, r.now(), frozen, rels, nil, operator, r.references)
+	frozenID, err := snapshotVersion(ctx, tx, newID, r.now(), frozen, rels, v.Changelog, operator, r.references)
 	if err != nil {
 		return err
 	}
