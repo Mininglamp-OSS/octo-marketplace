@@ -4598,6 +4598,12 @@ paths:
         required: true
         schema:
           type: string
+      - description: Stable key for this Admin container reupload
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
       requestBody:
         content:
           application/x-www-form-urlencoded:
@@ -4681,6 +4687,13 @@ paths:
         are rejected. With the rollout disabled, legacy container behavior remains
         unchanged.
       operationId: admin_plugin.import
+      parameters:
+      - description: Stable key for this Admin container import
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
       requestBody:
         content:
           application/x-www-form-urlencoded:
