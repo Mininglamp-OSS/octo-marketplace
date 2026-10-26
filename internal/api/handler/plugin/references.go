@@ -103,7 +103,7 @@ func (h *AdminHandler) ReferenceDependents(c *gin.Context) { readDependents(c, h
 
 // ReferenceCandidates godoc
 // @Summary List authorized plugin reference candidates
-// @Description Returns independently published resources compatible with the source audience. Already bound targets and missing release baselines are explicitly unselectable; placements never determine eligibility. Owners and admins see editable bindings; other readers see bindings from the published snapshot.
+// @Description Returns independently published resources compatible with the source audience. Already bound targets and missing release baselines are explicitly unselectable; placements never determine eligibility. Owners in the source Space see editable bindings; other readers, including non-owner platform admins using this public route, see bindings from the published snapshot.
 // @Tags plugin
 // @ID plugin.references.list
 // @Produce json
