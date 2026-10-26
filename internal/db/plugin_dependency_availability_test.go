@@ -398,6 +398,38 @@ func TestDependencyDiagnosticsRedactsLaterPrivateTargetName(t *testing.T) {
 	}
 }
 
+// Legacy live relations have no target foreign key; a dangling target must be
+// reported as deleted, not turn owner detail/admin list into a 500.
+func TestDependencyDiagnosticsHandlesMissingLiveTarget(t *testing.T) {
+	db := reviewDB(t)
+	seed(t, db, seedPlugin{id: "legacy-expert", typ: "expert", visibility: "space", listingState: "published"})
+	if _, err := db.Exec(`INSERT INTO plugin_relations(relation_id,source_plugin_id,target_plugin_id,relation_type,status,created_by,created_at,updated_at) VALUES ('dangling','legacy-expert','missing-connector','expert_connector',1,'user-1',NOW(3),NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(true)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+	ctx := context.Background()
+	detail, err := svc.Detail(ctx, managedOwner(), "legacy-expert", true)
+	if err != nil {
+		t.Fatalf("owner detail: %v", err)
+	}
+	if len(detail.DependencyIssues) != 1 || detail.DependencyIssues[0].Reason != "deleted" || detail.DependencyIssues[0].TargetName != "" {
+		t.Fatalf("owner diagnostics=%+v", detail.DependencyIssues)
+	}
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	auth := middleware.NewAuthenticator(false, nil, model.Identity{UID: "user-1", Name: "Owner"}, "space-a")
+	pluginhandler.New(svc).Register(engine.Group("/api/v1", auth.Handler()))
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/detail?plugin_id=legacy-expert", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, _, err := svc.AdminList(ctx, pluginsvc.Caller{UID: "admin", IsSystemAdmin: true}, model.PluginTypeExpert, "", pluginsvc.ListParams{Limit: 20}); err != nil {
+		t.Fatalf("admin list: %v", err)
+	}
+}
+
 func TestDependencyDelistingHidesCatalogButNotOwnerOrAdmin(t *testing.T) {
 	db := reviewDB(t)
 	dependencyFixture(t, db)

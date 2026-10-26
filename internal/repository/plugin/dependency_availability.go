@@ -379,14 +379,20 @@ func (r *Repo) batchDependencyTargetNames(ctx context.Context, scope Scope, edge
 	names := map[nameKey]string{}
 	for rows.Next() {
 		var pair nameKey
-		var visibility, pluginType, pluginName, snapshotName string
+		var visibility, pluginType, pluginName, snapshotName sql.NullString
 		var spaceID, ownerUID sql.NullString
 		if err := rows.Scan(&pair.id, &pair.version, &visibility, &spaceID, &ownerUID, &pluginType, &pluginName, &snapshotName); err != nil {
 			return err
 		}
+		// A legacy live relation may point at a target row that no longer exists.
+		// The missing target is already classified as "deleted"; it simply has no
+		// name metadata to expose.
+		if !visibility.Valid {
+			continue
+		}
 		authorized := scope.Admin
 		if !authorized {
-			switch model.PluginVisibility(visibility) {
+			switch model.PluginVisibility(visibility.String) {
 			case model.PluginVisibilityPublic, model.PluginVisibilitySystem:
 				authorized = true
 			case model.PluginVisibilitySpace:
@@ -398,10 +404,10 @@ func (r *Repo) batchDependencyTargetNames(ctx context.Context, scope Scope, edge
 		if !authorized {
 			continue
 		}
-		if pluginType == string(model.PluginTypeConnector) {
-			names[pair] = pluginName
+		if pluginType.String == string(model.PluginTypeConnector) {
+			names[pair] = pluginName.String
 		} else {
-			names[pair] = snapshotName
+			names[pair] = snapshotName.String
 		}
 	}
 	if err := rows.Err(); err != nil {
