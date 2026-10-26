@@ -288,6 +288,54 @@ func TestDependencyLegacyTeamHonorsLiveMemberPin(t *testing.T) {
 	}
 }
 
+// The web UI's 发布 action on a delisted row calls POST /plugins/publish with the
+// row's current version. For a version-managed Space resource that is the same
+// label as the existing release, so the current API refuses it. This pins the
+// behaviour the UI currently sees; a same-release relist path would change it.
+func TestFrontendRelistPublishSameVersionIsRejected(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(true)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: "skill", Version: "1.0.0"})
+	if !errors.Is(err, pluginsvc.ErrLabelTaken) {
+		t.Fatalf("same-version relist err=%v, want ErrLabelTaken", err)
+	}
+}
+
+// The documented recovery path is edit -> save a new version -> 发布. That must
+// restore the dependent expert even though the expert still pins skill-v1.
+func TestFrontendRelistPublishNewVersionRestoresDependency(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(true)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+	ctx := context.Background()
+	owner := managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), true, "reviewer", "Reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, err := repo.HasUnavailableDependencies(ctx, pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}, "expert"); err != nil || !blocked {
+		t.Fatalf("precondition expert blocked=%v err=%v", blocked, err)
+	}
+	if _, err := svc.Update(ctx, owner, "skill", managedSkillWrite("2.0.0", "relisted skill v2", model.PluginVisibilitySpace)); err != nil {
+		t.Fatalf("update skill: %v", err)
+	}
+	publishManaged(t, svc, owner, "skill")
+	blocked, err := repo.HasUnavailableDependencies(ctx, pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}, "expert")
+	if err != nil || blocked {
+		t.Fatalf("expert after relist blocked=%v err=%v", blocked, err)
+	}
+}
+
 func TestDependencyDelistingHidesCatalogButNotOwnerOrAdmin(t *testing.T) {
 	db := reviewDB(t)
 	dependencyFixture(t, db)
