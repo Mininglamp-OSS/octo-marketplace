@@ -4,7 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	jcs "github.com/Mininglamp-OSS/octo-marketplace/internal/jcs"
 )
 
 // WithInstallationHMACKeys copies the deployment key ring. Rotation changes the
@@ -24,7 +24,7 @@ func (s *Service) installationHMAC(keyID, domain string, value any) (string, err
 	if keyID == "" || len(key) < 32 {
 		return "", ErrVersionBaselineUnavailable
 	}
-	raw, err := json.Marshal(value)
+	raw, err := jcs.Canonicalize(value)
 	if err != nil {
 		return "", ErrInvalidRequest
 	}
@@ -33,4 +33,11 @@ func (s *Service) installationHMAC(keyID, domain string, value any) (string, err
 	mac.Write(raw)
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
-func equalInstallationHMAC(a, b string) bool { return hmac.Equal([]byte(a), []byte(b)) }
+func equalInstallationHMAC(a, b string) bool {
+	aa, aerr := hex.DecodeString(a)
+	bb, berr := hex.DecodeString(b)
+	if aerr != nil || berr != nil || len(aa) != sha256.Size || len(bb) != sha256.Size {
+		return false
+	}
+	return hmac.Equal(aa, bb)
+}
