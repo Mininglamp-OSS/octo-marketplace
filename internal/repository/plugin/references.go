@@ -74,7 +74,7 @@ func ValidateReferenceMetadata(source model.PluginType, rels []model.PluginRelat
 			if edge.TargetVersionID != nil {
 				return ErrInvalidRelation
 			}
-		} else if edge.TargetVersionID == nil || strings.TrimSpace(*edge.TargetVersionID) == "" {
+		} else if edge.TargetVersionID != nil && strings.TrimSpace(*edge.TargetVersionID) == "" {
 			return ErrInvalidRelation
 		}
 		var data map[string]json.RawMessage
@@ -126,32 +126,13 @@ func (r *Repo) lockReferences(ctx context.Context, tx *sql.Tx, scope Scope, sour
 	if source.IsEmbedded {
 		return ErrInvalidRelation
 	}
-	existing := map[string]bool{}
-	rows, err := tx.QueryContext(ctx, `SELECT relation_type,target_plugin_id,target_version_id FROM plugin_relations WHERE source_plugin_id=? AND status=1 AND deleted_at IS NULL`, source.ID)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var typ, target string
-		var pin sql.NullString
-		if err := rows.Scan(&typ, &target, &pin); err != nil {
-			rows.Close()
-			return err
-		}
-		existing[typ+"\x00"+target+"\x00"+pin.String] = true
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	return validateReferenceTree(ctx, tx, source, source, rels, true, map[string]bool{}, 0, existing)
+	return validateReferenceTree(ctx, tx, source, source, rels, map[string]bool{}, 0)
 }
 
-// validateReferenceTree checks frozen versions, never editable descendant edges.
+// validateReferenceTree checks current formal releases, never editable descendant edges.
 // The root audience is checked at every depth, so team composition cannot hide a
 // private dependency inside a broader member. Errors never disclose a target.
-func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.Plugin, rels []model.PluginRelation, listed bool, seen map[string]bool, depth int, existing ...map[string]bool) error {
+func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.Plugin, rels []model.PluginRelation, seen map[string]bool, depth int) error {
 	if depth > 2 || len(rels) > maxGraphEdges {
 		return ErrInvalidRelation
 	}
@@ -160,10 +141,11 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 	resolved := make([]model.PluginRelation, len(rels))
 	copy(resolved, rels)
 	targets := make([]model.Plugin, len(rels))
+	selected := make([]sql.NullString, len(rels))
 	for i, edge := range rels {
 		var target model.Plugin
 		var sid sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT plugin_id,plugin_type,is_embedded,owner_uid,space_id,visibility,listing_state FROM plugins WHERE plugin_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`, edge.TargetPluginID).Scan(&target.ID, &target.Type, &target.IsEmbedded, &target.OwnerUID, &sid, &target.Visibility, &target.ListingState)
+		err := tx.QueryRowContext(ctx, `SELECT plugin_id,plugin_type,is_embedded,owner_uid,space_id,visibility,listing_state,published_version_id FROM plugins WHERE plugin_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`, edge.TargetPluginID).Scan(&target.ID, &target.Type, &target.IsEmbedded, &target.OwnerUID, &sid, &target.Visibility, &target.ListingState, &selected[i])
 		if err == sql.ErrNoRows {
 			return ErrNotFound
 		}
@@ -174,14 +156,31 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 		if target.IsEmbedded || !referenceAudience(source, target) || !referenceAudience(root, target) {
 			return ErrNotFound
 		}
-		if listed && target.ListingState != model.PluginListingStatePublished {
-			pin := ""
-			if edge.TargetVersionID != nil {
-				pin = *edge.TargetVersionID
+		if target.ListingState != model.PluginListingStatePublished {
+			return referenceFieldError(i, depth, "target_plugin_id", "target_not_published")
+		}
+		if target.Type == model.PluginTypeConnector {
+			var revision uint64
+			if err := tx.QueryRowContext(ctx, `SELECT effective_revision FROM plugin_connector_effective WHERE plugin_id=? FOR UPDATE`, target.ID).Scan(&revision); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return referenceFieldError(i, depth, "target_plugin_id", "effective_required")
+				}
+				return err
 			}
-			key := edge.Type + "\x00" + edge.TargetPluginID + "\x00" + pin
-			if len(existing) == 0 || !existing[0][key] {
-				return referenceFieldError(i, depth, "target_plugin_id", "target_not_published")
+		} else {
+			if !selected[i].Valid {
+				return referenceFieldError(i, depth, "target_plugin_id", "released_version_required")
+			}
+			// Optional audit evidence must belong to the target and have been
+			// formally released. It does not determine which children are read.
+			if edge.TargetVersionID != nil {
+				var found string
+				if err := tx.QueryRowContext(ctx, `SELECT version_id FROM plugin_version_releases WHERE plugin_id=? AND version_id=? FOR UPDATE`, target.ID, *edge.TargetVersionID).Scan(&found); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return referenceFieldError(i, depth, "target_version_id", "released_version_required")
+					}
+					return err
+				}
 			}
 		}
 		resolved[i].TargetPluginType = target.Type
@@ -191,10 +190,10 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 		return err
 	}
 	for i, edge := range resolved {
-		if edge.TargetVersionID == nil {
+		if targets[i].Type == model.PluginTypeConnector {
 			continue
 		}
-		key := edge.TargetPluginID + "\x00" + *edge.TargetVersionID
+		key := edge.TargetPluginID + "\x00" + selected[i].String
 		if seen[key] {
 			continue
 		}
@@ -203,7 +202,7 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 			return ErrGraphTooLarge
 		}
 		var raw []byte
-		err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=? FOR UPDATE`, edge.TargetPluginID, *edge.TargetVersionID).Scan(&raw)
+		err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=? FOR UPDATE`, edge.TargetPluginID, selected[i].String).Scan(&raw)
 		if err == sql.ErrNoRows {
 			return referenceFieldError(i, depth, "target_version_id", "released_version_required")
 		}
@@ -214,7 +213,7 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 		if err != nil {
 			return ErrInvalidRelation
 		}
-		if err = validateReferenceTree(ctx, tx, root, targets[i], children, false, seen, depth+1); err != nil {
+		if err = validateReferenceTree(ctx, tx, root, targets[i], children, seen, depth+1); err != nil {
 			return err
 		}
 	}
@@ -248,7 +247,7 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 	if err != nil {
 		return ErrInvalidRelation
 	}
-	return validateReferenceTree(ctx, tx, p, p, rels, true, map[string]bool{}, 0)
+	return validateReferenceTree(ctx, tx, p, p, rels, map[string]bool{}, 0)
 }
 
 func (r *Repo) rejectPublishedMutation(ctx context.Context, tx *sql.Tx, p *model.Plugin) error {
@@ -290,4 +289,39 @@ func (r *Repo) ensureReferenceIndexComplete(ctx context.Context, scope Scope) er
 		return ErrReferenceIndexIncomplete
 	}
 	return nil
+}
+
+// rejectPublishedIncomingRelations protects only each surviving source's current
+// published graph. Historical releases remain audit data, not permanent delete
+// locks. Expert current graphs also cover Team→Expert→Skill expansion: an
+// indirect Skill edge is present in that Expert's current published snapshot.
+// The target row is already locked, serializing concurrent reference writers.
+func (r *Repo) rejectPublishedIncomingRelations(ctx context.Context, tx *sql.Tx, target string) error {
+	if !r.references {
+		return nil
+	}
+	var incomplete bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM plugins p JOIN plugin_versions v ON v.plugin_id=p.plugin_id AND v.version_id=p.published_version_id
+ LEFT JOIN plugin_version_reference_index_state idx ON idx.source_plugin_id=v.plugin_id AND idx.source_version_id=v.version_id
+ WHERE p.status=1 AND p.deleted_at IS NULL AND
+ (idx.source_version_id IS NULL OR idx.snapshot_digest<>SHA2(CAST(v.relations_json AS CHAR CHARACTER SET utf8mb4),256)
+ OR idx.relation_count<>(SELECT COUNT(*) FROM plugin_version_relation_refs edge WHERE edge.source_plugin_id=p.plugin_id AND edge.source_version_id=v.version_id)))`).Scan(&incomplete); err != nil {
+		return err
+	}
+	if incomplete {
+		return ErrReferenceIndexIncomplete
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT edge.relation_id FROM plugin_version_relation_refs edge
+ JOIN plugins source ON source.plugin_id=edge.source_plugin_id AND source.published_version_id=edge.source_version_id
+ WHERE edge.target_plugin_id=? AND source.status=1 AND source.deleted_at IS NULL
+ ORDER BY edge.source_plugin_id,edge.relation_id FOR UPDATE`, target)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return ErrRelationInUse
+	}
+	return rows.Err()
 }

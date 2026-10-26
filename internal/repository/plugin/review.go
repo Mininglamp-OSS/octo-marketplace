@@ -198,7 +198,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	// First-listing drafts are still allowed to snapshot the live row (that IS what
 	// the reviewer should see), which is why this is gated on the locked
 	// listing_state rather than applied unconditionally.
-	if !snap.DeclaredContent && current.ListingState == model.PluginListingStatePublished && !(r.versionManagement && versioned(current)) {
+	if !snap.DeclaredContent && current.ListingState == model.PluginListingStatePublished && !r.versionManagement {
 		return ErrReviewContentRequired
 	}
 	// Re-run the forward-only ordering rule against the LOCKED current_version.
@@ -267,7 +267,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 			}
 			relations[i].SourcePluginID = current.ID
 		}
-		if err := validateReferenceTree(ctx, tx, *current, *current, relations, true, map[string]bool{}, 0); err != nil {
+		if err := validateReferenceTree(ctx, tx, *current, *current, relations, map[string]bool{}, 0); err != nil {
 			return err
 		}
 	}
@@ -543,6 +543,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	if err != nil {
 		return nil, err
 	}
+	if r.versionManagement && current.Type == model.PluginTypeConnector {
+		return r.approveConnectorReview(ctx, tx, scope, p, current, version, manifest, pkg, attKeys, manifestHash, pluginHash)
+	}
 	if r.versionManagement && versioned(current) {
 		return r.approveManagedReview(ctx, tx, scope, p, current, version, changelog, manifest, pkg, attKeys, relationBytes, manifestHash, pluginHash)
 	}
@@ -661,7 +664,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	isFirst := !(current.Visibility == model.PluginVisibilitySpace && current.ListingState == model.PluginListingStatePublished)
 	if isFirst {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,visibility=?,listing_state=?,updated_at=?
+			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,visibility=?,listing_state=?,edit_revision=edit_revision+1,updated_at=?
 			  WHERE plugin_id=? AND space_id=? AND deleted_at IS NULL
 			    AND NOT (visibility=? AND listing_state=?)`,
 			frozenName, frozenTags, string(manifest), string(pkg), jsonColumn(attKeys), manifestHash, pluginHash,
@@ -686,7 +689,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		}
 	} else {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,updated_at=?
+			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,edit_revision=edit_revision+1,updated_at=?
 			  WHERE plugin_id=? AND space_id=? AND deleted_at IS NULL`,
 			frozenName, frozenTags, string(manifest), string(pkg), jsonColumn(attKeys), manifestHash, pluginHash, now, pluginID, scope.SpaceID); err != nil {
 			return nil, wrapped("apply approved snapshot", err)

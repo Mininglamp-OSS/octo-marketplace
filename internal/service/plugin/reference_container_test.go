@@ -65,7 +65,7 @@ func TestReferenceWriteRejectsManifestInlineAbilities(t *testing.T) {
 	manifest := map[string]any{"$schema": manifestSchema, "plugin_name": "Expert", "plugin_type": "expert", "name": "Expert", "description": "fixture", "labels": []string{}, "examples": []any{}}
 	raw, _ := json.Marshal(manifest)
 	pkg := json.RawMessage(`{"$schema":"cowork-plugin-package-2.0.json","attachments":[{"path":"AGENTS.md","content_type":"raw","mime_type":"text/markdown","raw_content":"Expert instructions"}]}`)
-	req := WriteRequest{Name: "Expert", Type: "expert", Visibility: "private", Tags: json.RawMessage(`[]`), Manifest: raw, Package: pkg}
+	req := WriteRequest{Relations: []RelationRequest{}, Name: "Expert", Type: "expert", Visibility: "private", Tags: json.RawMessage(`[]`), Manifest: raw, Package: pkg}
 	if _, _, err := svc.buildWrite(context.Background(), Caller{UID: "owner", SpaceID: "space"}, "", req, time.Now(), false); err != nil {
 		t.Fatalf("valid control rejected: %v", err)
 	}

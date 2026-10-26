@@ -109,14 +109,14 @@ func fixturePinned() (*Service, *pinnedFixtureStore, *fakeCapabilityInstaller) {
 	add("team", model.PluginTypeExpertTeam, "Team", "root-v1", packageWith(rawAtt("AGENTS.md", "team instructions")), []model.PluginRelation{rel("r1", "team", "expert-a", "expert_team_expert", "expert-v1", `{"member_key":"a","is_leader":true,"role":"leader"}`), rel("r2", "team", "expert-b", "expert_team_expert", "expert-v1", `{"member_key":"b","role":"reviewer"}`)})
 	for _, suffix := range []string{"a", "b"} {
 		add("expert-"+suffix, model.PluginTypeExpert, "Expert "+suffix, "expert-v1", packageWith(rawAtt("AGENTS.md", "old expert "+suffix)), []model.PluginRelation{rel("s"+suffix, "expert-"+suffix, "skill-"+suffix, "expert_skill", "skill-v1", `{}`), rel("c"+suffix, "expert-"+suffix, "connector", "expert_connector", "", `{}`)})
-		add("skill-"+suffix, model.PluginTypeSkill, "Search", "skill-v1", packageWith(rawAtt("SKILL.md", "---\nname: Search\ndescription: fixture\n---\nBody "+suffix), rawAtt("references/guide.md", "guide "+suffix)), nil)
+		add("skill-"+suffix, model.PluginTypeSkill, "Search "+suffix, "skill-v1", packageWith(rawAtt("SKILL.md", "---\nname: Search\ndescription: fixture\n---\nBody "+suffix), rawAtt("references/guide.md", "guide "+suffix)), nil)
 	}
 	add("connector", model.PluginTypeConnector, "Connector", "", packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"search-v1"}}}`)), nil)
 	installer := &fakeCapabilityInstaller{}
 	return New(f).WithVersionManagement(true).WithPinnedInstallation(true).WithCapabilityInstaller(installer), f, installer
 }
 
-func TestPinnedInstallationUsesFrozenFilesAndDistinctSameNames(t *testing.T) {
+func TestPinnedInstallationPreservesMarketNamesAndFrozenFiles(t *testing.T) {
 	s, f, remote := fixturePinned()
 	p := installationParams()
 	p.ResourceName = ""
@@ -127,8 +127,8 @@ func TestPinnedInstallationUsesFrozenFilesAndDistinctSameNames(t *testing.T) {
 	if remote.calls != 1 || len(def.Skills) != 2 || len(def.Experts) != 2 {
 		t.Fatalf("unexpected definition %+v", def)
 	}
-	if def.Skills[0].Name == def.Skills[1].Name || !strings.Contains(def.Skills[0].Name, "-mk1-") {
-		t.Fatal("same-name skills collapsed")
+	if def.Skills[0].Name != "Search a" || def.Skills[1].Name != "Search b" {
+		t.Fatal("market skill names changed")
 	}
 	for _, e := range def.Experts {
 		if !strings.HasPrefix(e.Instructions, "old expert") || !strings.Contains(string(e.MCPConfig), "search-v1") || len(e.SkillNames) != 1 {

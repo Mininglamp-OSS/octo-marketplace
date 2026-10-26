@@ -175,6 +175,9 @@ func defaultMarketPlacement(categoryID *string) model.PluginPlacement {
 
 // AdminCreate mints a new admin plugin (system connector or system skill).
 func (s *Service) AdminCreate(ctx context.Context, caller Caller, req WriteRequest) (*Detail, error) {
+	if s.versionManagement && req.ExpectedEditRevision != nil {
+		return nil, ErrInvalidRequest
+	}
 	visibility, ok := conventionVisibility(req.Type)
 	if !ok {
 		return nil, ErrInvalidRequest
@@ -198,6 +201,9 @@ func (s *Service) AdminCreate(ctx context.Context, caller Caller, req WriteReque
 	sync, err := s.repo.Create(ctx, adminScope(caller), m)
 	if err != nil {
 		return nil, mapStoreError(err)
+	}
+	if sync != nil && sync.EditRevision > 0 {
+		p.EditRevision = sync.EditRevision
 	}
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
@@ -334,6 +340,8 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	audit := s.audit(caller, storageID, "update", old, p, s.now())
 	m := mutation(*p, rels, audit)
 	m.SnapshotVersion = true
+	m.ExpectedEditRevision = req.ExpectedEditRevision
+	m.RequireEditRevision = s.versionManagement
 	// adminVersionGuard compared forward-only against the UNLOCKED `old` read; have
 	// the repo restate it under the row lock. The admin is exempt from the listing
 	// gates, not from version ordering — and this is the path that reaches an
@@ -347,6 +355,9 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	// The snapshot advanced current_version_id; stamp the new row id onto the
 	// response so it agrees with the DB (a follow-up GET must not contradict it),
 	// mirroring the tenant update path.
+	if sync != nil && sync.EditRevision > 0 {
+		p.EditRevision = sync.EditRevision
+	}
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
 	}

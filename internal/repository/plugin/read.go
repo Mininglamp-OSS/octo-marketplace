@@ -91,7 +91,7 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 		// lookup per row and defeating keyword/sort indexes.
 		from += publishedVersionJoin
 		project = publishedListProjection
-		where = project(where)
+		where = project(where) + " AND (p.plugin_type<>'connector' OR effective_ce.plugin_id IS NOT NULL)"
 	}
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.plugin_id) `+from+where, args...).Scan(&total); err != nil {
@@ -665,7 +665,7 @@ func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMet
 	if includePackage {
 		dest = append(dest, &pkg, &attachKeys)
 	}
-	dest = append(dest, &p.ManifestHash, &p.PluginHash, &version, &versionName, &p.Status, &p.CreatedAt, &p.UpdatedAt, &deleted)
+	dest = append(dest, &p.ManifestHash, &p.PluginHash, &version, &versionName, &p.Status, &p.CreatedAt, &p.UpdatedAt, &deleted, &p.EditRevision)
 	if includeMetrics {
 		dest = append(dest, &p.ViewCount, &p.InstallCount, &p.DownloadCount)
 	}

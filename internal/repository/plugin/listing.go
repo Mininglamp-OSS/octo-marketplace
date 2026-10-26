@@ -152,6 +152,11 @@ func (r *Repo) PublishPlugin(ctx context.Context, scope Scope, p PublishParams) 
 	if err != nil {
 		return nil, err
 	}
+	if r.versionManagement && current.Type == model.PluginTypeConnector {
+		if err := writeConnectorEffective(ctx, tx, *refreshed, p.OperatorID, now); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}

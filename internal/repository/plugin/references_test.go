@@ -28,18 +28,22 @@ func TestReferenceAudience(t *testing.T) {
 		})
 	}
 }
-func TestReferenceMetadataRejectsOverridesAndUnpinnedEdges(t *testing.T) {
+func TestReferenceMetadataAllowsOptionalAuditAndRejectsOverrides(t *testing.T) {
 	version := "released"
 	valid := model.PluginRelation{Status: 1, TargetPluginID: "skill", TargetPluginType: model.PluginTypeSkill, TargetVersionID: &version, Type: "expert_skill"}
 	if err := ValidateReferenceMetadata(model.PluginTypeExpert, []model.PluginRelation{valid}); err != nil {
 		t.Fatal(err)
 	}
-	for _, change := range []func(*model.PluginRelation){func(r *model.PluginRelation) { r.TargetVersionID = nil }, func(r *model.PluginRelation) { r.Data = json.RawMessage(`{"instruction":"override"}`) }, func(r *model.PluginRelation) { r.TargetPluginType = model.PluginTypeConnector }} {
+	for _, change := range []func(*model.PluginRelation){func(r *model.PluginRelation) { r.Data = json.RawMessage(`{"instruction":"override"}`) }, func(r *model.PluginRelation) { r.TargetPluginType = model.PluginTypeConnector }} {
 		r := valid
 		change(&r)
 		if ValidateReferenceMetadata(model.PluginTypeExpert, []model.PluginRelation{r}) == nil {
 			t.Fatalf("accepted %+v", r)
 		}
+	}
+	valid.TargetVersionID = nil
+	if err := ValidateReferenceMetadata(model.PluginTypeExpert, []model.PluginRelation{valid}); err != nil {
+		t.Fatal("ID-only floating reference rejected", err)
 	}
 	team := model.PluginRelation{Status: 1, TargetPluginID: "expert", TargetPluginType: model.PluginTypeExpert, TargetVersionID: &version, Type: "expert_team_expert", Data: json.RawMessage(`{"member_key":"lead","role":"lead","is_leader":true}`)}
 	if err := ValidateReferenceMetadata(model.PluginTypeExpertTeam, []model.PluginRelation{team}); err != nil {

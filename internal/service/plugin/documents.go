@@ -392,14 +392,4 @@ func inlineStorageURI(pkg json.RawMessage, path string) (string, bool) {
 // raw attachment. Tools metadata is optional display data, so a missing or
 // malformed attachment counts as zero instead of failing the write. Exported
 // so the backfill enrichment recomputes counts through the same rule.
-func ConnectorToolCount(pkg json.RawMessage) int {
-	raw, ok := rawAttachmentContent(pkg, "connector/tools.json")
-	if !ok {
-		return 0
-	}
-	var tools []json.RawMessage
-	if json.Unmarshal([]byte(raw), &tools) != nil {
-		return 0
-	}
-	return len(tools)
-}
+func ConnectorToolCount(pkg json.RawMessage) int { return model.ConnectorToolCount(pkg) }

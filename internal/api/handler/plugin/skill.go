@@ -14,17 +14,18 @@ import (
 )
 
 type importRequest struct {
-	ParseTaskID string   `json:"parse_task_id"`
-	PluginID    string   `json:"plugin_id,omitempty"`
-	PluginName  string   `json:"plugin_name,omitempty"`
-	Name        string   `json:"name,omitempty"`
-	Description string   `json:"description,omitempty"`
-	CategoryID  *string  `json:"category_id,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Visibility  string   `json:"visibility,omitempty"`
-	Icon        string   `json:"icon,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Changelog   *string  `json:"changelog,omitempty"`
+	ExpectedEditRevision *uint64  `json:"expected_edit_revision,omitempty"`
+	ParseTaskID          string   `json:"parse_task_id"`
+	PluginID             string   `json:"plugin_id,omitempty"`
+	PluginName           string   `json:"plugin_name,omitempty"`
+	Name                 string   `json:"name,omitempty"`
+	Description          string   `json:"description,omitempty"`
+	CategoryID           *string  `json:"category_id,omitempty"`
+	Tags                 []string `json:"tags,omitempty"`
+	Visibility           string   `json:"visibility,omitempty"`
+	Icon                 string   `json:"icon,omitempty"`
+	Version              string   `json:"version,omitempty"`
+	Changelog            *string  `json:"changelog,omitempty"`
 }
 
 type skillMarkdownResponse struct {
@@ -60,17 +61,18 @@ func (h *Handler) Import(c *gin.Context) {
 		return
 	}
 	v, err := h.svc.Import(c.Request.Context(), caller, pluginsvc.ImportParams{
-		ParseTaskID: req.ParseTaskID,
-		PluginID:    req.PluginID,
-		PluginName:  req.PluginName,
-		Name:        req.Name,
-		Description: req.Description,
-		CategoryID:  req.CategoryID,
-		Tags:        req.Tags,
-		Visibility:  model.PluginVisibility(req.Visibility),
-		Icon:        req.Icon,
-		Version:     req.Version,
-		Changelog:   req.Changelog,
+		ParseTaskID:          req.ParseTaskID,
+		PluginID:             req.PluginID,
+		ExpectedEditRevision: req.ExpectedEditRevision,
+		PluginName:           req.PluginName,
+		Name:                 req.Name,
+		Description:          req.Description,
+		CategoryID:           req.CategoryID,
+		Tags:                 req.Tags,
+		Visibility:           model.PluginVisibility(req.Visibility),
+		Icon:                 req.Icon,
+		Version:              req.Version,
+		Changelog:            req.Changelog,
 	})
 	if err != nil {
 		if errors.Is(err, pluginsvc.ErrInvalidParseTask) {

@@ -105,7 +105,20 @@ func (s *Service) adoptPublishedBaseline(ctx context.Context, caller Caller, d *
 // publishedDetail overlays only immutable content. Current permissions, listing,
 // and moderation metadata remain authoritative; a draft cannot freeze access.
 func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *model.Plugin, rels []model.PluginRelation, allowUnavailable bool) (*Detail, error) {
-	if !s.versionManagement || p.Type == model.PluginTypeConnector {
+	if s.versionManagement && p.Type == model.PluginTypeConnector {
+		store, ok := s.repo.(interface {
+			GetConnectorEffective(context.Context, pluginrepo.Scope, string) (*model.Plugin, error)
+		})
+		if !ok {
+			return nil, ErrInvalidRequest
+		}
+		effective, err := store.GetConnectorEffective(ctx, sc, p.ID)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		return &Detail{Plugin: effective, Relations: rels}, nil
+	}
+	if !s.versionManagement {
 		return &Detail{Plugin: p, Relations: rels}, nil
 	}
 	store, err := s.versionStore()

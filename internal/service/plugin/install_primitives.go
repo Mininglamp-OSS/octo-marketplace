@@ -1,8 +1,6 @@
 package plugin
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -12,9 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SkillInstallAdapterVersion is part of the identity algorithm. Future changes
-// must explicitly version the adapter rather than mutate an installed identity.
-const SkillInstallAdapterVersion = "mk1"
+// SkillInstallAdapterVersion identifies serialization, never a runtime alias.
+const SkillInstallAdapterVersion = "original-v1"
 
 // PinnedSkillFiles contains a verified, authorized immutable snapshot, not the
 // current display name or an unresolved storage reference. Files are root-relative
@@ -29,8 +26,7 @@ type PinnedSkillFiles struct {
 }
 
 // PreparedSkill retains source identity for callers' bindings/result mapping.
-// Directory is the runtime directory slug; Fleet receives Name through its
-// existing protocol and the same name in the temporary SKILL.md frontmatter.
+// Directory and Fleet Name preserve the market name; file bytes are unchanged.
 type PreparedSkill struct {
 	PluginID       string
 	VersionID      string
@@ -46,6 +42,13 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 	if len(inputs) > 600 {
 		return nil, ErrTooLarge
 	}
+	inputs = append([]PinnedSkillFiles(nil), inputs...)
+	sort.Slice(inputs, func(i, j int) bool {
+		if inputs[i].PluginID != inputs[j].PluginID {
+			return inputs[i].PluginID < inputs[j].PluginID
+		}
+		return inputs[i].VersionID < inputs[j].VersionID
+	})
 	b := capabilityBuilder{remaining: maxCapabilityBytes}
 	out := make([]PreparedSkill, 0, len(inputs))
 	seen := map[string]string{}
@@ -64,8 +67,16 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 			}
 			continue
 		}
-		if previous, exists := seen[name]; exists && previous != identity {
-			return nil, installationInvalid("definition.skills", "install_name_collision")
+		contentBytes, _ := json.Marshal(struct {
+			Description string
+			Files       map[string]string
+		}{input.Description, input.Files})
+		if previous, exists := seen[name]; exists {
+			if previous != string(contentBytes) {
+				return nil, installationInvalid("definition.skills", "same_install_identity_different_content")
+			}
+			identities[identity] = string(original)
+			continue
 		}
 		if len(input.Files) == 0 || len(input.Files) > 51 {
 			return nil, installationInvalid("definition.skills.files", "invalid_count")
@@ -88,8 +99,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 				return nil, err
 			}
 			value := input.Files[p]
-			// Validate the original before transformation, so oversized/binary input
-			// cannot become acceptable through a shorter rewritten header.
+			// Validate and forward the original bytes without rewriting metadata.
 			if !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
 				return nil, installationInvalid("definition.skills.files", "text_only")
 			}
@@ -97,7 +107,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 				return nil, ErrTooLarge
 			}
 			if p == "SKILL.md" {
-				value, err = rewriteInstallFrontmatter(value, name)
+				_, err = rewriteInstallFrontmatter(value, name)
 				if err != nil {
 					return nil, err
 				}
@@ -113,7 +123,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 				return nil, err
 			}
 		}
-		seen[name], identities[identity] = identity, string(original)
+		seen[name], identities[identity] = string(contentBytes), string(original)
 		out = append(out, PreparedSkill{PluginID: input.PluginID, VersionID: input.VersionID, AdapterVersion: SkillInstallAdapterVersion, Directory: name, Skill: skill})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Skill.Name < out[j].Skill.Name })
@@ -129,24 +139,7 @@ func pinnedSkillName(input PinnedSkillFiles) (string, error) {
 	if !installationName(input.Name, 128) {
 		return "", installationInvalid("definition.skills", "invalid_name")
 	}
-	var prefix strings.Builder
-	for _, r := range strings.ToLower(input.Name) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			prefix.WriteRune(r)
-		} else if prefix.Len() > 0 && !strings.HasSuffix(prefix.String(), "-") {
-			prefix.WriteByte('-')
-		}
-		if prefix.Len() >= 24 {
-			break
-		}
-	}
-	slug := strings.Trim(prefix.String(), "-")
-	if slug == "" {
-		slug = "skill"
-	}
-	encoded, _ := json.Marshal([3]string{SkillInstallAdapterVersion, input.PluginID, input.VersionID})
-	digest := sha256.Sum256(encoded)
-	return slug + "-" + SkillInstallAdapterVersion + "-" + hex.EncodeToString(digest[:16]), nil
+	return input.Name, nil
 }
 
 func validateInstallFilePath(p string) error {

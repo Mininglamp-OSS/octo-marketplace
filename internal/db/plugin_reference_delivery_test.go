@@ -20,6 +20,7 @@ func TestReferenceDeliveryOwnerPrivateSnapshotAndLifecycle(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('skill','skill-v1','1.0.0','user-1',NOW(3))`); err != nil {
 		t.Fatal(err)
 	}
+	setPublishedFixture(t, database, "skill", "skill-v1")
 	space := "space-a"
 	version := "skill-v1"
 	label := "1.0.0"
@@ -45,8 +46,8 @@ func TestReferenceDeliveryOwnerPrivateSnapshotAndLifecycle(t *testing.T) {
 	if !errors.Is(err, pluginrepo.ErrInvalidRelation) {
 		t.Fatalf("publish stale dependency=%v", err)
 	}
-	if err = repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrConflict) {
-		t.Fatalf("delete everreleased=%v", err)
+	if err = repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrRelationInUse) {
+		t.Fatalf("delete live referenced=%v", err)
 	}
 }
 func TestReferenceDeliveryRejectsUnauthorizedAndWrongRelease(t *testing.T) {
@@ -125,10 +126,18 @@ func TestReferenceDeliveryRedirectClearsVersionAndKeepsIdentity(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('skill','sv','1.0.0','user-1',NOW(3))`); err != nil {
 		t.Fatal(err)
 	}
+	setPublishedFixture(t, database, "skill", "sv")
+	effective, err := repo.Get(context.Background(), tenantScope(), "connector")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = repo.Update(context.Background(), pluginrepo.Scope{Admin: true}, pluginrepo.Mutation{Plugin: *effective, OperatorID: "platform"}); err != nil {
+		t.Fatal(err)
+	}
 	space, label, version := "space-a", "1.0.0", "sv"
 	p := model.Plugin{ID: "expert", Name: "Expert", Type: model.PluginTypeExpert, OwnerUID: "user-1", SpaceID: &space, Visibility: "private", ListingState: "draft", CreatedByType: "human", Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{"plugin_name":"Expert"}`), Package: json.RawMessage(`{"attachments":[]}`), ManifestHash: "m", PluginHash: "p", CurrentVersion: &label, Status: 1}
 	edge := model.PluginRelation{ID: "stable", SourcePluginID: p.ID, TargetPluginID: "skill", TargetPluginType: model.PluginTypeSkill, Type: "expert_skill", TargetVersionID: &version, Status: 1}
-	_, err := repo.Create(context.Background(), tenantScope(), pluginrepo.Mutation{Plugin: p, Relations: []model.PluginRelation{edge}, SnapshotVersion: true, OperatorID: "user-1"})
+	_, err = repo.Create(context.Background(), tenantScope(), pluginrepo.Mutation{Plugin: p, Relations: []model.PluginRelation{edge}, SnapshotVersion: true, OperatorID: "user-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +169,7 @@ func TestReferenceDeliveryApprovalRevalidatesFrozenPins(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('skill','skill-v1','1.0.0','user-1',NOW(3))`); err != nil {
 		t.Fatal(err)
 	}
+	setPublishedFixture(t, database, "skill", "skill-v1")
 	seed(t, database, seedPlugin{id: "expert", typ: "expert", visibility: "space", listingState: "draft", currentVersion: "1.0.0"})
 	version := "skill-v1"
 	edge := model.PluginRelation{ID: "frozen-ref", SourcePluginID: "expert", TargetPluginID: "skill", Type: "expert_skill", TargetVersionID: &version, Status: 1}
@@ -301,5 +311,12 @@ func TestReferenceCandidatesKeepDraftBindingsPrivate(t *testing.T) {
 	}
 	if _, _, err = repo.ReferenceCandidates(context.Background(), reader, "expert", "expert_skill", 20, 0); !errors.Is(err, pluginrepo.ErrVersionBaselineUnavailable) {
 		t.Fatalf("unknown baseline: %v", err)
+	}
+}
+
+func setPublishedFixture(t *testing.T, db *sql.DB, id, version string) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE plugins SET published_version_id=? WHERE plugin_id=?`, version, id); err != nil {
+		t.Fatal(err)
 	}
 }

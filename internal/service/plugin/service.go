@@ -22,6 +22,7 @@ import (
 var (
 	ErrNotFound       = errors.New("plugin not found")
 	ErrConflict       = errors.New("plugin conflict")
+	ErrEditConflict   = errors.New("plugin edit conflict")
 	ErrRelationInUse  = errors.New("plugin is referenced by another live plugin")
 	ErrInvalidRequest = errors.New("invalid plugin request")
 	ErrTooLarge       = errors.New("plugin artifact exceeds size limit")
@@ -261,6 +262,7 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
+	ExpectedEditRevision     *uint64
 	expectedCurrentVersionID string
 	// grandfatheredVersion is the plugin's STORED version label, set only by
 	// Service.update. A label minted before the format was tightened (v999,
@@ -639,6 +641,9 @@ func (s *Service) Create(ctx context.Context, caller Caller, req WriteRequest) (
 // object namespace, and the row would all disagree. Every create records a
 // plugin_versions snapshot — a save IS a version.
 func (s *Service) createWithID(ctx context.Context, caller Caller, req WriteRequest, reservedID string) (*Detail, error) {
+	if s.versionManagement && req.ExpectedEditRevision != nil {
+		return nil, ErrInvalidRequest
+	}
 	if err := validateCaller(caller); err != nil {
 		return nil, err
 	}
@@ -661,6 +666,7 @@ func (s *Service) createWithID(ctx context.Context, caller Caller, req WriteRequ
 		return nil, err
 	}
 	p.ID = reservedID
+	p.EditRevision = 1
 	if p.ID == "" {
 		p.ID = s.id()
 	}
@@ -679,6 +685,9 @@ func (s *Service) createWithID(ctx context.Context, caller Caller, req WriteRequ
 	sync, err := s.repo.Create(ctx, scope(caller), m)
 	if err != nil {
 		return nil, mapStoreError(err)
+	}
+	if sync != nil && sync.EditRevision > 0 {
+		p.EditRevision = sync.EditRevision
 	}
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
@@ -763,7 +772,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 		if !validVisibility(req.Visibility, false) {
 			return nil, ErrInvalidRequest
 		}
-		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace && !(s.versionManagement && old.Type != model.PluginTypeConnector) {
+		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace && !s.versionManagement {
 			return nil, ErrListedRequiresReview
 		}
 		// While a review is pending, the frozen snapshot is what the reviewer will
@@ -818,6 +827,8 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
 	m.ExpectedCurrentVersionID = req.expectedCurrentVersionID
+	m.ExpectedEditRevision = req.ExpectedEditRevision
+	m.RequireEditRevision = s.versionManagement
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
 	// restate it against the row it locks, for the same reason the two listing
 	// decisions below are re-derived: an approval that publishes a frozen label can
@@ -863,6 +874,9 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	sync, err := s.repo.Update(ctx, scope(caller), m)
 	if err != nil {
 		return nil, mapStoreError(err)
+	}
+	if sync != nil && sync.EditRevision > 0 {
+		p.EditRevision = sync.EditRevision
 	}
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
@@ -955,6 +969,9 @@ func (s *Service) ListVersions(ctx context.Context, caller Caller, pluginID stri
 }
 
 func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req WriteRequest, now time.Time, admin bool) (*model.Plugin, []model.PluginRelation, error) {
+	if s.versionManagement && req.Relations == nil {
+		return nil, nil, &ReviewFieldError{Field: "relations", Reason: "relations_required", Err: ErrInvalidRequest}
+	}
 	name := strings.TrimSpace(req.Name)
 	if !validName(name) || !validPluginType(req.Type) || !validVisibility(req.Visibility, c.IsSystemAdmin) {
 		return nil, nil, ErrInvalidRequest
@@ -1110,6 +1127,8 @@ func mapStoreError(err error) error {
 		return nil
 	case errors.Is(err, pluginrepo.ErrNotFound):
 		return ErrNotFound
+	case errors.Is(err, pluginrepo.ErrEditConflict):
+		return ErrEditConflict
 	case errors.Is(err, pluginrepo.ErrConflict):
 		return ErrConflict
 	case errors.Is(err, pluginrepo.ErrRelationInUse):

@@ -92,6 +92,11 @@ components:
         data:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_parse.PollResult'
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin_DistributionBundle
+    : properties:
+        data:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionBundle'
+      type: object
     ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_service_skill_SkillItem
     : properties:
         data:
@@ -1374,6 +1379,135 @@ components:
         status:
           type: string
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionAsset:
+      properties:
+        files:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionFile'
+          type: array
+          uniqueItems: false
+        market_name:
+          type: string
+        mcp_config:
+          type: object
+        node_key:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionBundle:
+      properties:
+        assets:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionAsset'
+          type: array
+          uniqueItems: false
+        bundle_digest:
+          type: string
+        graph:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionGraph'
+        root:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionRoot'
+        schema_version:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionEdge:
+      properties:
+        data:
+          type: object
+        relation_id:
+          type: string
+        relation_type:
+          type: string
+        resolved_effective_revision:
+          type: integer
+        sort_order:
+          type: integer
+        source_node_key:
+          type: string
+        source_version_id:
+          type: string
+        target_node_key:
+          type: string
+        target_plugin_id:
+          type: string
+        target_version_id:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionFile:
+      properties:
+        content:
+          type: string
+        content_hash:
+          type: string
+        mime_type:
+          type: string
+        path:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionFileInfo:
+      properties:
+        content_hash:
+          type: string
+        content_size:
+          type: integer
+        mime_type:
+          type: string
+        path:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionGraph:
+      properties:
+        edges:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionEdge'
+          type: array
+          uniqueItems: false
+        nodes:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionNode'
+          type: array
+          uniqueItems: false
+        root_node_key:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionNode:
+      properties:
+        effective_digest:
+          type: string
+        effective_revision:
+          type: integer
+        files:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionFileInfo'
+          type: array
+          uniqueItems: false
+        manifest_json:
+          type: object
+        node_key:
+          type: string
+        plugin_id:
+          type: string
+        plugin_name:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        version_id:
+          type: string
+        version_label:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin.DistributionRoot:
+      properties:
+        effective_revision:
+          type: integer
+        plugin_id:
+          type: string
+        plugin_name:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        selected_version_id:
+          type: string
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_service_skill.SkillItem:
       properties:
         category_id:
@@ -1656,6 +1790,8 @@ components:
           type: string
         description:
           type: string
+        expected_edit_revision:
+          type: integer
         name:
           type: string
         parse_task_id:
@@ -1809,6 +1945,8 @@ components:
           type: string
         description:
           type: string
+        expected_edit_revision:
+          type: integer
         icon:
           type: string
         name:
@@ -1875,6 +2013,12 @@ components:
         display_status:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
         download_count:
+          type: integer
+        edit_revision:
+          type: integer
+        effective_digest:
+          type: string
+        effective_revision:
           type: integer
         icon:
           type: string
@@ -2036,6 +2180,12 @@ components:
         display_status:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
         download_count:
+          type: integer
+        edit_revision:
+          type: integer
+        effective_digest:
+          type: string
+        effective_revision:
           type: integer
         icon:
           description: 'Icon is the stored write-canonical value clients must echo
@@ -2464,6 +2614,8 @@ components:
       type: object
     internal_api_handler_plugin.upsertRequest:
       properties:
+        expected_edit_revision:
+          type: integer
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginWriteRequest'
         relations:
@@ -4308,6 +4460,8 @@ paths:
                 type: string
               - title: version
                 type: string
+              - title: expected_edit_revision
+                type: integer
               - title: file
                 type: string
               - title: category_id
@@ -4316,8 +4470,9 @@ paths:
             schema:
               type: object
         description: Reference container schema version; 2 required when reference
-          writes enabled | Declared version label | Expert/expert_team container zip
-          (binary) | Optional plugin category for the top-level expert/team
+          writes enabled | Declared version label | Editing revision; required for
+          updates when version management is enabled | Expert/expert_team container
+          zip (binary) | Optional plugin category for the top-level expert/team
       responses:
         '200':
           content:
@@ -4388,6 +4543,8 @@ paths:
                 type: string
               - title: version
                 type: string
+              - title: expected_edit_revision
+                type: integer
               - title: file
                 type: string
               - title: category_id
@@ -4396,8 +4553,9 @@ paths:
             schema:
               type: object
         description: Reference container schema version; 2 required when reference
-          writes enabled | Declared version label | Expert/expert_team container zip
-          (binary) | Optional plugin category for the top-level expert/team
+          writes enabled | Declared version label | Editing revision; required for
+          updates when version management is enabled | Expert/expert_team container
+          zip (binary) | Optional plugin category for the top-level expert/team
       responses:
         '200':
           content:
@@ -6878,6 +7036,78 @@ paths:
       security:
       - Bearer: []
       summary: List historical plugin dependents
+      tags:
+      - plugin
+  /plugins/{plugin_id}/distribution:
+    get:
+      description: Resolves all published dependencies and effective connectors in
+        one snapshot, verifies original files, and returns the complete graph and
+        content. Does not install resources or call Fleet.
+      operationId: plugin.distribution.get
+      parameters:
+      - description: Expert or team plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_service_plugin_DistributionBundle'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Get complete current expert or team content
       tags:
       - plugin
   /plugins/{plugin_id}/draft:

@@ -342,6 +342,7 @@ func (h *AdminHandler) Create(c *gin.Context) {
 // @Security Bearer
 // @Param container_schema_version formData string false "Reference container schema version; 2 required when reference writes enabled"
 // @Param version formData string false "Declared version label"
+// @Param expected_edit_revision formData integer false "Editing revision; required for updates when version management is enabled"
 // @Param file formData string true "Expert/expert_team container zip (binary)"
 // @Param category_id formData string false "Optional plugin category for the top-level expert/team"
 // @Success 200 {object} apiresponse.Data[detailResponse]
@@ -406,6 +407,14 @@ func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImp
 		return pluginsvc.ContainerImportParams{}, false
 	}
 	params := pluginsvc.ContainerImportParams{Archive: archive, SchemaVersion: c.PostForm("container_schema_version"), Version: c.PostForm("version")}
+	if raw := c.PostForm("expected_edit_revision"); raw != "" {
+		revision, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || revision == 0 {
+			validation(c, "expected_edit_revision")
+			return pluginsvc.ContainerImportParams{}, false
+		}
+		params.ExpectedEditRevision = &revision
+	}
 	if categoryID := strings.TrimSpace(c.PostForm("category_id")); categoryID != "" {
 		params.CategoryID = &categoryID
 	}
@@ -423,6 +432,7 @@ func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImp
 // @Param plugin_id path string true "Plugin ID"
 // @Param container_schema_version formData string false "Reference container schema version; 2 required when reference writes enabled"
 // @Param version formData string false "Declared version label"
+// @Param expected_edit_revision formData integer false "Editing revision; required for updates when version management is enabled"
 // @Param file formData string true "Expert/expert_team container zip (binary)"
 // @Param category_id formData string false "Optional plugin category for the top-level expert/team"
 // @Success 200 {object} apiresponse.Data[detailResponse]
@@ -456,23 +466,25 @@ func (h *AdminHandler) ReuploadContainer(c *gin.Context) {
 // routes. The parse task carries the uploaded package; these fields override or
 // supply the plugin metadata. category_id is a unified plugin_categories id.
 type adminSkillImportRequest struct {
-	ParseTaskID string   `json:"parse_task_id"`
-	Name        string   `json:"name"`
-	CategoryID  string   `json:"category_id"`
-	Tags        []string `json:"tags"`
-	Version     string   `json:"version"`
-	Description string   `json:"description"`
-	Changelog   string   `json:"changelog"`
+	ExpectedEditRevision *uint64  `json:"expected_edit_revision,omitempty"`
+	ParseTaskID          string   `json:"parse_task_id"`
+	Name                 string   `json:"name"`
+	CategoryID           string   `json:"category_id"`
+	Tags                 []string `json:"tags"`
+	Version              string   `json:"version"`
+	Description          string   `json:"description"`
+	Changelog            string   `json:"changelog"`
 }
 
 func (r adminSkillImportRequest) params(pluginID string) pluginsvc.ImportParams {
 	p := pluginsvc.ImportParams{
-		ParseTaskID: r.ParseTaskID,
-		PluginID:    pluginID,
-		Name:        r.Name,
-		Description: r.Description,
-		Tags:        r.Tags,
-		Version:     r.Version,
+		ParseTaskID:          r.ParseTaskID,
+		PluginID:             pluginID,
+		ExpectedEditRevision: r.ExpectedEditRevision,
+		Name:                 r.Name,
+		Description:          r.Description,
+		Tags:                 r.Tags,
+		Version:              r.Version,
 	}
 	if strings.TrimSpace(r.CategoryID) != "" {
 		p.CategoryID = &r.CategoryID

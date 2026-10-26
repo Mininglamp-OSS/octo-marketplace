@@ -13,6 +13,8 @@ import (
 
 // Mutation contains current state, replacement relations, and append-only audit metadata.
 type Mutation struct {
+	ExpectedEditRevision *uint64
+	RequireEditRevision  bool
 	// ExpectedCurrentVersionID opts internal callers into a saved-head CAS.
 	// Empty preserves existing write semantics; it is not a public DTO field.
 	ExpectedCurrentVersionID string
@@ -85,10 +87,12 @@ type Mutation struct {
 // known ID with changed fields updates, and live IDs absent from the submitted
 // list are soft-deleted. Relations carries the final rows with assigned IDs.
 type RelationSync struct {
-	Created   []string
-	Updated   []string
-	Deleted   []string
-	Relations []model.PluginRelation
+	// EditRevision is populated when the caller opts into editing CAS.
+	EditRevision uint64
+	Created      []string
+	Updated      []string
+	Deleted      []string
+	Relations    []model.PluginRelation
 	// NewVersionID is the id of the plugin_versions row this write snapshotted and
 	// advanced current_version_id to (empty when the write did not snapshot). The
 	// service stamps it back onto the returned plugin so the write response's
@@ -143,13 +147,18 @@ func (r *Repo) Create(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 			return nil, err
 		}
 	}
+	if r.versionManagement && scope.Admin && p.Type == model.PluginTypeConnector {
+		if err = writeConnectorEffective(ctx, tx, p, m.OperatorID, now); err != nil {
+			return nil, err
+		}
+	}
 	if err = insertAudit(ctx, tx, r.id(), now, p, "create", m, "", p.PluginHash); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &RelationSync{Created: created, Updated: []string{}, Deleted: []string{}, Relations: m.Relations, NewVersionID: newVersionID}, nil
+	return &RelationSync{EditRevision: 1, Created: created, Updated: []string{}, Deleted: []string{}, Relations: m.Relations, NewVersionID: newVersionID}, nil
 }
 
 // jsonColumn maps an optional JSON document to a nullable SQL column value: NULL
@@ -386,6 +395,10 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	if err != nil {
 		return nil, err
 	}
+	nextEditRevision, err := checkEditRevision(ctx, tx, before.ID, top.ExpectedEditRevision, top.RequireEditRevision)
+	if err != nil {
+		return nil, err
+	}
 	if r.versionManagement && versioned(before) && before.ListingState == model.PluginListingStatePublished {
 		return nil, ErrConflict
 	}
@@ -481,7 +494,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 		updWhere, updTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{topPlugin.ID}
 	}
 	updArgs := append([]any{topPlugin.Name, topPlugin.Type, topPlugin.CategoryID, string(topPlugin.Tags), topPlugin.Publisher, topPlugin.Visibility, topPlugin.Icon, topPlugin.ToolCount, string(topPlugin.Manifest), string(topPlugin.Package), jsonColumn(topPlugin.AttachmentKeys), topPlugin.ManifestHash, topPlugin.PluginHash, topPlugin.Status, now}, updTail...)
-	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
+	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,edit_revision=edit_revision+1,updated_at=?
 `+updWhere, updArgs...); err != nil {
 		return nil, wrapped("rebuild", err)
 	}
@@ -524,6 +537,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
+	sync.EditRevision = nextEditRevision
 	return sync, nil
 }
 
@@ -582,6 +596,10 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	}
 	defer tx.Rollback()
 	before, err := getOwnedForUpdate(ctx, tx, scope, m.Plugin.ID)
+	if err != nil {
+		return nil, err
+	}
+	nextEditRevision, err := checkEditRevision(ctx, tx, before.ID, m.ExpectedEditRevision, m.RequireEditRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +664,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	// system admin keeps the platform-operator escape hatch and is not gated here.
 	resetListing := m.ResetListingToDraft
 	if m.EnforceListingGate {
-		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace && !(r.versionManagement && versioned(before)) {
+		if before.ListingState == model.PluginListingStatePublished && before.Visibility == model.PluginVisibilitySpace && !r.versionManagement {
 			return nil, ErrListedRequiresReview
 		}
 		resetListing = before.ListingState == model.PluginListingStatePublished && m.Plugin.Visibility != before.Visibility
@@ -712,7 +730,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 		listingReset = `listing_state='draft',`
 	}
 	updArgs := append([]any{p.Name, p.Type, p.CategoryID, string(p.Tags), p.Publisher, p.Visibility, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.Status, now}, updTail...)
-	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
+	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,edit_revision=edit_revision+1,updated_at=?
 `+updWhere, updArgs...)
 	if err != nil {
 		return nil, wrapped("update", err)
@@ -775,12 +793,18 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 			return nil, err
 		}
 	}
+	if r.versionManagement && scope.Admin && p.Type == model.PluginTypeConnector {
+		if err = writeConnectorEffective(ctx, tx, p, m.OperatorID, now); err != nil {
+			return nil, err
+		}
+	}
 	if err = insertAudit(ctx, tx, r.id(), now, p, "update", m, before.PluginHash, p.PluginHash); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
+	sync.EditRevision = nextEditRevision
 	return sync, nil
 }
 
@@ -846,10 +870,10 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	if err != nil {
 		return err
 	}
-	if err = r.rejectPublishedMutation(ctx, tx, before); err != nil {
+	if err = rejectLiveIncomingRelations(ctx, tx, pluginID); err != nil {
 		return err
 	}
-	if err = rejectLiveIncomingRelations(ctx, tx, pluginID); err != nil {
+	if err = r.rejectPublishedIncomingRelations(ctx, tx, before.ID); err != nil {
 		return err
 	}
 	now := r.now()
@@ -947,10 +971,10 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	if err != nil {
 		return err
 	}
-	if err = r.rejectPublishedMutation(ctx, tx, before); err != nil {
+	if err = rejectLiveIncomingRelations(ctx, tx, topID); err != nil {
 		return err
 	}
-	if err = rejectLiveIncomingRelations(ctx, tx, topID); err != nil {
+	if err = r.rejectPublishedIncomingRelations(ctx, tx, before.ID); err != nil {
 		return err
 	}
 	// Derive the embedded child set under the top's lock, before the top's own

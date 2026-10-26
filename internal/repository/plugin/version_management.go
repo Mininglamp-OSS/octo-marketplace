@@ -335,19 +335,21 @@ func (r *Repo) AdoptPublishedBaseline(ctx context.Context, scope Scope, p AdoptP
 // publishedVersionJoin attaches the formal release snapshot once. The projection
 // below references published_pv instead of running a correlated subquery for
 // every projected/WHERE/ORDER BY column.
-const publishedVersionJoin = ` LEFT JOIN plugin_versions published_pv ON published_pv.plugin_id=p.plugin_id AND published_pv.version_id=p.published_version_id`
+const publishedVersionJoin = ` LEFT JOIN plugin_versions published_pv ON published_pv.plugin_id=p.plugin_id AND published_pv.version_id=p.published_version_id LEFT JOIN plugin_connector_effective effective_ce ON effective_ce.plugin_id=p.plugin_id`
 
 func publishedListProjection(query string) string {
-	value := func(column, fallback string) string {
-		return `COALESCE(` + column + `,` + fallback + `)`
+	value := func(column, fallback string) string { return `COALESCE(` + column + `,` + fallback + `)` }
+	effective := func(column, other string) string {
+		return `CASE WHEN p.plugin_type='connector' THEN effective_ce.` + column + ` ELSE ` + other + ` END`
 	}
 	return strings.NewReplacer(
-		"p.plugin_name", value(`JSON_UNQUOTE(JSON_EXTRACT(published_pv.manifest_json,'$.plugin_name'))`, "p.plugin_name"),
-		"p.tags_json", `CASE WHEN p.published_version_id IS NULL THEN p.tags_json ELSE COALESCE(CASE WHEN JSON_TYPE(JSON_EXTRACT(published_pv.manifest_json,'$.labels'))='ARRAY' THEN JSON_EXTRACT(published_pv.manifest_json,'$.labels') ELSE JSON_ARRAY() END,JSON_ARRAY()) END`,
-		"p.manifest_json", value("published_pv.manifest_json", "p.manifest_json"),
-		"p.manifest_hash", value("published_pv.manifest_hash", "p.manifest_hash"),
-		"p.plugin_hash", value("published_pv.plugin_hash", "p.plugin_hash"),
-		"p.current_version_id", `COALESCE(p.published_version_id,p.current_version_id)`,
-		"p.current_version", value("published_pv.declared_version", "p.current_version"),
+		"p.plugin_name", effective("plugin_name", value(`JSON_UNQUOTE(JSON_EXTRACT(published_pv.manifest_json,'$.plugin_name'))`, "p.plugin_name")),
+		"p.tags_json", effective("tags_json", `CASE WHEN p.published_version_id IS NULL THEN p.tags_json ELSE COALESCE(CASE WHEN JSON_TYPE(JSON_EXTRACT(published_pv.manifest_json,'$.labels'))='ARRAY' THEN JSON_EXTRACT(published_pv.manifest_json,'$.labels') ELSE JSON_ARRAY() END,JSON_ARRAY()) END`),
+		"p.manifest_json", effective("manifest_json", value("published_pv.manifest_json", "p.manifest_json")),
+		"p.manifest_hash", effective("manifest_hash", value("published_pv.manifest_hash", "p.manifest_hash")),
+		"p.plugin_hash", effective("plugin_hash", value("published_pv.plugin_hash", "p.plugin_hash")),
+		"p.tool_count", effective("tool_count", "p.tool_count"),
+		"p.current_version_id", `CASE WHEN p.plugin_type='connector' THEN NULL ELSE COALESCE(p.published_version_id,p.current_version_id) END`,
+		"p.current_version", effective("current_version", value("published_pv.declared_version", "p.current_version")),
 	).Replace(query)
 }

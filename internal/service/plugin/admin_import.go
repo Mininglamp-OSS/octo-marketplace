@@ -144,6 +144,9 @@ func (s *Service) adminImportConsumedTask(ctx context.Context, caller Caller, ta
 			s.deleteObjects(ctx, uploaded...)
 			return nil, mapStoreError(err)
 		}
+		if sync != nil && sync.EditRevision > 0 {
+			p.EditRevision = sync.EditRevision
+		}
 		if sync != nil && sync.NewVersionID != "" {
 			p.CurrentVersionID = &sync.NewVersionID
 		}
@@ -194,6 +197,8 @@ func (s *Service) adminImportConsumedTask(ctx context.Context, caller Caller, ta
 	}
 	audit := s.audit(caller, updateID, "update", oldPlugin, p, now)
 	m := mutation(*p, rels, audit)
+	m.ExpectedEditRevision = f.expectedEditRevision
+	m.RequireEditRevision = s.versionManagement
 	m.SnapshotVersion = true // a package-only reupload is a new version snapshot
 	sync, err := s.repo.Update(ctx, adminScope(caller), m)
 	if err != nil {
@@ -202,6 +207,9 @@ func (s *Service) adminImportConsumedTask(ctx context.Context, caller Caller, ta
 	}
 	// The snapshot advanced current_version_id; stamp the new row id onto the
 	// response so it agrees with the DB, like the other write surfaces.
+	if sync != nil && sync.EditRevision > 0 {
+		p.EditRevision = sync.EditRevision
+	}
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
 	}

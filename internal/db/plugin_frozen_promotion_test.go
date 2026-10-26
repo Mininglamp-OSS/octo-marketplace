@@ -56,7 +56,7 @@ func TestManagedTeamApprovalRespectsStandalonePrivateExpertBoundary(t *testing.T
 			archive := promotionArchive(t, map[string][]byte{"expert.json": manifest, "skills/private.zip": skillZip})
 			admin := owner
 			admin.IsSystemAdmin = true
-			expert, err = svc.ReuploadContainer(ctx, admin, expert.Plugin.ID, pluginsvc.ContainerImportParams{Archive: archive})
+			expert, err = svc.ReuploadContainer(ctx, admin, expert.Plugin.ID, pluginsvc.ContainerImportParams{Archive: archive, ExpectedEditRevision: editingWrite(t, database, expert.Plugin.ID, pluginsvc.WriteRequest{}).ExpectedEditRevision})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -137,7 +137,7 @@ func TestManagedTeamApprovalPromotesOwnEmbeddedMembers(t *testing.T) {
 	archive := promotionArchive(t, map[string][]byte{"squad.json": manifest, "skills/team.zip": skillZip})
 	admin := owner
 	admin.IsSystemAdmin = true
-	team, err = svc.ReuploadContainer(ctx, admin, team.Plugin.ID, pluginsvc.ContainerImportParams{Archive: archive})
+	team, err = svc.ReuploadContainer(ctx, admin, team.Plugin.ID, pluginsvc.ContainerImportParams{Archive: archive, ExpectedEditRevision: editingWrite(t, database, team.Plugin.ID, pluginsvc.WriteRequest{}).ExpectedEditRevision})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestManagedTeamApprovalPromotesOwnEmbeddedMembers(t *testing.T) {
 	for _, rel := range team.Relations {
 		edited.Relations = append(edited.Relations, pluginsvc.RelationRequest{TargetPluginID: rel.TargetPluginID, Type: rel.Type, SortOrder: rel.SortOrder, Data: rel.Data})
 	}
-	if _, err = svc.Update(ctx, owner, team.Plugin.ID, edited); err != nil {
+	if _, err = svc.Update(ctx, owner, team.Plugin.ID, editingWrite(t, database, team.Plugin.ID, edited)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {

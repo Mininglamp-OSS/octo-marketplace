@@ -52,10 +52,11 @@ const (
 // plugin category (the free-text manifest category is display-only and not
 // mapped to a category row).
 type ContainerImportParams struct {
-	SchemaVersion string
-	Version       string
-	Archive       []byte
-	CategoryID    *string
+	ExpectedEditRevision *uint64
+	SchemaVersion        string
+	Version              string
+	Archive              []byte
+	CategoryID           *string
 }
 
 // ---- parsed container model (mirrors octo-admin parseContainer.ts) ----------
@@ -267,6 +268,8 @@ func (s *Service) ReuploadContainer(ctx context.Context, caller Caller, pluginID
 
 	audit := s.audit(eff, top.ID, "update", old, top, s.now())
 	topMut := mutation(*top, topRels, audit)
+	topMut.ExpectedEditRevision = p.ExpectedEditRevision
+	topMut.RequireEditRevision = s.versionManagement
 	topMut.SnapshotVersion = true
 	sync, err := s.repo.RebuildGraph(ctx, adminScope(eff), topMut, childNodes)
 	if err != nil {
@@ -557,6 +560,7 @@ func (s *Service) buildGraphPlugin(ctx context.Context, eff Caller, typ model.Pl
 		return nil, ErrInvalidRequest
 	}
 	req := WriteRequest{
+		Relations:  []RelationRequest{},
 		Name:       name,
 		Type:       typ,
 		CategoryID: categoryID,
@@ -635,6 +639,9 @@ func (s *Service) topLevelDetail(ctx context.Context, p *model.Plugin, sync *plu
 	// current_version_id; stamp the new row id onto the response so it agrees
 	// with the DB (a follow-up GET must not contradict it), mirroring the tenant
 	// and admin single-plugin paths.
+	if sync != nil && sync.EditRevision > 0 {
+		p.EditRevision = sync.EditRevision
+	}
 	if sync != nil && sync.NewVersionID != "" {
 		p.CurrentVersionID = &sync.NewVersionID
 	}

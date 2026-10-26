@@ -43,7 +43,8 @@ func (s *Service) WithParseTasks(p ParseTaskStore) *Service {
 }
 
 type ImportParams struct {
-	ParseTaskID string
+	ExpectedEditRevision *uint64
+	ParseTaskID          string
 	// PluginID selects an existing caller-owned skill Plugin to update; empty
 	// creates a new one.
 	PluginID    string
@@ -119,10 +120,11 @@ func (s *Service) Import(ctx context.Context, caller Caller, p ImportParams) (*D
 // importFields are the resolved (request value falling back to parse result)
 // document fields of one import.
 type importFields struct {
-	pluginName  string
-	name        string
-	description string
-	version     string
+	expectedEditRevision *uint64
+	pluginName           string
+	name                 string
+	description          string
+	version              string
 	// versionSubmitted records whether the caller explicitly sent a version (vs
 	// the resolved fallback to the parse result or the "1.0.0" default). The
 	// reupload path keeps the old current_version label only when no version was
@@ -137,15 +139,16 @@ type importFields struct {
 
 func resolveImportFields(p ImportParams, task *skillrepo.ParseTaskRow, systemAdmin bool, old *model.Plugin) (*importFields, error) {
 	f := &importFields{
-		pluginName:       strings.TrimSpace(p.PluginName),
-		name:             strings.TrimSpace(p.Name),
-		description:      strings.TrimSpace(p.Description),
-		changelog:        trimOptional(p.Changelog),
-		version:          strings.TrimSpace(p.Version),
-		versionSubmitted: strings.TrimSpace(p.Version) != "",
-		visibility:       p.Visibility,
-		categoryID:       trimOptional(p.CategoryID),
-		icon:             strings.TrimSpace(p.Icon),
+		expectedEditRevision: p.ExpectedEditRevision,
+		pluginName:           strings.TrimSpace(p.PluginName),
+		name:                 strings.TrimSpace(p.Name),
+		description:          strings.TrimSpace(p.Description),
+		changelog:            trimOptional(p.Changelog),
+		version:              strings.TrimSpace(p.Version),
+		versionSubmitted:     strings.TrimSpace(p.Version) != "",
+		visibility:           p.Visibility,
+		categoryID:           trimOptional(p.CategoryID),
+		icon:                 strings.TrimSpace(p.Icon),
 	}
 	// A package-only reupload replaces the package/tags but must preserve the
 	// row's curated market identity. The display name (plugin.Name column), the
@@ -452,15 +455,17 @@ func buildImportWriteRequest(f *importFields, attachments []map[string]any, isUp
 		version = ""
 	}
 	return &WriteRequest{
-		Name:       f.pluginName,
-		Type:       model.PluginTypeSkill,
-		CategoryID: f.categoryID,
-		Tags:       canonicalTags,
-		Icon:       f.icon,
-		Visibility: f.visibility,
-		Version:    version,
-		Manifest:   manifest,
-		Package:    pkg,
+		ExpectedEditRevision: f.expectedEditRevision,
+		Relations:            []RelationRequest{},
+		Name:                 f.pluginName,
+		Type:                 model.PluginTypeSkill,
+		CategoryID:           f.categoryID,
+		Tags:                 canonicalTags,
+		Icon:                 f.icon,
+		Visibility:           f.visibility,
+		Version:              version,
+		Manifest:             manifest,
+		Package:              pkg,
 	}, nil
 }
 

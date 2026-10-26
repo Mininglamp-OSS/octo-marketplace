@@ -23,7 +23,7 @@ func managedWrite(label, content string, visibility model.PluginVisibility) plug
 	manifest := json.RawMessage(`{"$schema":"cowork-plugin-manifest-2.0.json","plugin_name":"Versioned Expert","plugin_type":"expert","name":"versioned-expert","description":"Version management fixture.","labels":[],"examples":[]}`)
 	raw, _ := json.Marshal(content)
 	pkg := json.RawMessage(`{"$schema":"cowork-plugin-package-2.0.json","attachments":[{"path":"AGENTS.md","content_type":"raw","mime_type":"text/markdown","raw_content":` + string(raw) + `}]}`)
-	return pluginsvc.WriteRequest{Name: "Versioned Expert", Type: model.PluginTypeExpert, Visibility: visibility, Version: label, Manifest: manifest, Package: pkg, Tags: json.RawMessage(`[]`)}
+	return pluginsvc.WriteRequest{Relations: []pluginsvc.RelationRequest{}, Name: "Versioned Expert", Type: model.PluginTypeExpert, Visibility: visibility, Version: label, Manifest: manifest, Package: pkg, Tags: json.RawMessage(`[]`)}
 }
 func managedOwner() pluginsvc.Caller {
 	return pluginsvc.Caller{UID: "user-1", Name: "Owner", SpaceID: "space-a"}
@@ -54,7 +54,7 @@ func TestManagedVersionReadsSeparateDraftAndReleasedAccess(t *testing.T) {
 		t.Fatalf("missing published version: %+v err=%v", state, err)
 	}
 	releasedID := *state.PublishedVersionID
-	draft, err := svc.Update(ctx, owner, id, managedWrite("1.0.1", "private draft instructions", model.PluginVisibilitySpace))
+	draft, err := svc.Update(ctx, owner, id, editingWrite(t, database, id, managedWrite("1.0.1", "private draft instructions", model.PluginVisibilitySpace)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestManagedPrivateReleasePreservesDraft(t *testing.T) {
 	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
 		t.Fatal(err)
 	}
-	d, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "new draft", model.PluginVisibilityPrivate))
+	d, err = svc.Update(ctx, owner, id, editingWrite(t, database, id, managedWrite("2.0.0", "new draft", model.PluginVisibilityPrivate)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestManagedFrozenApprovalKeepsLaterDraft(t *testing.T) {
 				if pub.Review == nil {
 					t.Fatal("missing pending review")
 				}
-				if _, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)); err != nil {
+				if _, err = svc.Update(ctx, owner, id, editingWrite(t, database, id, managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace))); err != nil {
 					t.Fatal(err)
 				}
 				if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
@@ -182,7 +182,7 @@ func TestManagedFrozenApprovalKeepsLaterDraft(t *testing.T) {
 					t.Fatalf("approval overwrote draft: %+v %v", draft, err)
 				}
 			}
-			if _, err = svc.Update(ctx, owner, id, managedWrite("3.0.0", "unapproved v3", model.PluginVisibilitySpace)); err != nil {
+			if _, err = svc.Update(ctx, owner, id, editingWrite(t, database, id, managedWrite("3.0.0", "unapproved v3", model.PluginVisibilitySpace))); err != nil {
 				t.Fatal(err)
 			}
 			reader := pluginsvc.Caller{UID: "other", SpaceID: "space-a"}
@@ -241,7 +241,7 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 	}
 	id := d.Plugin.ID
 	v1 := *d.Plugin.CurrentVersionID
-	if _, err = svc.AdminUpdate(ctx, admin, id, managedWrite("2.0.0", "admin draft", model.PluginVisibilitySystem)); err != nil {
+	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedWrite("2.0.0", "admin draft", model.PluginVisibilitySystem))); err != nil {
 		t.Fatal(err)
 	}
 	reader := managedOwner()
@@ -318,7 +318,7 @@ func TestManagedAdminDelistedSystemUpdateOnlySaves(t *testing.T) {
 	if _, err = database.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id=?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.AdminUpdate(ctx, admin, id, managedWrite("2.0.0", "later edit", model.PluginVisibilitySystem)); err != nil {
+	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedWrite("2.0.0", "later edit", model.PluginVisibilitySystem))); err != nil {
 		t.Fatal(err)
 	}
 	var publishedID, currentID string
@@ -355,7 +355,7 @@ func TestManagedAdminTenantUpdateOnlySaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
-	if _, err = svc.AdminUpdate(ctx, admin, id, managedWrite("2.0.0", "tenant v2", model.PluginVisibilityPrivate)); err != nil {
+	if _, err = svc.AdminUpdate(ctx, admin, id, editingWrite(t, database, id, managedWrite("2.0.0", "tenant v2", model.PluginVisibilityPrivate))); err != nil {
 		t.Fatal(err)
 	}
 	var publishedID, currentID string
@@ -468,7 +468,7 @@ func TestManagedLegacyPublishedBaselineAdoption(t *testing.T) {
 				t.Fatalf("missing adopted release: %+v %v", state, err)
 			}
 			// Editing is unblocked, and the published read still serves v1.
-			if _, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "next draft", visibility)); err != nil {
+			if _, err = svc.Update(ctx, owner, id, editingWrite(t, database, id, managedWrite("2.0.0", "next draft", visibility))); err != nil {
 				t.Fatalf("edit after adoption: %v", err)
 			}
 			view, err := svc.Detail(ctx, owner, id, true)
@@ -562,7 +562,7 @@ func TestManagedPublicationUsesExpectedHeadAndRejectsLabelReuse(t *testing.T) {
 	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Update(ctx, owner, id, managedWrite("1.0.0", "changed under same draft label", model.PluginVisibilityPrivate)); err != nil {
+	if _, err = svc.Update(ctx, owner, id, editingWrite(t, database, id, managedWrite("1.0.0", "changed under same draft label", model.PluginVisibilityPrivate))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = repo.PublishManaged(ctx, tenantScope(), pluginrepo.PublishParams{PluginID: id, ExpectedVersionID: v1, OperatorID: owner.UID}); !errors.Is(err, pluginrepo.ErrConflict) {
@@ -608,7 +608,7 @@ func TestManagedCatalogSearchAndTagsUseRelease(t *testing.T) {
 	req.Name = "Secret Draft Name"
 	req.Tags = json.RawMessage(`["secret-draft-tag"]`)
 	req.Manifest = json.RawMessage(strings.Replace(strings.Replace(string(req.Manifest), `"plugin_name":"Versioned Expert"`, `"plugin_name":"Secret Draft Name"`, 1), `"labels":[]`, `"labels":["secret-draft-tag"]`, 1))
-	if _, err = svc.Update(ctx, owner, d.Plugin.ID, req); err != nil {
+	if _, err = svc.Update(ctx, owner, d.Plugin.ID, editingWrite(t, database, d.Plugin.ID, req)); err != nil {
 		t.Fatal(err)
 	}
 	reader := pluginsvc.Caller{UID: "reader", SpaceID: owner.SpaceID}
@@ -662,7 +662,7 @@ func TestManagedHistoricalBinaryRetainedAfterReplacement(t *testing.T) {
 	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: pid}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Update(ctx, owner, pid, write("2.0.0", "replacement bytes")); err != nil {
+	if _, err = svc.Update(ctx, owner, pid, editingWrite(t, database, pid, write("2.0.0", "replacement bytes"))); err != nil {
 		t.Fatal(err)
 	}
 	data, err := svc.VersionFile(ctx, owner, pid, v1, "assets/data.bin", false)
@@ -677,7 +677,7 @@ func TestManagedLegacyPublicationNeedsVerifiedBaseline(t *testing.T) {
 	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true)
 	ctx := context.Background()
 	owner := managedOwner()
-	if _, err := svc.Update(ctx, owner, "legacy-managed", managedWrite("2.0.0", "new unapproved draft", model.PluginVisibilityPrivate)); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
+	if _, err := svc.Update(ctx, owner, "legacy-managed", editingWrite(t, database, "legacy-managed", managedWrite("2.0.0", "new unapproved draft", model.PluginVisibilityPrivate))); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
 		t.Fatalf("legacy draft escaped compatibility guard: %v", err)
 	}
 	if _, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: "legacy-managed"}); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
@@ -705,7 +705,7 @@ func (p *installStubProvisioner) ProvisionSquadFromSpec(context.Context, experts
 func managedSkillWrite(label, name string, visibility model.PluginVisibility) pluginsvc.WriteRequest {
 	manifest, _ := json.Marshal(map[string]any{"$schema": "cowork-plugin-manifest-2.0.json", "plugin_name": name, "plugin_type": "skill", "name": strings.ToLower(name), "description": "fixture", "labels": []string{}, "examples": []string{}})
 	pkg, _ := json.Marshal(map[string]any{"$schema": "cowork-plugin-package-2.0.json", "attachments": []any{map[string]any{"path": "SKILL.md", "content_type": "raw", "mime_type": "text/markdown", "raw_content": "# " + name}}})
-	return pluginsvc.WriteRequest{Name: name, Type: model.PluginTypeSkill, Visibility: visibility, Version: label, Manifest: manifest, Package: pkg, Tags: json.RawMessage(`[]`)}
+	return pluginsvc.WriteRequest{Relations: []pluginsvc.RelationRequest{}, Name: name, Type: model.PluginTypeSkill, Visibility: visibility, Version: label, Manifest: manifest, Package: pkg, Tags: json.RawMessage(`[]`)}
 }
 
 func publishManaged(t *testing.T, svc *pluginsvc.Service, owner pluginsvc.Caller, id string) {
@@ -749,7 +749,7 @@ func TestManagedInstallUsesReleasedRelations(t *testing.T) {
 	publishManaged(t, svc, owner, skill.Plugin.ID)
 	draft := managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)
 	draft.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skill.Plugin.ID, Type: "expert_skill"}}
-	if _, err = svc.Update(ctx, owner, expert.Plugin.ID, draft); err != nil {
+	if _, err = svc.Update(ctx, owner, expert.Plugin.ID, editingWrite(t, database, expert.Plugin.ID, draft)); err != nil {
 		t.Fatal(err)
 	}
 	published, err := svc.Detail(ctx, teammate, expert.Plugin.ID, true)
@@ -792,7 +792,7 @@ func TestManagedFirstApprovalKeepsLaterDraftRelations(t *testing.T) {
 	}
 	later := managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)
 	later.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skillB.Plugin.ID, Type: "expert_skill"}}
-	updated, err := svc.Update(ctx, owner, expert.Plugin.ID, later)
+	updated, err := svc.Update(ctx, owner, expert.Plugin.ID, editingWrite(t, database, expert.Plugin.ID, later))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -888,7 +888,7 @@ func TestManagedMissingReleaseLabelsNeverExposeDraftTags(t *testing.T) {
 			draft := managedWrite("2.0.0", "private draft tags", model.PluginVisibilitySpace)
 			draft.Tags = json.RawMessage(`["secret-draft-tag"]`)
 			draft.Manifest = json.RawMessage(strings.Replace(string(draft.Manifest), `"labels":[]`, `"labels":["secret-draft-tag"]`, 1))
-			if _, err = svc.Update(ctx, owner, d.Plugin.ID, draft); err != nil {
+			if _, err = svc.Update(ctx, owner, d.Plugin.ID, editingWrite(t, database, d.Plugin.ID, draft)); err != nil {
 				t.Fatal(err)
 			}
 			reader := pluginsvc.Caller{UID: "reader", SpaceID: owner.SpaceID}

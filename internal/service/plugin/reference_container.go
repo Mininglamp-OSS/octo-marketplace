@@ -95,7 +95,7 @@ func (s *Service) parseReferenceContainer(p ContainerImportParams) (WriteRequest
 	if err != nil {
 		return WriteRequest{}, ErrInvalidContainer
 	}
-	return WriteRequest{Name: doc.Name, Type: typ, CategoryID: p.CategoryID, Version: p.Version, Tags: tags, Manifest: manifest, Package: pkg, Relations: rels}, nil
+	return WriteRequest{ExpectedEditRevision: p.ExpectedEditRevision, Name: doc.Name, Type: typ, CategoryID: p.CategoryID, Version: p.Version, Tags: tags, Manifest: manifest, Package: pkg, Relations: rels}, nil
 }
 func (s *Service) importReferenceContainer(ctx context.Context, caller Caller, p ContainerImportParams, pluginID string) (*Detail, error) {
 	req, err := s.parseReferenceContainer(p)

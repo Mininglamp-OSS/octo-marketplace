@@ -43,8 +43,8 @@ func TestAdminListHydratesSceneCodesForPage(t *testing.T) {
 	summaryColumns = append(summaryColumns, columns[21:]...)
 	summaryColumns = append(summaryColumns, "view_count", "install_count", "download_count")
 	rows := sqlmock.NewRows(summaryColumns).
-		AddRow("plugin-a", "A", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", nil, model.PluginVisibilitySystem, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), "sha256:m1", "sha256:p1", nil, nil, 1, now, now, nil, 0, 0, 0).
-		AddRow("plugin-b", "B", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", nil, model.PluginVisibilitySystem, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), "sha256:m2", "sha256:p2", nil, nil, 1, now, now, nil, 0, 0, 0)
+		AddRow("plugin-a", "A", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", nil, model.PluginVisibilitySystem, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), "sha256:m1", "sha256:p1", nil, nil, 1, now, now, nil, 1, 0, 0, 0).
+		AddRow("plugin-b", "B", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", nil, model.PluginVisibilitySystem, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), "sha256:m2", "sha256:p2", nil, nil, 1, now, now, nil, 1, 0, 0, 0)
 	mock.ExpectQuery(`SELECT .*FROM plugins p.*p.plugin_type=\?.*LIMIT \? OFFSET \?`).
 		WithArgs(model.PluginTypeSkill, 20, 0).
 		WillReturnRows(rows)
@@ -117,7 +117,7 @@ func TestGetScansMetricCounters(t *testing.T) {
 	columns := append(pluginTestColumns(), "view_count", "install_count", "download_count")
 	mock.ExpectQuery(`SELECT .*COALESCE\(\(SELECT rm.view_count.*resource_type='plugin'.* FROM plugins p`).
 		WithArgs("plugin-a", "space", "caller").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("plugin-a", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "caller", "space", model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "icons/a.png", 0, 4, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil, 7, 3, 5))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("plugin-a", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "caller", "space", model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "icons/a.png", 0, 4, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil, 1, 7, 3, 5))
 	p, err := New(db).Get(context.Background(), Scope{CallerUID: "caller", SpaceID: "space"}, "plugin-a")
 	if err != nil {
 		t.Fatal(err)

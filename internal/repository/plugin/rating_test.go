@@ -26,7 +26,7 @@ func TestUpdateRatingChangesOnlyRatingAndAudits(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT .*p\.rating.* FROM plugins p WHERE p\.plugin_id=\? .* FOR UPDATE`).
 		WithArgs("plugin-1").
-		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("plugin-1", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", "space", model.PluginVisibilitySpace, model.PluginListingStatePublished, "Creator", "human", nil, nil, "icon", 0, 2, []byte(`{"m":1}`), []byte(`{"p":1}`), nil, "sha256:m", "sha256:p", "version-id", "1.0.0", 1, now.Add(-time.Hour), now.Add(-time.Hour), nil))
+		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("plugin-1", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", "space", model.PluginVisibilitySpace, model.PluginListingStatePublished, "Creator", "human", nil, nil, "icon", 0, 2, []byte(`{"m":1}`), []byte(`{"p":1}`), nil, "sha256:m", "sha256:p", "version-id", "1.0.0", 1, now.Add(-time.Hour), now.Add(-time.Hour), nil, 1))
 	mock.ExpectExec(`UPDATE plugins SET rating=\?,updated_at=\? WHERE plugin_id=\? AND deleted_at IS NULL`).
 		WithArgs(&rating, now, "plugin-1").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).
@@ -86,7 +86,7 @@ func TestUpdateRatingRollsBackWhenAuditFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT .* FROM plugins p WHERE p\.plugin_id=\? .* FOR UPDATE`).WithArgs("plugin-1").
-		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("plugin-1", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", "space", model.PluginVisibilitySpace, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, 4, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil))
+		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("plugin-1", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", "owner", "space", model.PluginVisibilitySpace, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, 4, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil, 1))
 	mock.ExpectExec(`UPDATE plugins SET rating=\?,updated_at=\?`).WithArgs(nil, now, "plugin-1").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WillReturnError(errors.New("audit unavailable"))
 	mock.ExpectRollback()

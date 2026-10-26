@@ -16,7 +16,7 @@ func TestPreparePinnedSkillsIdentityAndCopy(t *testing.T) {
 	a, b, c := samplePinnedSkill("a", "v1"), samplePinnedSkill("b", "v1"), samplePinnedSkill("a", "v2")
 	original := a.Files["SKILL.md"]
 	got, err := PreparePinnedSkills([]PinnedSkillFiles{a, b, c, a})
-	if err != nil || len(got) != 3 {
+	if err != nil || len(got) != 1 {
 		t.Fatalf("prepare: count=%d err=%v", len(got), err)
 	}
 	repeat, err := PreparePinnedSkills([]PinnedSkillFiles{c, b, a})
@@ -26,7 +26,7 @@ func TestPreparePinnedSkillsIdentityAndCopy(t *testing.T) {
 	names := map[string]bool{}
 	for _, item := range got {
 		n := item.Skill.Name
-		if names[n] || len(n) > 64 || n != item.Directory || !strings.Contains(item.Skill.Content, "name: "+n+"\n") {
+		if names[n] || n != "Search" || n != item.Directory || item.Skill.Content != original {
 			t.Fatal("identity/frontmatter mismatch")
 		}
 		names[n] = true
@@ -41,6 +41,14 @@ func TestPreparePinnedSkillsIdentityAndCopy(t *testing.T) {
 	changed.Files["refs/help.md"] = "different"
 	if _, err = PreparePinnedSkills([]PinnedSkillFiles{a, changed}); err == nil {
 		t.Fatal("conflicting identity accepted")
+	}
+}
+
+func TestPreparePinnedSkillsRejectsSameNameDifferentContent(t *testing.T) {
+	a, b := samplePinnedSkill("a", "v1"), samplePinnedSkill("b", "v2")
+	b.Files["refs/help.md"] = "new content"
+	if _, err := PreparePinnedSkills([]PinnedSkillFiles{a, b}); err == nil {
+		t.Fatal("same market name with different supporting content accepted")
 	}
 }
 
