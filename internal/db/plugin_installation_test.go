@@ -119,7 +119,7 @@ func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.
 	ctx := context.Background()
 	repo := pluginrepo.New(database)
 	remote := &dbCapabilityInstall{}
-	svc := pluginsvc.New(repo).WithVersionManagement(true).WithPinnedInstallation(true).WithCapabilityInstaller(remote)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(remote)
 	owner := managedOwner()
 	d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "first released", model.PluginVisibilityPrivate))
 	if err != nil {
@@ -135,7 +135,7 @@ func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.
 	if remote.in.Definition.Experts[0].Instructions != "first released" {
 		t.Fatal("wrong released bytes")
 	}
-	if _, err = svc.Update(ctx, owner, d.Plugin.ID, managedWrite("2.0.0", "second released", model.PluginVisibilityPrivate)); err != nil {
+	if _, err = svc.Update(ctx, owner, d.Plugin.ID, editingWrite(t, database, d.Plugin.ID, managedWrite("2.0.0", "second released", model.PluginVisibilityPrivate))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {

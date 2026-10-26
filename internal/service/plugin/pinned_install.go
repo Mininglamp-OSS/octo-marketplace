@@ -35,12 +35,17 @@ type pinnedInstallResolver struct {
 	loaded   map[pluginrepo.InstallVersionKey]*Detail
 	assets   capabilityBuilder
 	skills   map[pluginrepo.InstallVersionKey]PinnedSkillFiles
+	snapshot *pluginrepo.LatestGraph
 }
 
 type pinnedInstallationPlan struct {
 	RootVersionID string
 	Definition    fleet.CapabilityDefinition
+	NodeIDs       []string
+	Edges         []planEligibilityEdge
 }
+
+type planEligibilityEdge struct{ Source, Target string }
 
 func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, id, rootVersion string) (*pinnedInstallationPlan, error) {
 	if !s.versionManagement {
@@ -50,7 +55,28 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	if !ok {
 		return nil, ErrInvalidRequest
 	}
-	r := pinnedInstallResolver{s: s, caller: caller, store: store, plugins: map[string]*model.Plugin{}, versions: map[pluginrepo.InstallVersionKey]*model.PluginVersion{}, loaded: map[pluginrepo.InstallVersionKey]*Detail{}, skills: map[pluginrepo.InstallVersionKey]PinnedSkillFiles{}, assets: capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes)}}
+	var snapshot *pluginrepo.LatestGraph
+	if s.references {
+		latest, ok := s.repo.(LatestGraphStore)
+		if !ok {
+			return nil, ErrVersionBaselineUnavailable
+		}
+		var err error
+		snapshot, err = latest.ResolveLatestGraph(ctx, scope(caller), id)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		selected := snapshot.Selected[id]
+		if selected == "" {
+			return nil, ErrVersionBaselineUnavailable
+		}
+		if rootVersion != "" && rootVersion != selected {
+			return nil, ErrConflict
+		}
+		rootVersion = selected
+		store = snapshot
+	}
+	r := pinnedInstallResolver{snapshot: snapshot, s: s, caller: caller, store: store, plugins: map[string]*model.Plugin{}, versions: map[pluginrepo.InstallVersionKey]*model.PluginVersion{}, loaded: map[pluginrepo.InstallVersionKey]*Detail{}, skills: map[pluginrepo.InstallVersionKey]PinnedSkillFiles{}, assets: capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes)}}
 	if err := r.load(ctx, []string{id}, nil); err != nil {
 		if errors.Is(err, ErrDependencyHidden) {
 			return nil, ErrNotFound
@@ -255,7 +281,24 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 		}
 		def.ExpertTeam = team
 	}
-	return &pinnedInstallationPlan{RootVersionID: rootVersion, Definition: def}, nil
+	plan := &pinnedInstallationPlan{RootVersionID: rootVersion, Definition: def}
+	for id := range r.plugins {
+		plan.NodeIDs = append(plan.NodeIDs, id)
+	}
+	sort.Strings(plan.NodeIDs)
+	for _, d := range r.loaded {
+		for _, rel := range d.Relations {
+			plan.Edges = append(plan.Edges, planEligibilityEdge{Source: d.Plugin.ID, Target: rel.TargetPluginID})
+		}
+	}
+	sort.Slice(plan.Edges, func(i, j int) bool {
+		a, b := plan.Edges[i], plan.Edges[j]
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
+		return a.Target < b.Target
+	})
+	return plan, nil
 }
 
 func (r *pinnedInstallResolver) load(ctx context.Context, ids []string, keys []pluginrepo.InstallVersionKey) error {
@@ -339,6 +382,9 @@ func (r *pinnedInstallResolver) detail(ctx context.Context, key pluginrepo.Insta
 	rels, err := model.DecodeSnapshotRelations(v.Relations)
 	if err != nil {
 		return nil, ErrIntegrity
+	}
+	if r.snapshot != nil {
+		rels = r.snapshot.Relations[key.PluginID]
 	}
 	cp := *p
 	cp.Manifest = v.Manifest

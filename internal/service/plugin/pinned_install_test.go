@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
@@ -113,7 +114,7 @@ func fixturePinned() (*Service, *pinnedFixtureStore, *fakeCapabilityInstaller) {
 	}
 	add("connector", model.PluginTypeConnector, "Connector", "", packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"search-v1"}}}`)), nil)
 	installer := &fakeCapabilityInstaller{}
-	return New(f).WithVersionManagement(true).WithPinnedInstallation(true).WithCapabilityInstaller(installer), f, installer
+	return New(f).WithVersionManagement(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(installer), f, installer
 }
 
 func TestPinnedInstallationPreservesMarketNamesAndFrozenFiles(t *testing.T) {
@@ -135,7 +136,7 @@ func TestPinnedInstallationPreservesMarketNamesAndFrozenFiles(t *testing.T) {
 			t.Fatalf("mutable or embedded content leaked %+v", e)
 		}
 	}
-	if f.pluginCalls != 3 || f.versionCalls != 3 {
+	if f.pluginCalls != 4 || f.versionCalls != 3 {
 		t.Fatalf("not batched: plugin=%d version=%d", f.pluginCalls, f.versionCalls)
 	}
 	if !strings.Contains(string(f.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}].Package), "name: Search") {
@@ -275,16 +276,11 @@ func TestPinnedInstallRejectsBeforeFleet(t *testing.T) {
 		})
 	}
 }
-func TestPinnedInstallUsesCurrentConnectorAndPreservesDelistedPins(t *testing.T) {
+func TestPinnedInstallRejectsDelistedDependencies(t *testing.T) {
 	s, f, remote := fixturePinned()
 	f.plugins["skill-a"].ListingState = model.PluginListingStateDelisted
-	f.plugins["expert-a"].ListingState = model.PluginListingStateDelisted
-	f.plugins["connector"].Package = packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"search-v2"}}}`))
-	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", installationParams()); err != nil {
-		t.Fatalf("%#v", err)
-	}
-	if !strings.Contains(string(remote.in.Definition.Experts[0].MCPConfig), "search-v2") {
-		t.Fatal("connector current config not used")
+	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", installationParams()); !errors.Is(err, ErrDependencyHidden) || remote.calls != 0 {
+		t.Fatalf("delisted dependency installed: %v", err)
 	}
 }
 func TestPinnedInstallNeedsVersioning(t *testing.T) {
@@ -296,7 +292,7 @@ func TestPinnedInstallNeedsVersioning(t *testing.T) {
 	}
 }
 
-func TestPinnedInstallRetriesKeepInitialRootAndDetectInputOrConnectorDrift(t *testing.T) {
+func TestPinnedInstallRetriesKeepInitialPlanDespiteUpstreamChanges(t *testing.T) {
 	s, f, remote := fixturePinned()
 	p := installationParams()
 	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", p); err != nil {
@@ -313,12 +309,13 @@ func TestPinnedInstallRetriesKeepInitialRootAndDetectInputOrConnectorDrift(t *te
 		t.Fatalf("input change err=%v", err)
 	}
 	f.plugins["connector"].Package = packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"new-command"}}}`))
-	if _, err = s.CreateInstallation(context.Background(), testCaller, "team", p); !errors.Is(err, ErrConflict) {
-		t.Fatalf("connector drift err=%v", err)
+	if _, err = s.CreateInstallation(context.Background(), testCaller, "team", p); err != nil {
+		t.Fatalf("upstream update blocked frozen replay: %v", err)
 	}
-	if remote.calls != 2 {
-		t.Fatal("changed payload submitted under same key")
+	if remote.calls != 3 || strings.Contains(string(remote.in.Definition.Experts[0].MCPConfig), "new-command") {
+		t.Fatal("frozen connector content changed")
 	}
+
 }
 func TestPinnedUncertainRetryUsesSameKeyAndExpiredReceiptFailsClosed(t *testing.T) {
 	s, f, remote := fixturePinned()
@@ -336,7 +333,8 @@ func TestPinnedUncertainRetryUsesSameKeyAndExpiredReceiptFailsClosed(t *testing.
 		t.Fatal("same-key retry not forwarded")
 	}
 	for _, a := range f.attempts {
-		a.CreatedAt = s.now().Add(-25 * time.Hour)
+		cutoff := s.now().Add(-time.Minute)
+		a.RetryUntil = &cutoff
 	}
 	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", p); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expired uncertain key permitted: %v", err)
@@ -365,5 +363,89 @@ func TestLegacyAndCapabilityUseSameFrozenBindings(t *testing.T) {
 		if member.Instruction != e.Instructions || len(member.Skills) != len(e.SkillNames) || member.Skills[0].Name != e.SkillNames[0] {
 			t.Fatal("entrypoints differ")
 		}
+	}
+}
+
+func (f *pinnedFixtureStore) AcquireInstallDispatch(_ context.Context, _ pluginrepo.Scope, a pluginrepo.InstallAttempt, token string, now time.Time, lease, retry time.Duration) (bool, error) {
+	p := f.attempts[a.WorkspaceID+a.KeyDigest]
+	if p.Completed || (p.LeaseUntil != nil && now.Before(*p.LeaseUntil)) || (p.RetryUntil != nil && !now.Before(*p.RetryUntil)) {
+		return false, nil
+	}
+	if p.State == "DISPATCHING" {
+		p.HadUnknown = true
+	}
+	p.State = "DISPATCHING"
+	p.LeaseToken = token
+	until := now.Add(lease)
+	p.LeaseUntil = &until
+	if p.RetryUntil == nil {
+		cutoff := now.Add(retry)
+		p.RetryUntil = &cutoff
+	}
+	return true, nil
+}
+func (f *pinnedFixtureStore) SetInstallDispatchUnknown(_ context.Context, _ pluginrepo.Scope, a pluginrepo.InstallAttempt, token string) error {
+	p := f.attempts[a.WorkspaceID+a.KeyDigest]
+	if p.LeaseToken == token && !p.Completed {
+		p.State = "UNKNOWN"
+		p.HadUnknown = true
+		p.LeaseToken = ""
+		p.LeaseUntil = nil
+	}
+	return nil
+}
+func (f *pinnedFixtureStore) FinishInstallDispatch(_ context.Context, _ pluginrepo.Scope, a pluginrepo.InstallAttempt, token string) (bool, error) {
+	p := f.attempts[a.WorkspaceID+a.KeyDigest]
+	if p.LeaseToken != token || p.Completed {
+		return false, nil
+	}
+	p.Completed = true
+	p.State = "SUCCEEDED"
+	p.AgentID = a.AgentID
+	p.TeamID = a.TeamID
+	p.LeaseToken = ""
+	p.LeaseUntil = nil
+	return true, nil
+}
+
+func (f *pinnedFixtureStore) FailInstallDispatch(_ context.Context, _ pluginrepo.Scope, a pluginrepo.InstallAttempt, token string) (bool, error) {
+	p := f.attempts[a.WorkspaceID+a.KeyDigest]
+	if p.LeaseToken != token || p.HadUnknown || p.Completed {
+		return false, nil
+	}
+	p.State = "FAILED"
+	p.LeaseToken = ""
+	p.LeaseUntil = nil
+	return true, nil
+}
+
+func TestUnknownInstallationSurvivesLaterForbidden(t *testing.T) {
+	s, f, remote := fixturePinned()
+	p := installationParams()
+	remote.err = errors.New("timeout")
+	_, err := s.CreateInstallation(context.Background(), testCaller, "team", p)
+	var attemptErr *InstallationAttemptError
+	if !errors.As(err, &attemptErr) || !attemptErr.Unknown {
+		t.Fatal("timeout did not expose uncertainty")
+	}
+	remote.err = &fleet.CapabilityAPIError{Status: 403}
+	_, err = s.CreateInstallation(context.Background(), testCaller, "team", p)
+	if !errors.As(err, &attemptErr) || !attemptErr.Unknown {
+		t.Fatal("later 403 erased earlier possible commit")
+	}
+	for _, a := range f.attempts {
+		if a.State != "UNKNOWN" || !a.HadUnknown {
+			t.Fatal("uncertainty lost")
+		}
+		for _, secret := range []string{p.Token, p.IdempotencyKey, p.CustomEnv["OCTOBUDDY_PROVIDER_ID"]} {
+			if secret != "" && strings.Contains(string(a.FrozenPlan), secret) {
+				t.Fatal("runtime input persisted in frozen plan")
+			}
+		}
+	}
+	remote.err = nil
+	s.WithInstallationHMACKeys("rotated", map[string]string{"test": "synthetic-installation-test-key-32-bytes", "rotated": "synthetic-rotated-installation-key-32-bytes"})
+	if _, err = s.CreateInstallation(context.Background(), testCaller, "team", p); err != nil {
+		t.Fatalf("old-key frozen retry failed after rotation: %v", err)
 	}
 }

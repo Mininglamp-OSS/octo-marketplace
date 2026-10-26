@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
@@ -146,6 +147,12 @@ func writeInstallationError(c *gin.Context, err error) {
 	var upstream *fleet.CapabilityAPIError
 	var attempt *pluginsvc.InstallationAttemptError
 	switch {
+	case errors.As(err, &attempt) && attempt.Unknown:
+		details := map[string]any{"reason": "installation_result_unknown", "attempt_id": attempt.AttemptID, "can_retry_same_key": attempt.RetryUntil != nil && time.Now().Before(*attempt.RetryUntil)}
+		if attempt.RetryUntil != nil {
+			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
+		}
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装结果未知，请使用原幂等键和原参数核对或重试。", details, installationRetryHint)
 	case errors.As(err, &field):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "安装参数不正确。", map[string]any{"field": field.Field, "reason": field.Reason}, "请检查工作区、运行环境、名称和环境变量后重试。")
 	case errors.Is(err, expertsvc.ErrFleetNotConfigured):

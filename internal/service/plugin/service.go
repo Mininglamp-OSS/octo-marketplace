@@ -124,6 +124,8 @@ type Store interface {
 var _ Store = (*pluginrepo.Repo)(nil)
 
 type Service struct {
+	installHMACKeyID    string
+	installHMACKeys     map[string][]byte
 	versionManagement   bool
 	pinnedInstallation  bool
 	references          bool

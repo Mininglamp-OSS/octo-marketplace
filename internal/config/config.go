@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -106,6 +107,8 @@ type Config struct {
 	PluginVersionManagementEnabled  bool
 	PluginReferencesEnabled         bool
 	PluginPinnedInstallationEnabled bool
+	InstallationHMACKeyID           string
+	InstallationHMACKeys            map[string]string
 	ProbeAllowPrivate               bool
 	BotPublishTimeout               time.Duration
 
@@ -207,6 +210,8 @@ func Load() Config {
 		PluginVersionManagementEnabled:  envBool("PLUGIN_VERSION_MANAGEMENT_ENABLED", false),
 		PluginReferencesEnabled:         envBool("PLUGIN_REFERENCES_ENABLED", false),
 		PluginPinnedInstallationEnabled: envBool("PLUGIN_PINNED_INSTALLATION_ENABLED", false),
+		InstallationHMACKeyID:           env("INSTALLATION_HMAC_KEY_ID", ""),
+		InstallationHMACKeys:            envInstallationHMACKeys(),
 		ProbeAllowPrivate:               envBool("PROBE_ALLOW_PRIVATE", false),
 		BotPublishTimeout:               envDuration("BOT_PUBLISH_TIMEOUT", DefaultBotPublishTimeout),
 
@@ -271,6 +276,16 @@ func (c Config) ValidateAPI() error {
 	}
 	if c.PluginPinnedInstallationEnabled && !c.PluginReferencesEnabled {
 		return fmt.Errorf("PLUGIN_PINNED_INSTALLATION_ENABLED requires PLUGIN_REFERENCES_ENABLED")
+	}
+	if c.PluginPinnedInstallationEnabled {
+		if c.InstallationHMACKeyID == "" || len(c.InstallationHMACKeys[c.InstallationHMACKeyID]) < 32 {
+			return fmt.Errorf("installation HMAC active key must be configured with at least 32 bytes")
+		}
+		for id, key := range c.InstallationHMACKeys {
+			if id == "" || len(id) > 64 || len(key) < 32 {
+				return fmt.Errorf("invalid installation HMAC key ring")
+			}
+		}
 	}
 	if c.MySQLDSN == "" {
 		return fmt.Errorf("MYSQL_DSN is required")
@@ -452,4 +467,13 @@ func envCSV(key string) []string {
 		return nil
 	}
 	return out
+}
+
+// Invalid or missing key JSON fails closed when installation is enabled.
+func envInstallationHMACKeys() map[string]string {
+	var keys map[string]string
+	if json.Unmarshal([]byte(os.Getenv("INSTALLATION_HMAC_KEYS")), &keys) != nil {
+		return nil
+	}
+	return keys
 }

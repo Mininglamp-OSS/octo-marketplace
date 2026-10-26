@@ -38,7 +38,7 @@ func TestPinnedInvisibleRootReturns404ThroughRealService(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM plugin_install_attempts").WillReturnRows(sqlmock.NewRows([]string{"plugin_id"}))
 	mock.ExpectQuery("SELECT .* FROM plugins p WHERE p.plugin_id IN").WillReturnRows(sqlmock.NewRows([]string{"plugin_id"}))
 	remote := &noRootInstaller{}
-	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithPinnedInstallation(true).WithCapabilityInstaller(remote)
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(remote)
 	rec := httptest.NewRecorder()
 	testEngine(svc).ServeHTTP(rec, installationRequest(installationBody))
 	if rec.Code != http.StatusNotFound || remote.calls != 0 {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -40,7 +41,12 @@ type InstallationOutcome struct {
 // InstallationAttemptError marks the boundary after the Fleet adapter was
 // invoked. Unknown errors here may follow a commit and require same-key retry.
 // Never log the wrapped error verbatim: an upstream may echo submitted secrets.
-type InstallationAttemptError struct{ Err error }
+type InstallationAttemptError struct {
+	Err        error
+	Unknown    bool
+	AttemptID  string
+	RetryUntil *time.Time
+}
 
 func (e *InstallationAttemptError) Error() string { return "capability installation attempt failed" }
 func (e *InstallationAttemptError) Unwrap() error { return e.Err }

@@ -23,7 +23,7 @@ func (r *Repo) GetInstallPlugins(ctx context.Context, sc Scope, ids []string) (m
 	if len(ids) == 0 {
 		return out, nil
 	}
-	if len(ids) > 631 {
+	if len(ids) > 1500 {
 		return nil, ErrGraphTooLarge
 	}
 	args := make([]any, 0, len(ids)+2)
@@ -53,7 +53,7 @@ func (r *Repo) GetInstallVersions(ctx context.Context, sc Scope, keys []InstallV
 	if len(keys) == 0 {
 		return out, nil
 	}
-	if len(keys) > 631 {
+	if len(keys) > 1500 {
 		return nil, ErrGraphTooLarge
 	}
 	predicates := make([]string, 0, len(keys))
