@@ -1,0 +1,368 @@
+{
+  "schema_version": "1.1",
+  "status": "documentation_revised_pending_implementation",
+  "contract": "02-api-contracts.md",
+  "decisions": {
+    "decided_at": "2026-10-26",
+    "authority": "00-decisions.md",
+    "user_record": "decisions-20261026.md",
+    "reference_model": "B",
+    "summary": {
+      "B": "Expert→Skill、Team→Expert 每次读取/安装解析目标当前正式发布版（status=1、未删除、listing_state=published）；Connector 按 ID 读 effective；target_version_id 仅作上次解析/审计值；A01/A34/安装/审核共用一个最新解析服务，每次请求各自使用一致性快照；最新版不可用时不回退旧版。",
+      "D1": "保留原删除能力；删除保护 = live incoming（含草稿、不过滤 listing）∪ published refs ∪ Team→最新发布 Expert→Skill/Connector 间接引用；不新增“曾发布即禁止删除”，只改删除、不改已发布资源收窄 visibility 的现有行为。",
+      "D2": "不做 A09 restore-to-draft；A09 从 MP-01/API/plan/CL-02 删除，不引入 restored_from_version_id；历史读取 A04–A08 保留。",
+      "D3": "不允许同名/多版本共存；同名不同内容冲突失败；普通安装保留市场原名/原字节；不改 SKILL.md frontmatter、不生成 mk1 别名、不改 Fleet/Daemon。",
+      "D4": "A01 mine 的 Expert/Team 必返 dependency_availability 四字段（status/evaluated_view/evaluated_version_id/reasons）；evaluated 指来源自己的 published/editing；target.version_id 为本次解析到的最新版本；reason code 固定三种；无权依赖匿名；view 规则与 SQL COUNT/facets 同口径；mine/Admin 保留管理范围。",
+      "D5": "生产迁移用 CLI + 离线授权，不做 A29/A30 HTTP；CLI 两次只读 preview 并冻结 plan_digest；apply 只认冻结计划；新版本走既有审核（waiting_review）；回滚必须数据安全（不恢复 current/published 指针）。 离线授权采用 02 §5.1 Ed25519/JCS 制品，验证主体/环境/有效期/撤销；续签仅恢复同计划同批次原 run。",
+      "D6": "同 owner private→private 允许；space/system 不得引用 private；最新解析依赖下架/删除 => Expert/Team 公共隐藏且 A34/安装失败；owner 只能看诊断，不能安装坏图。",
+      "D7": "Admin 不用审核，直接写入同步 effective；Tenant 沿用既有审核策略；审核观察变化 409 后取消旧申请并重新提交新审核；A34/安装读 effective。",
+      "D8": "edit_revision + expected_edit_revision：更新必带、新建省略，缺失/过期 409 edit_conflict；relations 必填数组，缺失/null 400；Admin/Web/CLI/Bot 四端同批改。",
+      "D9": "A31/A32 保留 URL、共用同一 InstallCoordinator/attempt；同 key 只重放首次冻结 plan；显式安装输入变化返回 409；上游正常发新版不阻断原 key 重试，新 key 新安装才解析最新；状态机含 UNKNOWN；仅首次成功计数。",
+      "D10": "新改造完成后旧市场执行器不可达；回滚接受兼容二进制 + 从历史生成新版本恢复；不恢复指针/legacy，不删历史/对象/attempt。",
+      "review": "沿用现有 Space 策略：默认自动审核（plugin_review_policies），Space 可关；自动模式内部重试一次；人工模式审核窗口依赖变化才 409；批准后依赖继续浮动，依赖发新版不要求重新审核引用方。 人工冲突不刷新旧观察值：按原权限取消后重提新 review_id；Admin 不审核。"
+    },
+    "removed": {
+      "A09": "restore-to-draft 明确不做。",
+      "A29": "legacy_import/preview HTTP 明确不做，改 CLI 冻结计划。",
+      "A30": "legacy_import/apply HTTP 明确不做，改 CLI apply。",
+      "same_name_coexistence": "同名/多版本共存本期拒绝，不是 deferred；同名不同内容安装冲突失败。",
+      "ever_published_delete_ban": "不存在“曾发布即禁止删除”的总禁令。"
+    }
+  },
+  "confirmed_scopes": [
+    "b_model_latest_published_resolution_at_read_and_install",
+    "relation_target_version_id_audit_only",
+    "single_latest_resolver_shared_by_a01_a34_install_review",
+    "consistent_snapshot_per_request_no_old_version_fallback",
+    "independent_market_assets_referenced_by_id_not_authoritative_version",
+    "admin_zip_only_dependency_maintenance",
+    "existing_fleet_idempotent_network_retry",
+    "market_definitions_separate_from_local_and_workspace_composition",
+    "system_space_dependency_scope_matrix",
+    "same_owner_private_dependency_allowed",
+    "reuse_existing_publication_review_roles_and_policy",
+    "reuse_existing_market_actions_no_lifecycle_expansion",
+    "delete_protection_union_no_ever_published_ban",
+    "connector_effective_model_with_review_observations",
+    "edit_revision_cas_and_required_relations",
+    "single_request_complete_latest_plugin_content",
+    "market_dependency_filter_with_owner_diagnostics",
+    "install_single_engine_same_key_original_plan_new_key_latest",
+    "stock_migration_cli_with_frozen_plan",
+    "four_client_a34_and_mine_dependency_diagnostics",
+    "no_same_name_coexistence_no_mk1_frontmatter_rewrite",
+    "no_a09_restore_no_a29_a30_http",
+    "legacy_embedded_skills_and_experts_become_visible_market_assets"
+  ],
+  "pending_decisions": [],
+  "deferred_decisions": [],
+  "rejected_decisions": [
+    {
+      "id": "same_name_coexistence",
+      "status": "rejected",
+      "reason": "用户 2026-10-26 决定不允许同名/多版本共存；同名不同内容安装冲突失败；不生成 mk1 别名、不改写 frontmatter；不以未验证的 Daemon 双版本加载作为本期能力。"
+    },
+    {
+      "id": "a09_restore_to_draft",
+      "status": "rejected",
+      "reason": "D2：不做 restore-to-draft；A04–A08 历史读取保留。"
+    },
+    {
+      "id": "a29_a30_http_migration",
+      "status": "rejected",
+      "reason": "D5：生产迁移改 CLI + 离线授权，不新增 A29/A30 HTTP。"
+    },
+    {
+      "id": "ever_published_delete_ban",
+      "status": "rejected",
+      "reason": "D1：删除保护按 live incoming ∪ published refs ∪ Team→最新发布 Expert→Skill/Connector 间接引用并集判定，不新增曾发布总禁令。"
+    }
+  ],
+  "external_api_ids": [
+    "F01"
+  ],
+  "removed_api_ids": [
+    "A09",
+    "A29",
+    "A30"
+  ],
+  "issues": [
+    {
+      "id": "MP-01",
+      "title": "不可变版本、发布、Connector effective 与统一读取",
+      "path": "issues/01-version-publication.md",
+      "description": "B 模型版本底座：current/published/release、不可变文件、Connector effective、edit_revision CAS 与 relations 必填、published/editing/effective 读投影；提供 A01 四字段诊断 DTO 底座但不实现依赖谓词（MP-02）；无 A09 restore、无 restored_from_version_id。",
+      "depends_on": [],
+      "repositories": [
+        "octo-marketplace"
+      ],
+      "owns_api_ids": [
+        "A01",
+        "A02",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A12",
+        "A13",
+        "A21",
+        "A22",
+        "A23",
+        "A24",
+        "A26"
+      ],
+      "owns_new_tables": [
+        "plugin_version_releases",
+        "plugin_connector_effective"
+      ]
+    },
+    {
+      "id": "MP-02",
+      "title": "浮动引用、最新解析、审核观察与依赖治理",
+      "path": "issues/02-dependency-governance.md",
+      "description": "唯一 LatestPublishedResolver：Expert→Skill、Team→Expert 解析最新正式发布版，Connector 读 effective，一次请求一个一致性快照；A01/A03/A34/安装/审核共用；A01 四字段诊断、SQL COUNT/facets；删除保护并集；private/space/system 矩阵；Connector 审核观察；A25 receipts。",
+      "depends_on": [
+        "MP-01"
+      ],
+      "repositories": [
+        "octo-marketplace"
+      ],
+      "owns_api_ids": [
+        "A03",
+        "A10",
+        "A11",
+        "A14",
+        "A15",
+        "A16",
+        "A17",
+        "A18",
+        "A19",
+        "A25",
+        "A27"
+      ],
+      "extends_api_ids": [
+        "A01",
+        "A12",
+        "A13",
+        "A24",
+        "A34"
+      ],
+      "owns_new_tables": [
+        "plugin_version_relation_refs",
+        "plugin_mutation_receipts"
+      ]
+    },
+    {
+      "id": "MP-03",
+      "title": "统一原子安装、A34 完整最新内容与安全重试",
+      "path": "issues/03-installation-fleet.md",
+      "description": "A34 单 GET 按 B 返回最新完整图与全部原始文件（bundle_digest 动态、no-store、零 Fleet/零写入）；A31/A32 共用唯一 InstallCoordinator，同 key 只重放首次冻结 plan，显式安装输入变化 409；上游正常发新版仍重放原 plan，新 key 才解析最新，状态机/UNKNOWN、仅首次成功计数；同名冲突失败，不改名/不改 frontmatter。",
+      "depends_on": [
+        "MP-02"
+      ],
+      "repositories": [
+        "octo-marketplace"
+      ],
+      "integration_dependencies": [
+        "octo-fleet"
+      ],
+      "owns_api_ids": [
+        "A31",
+        "A32",
+        "A34"
+      ],
+      "consumes_api_ids": [
+        "F01"
+      ],
+      "owns_new_tables": [
+        "plugin_install_attempts"
+      ]
+    },
+    {
+      "id": "MP-04",
+      "title": "CLI 冻结计划驱动的历史资产转换与数据安全回滚",
+      "path": "issues/04-migration.md",
+      "description": "CLI + 离线授权完成生产迁移：两次只读 preview、显式标签/映射并冻结 plan_digest、apply 只认冻结计划；create/reuse/update_source、Connector server 分组、waiting_review；数据安全回滚（不恢复指针、不删历史）；不新增 A29/A30 HTTP。",
+      "depends_on": [
+        "MP-02"
+      ],
+      "repositories": [
+        "octo-marketplace"
+      ],
+      "owns_api_ids": [],
+      "extends_tables": [
+        "plugin_mutation_receipts"
+      ],
+      "owns_new_tables": [
+        "plugin_dependency_migration_map"
+      ]
+    },
+    {
+      "id": "CL-01",
+      "title": "Admin 引用式容器（ZIP-only）、CAS 与只读依赖预览",
+      "path": "issues/05-admin.md",
+      "description": "Expert/Team 仅 schema2 ZIP（A25 强制 Idempotency-Key/CAS/resolved[]），A24 拒绝 JSON 内容写；预览展示本次解析到的目标版本（非权威 pin）；MCP/独立 Skill 写同步 CAS；Admin 不用审核，沿用直接生效与上下架动作。",
+      "depends_on": [
+        "MP-02"
+      ],
+      "repositories": [
+        "octo-admin"
+      ],
+      "owns_api_ids": [],
+      "consumes_api_ids": [
+        "A21",
+        "A22",
+        "A23",
+        "A24",
+        "A25",
+        "A26",
+        "A27"
+      ],
+      "owns_new_tables": []
+    },
+    {
+      "id": "CL-02",
+      "title": "Web/CLI 发布审核、A34 最新内容、mine 诊断与新 key 重装",
+      "path": "issues/06-web-cli.md",
+      "description": "Web/CLI 显式 relations + CAS 保存发布；一次 A34 取最新完整内容（不按依赖扇出、不补 frontmatter）；mine 全部/专家/专家团透传四字段诊断、匿名原因与 Tooltip；安装同 key 原 plan、配置变化提示新 key 新安装。",
+      "depends_on": [
+        "MP-02",
+        "MP-03"
+      ],
+      "coding_can_start_after": [
+        "MP-02"
+      ],
+      "repositories": [
+        "octo-web",
+        "octo-cli"
+      ],
+      "owns_api_ids": [],
+      "consumes_api_ids": [
+        "A01",
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A10",
+        "A12",
+        "A13",
+        "A14",
+        "A15",
+        "A16",
+        "A17",
+        "A18",
+        "A19",
+        "A32",
+        "A34"
+      ],
+      "owns_new_tables": []
+    },
+    {
+      "id": "CL-03",
+      "title": "Buddy 单 A34 最新内容、本地安装与安全重试",
+      "path": "issues/07-buddy.md",
+      "description": "Buddy 只消费一次 A34 的最新完整图/原始文件，删除依赖 BFS 与 ZIP/frontmatter 字节改写；工作空间招募同 key 原 plan 重试，pending 仅无 Secret 防重复/人工核对；不改 Fleet/Daemon。",
+      "depends_on": [
+        "MP-03"
+      ],
+      "repositories": [
+        "octo-buddy-client"
+      ],
+      "owns_api_ids": [],
+      "consumes_api_ids": [
+        "A01",
+        "A02",
+        "A03",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A31",
+        "A34"
+      ],
+      "owns_new_tables": []
+    },
+    {
+      "id": "REL-01",
+      "title": "四端真实证据、部署门禁、旧执行器退役与数据安全回滚",
+      "path": "issues/08-cutover.md",
+      "description": "真实 MySQL/OSS/Fleet/Daemon 与 Admin/Web/CLI/Buddy 四端证据；部署层全入口门禁使旧市场执行器不可达；旧写入/A32 legacy 补偿退役；回滚只退兼容二进制并从历史生成新版本，不恢复指针；不把同名共存列为门槛。",
+      "depends_on": [
+        "MP-03",
+        "MP-04",
+        "CL-01",
+        "CL-02",
+        "CL-03"
+      ],
+      "repositories": [
+        "octo-marketplace",
+        "octo-admin",
+        "octo-web",
+        "octo-cli",
+        "octo-buddy-client"
+      ],
+      "integration_dependencies": [
+        "octo-fleet"
+      ],
+      "owns_api_ids": [],
+      "owns_new_tables": []
+    }
+  ],
+  "api_catalog_ids": [
+    "A01",
+    "A02",
+    "A03",
+    "A04",
+    "A05",
+    "A06",
+    "A07",
+    "A08",
+    "A10",
+    "A11",
+    "A12",
+    "A13",
+    "A14",
+    "A15",
+    "A16",
+    "A17",
+    "A18",
+    "A19",
+    "A21",
+    "A22",
+    "A23",
+    "A24",
+    "A25",
+    "A26",
+    "A27",
+    "A31",
+    "A32",
+    "A34",
+    "F01"
+  ],
+  "cutover_issue": "REL-01",
+  "runtime_fallbacks_allowed": false,
+  "latest_version_fallback_allowed": false,
+  "review_revision": "2026-10-26-five-groups",
+  "implementation_verified": false,
+  "baseline": {
+    "observed_at": "2026-10-26",
+    "main": "eec5223",
+    "merged_prs": [
+      124,
+      125,
+      128
+    ],
+    "closed_prs": [
+      126
+    ],
+    "open_prs": [
+      127
+    ],
+    "note": "本轮重新查询 GitHub/fetch；PR127 尚未合入，不作为已交付能力。"
+  },
+  "table_ownership_note": "保留 schema 1.1 的 owns_new_tables 字段名以兼容消费者；它列出本方案表职责，不表示基线已有表需要重建。按实际合并状态复用并提交增量 DDL。"
+}
