@@ -51,6 +51,17 @@ func missingRelationPins(source model.PluginType, rels []model.PluginRelation) b
 // Expert's published version; that Expert snapshot already carries its own
 // frozen Skill pins from its own publication.
 func FreezeRelationPins(ctx context.Context, tx *sql.Tx, source model.Plugin, rels []model.PluginRelation) error {
+	return freezeRelationPins(ctx, tx, source, rels, false)
+}
+
+// RefreshRelationPins is the new-publication variant: every Skill/Expert pin is
+// refreshed to the target current formal release, including a carried-forward
+// old pin. Approval of an already-frozen review must NOT call this.
+func RefreshRelationPins(ctx context.Context, tx *sql.Tx, source model.Plugin, rels []model.PluginRelation) error {
+	return freezeRelationPins(ctx, tx, source, rels, true)
+}
+
+func freezeRelationPins(ctx context.Context, tx *sql.Tx, source model.Plugin, rels []model.PluginRelation, force bool) error {
 	if !pinBearingSource(source.Type) {
 		return nil
 	}
@@ -92,7 +103,7 @@ func FreezeRelationPins(ctx context.Context, tx *sql.Tx, source model.Plugin, re
 			return referenceFieldError(i, 0, "target_plugin_id", "released_version_required")
 		}
 		pin := strings.TrimSpace(published.String)
-		if edge.TargetVersionID != nil && strings.TrimSpace(*edge.TargetVersionID) != "" {
+		if !force && edge.TargetVersionID != nil && strings.TrimSpace(*edge.TargetVersionID) != "" {
 			// Explicit pins are evidence the author selected that release. They are
 			// validated and preserved even when the target has since released a
 			// newer version.
@@ -144,12 +155,7 @@ func (r *Repo) freezePublishedSnapshotForRelease(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return ErrInvalidRelation
 	}
-	if !missingRelationPins(current.Type, rels) {
-		// Still validate explicit pins/connectors at the publication boundary; the
-		// release transaction re-reads the stored snapshot and rejects drift.
-		return FreezeRelationPins(ctx, tx, *current, rels)
-	}
-	if err = FreezeRelationPins(ctx, tx, *current, rels); err != nil {
+	if err = RefreshRelationPins(ctx, tx, *current, rels); err != nil {
 		return err
 	}
 	// The frozen graph must stay attached to exactly the label/content the caller
