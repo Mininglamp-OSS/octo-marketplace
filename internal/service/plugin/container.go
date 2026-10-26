@@ -53,6 +53,7 @@ const (
 // mapped to a category row).
 type ContainerImportParams struct {
 	ExpectedEditRevision *uint64
+	IdempotencyKey       string
 	SchemaVersion        string
 	Version              string
 	Archive              []byte

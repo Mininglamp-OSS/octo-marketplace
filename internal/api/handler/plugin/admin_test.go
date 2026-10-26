@@ -170,6 +170,7 @@ func TestAdminImportContainerForwardsArchiveAndAdminCaller(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/import", &body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Idempotency-Key", "import-key-1")
 	adminTestEngine(f, &fakeAdminCategories{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -206,6 +207,7 @@ func TestAdminReuploadContainerForwardsPluginIDArchiveAndAdminCaller(t *testing.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/container_reupload/expert-9", &body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Idempotency-Key", "reupload-key-1")
 	adminTestEngine(f, &fakeAdminCategories{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

@@ -10,7 +10,12 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
@@ -634,7 +639,9 @@ func (s *Service) AdminUpdateRating(ctx context.Context, caller Caller, pluginID
 // members, and relations) under the admin conventions. It is the admin-surface
 // name for ImportContainer, which already stamps the admin identity itself.
 func (s *Service) AdminImportContainer(ctx context.Context, caller Caller, p ContainerImportParams) (*Detail, error) {
-	return s.ImportContainer(ctx, caller, p)
+	return s.withContainerReceipt(ctx, caller, "import", "", p, func() (*Detail, error) {
+		return s.ImportContainer(ctx, caller, p)
+	})
 }
 
 // AdminReuploadContainer re-uploads an expert/expert_team container archive to
@@ -643,7 +650,81 @@ func (s *Service) AdminImportContainer(ctx context.Context, caller Caller, p Con
 // admin-surface name for ReuploadContainer, which already stamps the admin
 // identity itself.
 func (s *Service) AdminReuploadContainer(ctx context.Context, caller Caller, pluginID string, p ContainerImportParams) (*Detail, error) {
-	return s.ReuploadContainer(ctx, caller, pluginID, p)
+	return s.withContainerReceipt(ctx, caller, "reupload", pluginID, p, func() (*Detail, error) {
+		return s.ReuploadContainer(ctx, caller, pluginID, p)
+	})
+}
+
+func (s *Service) withContainerReceipt(ctx context.Context, caller Caller, operation, pluginID string, p ContainerImportParams, do func() (*Detail, error)) (*Detail, error) {
+	if strings.TrimSpace(p.IdempotencyKey) == "" {
+		return nil, ErrInvalidRequest
+	}
+	store, ok := s.repo.(interface {
+		GetContainerImportReceipt(context.Context, string, string, string, string) (*pluginrepo.ContainerImportReceipt, error)
+		InsertContainerImportReceipt(context.Context, pluginrepo.ContainerImportReceipt, time.Time) (bool, error)
+	})
+	if !ok {
+		return do()
+	}
+	digest := containerImportDigest(operation, pluginID, p)
+	rec, err := store.GetContainerImportReceipt(ctx, caller.UID, operation, pluginID, p.IdempotencyKey)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if rec != nil {
+		if rec.InputDigest != digest {
+			return nil, ErrIdempotencyConflict
+		}
+		var out Detail
+		if json.Unmarshal([]byte(rec.ResponseJSON), &out) != nil {
+			return nil, ErrIntegrity
+		}
+		return &out, nil
+	}
+	out, err := do()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return nil, ErrIntegrity
+	}
+	inserted, err := store.InsertContainerImportReceipt(ctx, pluginrepo.ContainerImportReceipt{ScopeUID: caller.UID, Operation: operation, PluginID: pluginID, IdempotencyKey: p.IdempotencyKey, InputDigest: digest, ResponseJSON: string(raw)}, s.now())
+	if err != nil || inserted {
+		return out, err
+	}
+	// A concurrent identical request won the unique key: replay its frozen response.
+	rec, err = store.GetContainerImportReceipt(ctx, caller.UID, operation, pluginID, p.IdempotencyKey)
+	if err != nil || rec == nil || rec.InputDigest != digest {
+		return nil, ErrIdempotencyConflict
+	}
+	var replay Detail
+	if json.Unmarshal([]byte(rec.ResponseJSON), &replay) != nil {
+		return nil, ErrIntegrity
+	}
+	return &replay, nil
+}
+
+func containerImportDigest(operation, pluginID string, p ContainerImportParams) string {
+	h := sha256.New()
+	h.Write([]byte(operation))
+	h.Write([]byte{0})
+	h.Write([]byte(pluginID))
+	h.Write([]byte{0})
+	h.Write([]byte(p.SchemaVersion))
+	h.Write([]byte{0})
+	h.Write([]byte(p.Version))
+	h.Write([]byte{0})
+	if p.CategoryID != nil {
+		h.Write([]byte(*p.CategoryID))
+	}
+	h.Write([]byte{0})
+	if p.ExpectedEditRevision != nil {
+		h.Write([]byte(strconv.FormatUint(*p.ExpectedEditRevision, 10)))
+	}
+	h.Write([]byte{0})
+	h.Write(p.Archive)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // AdminDelete soft-deletes any plugin by id, regardless of owner/Space. An

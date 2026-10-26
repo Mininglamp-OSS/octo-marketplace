@@ -327,6 +327,7 @@ func (h *AdminHandler) Create(c *gin.Context) {
 // @Accept multipart/form-data
 // @Produce json
 // @Security Bearer
+// @Param Idempotency-Key header string true "Stable key for this Admin container import"
 // @Param container_schema_version formData string false "Reference container schema version; 2 required when reference writes enabled"
 // @Param version formData string false "Declared version label"
 // @Param expected_edit_revision formData integer false "Editing revision; required for updates when version management is enabled"
@@ -367,6 +368,17 @@ func (h *AdminHandler) ImportContainer(c *gin.Context) {
 // The import and container-reupload routes share it so both enforce the same
 // limits and shape.
 func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImportParams, bool) {
+	key := c.GetHeader("Idempotency-Key")
+	if len(key) < 1 || len(key) > 200 {
+		validation(c, "Idempotency-Key")
+		return pluginsvc.ContainerImportParams{}, false
+	}
+	for _, r := range key {
+		if r < 0x20 || r > 0x7e {
+			validation(c, "Idempotency-Key")
+			return pluginsvc.ContainerImportParams{}, false
+		}
+	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
@@ -393,7 +405,7 @@ func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImp
 		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "container archive is too large", map[string]any{"max_bytes": maxBytes}, "Reduce the archive size and try again.")
 		return pluginsvc.ContainerImportParams{}, false
 	}
-	params := pluginsvc.ContainerImportParams{Archive: archive, SchemaVersion: c.PostForm("container_schema_version"), Version: c.PostForm("version")}
+	params := pluginsvc.ContainerImportParams{Archive: archive, SchemaVersion: c.PostForm("container_schema_version"), Version: c.PostForm("version"), IdempotencyKey: key}
 	if raw := c.PostForm("expected_edit_revision"); raw != "" {
 		revision, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil || revision == 0 {
@@ -417,6 +429,7 @@ func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImp
 // @Produce json
 // @Security Bearer
 // @Param plugin_id path string true "Plugin ID"
+// @Param Idempotency-Key header string true "Stable key for this Admin container reupload"
 // @Param container_schema_version formData string false "Reference container schema version; 2 required when reference writes enabled"
 // @Param version formData string false "Declared version label"
 // @Param expected_edit_revision formData integer false "Editing revision; required for updates when version management is enabled"
