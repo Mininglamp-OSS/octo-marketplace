@@ -173,6 +173,9 @@ type Plugin struct {
 	// currently attached to this Plugin. It is hydrated in one page-level query
 	// and is not persisted on the plugins row.
 	SceneCodes []string
+	// DependencyIssues is derived from the released dependency graph for owner
+	// and admin reads. It is never stored or exposed on the public catalog.
+	DependencyIssues []DependencyIssue
 	// HasPendingReview / LatestReviewID / LatestReviewStatus are the review half of
 	// the displayed status. They are DERIVED at read time and never persisted on
 	// this row — review state lives on plugin_review_requests so a listed v1 and an
@@ -197,6 +200,16 @@ type Plugin struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	DeletedAt        *time.Time
+}
+
+// DependencyIssue explains why a listed expert or team is hidden from the
+// catalog. Via contains the member expert ID for an indirect team dependency.
+type DependencyIssue struct {
+	TargetPluginID string   `json:"target_plugin_id"`
+	TargetName     string   `json:"target_name"`
+	RelationType   string   `json:"relation_type"`
+	Reason         string   `json:"reason"`
+	Via            []string `json:"via"`
 }
 
 // PluginRelation is one directed, one-level composition edge.

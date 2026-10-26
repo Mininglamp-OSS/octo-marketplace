@@ -238,6 +238,7 @@ type listItemResponse struct {
 	InstallCount     int                       `json:"install_count"`
 	DownloadCount    int                       `json:"download_count"`
 	SceneCodes       []string                  `json:"scene_codes"`
+	DependencyIssues []model.DependencyIssue   `json:"dependency_issues,omitempty"`
 	ManifestJSON     json.RawMessage           `json:"manifest_json" swaggertype:"object"`
 	ManifestHash     string                    `json:"manifest_hash"`
 	PluginHash       string                    `json:"plugin_hash"`
@@ -259,8 +260,9 @@ type relationResponse struct {
 }
 
 type detailResponse struct {
-	Plugin    pluginResponse     `json:"plugin"`
-	Relations []relationResponse `json:"relations"`
+	Plugin           pluginResponse          `json:"plugin"`
+	Relations        []relationResponse      `json:"relations"`
+	DependencyIssues []model.DependencyIssue `json:"dependency_issues,omitempty"`
 	// RelationResult reports upsert relation target-state synchronization:
 	// empty relation_id created, known relation_id with changes updated, live
 	// relations omitted from the submission deleted. Absent on reads.
@@ -268,9 +270,10 @@ type detailResponse struct {
 }
 
 type detailGraphResponse struct {
-	Plugin         pluginResponse     `json:"plugin"`
-	Relations      []relationResponse `json:"relations"`
-	RelatedPlugins []listItemResponse `json:"related_plugins"`
+	Plugin           pluginResponse          `json:"plugin"`
+	Relations        []relationResponse      `json:"relations"`
+	RelatedPlugins   []listItemResponse      `json:"related_plugins"`
+	DependencyIssues []model.DependencyIssue `json:"dependency_issues,omitempty"`
 }
 
 type relationResultResponse struct {
@@ -311,7 +314,7 @@ type categoryResponse struct {
 
 // List godoc
 // @Summary List plugins
-// @Description List Plugins visible in the authoritative caller Space using offset pagination.
+// @Description List Plugins visible in the authoritative caller Space using offset pagination. The catalog hides experts and teams with unavailable published dependencies; mode=mine retains them and reports dependency_issues.
 // @Tags plugin
 // @ID plugin.list
 // @Accept json
@@ -379,7 +382,7 @@ func (h *Handler) List(c *gin.Context) {
 
 // Get godoc
 // @Summary Get plugin
-// @Description Return one Plugin and its visible one-level relations without leaking cross-Space existence.
+// @Description Return one Plugin and its visible one-level relations without leaking cross-Space existence. An expert or team with unavailable published dependencies returns NOT_FOUND to non-owners; its owner receives dependency_issues.
 // @Tags plugin
 // @ID plugin.get
 // @Accept json
@@ -419,7 +422,7 @@ func (h *Handler) Get(c *gin.Context) {
 
 // GetGraph godoc
 // @Summary Get plugin relation graph
-// @Description Return one Plugin (full projection identical to GET /plugins/detail, including owner-only review state in the current Space) together with the flat, deduplicated transitive closure of its relation graph and every edge in that closure, up to the fixed depth enforced by the relation matrix. Every related plugin — bundled (embedded) children included — is filtered by the same per-row visibility predicate GET /plugins/detail applies; hidden ones are silently omitted, edge and node. Related plugins include review state only for the caller's own nodes in the current Space. related_plugins is a lookup table keyed by plugin_id rather than a tree: an entry is not guaranteed to be referenced by an edge.
+// @Description Return one Plugin and its flat relation closure. An expert or team with unavailable published dependencies returns NOT_FOUND to non-owners; the owner receives dependency_issues and a root-only diagnostic graph. Other related plugins are filtered by the same per-row visibility predicate as GET /plugins/detail.
 // @Tags plugin
 // @ID plugin.graph.get
 // @Accept json
@@ -875,7 +878,7 @@ func listItemDTO(p *model.Plugin) listItemResponse {
 	if p == nil {
 		return listItemResponse{}
 	}
-	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 func nonNilStrings(values []string) []string {
@@ -913,7 +916,7 @@ func detailDTO(d *pluginsvc.Detail) detailResponse {
 		}
 		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
 	}
-	out := detailResponse{Plugin: pluginDTO(d.Plugin), Relations: rels}
+	out := detailResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, DependencyIssues: d.DependencyIssues}
 	if d.RelationResult != nil {
 		out.RelationResult = &relationResultResponse{Created: d.RelationResult.Created, Updated: d.RelationResult.Updated, Deleted: d.RelationResult.Deleted}
 	}
@@ -931,7 +934,7 @@ func detailGraphDTO(d *pluginsvc.DetailGraph) detailGraphResponse {
 	for i, p := range d.Related {
 		related[i] = listItemDTO(p)
 	}
-	return detailGraphResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, RelatedPlugins: related}
+	return detailGraphResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, RelatedPlugins: related, DependencyIssues: d.DependencyIssues}
 }
 func versionDTO(x model.PluginVersion) versionResponse {
 	var release *versionReleaseResponse

@@ -104,7 +104,7 @@ func (s *Service) adoptPublishedBaseline(ctx context.Context, caller Caller, d *
 
 // publishedDetail overlays only immutable content. Current permissions, listing,
 // and moderation metadata remain authoritative; a draft cannot freeze access.
-func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *model.Plugin, rels []model.PluginRelation) (*Detail, error) {
+func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *model.Plugin, rels []model.PluginRelation, allowUnavailable bool) (*Detail, error) {
 	if !s.versionManagement || p.Type == model.PluginTypeConnector {
 		return &Detail{Plugin: p, Relations: rels}, nil
 	}
@@ -132,8 +132,10 @@ func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *m
 	if err != nil {
 		return nil, ErrIntegrity
 	}
-	if err = s.checkHistoricalRelations(ctx, sc, frozen); err != nil {
-		return nil, err
+	if !allowUnavailable {
+		if err = s.checkHistoricalRelations(ctx, sc, frozen); err != nil {
+			return nil, err
+		}
 	}
 	copy := *p
 	copy.Manifest = v.Manifest
@@ -420,7 +422,7 @@ func (s *Service) publishedPlugin(ctx context.Context, sc pluginrepo.Scope, id s
 	if sc.Admin {
 		return p, nil
 	}
-	d, err := s.publishedDetail(ctx, sc, p, rels)
+	d, err := s.publishedDetail(ctx, sc, p, rels, false)
 	if err != nil {
 		return nil, err
 	}
@@ -434,6 +436,11 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 	root, err := s.Detail(ctx, caller, id, true)
 	if err != nil {
 		return nil, err
+	}
+	if len(root.DependencyIssues) > 0 {
+		// The author can diagnose a broken published graph without traversing a
+		// deleted target. Ordinary readers were already rejected by Detail.
+		return &DetailGraph{Plugin: root.Plugin, Relations: root.Relations, Related: []*model.Plugin{}, DependencyIssues: root.DependencyIssues}, nil
 	}
 	out := &DetailGraph{Plugin: root.Plugin, Relations: []model.PluginRelation{}, Related: []*model.Plugin{}}
 	seen := map[string]bool{id: true}

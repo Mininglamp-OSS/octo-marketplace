@@ -14,42 +14,43 @@ import (
 )
 
 type fakeStore struct {
-	plugins        map[string]*model.Plugin
-	relations      map[string][]model.PluginRelation
-	getIDs         []string
-	listScope      pluginrepo.Scope
-	listFilter     pluginrepo.ListFilter
-	create         *model.Plugin
-	createScope    pluginrepo.Scope
-	createRels     []model.PluginRelation
-	createPlace    []model.PluginPlacement
-	createAudit    model.PluginAuditLog
-	createSnapshot bool
-	graphNodes     []pluginrepo.Mutation
-	graphScope     pluginrepo.Scope
-	graphErr       error
-	rebuildTop     *pluginrepo.Mutation
-	rebuildChild   []pluginrepo.Mutation
-	rebuildOldIDs  []string
-	rebuildScope   pluginrepo.Scope
-	rebuildErr     error
-	update         *model.Plugin
-	updateRels     []model.PluginRelation
-	updateSnapshot bool
-	updateErr      error
-	ratingParams   pluginrepo.RatingParams
-	ratingScope    pluginrepo.Scope
-	deleteScope    pluginrepo.Scope
-	deleteID       string
-	deleteGraphID  string
-	deleteChildIDs []string
-	versionID      string
-	versions       []model.PluginVersion
-	scopeAware     bool
-	versionTotal   int64
-	list           []model.Plugin
-	memberCounts   map[string]int
-	memberCountIDs []string
+	dependencyIssues map[string][]model.DependencyIssue
+	plugins          map[string]*model.Plugin
+	relations        map[string][]model.PluginRelation
+	getIDs           []string
+	listScope        pluginrepo.Scope
+	listFilter       pluginrepo.ListFilter
+	create           *model.Plugin
+	createScope      pluginrepo.Scope
+	createRels       []model.PluginRelation
+	createPlace      []model.PluginPlacement
+	createAudit      model.PluginAuditLog
+	createSnapshot   bool
+	graphNodes       []pluginrepo.Mutation
+	graphScope       pluginrepo.Scope
+	graphErr         error
+	rebuildTop       *pluginrepo.Mutation
+	rebuildChild     []pluginrepo.Mutation
+	rebuildOldIDs    []string
+	rebuildScope     pluginrepo.Scope
+	rebuildErr       error
+	update           *model.Plugin
+	updateRels       []model.PluginRelation
+	updateSnapshot   bool
+	updateErr        error
+	ratingParams     pluginrepo.RatingParams
+	ratingScope      pluginrepo.Scope
+	deleteScope      pluginrepo.Scope
+	deleteID         string
+	deleteGraphID    string
+	deleteChildIDs   []string
+	versionID        string
+	versions         []model.PluginVersion
+	scopeAware       bool
+	versionTotal     int64
+	list             []model.Plugin
+	memberCounts     map[string]int
+	memberCountIDs   []string
 	// declaredCounts overrides the unfiltered declared-relation count per plugin;
 	// unset entries default to len(relations[id]) so declared==visible and the
 	// install dependency-visibility guard stays inert for existing tests.
@@ -88,6 +89,16 @@ func (f *fakeStore) List(_ context.Context, s pluginrepo.Scope, filter pluginrep
 	f.listScope = s
 	f.listFilter = filter
 	return f.list, int64(len(f.list)), f.err
+}
+func (f *fakeStore) DependencyIssues(_ context.Context, _ pluginrepo.Scope, roots []model.Plugin) (map[string][]model.DependencyIssue, error) {
+	out := map[string][]model.DependencyIssue{}
+	for _, root := range roots {
+		out[root.ID] = f.dependencyIssues[root.ID]
+	}
+	return out, nil
+}
+func (f *fakeStore) HasUnavailableDependencies(_ context.Context, _ pluginrepo.Scope, id string) (bool, error) {
+	return len(f.dependencyIssues[id]) > 0, nil
 }
 func (f *fakeStore) ListTags(_ context.Context, _ pluginrepo.Scope, filter pluginrepo.TagListFilter) ([]model.TagFilter, error) {
 	f.tagFilter = filter
