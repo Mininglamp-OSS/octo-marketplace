@@ -787,6 +787,10 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		// and reason so the browser can show the user which input to fix,
 		// instead of collapsing every cause into {"field":"body","reason":"invalid"}.
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, "Correct the request and try again.")
+	case errors.Is(err, pluginsvc.ErrDependencyUnavailable):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a dependency is not available in the current published graph", map[string]any{"reason": "dependency_unavailable"}, "Refresh the plugin and ask the publisher to repair the dependency.")
+	case errors.Is(err, pluginsvc.ErrZipOnlyRequired):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "expert/team content must use schema2 ZIP import", map[string]any{"field": "plugin_type", "reason": "zip_only_required"}, "Upload the expert or team through the container import endpoint.")
 	case errors.Is(err, pluginsvc.ErrInvalidRequest):
 		validation(c, "body")
 	case errors.Is(err, pluginsvc.ErrReviewInvalid):

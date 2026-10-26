@@ -113,6 +113,10 @@ func (s *Service) Distribution(ctx context.Context, caller Caller, id string) (*
 		version := graph.Selected[id]
 		node := DistributionNode{PluginID: id, PluginType: p.Type, VersionID: version}
 		if p.Type == model.PluginTypeConnector {
+			// Connector assets carry mcp_config only; expose an explicit empty
+			// files list so clients never have to distinguish omitted vs empty.
+			emptyFiles := []DistributionFileInfo{}
+			node.Files = &emptyFiles
 			if p.EffectiveRevision == nil || p.EffectiveDigest == nil {
 				return nil, ErrIntegrity
 			}
@@ -122,7 +126,7 @@ func (s *Service) Distribution(ctx context.Context, caller Caller, id string) (*
 				return nil, ErrIntegrity
 			}
 			// The effective revision and its complete payload were read together.
-			if *p.EffectiveDigest != "sha256:"+contentSHA256([]byte(p.ManifestHash+"\x00"+p.PluginHash)) {
+			if *p.EffectiveDigest != model.EffectiveDigest(p) {
 				return nil, ErrIntegrity
 			}
 			node.NodeKey = id + "@" + strconv.FormatUint(*p.EffectiveRevision, 10)

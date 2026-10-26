@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
+	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 )
 
 func TestReferenceDeliveryOwnerPrivateSnapshotAndLifecycle(t *testing.T) {
@@ -318,5 +319,34 @@ func setPublishedFixture(t *testing.T, db *sql.DB, id, version string) {
 	t.Helper()
 	if _, err := db.Exec(`UPDATE plugins SET published_version_id=? WHERE plugin_id=?`, version, id); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServiceAcceptanceAllowsOptionalAuditVersion(t *testing.T) {
+	database := reviewDB(t)
+	ctx := context.Background()
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(true)
+	seed(t, database, seedPlugin{id: "optional-skill", typ: "skill", visibility: "private", listingState: "published"})
+	seedVersionRow(t, database, "optional-skill-v1", "optional-skill", "1")
+	if _, err := database.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('optional-skill','optional-skill-v1','1.0.0','user-1',NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE plugins SET published_version_id='optional-skill-v1' WHERE plugin_id='optional-skill'`); err != nil {
+		t.Fatal(err)
+	}
+	owner := managedOwner()
+	created, err := svc.Create(ctx, owner, managedWrite("1.0.0", "initial", model.PluginVisibilityPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := managedWrite("1.0.1", "updated", model.PluginVisibilityPrivate)
+	req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: "optional-skill", Type: "expert_skill"}}
+	req = editingWrite(t, database, created.Plugin.ID, req)
+	updated, err := svc.Update(ctx, owner, created.Plugin.ID, req)
+	if err != nil {
+		t.Fatalf("service rejected optional audit version: %v", err)
+	}
+	if len(updated.Relations) != 1 || updated.Relations[0].TargetVersionID != nil {
+		t.Fatalf("optional audit version was rewritten: %+v", updated.Relations)
 	}
 }

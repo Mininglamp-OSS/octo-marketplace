@@ -142,7 +142,7 @@ func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.
 		t.Fatal(err)
 	}
 	out, err := svc.CreateInstallation(ctx, owner, d.Plugin.ID, p)
-	if err != nil || !out.Replayed || remote.calls != 2 {
+	if err != nil || !out.Replayed || remote.calls != 1 {
 		t.Fatalf("retry %+v %v calls%d", out, err, remote.calls)
 	}
 	var persisted string

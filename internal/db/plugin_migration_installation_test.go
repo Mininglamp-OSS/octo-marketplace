@@ -72,8 +72,10 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 		t.Fatal("migrated instruction bytes changed")
 	}
 	name := d.Skills[0].Name
-	if !strings.Contains(name, "-mk1-") || !strings.Contains(d.Skills[0].Content, "name: "+name) || len(d.Experts[0].SkillNames) != 1 || d.Experts[0].SkillNames[0] != name {
-		t.Fatal("migrated skill alias/content/binding mismatch")
+	// The new adapter preserves the market name and original SKILL.md bytes; it
+	// must not mint the obsolete mk1 alias or rewrite the frontmatter name.
+	if name != "migration-install-skill" || strings.Contains(name, "-mk1-") || !strings.Contains(d.Skills[0].Content, "name: skill") || len(d.Experts[0].SkillNames) != 1 || d.Experts[0].SkillNames[0] != name {
+		t.Fatalf("migrated skill name/content/binding mismatch: name=%q content=%q skills=%v", name, d.Skills[0].Content, d.Experts[0].SkillNames)
 	}
 	if !strings.Contains(string(d.Experts[0].MCPConfig), `"search"`) {
 		t.Fatal("independent connector not loaded")

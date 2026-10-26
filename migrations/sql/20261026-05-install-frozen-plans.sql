@@ -8,7 +8,7 @@ ALTER TABLE plugin_install_attempts
  ADD COLUMN lease_token VARCHAR(64) NULL,
  ADD COLUMN lease_until DATETIME(3) NULL,
  ADD COLUMN retry_until DATETIME(3) NULL,
- ADD CONSTRAINT chk_install_attempt_state CHECK (attempt_state IN ('PREPARED','DISPATCHING','SUCCEEDED','FAILED','UNKNOWN'));
+ ADD CONSTRAINT chk_install_attempt_state CHECK (attempt_state IN ('PREPARED','DISPATCHING','SUCCEEDED','FAILED','UNKNOWN','EXPIRED'));
 -- Existing attempts have no frozen payload. Retain uncertainty; never infer
 -- a replacement plan from today's mutable catalog.
 UPDATE plugin_install_attempts SET attempt_state='SUCCEEDED' WHERE completed=TRUE;

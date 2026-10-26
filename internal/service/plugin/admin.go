@@ -175,6 +175,9 @@ func defaultMarketPlacement(categoryID *string) model.PluginPlacement {
 
 // AdminCreate mints a new admin plugin (system connector or system skill).
 func (s *Service) AdminCreate(ctx context.Context, caller Caller, req WriteRequest) (*Detail, error) {
+	if !req.AllowContainerTypes && (req.Type == model.PluginTypeExpert || req.Type == model.PluginTypeExpertTeam) {
+		return nil, ErrZipOnlyRequired
+	}
 	if s.versionManagement && req.ExpectedEditRevision != nil {
 		return nil, ErrInvalidRequest
 	}
@@ -296,6 +299,9 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	}
 	if req.Type != old.Type {
 		return nil, ErrInvalidRequest
+	}
+	if !req.AllowContainerTypes && (old.Type == model.PluginTypeExpert || old.Type == model.PluginTypeExpertTeam) {
+		return nil, ErrZipOnlyRequired
 	}
 	// Storage-attachment keys are namespaced under the row's real Space, so
 	// canonicalization must validate against it — not the empty global Space

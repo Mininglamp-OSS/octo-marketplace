@@ -345,6 +345,25 @@ func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Ti
 		}
 	}
 	if n.Type == model.PluginTypeConnector {
+		// Migrated Connectors were review-gated before effective isolation. Seed
+		// revision 1 so B-model reads/install can resolve them; digest mirrors the
+		// effective-row formula used by the repository backfill. Older upgrade
+		// fixtures intentionally run this code before the effective table exists,
+		// so the backfill is conditional on the additive schema being present.
+		var effectiveTable int
+		if tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='plugin_connector_effective'`).Scan(&effectiveTable) != nil {
+			return ErrRead
+		}
+		if effectiveTable == 0 {
+			return nil
+		}
+		if _, e := tx.ExecContext(ctx, `INSERT INTO plugin_connector_effective
+ (plugin_id,effective_revision,effective_digest,plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,updated_by,updated_at)
+ SELECT plugin_id,1,CONCAT('sha256:',SHA2(CONCAT('v2',CHAR(31),manifest_hash,CHAR(31),plugin_hash,CHAR(31),plugin_name,CHAR(31),COALESCE(CAST(tags_json AS CHAR),''),CHAR(31),CAST(tool_count AS CHAR),CHAR(31),COALESCE(CAST(manifest_json AS CHAR),''),CHAR(31),COALESCE(CAST(plugin_json AS CHAR),''),CHAR(31),COALESCE(CAST(attachment_keys_json AS CHAR),''),CHAR(31),COALESCE(current_version,''),CHAR(31),visibility),256)),plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,'stock-migration',?
+ FROM plugins WHERE plugin_id=?
+ ON DUPLICATE KEY UPDATE effective_digest=VALUES(effective_digest),plugin_name=VALUES(plugin_name),tags_json=VALUES(tags_json),tool_count=VALUES(tool_count),manifest_json=VALUES(manifest_json),plugin_json=VALUES(plugin_json),attachment_keys_json=VALUES(attachment_keys_json),manifest_hash=VALUES(manifest_hash),plugin_hash=VALUES(plugin_hash),current_version=VALUES(current_version),visibility=VALUES(visibility),updated_by=VALUES(updated_by),updated_at=VALUES(updated_at)`, now, p.ID); e != nil {
+			return ErrWrite
+		}
 		return nil
 	}
 	raw, e := model.EncodeSnapshotRelations(n.Relations)

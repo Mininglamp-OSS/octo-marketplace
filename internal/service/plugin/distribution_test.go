@@ -48,7 +48,8 @@ func distributionTestService(t *testing.T) (*Service, *distributionFixture) {
 	p.Manifest = json.RawMessage(`{"plugin_name":"Connector"}`)
 	p.ManifestHash = hashJSON(p.Manifest)
 	p.PluginHash, _ = libplugin.ComputePluginHash(p.Manifest, p.Package)
-	digest := "sha256:" + contentSHA256([]byte(p.ManifestHash+"\x00"+p.PluginHash))
+	p.Tags = json.RawMessage(`[]`)
+	digest := model.EffectiveDigest(*p)
 	p.EffectiveDigest = &digest
 	p.Manifest = json.RawMessage(`{"plugin_name":"Connector"}`)
 	store := &distributionFixture{Store: &fakeStore{}, graph: g}
@@ -89,7 +90,7 @@ func TestDistributionOriginalContentAndJCSDigest(t *testing.T) {
 	p := f.graph.Plugins["connector"]
 	p.Package = packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"search-v2"}}}`))
 	p.PluginHash, _ = libplugin.ComputePluginHash(p.Manifest, p.Package)
-	d := "sha256:" + contentSHA256([]byte(p.ManifestHash+"\x00"+p.PluginHash))
+	d := model.EffectiveDigest(*p)
 	p.EffectiveDigest = &d
 	*p.EffectiveRevision = 3
 	next, err := s.Distribution(context.Background(), testCaller, "expert-a")

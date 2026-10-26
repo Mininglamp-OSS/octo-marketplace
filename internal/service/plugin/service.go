@@ -20,12 +20,17 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("plugin not found")
-	ErrConflict       = errors.New("plugin conflict")
-	ErrEditConflict   = errors.New("plugin edit conflict")
-	ErrRelationInUse  = errors.New("plugin is referenced by another live plugin")
-	ErrInvalidRequest = errors.New("invalid plugin request")
-	ErrTooLarge       = errors.New("plugin artifact exceeds size limit")
+	ErrNotFound              = errors.New("plugin not found")
+	ErrDependencyUnavailable = errors.New("plugin dependency unavailable")
+	ErrAttemptExpired        = errors.New("installation attempt expired")
+	ErrConflict              = errors.New("plugin conflict")
+	ErrEditConflict          = errors.New("plugin edit conflict")
+	ErrRelationInUse         = errors.New("plugin is referenced by another live plugin")
+	ErrInvalidRequest        = errors.New("invalid plugin request")
+	// ErrZipOnlyRequired marks the A24 boundary: Expert/Team content and
+	// content metadata are accepted only through the A25 schema2 ZIP surface.
+	ErrZipOnlyRequired = errors.New("expert/team content requires schema2 ZIP import")
+	ErrTooLarge        = errors.New("plugin artifact exceeds size limit")
 	// ErrDeadlock is returned when a review transaction was chosen as the InnoDB
 	// deadlock victim (submit and the decision paths take the plugin/request rows
 	// in opposite orders). It is TRANSIENT — the aborted transaction did not
@@ -264,6 +269,9 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
+	// AllowContainerTypes is an internal A25-only escape hatch. It is never
+	// decoded from the A24 JSON wire; external A24 writes must use ZIP.
+	AllowContainerTypes      bool
 	ExpectedEditRevision     *uint64
 	expectedCurrentVersionID string
 	// grandfatheredVersion is the plugin's STORED version label, set only by
@@ -1033,10 +1041,13 @@ func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, sour
 			field := fmt.Sprintf("relations[%d].target_version_id", index)
 			if r.Type == "expert_connector" {
 				if r.TargetVersionID != nil {
-					return nil, &ReviewFieldError{Field: field, Reason: "connector_version_not_allowed", Err: ErrInvalidRequest}
+					return nil, &ReviewFieldError{Field: field, Reason: "connector_version_forbidden", Err: ErrInvalidRequest}
 				}
-			} else if r.TargetVersionID == nil || strings.TrimSpace(*r.TargetVersionID) == "" {
-				return nil, &ReviewFieldError{Field: field, Reason: "released_version_required", Err: ErrInvalidRequest}
+			} else if r.TargetVersionID != nil && strings.TrimSpace(*r.TargetVersionID) == "" {
+				// The field is optional audit evidence now. An explicitly supplied
+				// but empty value is still malformed; the repository validates that
+				// a non-empty value belongs to the target and has been released.
+				return nil, &ReviewFieldError{Field: field, Reason: "dependency_version_mismatch", Err: ErrInvalidRequest}
 			}
 		}
 		if !s.references && r.TargetVersionID != nil {
@@ -1129,6 +1140,8 @@ func mapStoreError(err error) error {
 		return nil
 	case errors.Is(err, pluginrepo.ErrNotFound):
 		return ErrNotFound
+	case errors.Is(err, pluginrepo.ErrDependencyUnavailable):
+		return ErrDependencyUnavailable
 	case errors.Is(err, pluginrepo.ErrEditConflict):
 		return ErrEditConflict
 	case errors.Is(err, pluginrepo.ErrConflict):

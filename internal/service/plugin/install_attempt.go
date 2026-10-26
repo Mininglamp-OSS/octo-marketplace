@@ -25,6 +25,7 @@ type InstallationAttemptStore interface {
 	SetInstallDispatchUnknown(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt, string) error
 	FinishInstallDispatch(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt, string) (bool, error)
 	FailInstallDispatch(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt, string) (bool, error)
+	ExpireInstallAttempt(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt) error
 }
 
 func digestInstall(v any) string {
@@ -47,6 +48,17 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		keyID = attempt.HMACKeyID
 	}
 	intent := digestInstall(struct{ Root, Space, Workspace, Runtime, Name string }{id, caller.SpaceID, p.WorkspaceID, p.RuntimeID, p.ResourceName})
+	if attempt != nil {
+		if attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion {
+			return nil, ErrConflict
+		}
+		// A committed result is terminal. Replaying it locally avoids a second
+		// Fleet call and does not require the caller to re-supply custom_env or
+		// any other secret-bearing runtime input.
+		if attempt.Completed {
+			return &InstallationOutcome{AgentID: attempt.AgentID, SquadID: attempt.TeamID, Replayed: true}, nil
+		}
+	}
 	input, err := s.installationHMAC(keyID, "input", struct {
 		Intent string
 		Env    map[string]string
@@ -136,7 +148,8 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 	}
 	now := s.now()
 	if attempt.RetryUntil != nil && !now.Before(*attempt.RetryUntil) {
-		return nil, ErrConflict
+		_ = store.ExpireInstallAttempt(context.WithoutCancel(ctx), scope(caller), *attempt)
+		return nil, &InstallationAttemptError{Err: ErrAttemptExpired, AttemptID: digestInstall([]string{caller.SpaceID, caller.UID, p.WorkspaceID, key}), RetryUntil: attempt.RetryUntil}
 	}
 	completed := attempt.Completed
 	token := s.id()
@@ -148,10 +161,27 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if !acquired {
 			return nil, ErrConflict
 		}
+		// AcquireInstallDispatch persists the retry deadline with COALESCE so a
+		// retry never extends it, but it does not mutate this in-memory attempt.
+		// Reload that durable value before any later completion failure can be
+		// reported as non-retryable; never derive a fresh deadline here.
+		refreshed, readErr := store.GetInstallAttempt(ctx, scope(caller), p.WorkspaceID, key)
+		if readErr != nil {
+			return nil, mapStoreError(readErr)
+		}
+		if refreshed == nil || refreshed.RetryUntil == nil {
+			return nil, ErrIntegrity
+		}
+		attempt.RetryUntil = refreshed.RetryUntil
+		attempt.LeaseToken = refreshed.LeaseToken
+		attempt.LeaseUntil = refreshed.LeaseUntil
+		attempt.State = refreshed.State
+		attempt.HadUnknown = refreshed.HadUnknown
 	}
 	// Until local Workspace authorization is wired, Fleet remains the authority
 	// even for a known result: submit exactly the frozen same-key request.
-	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey, *request)
+	attemptID := digestInstall([]string{caller.SpaceID, caller.UID, p.WorkspaceID, key})
+	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, attemptID, *request)
 	if err != nil || result == nil {
 		if err == nil {
 			err = errors.New("missing installation result")

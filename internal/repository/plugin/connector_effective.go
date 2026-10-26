@@ -2,9 +2,7 @@ package plugin
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -16,12 +14,12 @@ func writeConnectorEffective(ctx context.Context, tx *sql.Tx, p model.Plugin, ac
 	if p.Type != model.PluginTypeConnector {
 		return ErrInvalidRelation
 	}
-	digest := sha256.Sum256([]byte(p.ManifestHash + "\x00" + p.PluginHash))
+	digest := model.EffectiveDigest(p)
 	_, err := tx.ExecContext(ctx, `INSERT INTO plugin_connector_effective
  (plugin_id,effective_revision,effective_digest,plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,updated_by,updated_at)
  VALUES (?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)
  ON DUPLICATE KEY UPDATE effective_revision=IF(effective_digest=VALUES(effective_digest),effective_revision,effective_revision+1),effective_digest=VALUES(effective_digest),plugin_name=VALUES(plugin_name),tags_json=VALUES(tags_json),tool_count=VALUES(tool_count),manifest_json=VALUES(manifest_json),plugin_json=VALUES(plugin_json),attachment_keys_json=VALUES(attachment_keys_json),manifest_hash=VALUES(manifest_hash),plugin_hash=VALUES(plugin_hash),current_version=VALUES(current_version),visibility=VALUES(visibility),updated_by=VALUES(updated_by),updated_at=VALUES(updated_at)`,
-		p.ID, "sha256:"+hex.EncodeToString(digest[:]), p.Name, string(p.Tags), p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersion, p.Visibility, actor, now)
+		p.ID, digest, p.Name, string(p.Tags), p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersion, p.Visibility, actor, now)
 	return err
 }
 

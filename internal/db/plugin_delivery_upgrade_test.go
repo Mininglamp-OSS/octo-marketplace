@@ -19,7 +19,7 @@ func TestReferenceToInstallationDeliveryMigrationCatchupMySQL(t *testing.T) {
 	}
 	prior := make([]*migrate.Migration, 0, len(all))
 	for _, m := range all {
-		if m.Id == "20261024-02-plugin-install-attempts.sql" || m.Id == "20261024-03-stock-migration-batches.sql" || m.Id == "20261026-01-install-migration-access-indexes.sql" {
+		if m.Id == "20261024-02-plugin-install-attempts.sql" || m.Id == "20261024-03-stock-migration-batches.sql" || m.Id == "20261026-01-install-migration-access-indexes.sql" || m.Id == "20261026-05-install-frozen-plans.sql" {
 			continue
 		}
 		prior = append(prior, m)
@@ -27,7 +27,7 @@ func TestReferenceToInstallationDeliveryMigrationCatchupMySQL(t *testing.T) {
 	if _, err := migrate.Exec(database, "mysql", migrate.MemoryMigrationSource{Migrations: prior}, migrate.Up); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 3 {
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 4 {
 		t.Fatalf("PR3 catch-up: applied=%d err=%v", n, err)
 	}
 	for _, name := range []string{"plugin_install_attempts", "plugin_stock_migration_batches", "plugin_stock_migration_roots", "plugin_version_reference_index_state"} {

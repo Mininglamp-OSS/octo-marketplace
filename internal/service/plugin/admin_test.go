@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -272,13 +273,14 @@ func TestAdminUpdateResolvesRelationTargetsUnderAdminScope(t *testing.T) {
 	manifest := json.RawMessage(`{"$schema":"cowork-plugin-manifest-2.0.json","plugin_name":"E","plugin_type":"expert","name":"e","description":"d","labels":[],"examples":[]}`)
 	pkg := json.RawMessage(`{"$schema":"cowork-plugin-package-2.0.json","attachments":[{"path":"AGENTS.md","content_type":"raw","mime_type":"text/markdown","raw_content":"# doc"}]}`)
 	req := WriteRequest{
-		Name:       "E",
-		Type:       model.PluginTypeExpert,
-		Visibility: model.PluginVisibilitySpace,
-		Tags:       json.RawMessage(`[]`),
-		Manifest:   manifest,
-		Package:    pkg,
-		Relations:  []RelationRequest{{TargetPluginID: "skill-1", Type: "expert_skill", SortOrder: 0}},
+		AllowContainerTypes: true,
+		Name:                "E",
+		Type:                model.PluginTypeExpert,
+		Visibility:          model.PluginVisibilitySpace,
+		Tags:                json.RawMessage(`[]`),
+		Manifest:            manifest,
+		Package:             pkg,
+		Relations:           []RelationRequest{{TargetPluginID: "skill-1", Type: "expert_skill", SortOrder: 0}},
 	}
 	if _, err := fixedService(f).AdminUpdate(context.Background(), adminCaller, "expert-1", req); err != nil {
 		t.Fatalf("admin update echoing a space-scoped relation failed: %v", err)
@@ -390,5 +392,26 @@ func TestAdminUpdatePreservesCurrentVersion(t *testing.T) {
 	}
 	if f.update == nil || f.update.CurrentVersion == nil || *f.update.CurrentVersion != ver {
 		t.Fatalf("current_version not preserved: %#v", f.update)
+	}
+}
+
+func TestAdminCreateRejectsExpertJSONWithZipOnlyReason(t *testing.T) {
+	req := adminSkillRequest()
+	req.Type = model.PluginTypeExpert
+	_, err := fixedService(&fakeStore{}).AdminCreate(context.Background(), adminCaller, req)
+	if !errors.Is(err, ErrZipOnlyRequired) {
+		t.Fatalf("AdminCreate expert err=%v, want ErrZipOnlyRequired", err)
+	}
+}
+
+func TestAdminUpdateRejectsExpertJSONWithZipOnlyReason(t *testing.T) {
+	f := &fakeStore{}
+	expert := &model.Plugin{ID: "expert-1", Type: model.PluginTypeExpert, OwnerUID: "admin", Visibility: model.PluginVisibilitySystem, ListingState: model.PluginListingStatePublished, Status: 1}
+	f.plugins = map[string]*model.Plugin{"expert-1": expert}
+	req := adminSkillRequest()
+	req.Type = model.PluginTypeExpert
+	_, err := fixedService(f).AdminUpdate(context.Background(), adminCaller, "expert-1", req)
+	if !errors.Is(err, ErrZipOnlyRequired) {
+		t.Fatalf("AdminUpdate expert err=%v, want ErrZipOnlyRequired", err)
 	}
 }

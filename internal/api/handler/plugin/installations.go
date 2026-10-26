@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -29,8 +30,11 @@ type capabilityInstallationService interface {
 type createInstallationRequest struct {
 	ResourceName string                          `json:"resource_name,omitempty" maxLength:"128"`
 	RuntimeID    string                          `json:"runtime_id" binding:"required" format:"uuid"`
+	WorkspaceID  string                          `json:"workspace_id,omitempty"`
 	CustomEnv    map[string]installationEnvValue `json:"custom_env,omitempty" swaggertype:"object,string"`
 }
+
+var workspaceUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // CreateInstallation godoc
 // @Summary Install a plugin through Fleet capability installation
@@ -41,7 +45,7 @@ type createInstallationRequest struct {
 // @Produce json
 // @Security Bearer
 // @Param plugin_id path string true "Marketplace plugin ID"
-// @Param X-Workspace-ID header string true "Target Workspace ID"
+// @Param X-Workspace-Id header string true "Target Workspace ID"
 // @Param Idempotency-Key header string true "Stable key for this installation; 1-200 visible ASCII characters"
 // @Param body body createInstallationRequest true "Resource name, local runtime, and environment bindings"
 // @Success 200 {object} apiresponse.Data[installResponse]
@@ -83,6 +87,15 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	if !decodeInstallation(c, &req) {
 		return
 	}
+	workspaceID := c.GetHeader("X-Workspace-ID")
+	if !workspaceUUID.MatchString(workspaceID) {
+		installationValidation(c, "X-Workspace-Id")
+		return
+	}
+	if req.WorkspaceID != "" && req.WorkspaceID != workspaceID {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "X-Workspace-Id 与请求体 workspace_id 不一致。", map[string]any{"field": "workspace_id", "reason": "mismatch"}, "请使用同一个工作区 ID 重试。")
+		return
+	}
 	var customEnv map[string]string
 	if req.CustomEnv != nil {
 		customEnv = make(map[string]string, len(req.CustomEnv))
@@ -90,7 +103,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 			customEnv[key] = string(value)
 		}
 	}
-	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{WorkspaceID: c.GetHeader("X-Workspace-ID"), RuntimeID: req.RuntimeID, ResourceName: req.ResourceName, CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c)})
+	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{WorkspaceID: workspaceID, RuntimeID: req.RuntimeID, ResourceName: req.ResourceName, CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c)})
 	if err != nil {
 		writeInstallationError(c, err)
 		return
@@ -149,14 +162,24 @@ func writeInstallationError(c *gin.Context, err error) {
 	switch {
 	case errors.As(err, &attempt) && attempt.Unknown:
 		details := map[string]any{"reason": "installation_result_unknown", "attempt_id": attempt.AttemptID, "can_retry_same_key": attempt.RetryUntil != nil && time.Now().Before(*attempt.RetryUntil)}
-		if attempt.RetryUntil != nil {
+		if attempt != nil && attempt.RetryUntil != nil {
 			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
 		}
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装结果未知，请使用原幂等键和原参数核对或重试。", details, installationRetryHint)
+	case errors.As(err, &field) && field.Reason == "same_install_identity_different_content":
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装名称或目标已存在但内容不同，不能覆盖。", map[string]any{"field": field.Field, "reason": field.Reason}, "请修改市场内容或使用不同的资源名称后重试。")
 	case errors.As(err, &field):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "安装参数不正确。", map[string]any{"field": field.Field, "reason": field.Reason}, "请检查工作区、运行环境、名称和环境变量后重试。")
 	case errors.Is(err, expertsvc.ErrFleetNotConfigured):
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装服务尚未配置，请联系管理员。", map[string]any{"upstream": "fleet", "reason": "not_configured"}, installationRetryHint)
+	case errors.Is(err, pluginsvc.ErrAttemptExpired):
+		details := map[string]any{"reason": "installation_attempt_expired", "can_retry_same_key": false}
+		if attempt.RetryUntil != nil {
+			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
+		}
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "原安装凭证已过期，请核对工作区已有资源后使用新幂等键。", details, "请先确认是否已安装；不要用原幂等键重复提交。")
+	case errors.Is(err, pluginsvc.ErrDependencyUnavailable):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装依赖已变化或不可用，请使用原幂等键核对后重试。", map[string]any{"reason": "dependency_changed"}, installationRetryHint)
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装请求与首次提交的参数或依赖状态不一致，或原安装凭证已过期。", nil, "请先核对工作区已有资源和依赖状态，不要直接更换幂等键重复安装。")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):

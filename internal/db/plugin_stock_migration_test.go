@@ -110,7 +110,8 @@ func TestStockMigrationRemainsEditableAndPublishable(t *testing.T) {
 			}
 			migratedID := *p.CurrentVersionID
 			req := pluginsvc.WriteRequest{
-				Name: p.Name, Type: p.Type, Visibility: p.Visibility, Version: tc.next,
+				ExpectedEditRevision: &p.EditRevision,
+				Name:                 p.Name, Type: p.Type, Visibility: p.Visibility, Version: tc.next,
 				Tags: p.Tags, Manifest: p.Manifest,
 				Package: json.RawMessage(strings.ReplaceAll(string(p.Package), "team instructions", "updated team instructions")),
 			}

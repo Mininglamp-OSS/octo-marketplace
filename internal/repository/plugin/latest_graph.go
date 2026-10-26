@@ -21,6 +21,8 @@ type LatestGraph struct {
 
 // ResolveLatestGraph never substitutes an older release for an unavailable head.
 // Admin privileges do not widen the audience of distributed content.
+var ErrDependencyUnavailable = errors.New("plugin dependency unavailable")
+
 func (r *Repo) ResolveLatestGraph(ctx context.Context, sc Scope, id string) (*LatestGraph, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
@@ -47,21 +49,33 @@ func (r *Repo) ResolveLatestGraph(ctx context.Context, sc Scope, id string) (*La
 		}
 		p, err = scanPlugin(tx.QueryRowContext(ctx, `SELECT `+pluginColumns+` FROM plugins p WHERE p.plugin_id=? AND p.status=1 AND p.deleted_at IS NULL AND p.is_embedded=0 AND p.listing_state='published' AND `+installAccess, target, sc.SpaceID, sc.CallerUID))
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
+			if source == nil {
+				return ErrNotFound
+			}
+			return ErrDependencyUnavailable
 		}
 		if err != nil {
 			return err
 		}
 		if source != nil && (!referenceAudience(*source, *p) || !referenceAudience(*g.Plugins[id], *p)) {
-			return ErrNotFound
+			return ErrDependencyUnavailable
 		}
 		g.Plugins[target] = p
 		if p.Type == model.PluginTypeConnector {
-			return overlayConnectorEffective(ctx, tx, p)
+			if err := overlayConnectorEffective(ctx, tx, p); err != nil {
+				if source == nil {
+					return err
+				}
+				return ErrDependencyUnavailable
+			}
+			return nil
 		}
 		v, err := scanManagedVersion(tx.QueryRowContext(ctx, `SELECT `+managedVersionColumns+` FROM plugins p JOIN plugin_versions v ON v.plugin_id=p.plugin_id AND v.version_id=p.published_version_id JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE p.plugin_id=?`, target))
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrVersionBaselineUnavailable
+			if source == nil {
+				return ErrVersionBaselineUnavailable
+			}
+			return ErrDependencyUnavailable
 		}
 		if err != nil {
 			return err

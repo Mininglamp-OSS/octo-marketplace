@@ -31,11 +31,14 @@ func TestCapabilityInstallationNeedsNoEnableFlag(t *testing.T) {
 				}
 				for header, want := range map[string]string{
 					"Token": "user-token", "X-Space-ID": testCaller.SpaceID,
-					"X-Workspace-ID": "workspace-1", "Idempotency-Key": "operation-key",
+					"X-Workspace-ID": "workspace-1",
 				} {
 					if r.Header.Get(header) != want {
 						t.Errorf("%s was not forwarded", header)
 					}
+				}
+				if r.Header.Get("Idempotency-Key") == "" {
+					t.Error("attempt idempotency key was not forwarded")
 				}
 				out := fleet.CapabilityInstallResult{
 					Type: "expert", ExpertID: "created-expert",

@@ -102,6 +102,7 @@ func (s *Service) importReferenceContainer(ctx context.Context, caller Caller, p
 	if err != nil {
 		return nil, err
 	}
+	req.AllowContainerTypes = true
 	if pluginID == "" {
 		return s.AdminCreate(ctx, caller, req)
 	}

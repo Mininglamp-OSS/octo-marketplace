@@ -92,11 +92,16 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 	}
 	repo := pluginrepo.New(database)
 	attempt := pluginrepo.InstallAttempt{WorkspaceID: "workspace", KeyDigest: strings.Repeat("a", 64), PluginID: "index-upgrade", RootVersionID: "version", AdapterVersion: "1", InputFingerprint: strings.Repeat("b", 64), RequestFingerprint: strings.Repeat("c", 64)}
-	if _, err = repo.ClaimInstallAttempt(ctx, tenantScope(), attempt); err != nil {
+	// Seed an old-schema receipt directly: the repository's current INSERT
+	// already names frozen-plan columns that this upgrade fixture has not added
+	// yet. The post-upgrade read below exercises the new repository surface.
+	if _, err = database.ExecContext(ctx, `INSERT INTO plugin_install_attempts
+		(space_id,caller_uid,workspace_id,key_digest,plugin_id,root_version_id,adapter_version,input_fingerprint,request_fingerprint,created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,NOW(3))`, tenantScope().SpaceID, tenantScope().CallerUID, attempt.WorkspaceID, attempt.KeyDigest, attempt.PluginID, attempt.RootVersionID, attempt.AdapterVersion, attempt.InputFingerprint, attempt.RequestFingerprint); err != nil {
 		t.Fatal(err)
 	}
 	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
-	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 1 {
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 5 {
 		t.Fatalf("index upgrade: n=%d err=%v", n, err)
 	}
 	for _, tc := range []struct{ table, index, columns string }{

@@ -21,6 +21,7 @@ type pinnedFixtureStore struct {
 	state                     model.PluginVersionState
 	pluginCalls, versionCalls int
 	attempts                  map[string]*pluginrepo.InstallAttempt
+	finishErr                 error
 }
 
 func (f *pinnedFixtureStore) GetInstallPlugins(_ context.Context, sc pluginrepo.Scope, ids []string) (map[string]*model.Plugin, error) {
@@ -298,9 +299,12 @@ func TestPinnedInstallRetriesKeepInitialPlanDespiteUpstreamChanges(t *testing.T)
 	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", p); err != nil {
 		t.Fatalf("%#v", err)
 	}
+	if remote.key == "" || remote.key == p.IdempotencyKey {
+		t.Fatalf("first dispatch did not use a stable attempt id: key=%q", remote.key)
+	}
 	f.state.PublishedVersionID = pin("new-root-not-in-fixture")
 	out, err := s.CreateInstallation(context.Background(), testCaller, "team", p)
-	if err != nil || !out.Replayed || remote.calls != 2 {
+	if err != nil || !out.Replayed || remote.calls != 1 {
 		t.Fatalf("retry drifted: %+v %v %d", out, err, remote.calls)
 	}
 	changed := p
@@ -312,8 +316,8 @@ func TestPinnedInstallRetriesKeepInitialPlanDespiteUpstreamChanges(t *testing.T)
 	if _, err = s.CreateInstallation(context.Background(), testCaller, "team", p); err != nil {
 		t.Fatalf("upstream update blocked frozen replay: %v", err)
 	}
-	if remote.calls != 3 || strings.Contains(string(remote.in.Definition.Experts[0].MCPConfig), "new-command") {
-		t.Fatal("frozen connector content changed")
+	if remote.calls != 1 || strings.Contains(string(remote.in.Definition.Experts[0].MCPConfig), "new-command") {
+		t.Fatal("frozen connector content changed or local replay reached Fleet")
 	}
 
 }
@@ -324,23 +328,23 @@ func TestPinnedUncertainRetryUsesSameKeyAndExpiredReceiptFailsClosed(t *testing.
 	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", p); err == nil {
 		t.Fatal("uncertain remote result lost")
 	}
-	remote.err = nil
-	f.state.PublishedVersionID = pin("root-v2")
-	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", p); err != nil {
-		t.Fatalf("%#v", err)
-	}
-	if remote.calls != 2 || remote.key != p.IdempotencyKey {
-		t.Fatal("same-key retry not forwarded")
+	if remote.calls != 1 || remote.key == "" || remote.key == p.IdempotencyKey {
+		t.Fatalf("uncertain dispatch did not use a stable attempt id: calls=%d key=%q", remote.calls, remote.key)
 	}
 	for _, a := range f.attempts {
 		cutoff := s.now().Add(-time.Minute)
 		a.RetryUntil = &cutoff
 	}
-	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", p); !errors.Is(err, ErrConflict) {
+	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", p); !errors.Is(err, ErrAttemptExpired) {
 		t.Fatalf("expired uncertain key permitted: %v", err)
 	}
-	if remote.calls != 2 {
+	if remote.calls != 1 {
 		t.Fatal("expired key reached Fleet")
+	}
+	for _, a := range f.attempts {
+		if a.State != "EXPIRED" {
+			t.Fatalf("expired state not persisted: %s", a.State)
+		}
 	}
 }
 func TestLegacyAndCapabilityUseSameFrozenBindings(t *testing.T) {
@@ -394,7 +398,17 @@ func (f *pinnedFixtureStore) SetInstallDispatchUnknown(_ context.Context, _ plug
 	}
 	return nil
 }
+func (f *pinnedFixtureStore) ExpireInstallAttempt(_ context.Context, _ pluginrepo.Scope, a pluginrepo.InstallAttempt) error {
+	p := f.attempts[a.WorkspaceID+a.KeyDigest]
+	if p != nil && p.State != "SUCCEEDED" {
+		p.State = "EXPIRED"
+	}
+	return nil
+}
 func (f *pinnedFixtureStore) FinishInstallDispatch(_ context.Context, _ pluginrepo.Scope, a pluginrepo.InstallAttempt, token string) (bool, error) {
+	if f.finishErr != nil {
+		return false, f.finishErr
+	}
 	p := f.attempts[a.WorkspaceID+a.KeyDigest]
 	if p.LeaseToken != token || p.Completed {
 		return false, nil
@@ -447,5 +461,18 @@ func TestUnknownInstallationSurvivesLaterForbidden(t *testing.T) {
 	s.WithInstallationHMACKeys("rotated", map[string]string{"test": "synthetic-installation-test-key-32-bytes", "rotated": "synthetic-rotated-installation-key-32-bytes"})
 	if _, err = s.CreateInstallation(context.Background(), testCaller, "team", p); err != nil {
 		t.Fatalf("old-key frozen retry failed after rotation: %v", err)
+	}
+}
+
+func TestSuccessfulRemoteCompletionFailureKeepsRetryDeadline(t *testing.T) {
+	s, f, _ := fixturePinned()
+	f.finishErr = errors.New("completion write failed")
+	_, err := s.CreateInstallation(context.Background(), testCaller, "team", installationParams())
+	var attemptErr *InstallationAttemptError
+	if !errors.As(err, &attemptErr) || !attemptErr.Unknown {
+		t.Fatalf("completion failure was not uncertain: %v", err)
+	}
+	if attemptErr.RetryUntil == nil || !time.Now().Before(*attemptErr.RetryUntil) {
+		t.Fatalf("durable retry deadline lost: %+v", attemptErr)
 	}
 }

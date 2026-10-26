@@ -108,6 +108,13 @@ func (r *Repo) FinishInstallDispatch(ctx context.Context, sc Scope, a InstallAtt
 
 // FailInstallDispatch records a definite rejection only when no earlier send
 // was uncertain. A later 4xx can never erase a possible earlier remote commit.
+// ExpireInstallAttempt records a terminal expired state once the durable
+// same-key window has passed. It never touches a committed result.
+func (r *Repo) ExpireInstallAttempt(ctx context.Context, sc Scope, a InstallAttempt) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE plugin_install_attempts SET attempt_state='EXPIRED',lease_token=NULL,lease_until=NULL WHERE space_id=? AND caller_uid=? AND workspace_id=? AND key_digest=? AND attempt_state<>'SUCCEEDED' AND retry_until IS NOT NULL AND retry_until<=NOW(3)`, sc.SpaceID, sc.CallerUID, a.WorkspaceID, a.KeyDigest)
+	return err
+}
+
 func (r *Repo) FailInstallDispatch(ctx context.Context, sc Scope, a InstallAttempt, token string) (bool, error) {
 	result, err := r.db.ExecContext(ctx, `UPDATE plugin_install_attempts SET attempt_state='FAILED',lease_token=NULL,lease_until=NULL WHERE space_id=? AND caller_uid=? AND workspace_id=? AND key_digest=? AND lease_token=? AND attempt_state='DISPATCHING' AND had_unknown=FALSE`, sc.SpaceID, sc.CallerUID, a.WorkspaceID, a.KeyDigest, token)
 	if err != nil {

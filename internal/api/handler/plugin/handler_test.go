@@ -626,3 +626,22 @@ func TestWriteServiceErrorMapsArtifactConditions(t *testing.T) {
 		})
 	}
 }
+
+func (f *fakeService) Distribution(_ context.Context, _ pluginsvc.Caller, _ string) (*pluginsvc.DistributionBundle, error) {
+	return nil, f.err
+}
+
+func TestDistributionMapsDependencyUnavailableToConflict(t *testing.T) {
+	f := &fakeService{err: pluginsvc.ErrDependencyUnavailable}
+	r := testEngine(f)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins/expert-1/distribution", nil)
+	req.Header.Set("Authorization", "Bearer end-user-token")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "dependency_unavailable") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Cache-Control") != "" {
+		t.Fatalf("error response must not set no-store as success: %q", rec.Header().Get("Cache-Control"))
+	}
+}

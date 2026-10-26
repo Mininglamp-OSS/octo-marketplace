@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -70,7 +72,7 @@ func installationRequest(body string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/expert-1/installations", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer end-user-token")
-	r.Header.Set("X-Workspace-ID", "workspace-1")
+	r.Header.Set("X-Workspace-ID", "11111111-1111-4111-8111-111111111111")
 	r.Header.Set("Idempotency-Key", "operation-key")
 	return r
 }
@@ -83,7 +85,7 @@ func TestInstallationAndLegacyRoutesRemainIndependent(t *testing.T) {
 	if rec.Code != 200 || f.calls != 1 || f.installID != "" || rec.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("code=%d calls=%d body=%s", rec.Code, f.calls, rec.Body.String())
 	}
-	if f.id != "expert-1" || f.params.Token != "end-user-token" || f.params.WorkspaceID != "workspace-1" || f.params.IdempotencyKey != "operation-key" || f.params.ResourceName != "My reviewer" || f.params.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider" {
+	if f.id != "expert-1" || f.params.Token != "end-user-token" || f.params.WorkspaceID != "11111111-1111-4111-8111-111111111111" || f.params.IdempotencyKey != "operation-key" || f.params.ResourceName != "My reviewer" || f.params.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider" {
 		t.Fatal("new installation arguments were not forwarded")
 	}
 	if f.caller.UID != "user-1" || f.caller.SpaceID != "space-a" {
@@ -115,6 +117,7 @@ func TestInstallationRejectsInvalidRequestsBeforeService(t *testing.T) {
 		{name: "duplicate_key", mutate: func(r *http.Request) { r.Header.Add("Idempotency-Key", "other") }, status: 400},
 		{name: "invalid_key", mutate: func(r *http.Request) { r.Header.Set("Idempotency-Key", strings.Repeat("x", 201)) }, status: 400},
 		{name: "invalid_runtime", body: `{"runtime_id":"rt"}`, status: 400},
+		{name: "invalid_workspace_uuid", mutate: func(r *http.Request) { r.Header.Set("X-Workspace-ID", "workspace-1") }, status: 400},
 		{name: "forged_identity", body: strings.TrimSuffix(installationBody, "}") + `,"uid":"other"}`, status: 400},
 		{name: "body_workspace", body: strings.TrimSuffix(installationBody, "}") + `,"workspace_id":"other"}`, status: 400},
 		{name: "forged_space", body: strings.TrimSuffix(installationBody, "}") + `,"space_id":"other"}`, status: 400},
@@ -310,5 +313,41 @@ func TestInstallationUnavailableWithoutNewService(t *testing.T) {
 	testEngine(&fakeService{}).ServeHTTP(rec, installationRequest(installationBody))
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), `"reason":"not_configured"`) || !strings.Contains(rec.Body.String(), "安装服务尚未配置") {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInstallationAcceptsMatchingWorkspaceBody(t *testing.T) {
+	f := &fakeInstallationService{fakeService: &fakeService{}, out: &pluginsvc.InstallationOutcome{SquadID: "new-squad"}}
+	r := testEngine(f)
+	body := strings.TrimSuffix(installationBody, "}") + `,"workspace_id":"11111111-1111-4111-8111-111111111111"}`
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, installationRequest(body))
+	if rec.Code != 200 || f.calls != 1 {
+		t.Fatalf("matching workspace body rejected: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInstallationMapsAttemptExpiredAndSameNameConflict(t *testing.T) {
+	expired := time.Now().Add(time.Hour)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"expired", &pluginsvc.InstallationAttemptError{Err: pluginsvc.ErrAttemptExpired, AttemptID: "a", RetryUntil: &expired}, "installation_attempt_expired"},
+		{"same_name", &pluginsvc.InstallationValidationError{Field: "definition.skills", Reason: "same_install_identity_different_content"}, "same_install_identity_different_content"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: tc.err}
+			r := testEngine(f)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, installationRequest(installationBody))
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if !bytes.Contains(rec.Body.Bytes(), []byte(tc.want)) {
+				t.Fatalf("missing reason %s: %s", tc.want, rec.Body.String())
+			}
+		})
 	}
 }

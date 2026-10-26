@@ -65,7 +65,7 @@ func TestLatestGraphFollowsBothLevelsAndFailsClosed(t *testing.T) {
 	if _, err = database.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = repo.ResolveLatestGraph(ctx, tenantScope(), "team"); !errors.Is(err, pluginrepo.ErrNotFound) {
+	if _, err = repo.ResolveLatestGraph(ctx, tenantScope(), "team"); !errors.Is(err, pluginrepo.ErrDependencyUnavailable) {
 		t.Fatalf("delisted latest fell back: %v", err)
 	}
 	// The already resolved snapshot stays frozen even after governance changes.
@@ -75,7 +75,7 @@ func TestLatestGraphFollowsBothLevelsAndFailsClosed(t *testing.T) {
 	if _, err = database.Exec(`UPDATE plugins SET listing_state='published',published_version_id=NULL WHERE plugin_id='skill'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = repo.ResolveLatestGraph(ctx, tenantScope(), "team"); !errors.Is(err, pluginrepo.ErrVersionBaselineUnavailable) {
+	if _, err = repo.ResolveLatestGraph(ctx, tenantScope(), "team"); !errors.Is(err, pluginrepo.ErrDependencyUnavailable) {
 		t.Fatalf("missing head fell back: %v", err)
 	}
 }
