@@ -564,14 +564,20 @@ func runPlanEffective(run *MigrationRun, pluginID string) (ConnectorEffective, b
 }
 
 func blockRun(ctx context.Context, db *sql.DB, run *MigrationRun, reason string, cause error) (RunStatus, string, error) {
-	_ = SetRunStatus(ctx, db, run.RunID, RunBlocked, reason, time.Now().UTC())
+	if err := SetRunStatus(ctx, db, run.RunID, RunBlocked, reason, time.Now().UTC()); err != nil {
+		cause = fmt.Errorf("%w; persist block status: %v", cause, err)
+	}
 	return RunBlocked, reason, cause
 }
 
 func blockNode(ctx context.Context, db *sql.DB, run *MigrationRun, node *MigrationRunNode, reason string, cause error) (RunStatus, string, error) {
 	blocked := withNodeState(*node, StepBlocked, node.TargetVersionID, node.ReviewID, node.SourceCommitJSON, reason)
-	_ = UpsertRunNode(ctx, db, blocked)
-	_ = SetRunStatus(ctx, db, run.RunID, RunBlocked, reason, time.Now().UTC())
+	if err := UpsertRunNode(ctx, db, blocked); err != nil {
+		cause = fmt.Errorf("%w; persist blocked node: %v", cause, err)
+	}
+	if err := SetRunStatus(ctx, db, run.RunID, RunBlocked, reason, time.Now().UTC()); err != nil {
+		cause = fmt.Errorf("%w; persist block status: %v", cause, err)
+	}
 	return RunBlocked, reason, cause
 }
 

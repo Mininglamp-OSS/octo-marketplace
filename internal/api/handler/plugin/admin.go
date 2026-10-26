@@ -368,7 +368,7 @@ func (h *AdminHandler) ImportContainer(c *gin.Context) {
 // The import and container-reupload routes share it so both enforce the same
 // limits and shape.
 func readContainerParams(c *gin.Context, maxBytes int64) (pluginsvc.ContainerImportParams, bool) {
-	key := c.GetHeader("Idempotency-Key")
+	key := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
 	if len(key) < 1 || len(key) > 200 {
 		validation(c, "Idempotency-Key")
 		return pluginsvc.ContainerImportParams{}, false

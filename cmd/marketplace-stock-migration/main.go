@@ -285,14 +285,18 @@ func runResume(args []string, out io.Writer) error {
 		PlanDigest: run.PlanDigest, BatchID: run.BatchID,
 	}, time.Now().UTC())
 	if err != nil {
-		_ = stockmigration.SetRunStatus(ctx, db, run.RunID, stockmigration.RunBlocked, reasonAuthorization, time.Now().UTC())
+		if statusErr := stockmigration.SetRunStatus(ctx, db, run.RunID, stockmigration.RunBlocked, reasonAuthorization, time.Now().UTC()); statusErr != nil {
+			err = fmt.Errorf("%w; persist block status: %v", err, statusErr)
+		}
 		return returnReason(out, reasonAuthorization, exitAuthorization, run.RunID, err)
 	}
 	if run.Status == stockmigration.RunCompleted {
 		return writeJSON(out, runOutput(run, nil, ""))
 	}
 	if err = stockmigration.BindAuthorization(ctx, db, run, *payload, envelope.Signature, time.Now().UTC()); err != nil {
-		_ = stockmigration.SetRunStatus(ctx, db, run.RunID, stockmigration.RunBlocked, reasonAuthorization, time.Now().UTC())
+		if statusErr := stockmigration.SetRunStatus(ctx, db, run.RunID, stockmigration.RunBlocked, reasonAuthorization, time.Now().UTC()); statusErr != nil {
+			err = fmt.Errorf("%w; persist block status: %v", err, statusErr)
+		}
 		return returnReason(out, reasonAuthorization, exitAuthorization, run.RunID, err)
 	}
 	resolver, err := resolverFromFlag(*artifactDir)
@@ -308,8 +312,11 @@ func runResume(args []string, out io.Writer) error {
 		// must still match the frozen plan.
 		_, digest, freezeErr := stockmigration.Freeze(d, run.Plan)
 		if freezeErr != nil || digest != run.PlanDigest {
-			_ = stockmigration.SetRunStatus(ctx, db, run.RunID, stockmigration.RunBlocked, reasonPlanStale, time.Now().UTC())
-			return returnReason(out, reasonPlanStale, exitPlanStale, run.RunID, fmt.Errorf("source or plan changed; re-run preview"))
+			staleErr := fmt.Errorf("source or plan changed; re-run preview")
+			if statusErr := stockmigration.SetRunStatus(ctx, db, run.RunID, stockmigration.RunBlocked, reasonPlanStale, time.Now().UTC()); statusErr != nil {
+				staleErr = fmt.Errorf("%w; persist block status: %v", staleErr, statusErr)
+			}
+			return returnReason(out, reasonPlanStale, exitPlanStale, run.RunID, staleErr)
 		}
 	} else {
 		// Root content is our own staged/committed output. The persisted plan is
