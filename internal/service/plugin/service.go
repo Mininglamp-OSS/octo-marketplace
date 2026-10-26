@@ -1127,7 +1127,7 @@ func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, sour
 // the write did not freeze (for example references enabled without managed
 // releases), and reporting a head there would be the latest-resolution bug this
 // surface exists to avoid, so it fails closed.
-func (s *Service) resolveImportDependencies(rels []model.PluginRelation) ([]ResolvedDependency, error) {
+func (s *Service) resolveImportDependencies(rels []model.PluginRelation, published bool) ([]ResolvedDependency, error) {
 	out := make([]ResolvedDependency, 0, len(rels))
 	for _, rel := range rels {
 		item := ResolvedDependency{SourcePluginID: rel.SourcePluginID, RelationID: rel.ID, RelationType: rel.Type, TargetPluginID: rel.TargetPluginID, SortOrder: rel.SortOrder}
@@ -1138,6 +1138,10 @@ func (s *Service) resolveImportDependencies(rels []model.PluginRelation) ([]Reso
 			continue
 		}
 		if rel.TargetVersionID == nil || strings.TrimSpace(*rel.TargetVersionID) == "" {
+			// Drafts may omit pins; only a released source must have them.
+			if !published {
+				continue
+			}
 			return nil, ErrDependencyUnavailable
 		}
 		pin := strings.TrimSpace(*rel.TargetVersionID)

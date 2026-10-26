@@ -112,7 +112,7 @@ func (s *Service) importReferenceContainer(ctx context.Context, caller Caller, p
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := s.resolveImportDependencies(detail.Relations)
+	resolved, err := s.resolveImportDependencies(detail.Relations, detail.Plugin != nil && detail.Plugin.ListingState == model.PluginListingStatePublished)
 	if err != nil {
 		return nil, err
 	}

@@ -278,6 +278,7 @@ func observationResolutionError(err error) error {
 	}
 	switch {
 	case errors.Is(err, ErrDependencyUnavailable),
+		errors.Is(err, ErrNotFound),
 		errors.Is(err, ErrInvalidRelation),
 		errors.Is(err, ErrGraphTooLarge):
 		return ErrDependencyChanged
