@@ -329,7 +329,7 @@ func runResume(args []string, out io.Writer) error {
 
 func executeAndReport(ctx context.Context, db *sql.DB, run *stockmigration.MigrationRun, d stockmigration.Dataset, trust *migrationauth.TrustConfig, payload *migrationauth.Payload, signature string, out io.Writer, _ bool) error {
 	status, reason, err := stockmigration.ExecuteRun(ctx, db, run, d, stockmigration.ExecuteOptions{
-		ActorID: payload.ActorID, ActorName: payload.ActorID, Now: time.Now().UTC(),
+		ActorID: payload.ActorID, ActorName: "migration-operator", Now: time.Now().UTC(),
 	})
 	nodes, _ := stockmigration.ListNode(ctx, db, run.RunID)
 	output := runOutput(run, nodes, reason)
