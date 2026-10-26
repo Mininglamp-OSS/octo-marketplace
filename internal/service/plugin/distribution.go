@@ -15,8 +15,16 @@ import (
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
 )
 
+// LatestGraphStore is retained for legacy readers. Published A34 graphs must
+// resolve through PinnedGraphStore so targets are the snapshotted pins.
 type LatestGraphStore interface {
 	ResolveLatestGraph(context.Context, pluginrepo.Scope, string) (*pluginrepo.LatestGraph, error)
+}
+
+// PinnedGraphStore resolves a published source snapshot to the exact pinned
+// Skill/Expert versions it froze. Connectors remain ID + effective.
+type PinnedGraphStore interface {
+	ResolvePinnedGraph(context.Context, pluginrepo.Scope, string) (*pluginrepo.PinnedGraph, error)
 }
 type DistributionRoot struct {
 	PluginID          string           `json:"plugin_id"`
@@ -82,20 +90,47 @@ type DistributionBundle struct {
 
 func contentSHA256(raw []byte) string { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
 
+// latestAsPinned adapts the pre-P graph for the explicit flag-off path. The two
+// shapes carry the same fields, so the distribution builder is shared without a
+// second code path.
+func latestAsPinned(g *pluginrepo.LatestGraph) *pluginrepo.PinnedGraph {
+	return &pluginrepo.PinnedGraph{RootID: g.RootID, Plugins: g.Plugins, Versions: g.Versions, Selected: g.Selected, Relations: g.Relations}
+}
+
 // Distribution materializes a single authorized graph without workspace/runtime
 // credentials or Fleet calls. No partial response escapes if any file fails.
 func (s *Service) Distribution(ctx context.Context, caller Caller, id string) (*DistributionBundle, error) {
 	if !s.versionManagement {
 		return nil, ErrNotFound
 	}
-	store, ok := s.repo.(LatestGraphStore)
-	if !ok {
-		return nil, ErrVersionBaselineUnavailable
+	var graph *pluginrepo.PinnedGraph
+	if s.references {
+		// Published P graphs resolve only through their frozen pins. A repo that
+		// cannot do so fails closed; it never silently distributes live heads.
+		store, ok := s.repo.(PinnedGraphStore)
+		if !ok {
+			return nil, ErrVersionBaselineUnavailable
+		}
+		pinned, err := store.ResolvePinnedGraph(ctx, scope(caller), id)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		graph = pinned
+	} else {
+		// Legacy/flag-off deployments predate P pins. Preserve their existing
+		// latest-release distribution; this branch is never used once references
+		// (and therefore snapshotted pins) are enabled.
+		store, ok := s.repo.(LatestGraphStore)
+		if !ok {
+			return nil, ErrVersionBaselineUnavailable
+		}
+		latest, err := store.ResolveLatestGraph(ctx, scope(caller), id)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		graph = latestAsPinned(latest)
 	}
-	graph, err := store.ResolveLatestGraph(ctx, scope(caller), id)
-	if err != nil {
-		return nil, mapStoreError(err)
-	}
+	var err error
 	root := graph.Plugins[id]
 	if root == nil || (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) {
 		return nil, ErrInvalidRequest

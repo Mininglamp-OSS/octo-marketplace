@@ -15,18 +15,29 @@ import (
 
 type distributionFixture struct {
 	Store
-	graph *pluginrepo.LatestGraph
-	err   error
+	graph       *pluginrepo.PinnedGraph
+	err         error
+	pinnedCalls int
+	latestCalls int
+}
+
+func (f *distributionFixture) ResolvePinnedGraph(context.Context, pluginrepo.Scope, string) (*pluginrepo.PinnedGraph, error) {
+	f.pinnedCalls++
+	return f.graph, f.err
 }
 
 func (f *distributionFixture) ResolveLatestGraph(context.Context, pluginrepo.Scope, string) (*pluginrepo.LatestGraph, error) {
-	return f.graph, f.err
+	f.latestCalls++
+	if f.graph == nil {
+		return nil, f.err
+	}
+	return &pluginrepo.LatestGraph{RootID: f.graph.RootID, Plugins: f.graph.Plugins, Versions: f.graph.Versions, Selected: f.graph.Selected, Relations: f.graph.Relations}, f.err
 }
 func distributionTestService(t *testing.T) (*Service, *distributionFixture) {
 	t.Helper()
 	_, f, _ := fixturePinned()
 	// Keep a single expert root, one Skill and one effective Connector.
-	g := &pluginrepo.LatestGraph{RootID: "expert-a", Plugins: map[string]*model.Plugin{}, Versions: map[pluginrepo.InstallVersionKey]*model.PluginVersion{}, Selected: map[string]string{}, Relations: map[string][]model.PluginRelation{}}
+	g := &pluginrepo.PinnedGraph{RootID: "expert-a", Plugins: map[string]*model.Plugin{}, Versions: map[pluginrepo.InstallVersionKey]*model.PluginVersion{}, Selected: map[string]string{}, Relations: map[string][]model.PluginRelation{}}
 	for _, id := range []string{"expert-a", "skill-a", "connector"} {
 		g.Plugins[id] = f.plugins[id]
 	}
@@ -53,7 +64,7 @@ func distributionTestService(t *testing.T) (*Service, *distributionFixture) {
 	p.EffectiveDigest = &digest
 	p.Manifest = json.RawMessage(`{"plugin_name":"Connector"}`)
 	store := &distributionFixture{Store: &fakeStore{}, graph: g}
-	return New(store).WithVersionManagement(true), store
+	return New(store).WithVersionManagement(true).WithReferences(true), store
 }
 func TestDistributionOriginalContentAndJCSDigest(t *testing.T) {
 	s, f := distributionTestService(t)
@@ -121,5 +132,27 @@ func TestDistributionFailsWholeResponse(t *testing.T) {
 				t.Fatalf("unsafe error: %v", err)
 			}
 		})
+	}
+}
+
+// Flag-off deployments predate P pins; A34 keeps their pre-P latest-release
+// resolution until references are enabled.
+func TestDistributionLegacyFlagOffUsesLatestGraph(t *testing.T) {
+	s, f := distributionTestService(t)
+	s.WithReferences(false)
+	if _, err := s.Distribution(context.Background(), testCaller, "expert-a"); err != nil {
+		t.Fatal(err)
+	}
+	if f.latestCalls != 1 || f.pinnedCalls != 0 {
+		t.Fatalf("legacy path resolved pinned: latest=%d pinned=%d", f.latestCalls, f.pinnedCalls)
+	}
+}
+
+// A published P graph must never quietly fall back to the live head: without a
+// pinned resolver the request fails closed.
+func TestDistributionPinnedGraphStoreRequired(t *testing.T) {
+	s := New(&fakeStore{}).WithVersionManagement(true).WithReferences(true)
+	if _, err := s.Distribution(context.Background(), testCaller, "expert-a"); !errors.Is(err, ErrVersionBaselineUnavailable) {
+		t.Fatalf("missing pinned resolver err=%v", err)
 	}
 }

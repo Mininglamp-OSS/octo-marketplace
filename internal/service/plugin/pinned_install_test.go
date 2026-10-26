@@ -284,6 +284,16 @@ func TestPinnedInstallRejectsDelistedDependencies(t *testing.T) {
 		t.Fatalf("delisted dependency installed: %v", err)
 	}
 }
+
+// A references-enabled install is a published P graph: without a pinned resolver
+// the service fails closed instead of following a live head.
+func TestPinnedInstallReferencesRequirePinnedResolver(t *testing.T) {
+	s, _, remote := fixturePinned()
+	s.WithReferences(true)
+	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", installationParams()); !errors.Is(err, ErrVersionBaselineUnavailable) || remote.calls != 0 {
+		t.Fatalf("missing pinned resolver err=%v calls=%d", err, remote.calls)
+	}
+}
 func TestPinnedInstallNeedsVersioning(t *testing.T) {
 	s, _, remote := fixturePinned()
 	s.WithVersionManagement(false)

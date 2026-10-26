@@ -35,7 +35,7 @@ type pinnedInstallResolver struct {
 	loaded   map[pluginrepo.InstallVersionKey]*Detail
 	assets   capabilityBuilder
 	skills   map[pluginrepo.InstallVersionKey]PinnedSkillFiles
-	snapshot *pluginrepo.LatestGraph
+	snapshot *pluginrepo.PinnedGraph
 }
 
 type pinnedInstallationPlan struct {
@@ -55,14 +55,16 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	if !ok {
 		return nil, ErrInvalidRequest
 	}
-	var snapshot *pluginrepo.LatestGraph
+	var snapshot *pluginrepo.PinnedGraph
 	if s.references {
-		latest, ok := s.repo.(LatestGraphStore)
+		pinned, ok := s.repo.(PinnedGraphStore)
 		if !ok {
 			return nil, ErrVersionBaselineUnavailable
 		}
 		var err error
-		snapshot, err = latest.ResolveLatestGraph(ctx, scope(caller), id)
+		// Published P graphs resolve only through their frozen pins; a repo that
+		// cannot do so fails closed rather than falling back to the live head.
+		snapshot, err = pinned.ResolvePinnedGraph(ctx, scope(caller), id)
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
