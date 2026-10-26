@@ -722,3 +722,19 @@ func wrapped(op string, err error) error {
 	}
 	return fmt.Errorf("plugin repository %s: %w", op, err)
 }
+
+// GetPublishedVersionID returns the current formal release pointer for a target.
+// Admin scope is explicit; callers must already have validated audience.
+func (r *Repo) GetPublishedVersionID(ctx context.Context, sc Scope, pluginID string, out *sql.NullString) error {
+	query := `SELECT published_version_id FROM plugins p WHERE p.plugin_id=? AND p.status=1 AND p.deleted_at IS NULL`
+	args := []any{pluginID}
+	if !sc.Admin {
+		query += ` AND ` + visibilitySQL
+		args = append(args, sc.SpaceID, sc.CallerUID)
+	}
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(out)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}

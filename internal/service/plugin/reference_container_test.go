@@ -91,7 +91,8 @@ func TestTaggedReferenceContainerPassesCanonicalWriteValidation(t *testing.T) {
 			t.Fatalf("tags lost: %s", req.Tags)
 		}
 		// Exercise both public service entry points, including admin writes.
-		store := &fakeStore{plugins: map[string]*model.Plugin{"expert": {ID: "expert", Type: model.PluginTypeExpert, Visibility: model.PluginVisibilitySystem}}}
+		v1 := "v1"
+		store := &fakeStore{plugins: map[string]*model.Plugin{"expert": {ID: "expert", Type: model.PluginTypeExpert, Visibility: model.PluginVisibilitySystem, CurrentVersionID: &v1}}}
 		service := fixedService(store).WithVersionManagement(true).WithReferences(true)
 		params := ContainerImportParams{SchemaVersion: "2", Archive: referenceArchive(t, map[string]string{filename: doc})}
 		imported, err := service.ImportContainer(context.Background(), adminCaller, params)
@@ -100,6 +101,9 @@ func TestTaggedReferenceContainerPassesCanonicalWriteValidation(t *testing.T) {
 		}
 		if string(imported.Plugin.Tags) != `["research"]` {
 			t.Fatalf("import tags: %s", imported.Plugin.Tags)
+		}
+		if filename == "squad.json" && (len(imported.Resolved) != 1 || imported.Resolved[0].TargetPluginID != "expert" || imported.Resolved[0].TargetVersionID == nil || *imported.Resolved[0].TargetVersionID != "v1") {
+			t.Fatalf("resolved observations missing: %+v", imported.Resolved)
 		}
 		store.plugins[imported.Plugin.ID] = imported.Plugin
 		reuploaded, err := service.ReuploadContainer(context.Background(), adminCaller, imported.Plugin.ID, params)

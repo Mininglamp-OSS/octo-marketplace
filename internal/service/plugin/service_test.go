@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -936,4 +937,17 @@ func TestCreateStampsNewCurrentVersionID(t *testing.T) {
 	if detail.Plugin.CurrentVersionID == nil || *detail.Plugin.CurrentVersionID != "ver-snap" {
 		t.Fatalf("create response current_version_id = %v, want ver-snap", detail.Plugin.CurrentVersionID)
 	}
+}
+
+func (f *fakeStore) GetPublishedVersionID(_ context.Context, _ pluginrepo.Scope, id string, out *sql.NullString) error {
+	p := f.plugins[id]
+	if p == nil {
+		return pluginrepo.ErrNotFound
+	}
+	if p.CurrentVersionID != nil && *p.CurrentVersionID != "" {
+		out.Valid, out.String = true, *p.CurrentVersionID
+		return nil
+	}
+	out.Valid, out.String = false, ""
+	return nil
 }

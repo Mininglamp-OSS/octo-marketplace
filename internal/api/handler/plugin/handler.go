@@ -270,10 +270,21 @@ type relationResponse struct {
 	Data            json.RawMessage `json:"data,omitempty" swaggertype:"object"`
 }
 
+type resolvedDependencyResponse struct {
+	SourcePluginID  string  `json:"source_plugin_id"`
+	RelationID      string  `json:"relation_id"`
+	RelationType    string  `json:"relation_type"`
+	TargetPluginID  string  `json:"target_plugin_id"`
+	TargetVersionID *string `json:"target_version_id,omitempty"`
+}
+
 type detailResponse struct {
 	Plugin           pluginResponse          `json:"plugin"`
 	Relations        []relationResponse      `json:"relations"`
 	DependencyIssues []model.DependencyIssue `json:"dependency_issues,omitempty"`
+	// Resolved is the A25 import-time observation of each final direct relation.
+	// Omitted on ordinary reads; explicit [] when the import had no dependencies.
+	Resolved []resolvedDependencyResponse `json:"resolved,omitempty"`
 	// RelationResult reports upsert relation target-state synchronization:
 	// empty relation_id created, known relation_id with changes updated, live
 	// relations omitted from the submission deleted. Absent on reads.
@@ -941,6 +952,12 @@ func detailDTO(d *pluginsvc.Detail) detailResponse {
 		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
 	}
 	out := detailResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, DependencyIssues: d.DependencyIssues}
+	if d.Resolved != nil {
+		out.Resolved = make([]resolvedDependencyResponse, len(d.Resolved))
+		for i, x := range d.Resolved {
+			out.Resolved[i] = resolvedDependencyResponse{SourcePluginID: x.SourcePluginID, RelationID: x.RelationID, RelationType: x.RelationType, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID}
+		}
+	}
 	if d.RelationResult != nil {
 		out.RelationResult = &relationResultResponse{Created: d.RelationResult.Created, Updated: d.RelationResult.Updated, Deleted: d.RelationResult.Deleted}
 	}

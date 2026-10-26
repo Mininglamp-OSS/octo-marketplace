@@ -103,8 +103,19 @@ func (s *Service) importReferenceContainer(ctx context.Context, caller Caller, p
 		return nil, err
 	}
 	req.AllowContainerTypes = true
+	var detail *Detail
 	if pluginID == "" {
-		return s.AdminCreate(ctx, caller, req)
+		detail, err = s.AdminCreate(ctx, caller, req)
+	} else {
+		detail, err = s.AdminUpdate(ctx, caller, pluginID, req)
 	}
-	return s.AdminUpdate(ctx, caller, pluginID, req)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := s.resolveImportDependencies(ctx, caller, detail.Relations)
+	if err != nil {
+		return nil, err
+	}
+	detail.Resolved = resolved
+	return detail, nil
 }

@@ -5,9 +5,11 @@ package plugin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -246,6 +248,20 @@ type Detail struct {
 	DependencyIssues []model.DependencyIssue
 	// RelationResult reports upsert relation synchronization; nil on reads.
 	RelationResult *RelationResult
+	// Resolved is the A25 import-time observation of each final direct relation.
+	// It is not a pin and is omitted from reads.
+	Resolved []ResolvedDependency
+}
+
+// ResolvedDependency is the A25 observation value for one final direct relation.
+// Connector targets omit TargetVersionID.
+type ResolvedDependency struct {
+	SourcePluginID  string
+	RelationID      string
+	RelationType    string
+	TargetPluginID  string
+	TargetVersionID *string
+	SortOrder       int
 }
 
 // DetailGraph is the flat transitive closure returned by DetailGraph: the
@@ -1094,6 +1110,44 @@ func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, sour
 	if err := s.validateReferenceShape(ctx, source, out); err != nil {
 		return nil, err
 	}
+	return out, nil
+}
+
+func (s *Service) resolveImportDependencies(ctx context.Context, caller Caller, rels []model.PluginRelation) ([]ResolvedDependency, error) {
+	out := make([]ResolvedDependency, 0, len(rels))
+	for _, rel := range rels {
+		item := ResolvedDependency{SourcePluginID: rel.SourcePluginID, RelationID: rel.ID, RelationType: rel.Type, TargetPluginID: rel.TargetPluginID, SortOrder: rel.SortOrder}
+		target, _, err := s.repo.GetWithRelations(ctx, adminScope(caller), rel.TargetPluginID)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		if target.Type == model.PluginTypeConnector {
+			out = append(out, item)
+			continue
+		}
+		reader, ok := s.repo.(interface {
+			GetPublishedVersionID(context.Context, pluginrepo.Scope, string, *sql.NullString) error
+		})
+		if !ok {
+			return nil, ErrVersionBaselineUnavailable
+		}
+		var published sql.NullString
+		if err := reader.GetPublishedVersionID(ctx, adminScope(caller), rel.TargetPluginID, &published); err != nil {
+			return nil, mapStoreError(err)
+		}
+		if !published.Valid || published.String == "" {
+			return nil, ErrDependencyUnavailable
+		}
+		v := published.String
+		item.TargetVersionID = &v
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SortOrder != out[j].SortOrder {
+			return out[i].SortOrder < out[j].SortOrder
+		}
+		return out[i].RelationID < out[j].RelationID
+	})
 	return out, nil
 }
 
