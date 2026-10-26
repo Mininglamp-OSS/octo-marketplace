@@ -19,6 +19,12 @@ import (
 )
 
 func main() {
+	// D10: this historical backfill entry is retired. It must not be able to
+	// write after the dependency migration CLI takes over. Deployment still
+	// revokes its DB account and removes/denies the old binary; this guard is a
+	// fail-closed in-process barrier, not a substitute for that gate.
+	fmt.Fprintln(os.Stderr, "plugin-backfill is retired; use marketplace-stock-migration with a frozen plan and offline authorization")
+	os.Exit(2)
 	var mode, dsn, phase string
 	var runMigrations bool
 	flag.StringVar(&mode, "mode", "dry-run", "dry-run, apply, or verify")

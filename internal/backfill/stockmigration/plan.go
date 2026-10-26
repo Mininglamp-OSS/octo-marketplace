@@ -31,6 +31,19 @@ type Dataset struct {
 	ExistingMappings   []Mapping                    `json:"existing_mappings,omitempty"`
 	MigratedSourceIDs  []string                     `json:"migrated_source_ids,omitempty"`
 	Releases           []model.PluginVersionRelease `json:"releases"`
+	// Labels are frozen plan version labels keyed by source inventory node.
+	// They are execution input, not part of the source snapshot/digest.
+	Labels map[string]string `json:"-"`
+	// Effective holds the preview-time Connector effective observation used by
+	// reuse resources. Absent table/rows are represented by an empty map.
+	Effective map[string]ConnectorEffective `json:"-"`
+}
+
+// ConnectorEffective is the B-model observation for a reused Connector. It is an
+// approval observation, never a relation pin.
+type ConnectorEffective struct {
+	Revision uint64
+	Digest   string
 }
 type Exception struct {
 	ResourceID string `json:"resource_id"`
@@ -392,7 +405,9 @@ func Build(d Dataset) Plan {
 				return Mapping{}, false
 			}
 			label := "1.0.0"
-			if isRoot {
+			if frozen := d.Labels[id]; frozen != "" {
+				label = frozen
+			} else if isRoot {
 				label = forwardLabel(old, d)
 				if label == "" {
 					fail(id, "unresolved_version_label")

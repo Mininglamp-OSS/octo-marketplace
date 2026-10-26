@@ -14,7 +14,7 @@ func pointer(v string) *string { return &v }
 func fixture() Dataset {
 	space := "space-a"
 	resource := func(id string, kind model.PluginType, embedded bool, attachments ...map[string]any) Resource {
-		p := model.Plugin{ID: id, Name: id, Type: kind, IsEmbedded: embedded, OwnerUID: "owner", SpaceID: &space, Visibility: "private", ListingState: "published", Status: 1, Tags: json.RawMessage(`[]`), CurrentVersion: pointer("1.2.3")}
+		p := model.Plugin{ID: id, Name: id, Type: kind, IsEmbedded: embedded, OwnerUID: "owner", SpaceID: &space, Visibility: "private", ListingState: "published", Status: 1, Tags: json.RawMessage(`[]`), CurrentVersion: pointer("1.2.3"), EditRevision: 1}
 		p.Manifest, _ = json.Marshal(map[string]any{"$schema": "cowork-plugin-manifest-2.0.json", "plugin_name": id, "plugin_type": kind, "name": id, "description": "fixture", "labels": []any{}, "examples": []any{}})
 		p.Package, _ = json.Marshal(map[string]any{"$schema": "cowork-plugin-package-2.0.json", "attachments": attachments})
 		return Resource{Plugin: p, Relations: []model.PluginRelation{}}

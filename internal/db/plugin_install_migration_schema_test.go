@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
 	migrate "github.com/rubenv/sql-migrate"
@@ -77,14 +76,15 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 	}
 	ctx := context.Background()
 	seedStockRoot(t, database, "index-upgrade", "private", "published")
-	evidence, err := stockmigration.Read(ctx, database, 1000)
-	if err != nil {
+	// This fixture predates the run ledger. Seed the batch/root audit rows through
+	// the old shape so the upgrade proves the additive migration preserves them.
+	if _, err := database.Exec(`INSERT INTO plugin_stock_migration_batches(batch_id,state,created_at) VALUES ('index-batch','active',NOW(3))`); err != nil {
 		t.Fatal(err)
 	}
-	plan := stockmigration.Build(evidence)
-	if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "index-batch", "index-upgrade", plan.Digest, true); err != nil {
+	if _, err := database.Exec(`INSERT INTO plugin_stock_migration_roots(batch_id,root_plugin_id,source_digest,mappings_json,before_json,after_json,node_states_json,applied_at) VALUES ('index-batch','index-upgrade',REPEAT('a',64),JSON_ARRAY(),JSON_OBJECT('saved','before'),JSON_OBJECT('saved','after'),JSON_ARRAY(),NOW(3))`); err != nil {
 		t.Fatal(err)
 	}
+	var err error
 	var originalAudit string
 	const audit = `SELECT CONCAT(source_digest,mappings_json,before_json,after_json,node_states_json) FROM plugin_stock_migration_roots WHERE batch_id='index-batch'`
 	if err = database.QueryRow(audit).Scan(&originalAudit); err != nil {
@@ -101,7 +101,7 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
-	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 5 {
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 7 {
 		t.Fatalf("index upgrade: n=%d err=%v", n, err)
 	}
 	for _, tc := range []struct{ table, index, columns string }{

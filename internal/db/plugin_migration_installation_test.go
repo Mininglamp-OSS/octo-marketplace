@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
@@ -46,17 +45,7 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 		}
 	}
 	checkGate(false)
-	evidence, err := stockmigration.Read(ctx, database, 1000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := stockmigration.Build(evidence)
-	if len(plan.Exceptions) != 0 {
-		t.Fatalf("migration fixture: %+v", plan.Exceptions)
-	}
-	if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "migration-install-batch", "migration-install", plan.Digest, true); err != nil {
-		t.Fatal(err)
-	}
+	applyOfflineMigrationForTest(t, database, "migration-install", "migration-install-batch")
 	checkGate(true)
 	remote := &migratedGraphInstaller{}
 	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(remote)

@@ -1,18 +1,33 @@
--- Read-only structural gate for the CURRENT listed roots and their released pins.
--- Old releases not reachable from a listed root are intentionally excluded.
+-- Read-only structural/B-latest readiness gate for migrated marketplace assets.
+--
+-- This query intentionally does NOT walk plugin_version_relation_refs.target_version_id:
+-- under the B model a dependency resolves to the target's CURRENT published
+-- version, and the old audit pin is not authority. Roots are the listed public
+-- Expert/Team rows; every reachable latest target must have a release snapshot,
+-- complete reference-index coverage, and an effective Connector row. Expert/Team
+-- latest snapshots must not retain legacy inline/embedded content.
+--
 -- Run with a SELECT-only account. Zero blockers is required, not sufficient for
 -- provider/Fleet/Daemon acceptance or permission to activate a deployment.
-WITH RECURSIVE reachable (plugin_id, version_id) AS (
-  SELECT plugin_id, published_version_id FROM plugins
-  WHERE status=1 AND deleted_at IS NULL AND is_embedded=0
-    AND listing_state='published' AND plugin_type IN ('expert','expert_team')
-  UNION DISTINCT
-  SELECT ref.target_plugin_id, ref.target_version_id
-  FROM reachable r JOIN plugin_version_relation_refs ref
+WITH RECURSIVE roots AS (
+  SELECT p.plugin_id, p.published_version_id AS version_id, p.plugin_type, 0 AS depth
+  FROM plugins p
+  WHERE p.status=1 AND p.deleted_at IS NULL AND p.is_embedded=0
+    AND p.listing_state='published' AND p.plugin_type IN ('expert','expert_team')
+), reachable AS (
+  SELECT plugin_id, version_id, plugin_type, depth FROM roots
+  UNION
+  SELECT ref.target_plugin_id, target.published_version_id, target.plugin_type, r.depth+1
+  FROM reachable r
+  JOIN plugin_version_relation_refs ref
     ON ref.source_plugin_id=r.plugin_id AND ref.source_version_id=r.version_id
-  WHERE ref.target_version_id IS NOT NULL
+  JOIN plugins target
+    ON target.plugin_id=ref.target_plugin_id AND target.status=1 AND target.deleted_at IS NULL
+  WHERE r.depth < 2
+    AND ref.relation_type IN ('expert_skill','expert_team_expert')
+    AND target.plugin_type IN ('skill','expert')
 ), snapshots AS (
-  SELECT r.plugin_id, r.version_id, p.plugin_type, p.status, p.deleted_at,
+  SELECT r.plugin_id, r.version_id, r.plugin_type, p.status, p.deleted_at,
     p.is_embedded, p.listing_state, v.snapshot_schema_version, v.artifacts_json,
     v.manifest_json, v.plugin_json, v.relations_json, rel.version_id AS released,
     coverage.snapshot_digest, coverage.relation_count,
@@ -54,5 +69,15 @@ WITH RECURSIVE reachable (plugin_id, version_id) AS (
         OR LOWER(TRIM(file_path)) LIKE 'members/%'
     )
   )
+  UNION
+  SELECT DISTINCT ref.target_plugin_id, NULL
+  FROM reachable r
+  JOIN plugin_version_relation_refs ref
+    ON ref.source_plugin_id=r.plugin_id AND ref.source_version_id=r.version_id
+  JOIN plugins target
+    ON target.plugin_id=ref.target_plugin_id AND target.plugin_type='connector'
+   AND target.status=1 AND target.deleted_at IS NULL
+  WHERE ref.relation_type='expert_connector'
+    AND NOT EXISTS (SELECT 1 FROM plugin_connector_effective e WHERE e.plugin_id=target.plugin_id)
 )
 SELECT 'pinned_readiness_blockers' AS check_name, COUNT(*) AS blockers FROM blockers;

@@ -3,53 +3,126 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 )
 
-func TestFixturePreviewIsOfflineDeterministicAndUnchanged(t *testing.T) {
-	t.Setenv("MARKETPLACE_STOCK_MIGRATION_DSN", "invalid")
-	p := filepath.Join(t.TempDir(), "fixture.json")
-	original := []byte(`{"resources":[],"versions":[],"releases":[]}`)
-	if err := os.WriteFile(p, original, 0400); err != nil {
+func TestLegacyUnsafeModesAreUnreachable(t *testing.T) {
+	for _, args := range [][]string{
+		{"--apply"},
+		{"--rollback"},
+		{"--all-spaces", "--apply"},
+		{"--g4-stop-on-exceptions-approved"},
+		{"preview", "--discover", "--apply"},
+		{"preview", "--discover", "--rollback"},
+		{"preview", "--discover", "--all-spaces"},
+		{"apply", "--plan", "p.json", "--plan-digest", strings.Repeat("a", 64), "--authorization", "a.json", "--rollback"},
+		{"apply", "--plan", "p.json", "--plan-digest", strings.Repeat("a", 64), "--authorization", "a.json", "--g4-stop-on-exceptions-approved"},
+		{"resume", "--run-id", "r", "--authorization", "a.json", "--plan", "p.json"},
+	} {
+		var out bytes.Buffer
+		if err := run(args, &out); err == nil {
+			t.Fatalf("unsafe mode accepted: %v", args)
+		}
+	}
+}
+
+func TestPreviewRequiresExactlyOneMode(t *testing.T) {
+	for _, args := range [][]string{
+		{"preview"},
+		{"preview", "--discover", "--freeze"},
+		{"preview", "--freeze"},
+	} {
+		if err := run(args, new(bytes.Buffer)); err == nil {
+			t.Fatalf("invalid preview accepted: %v", args)
+		}
+	}
+}
+
+func TestApplyRequiresFrozenPlanDigestAndAuthorization(t *testing.T) {
+	for _, args := range [][]string{
+		{"apply"},
+		{"apply", "--plan", "p.json"},
+		{"apply", "--plan", "p.json", "--plan-digest", strings.Repeat("a", 64)},
+	} {
+		if err := run(args, new(bytes.Buffer)); err == nil {
+			t.Fatalf("incomplete apply accepted: %v", args)
+		}
+	}
+}
+
+func TestApplyDigestMismatchIsPlanStaleNotHTTP(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "plan.json")
+	plan := stockmigration.MigrationPlan{
+		SchemaVersion: stockmigration.PlanSchemaVersion, SourceKind: stockmigration.PlanSourceDB,
+		SourceIdentity: "p@v", SourcePluginID: "p", SourceVersionID: "v",
+		Resources: []stockmigration.MigrationPlanResource{}, Relations: []stockmigration.MigrationPlanRelation{},
+	}
+	raw, _ := json.Marshal(plan)
+	if err := os.WriteFile(planPath, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	var first, again bytes.Buffer
-	for _, out := range []*bytes.Buffer{&first, &again} {
-		if err := run([]string{"--fixture", p}, out); err != nil {
-			t.Fatal(err)
-		}
+	var out bytes.Buffer
+	err := run([]string{"apply", "--plan", planPath, "--plan-digest", strings.Repeat("a", 64), "--authorization", filepath.Join(dir, "missing.json")}, &out)
+	var reason *reasonError
+	if !errors.As(err, &reason) || reason.Code != exitPlanStale || reason.Reason != reasonPlanStale {
+		t.Fatalf("error: %v", err)
 	}
-	if first.String() != again.String() {
-		t.Fatal("nondeterministic preview")
+	if !strings.Contains(out.String(), reasonPlanStale) || strings.Contains(out.String(), "409") {
+		t.Fatalf("output: %s", out.String())
 	}
-	var report map[string]any
-	if json.Unmarshal(first.Bytes(), &report) != nil || report["input_resources"] != float64(0) {
-		t.Fatal("invalid report")
+}
+
+func TestApplyMissingTrustConfigurationIsAuthorizationInvalid(t *testing.T) {
+	t.Setenv("MARKETPLACE_MIGRATION_TRUST_CONFIG", "")
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "plan.json")
+	plan := stockmigration.MigrationPlan{
+		SchemaVersion: stockmigration.PlanSchemaVersion, SourceKind: stockmigration.PlanSourceDB,
+		SourceIdentity: "p@v", SourcePluginID: "p", SourceVersionID: "v",
+		Resources: []stockmigration.MigrationPlanResource{}, Relations: []stockmigration.MigrationPlanRelation{},
 	}
-	after, _ := os.ReadFile(p)
+	raw, _ := json.Marshal(plan)
+	if err := os.WriteFile(planPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := stockmigration.PlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(dir, "auth.json")
+	if err = os.WriteFile(authPath, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = run([]string{"apply", "--plan", planPath, "--plan-digest", digest, "--authorization", authPath}, &out)
+	var reason *reasonError
+	if !errors.As(err, &reason) || reason.Code != exitAuthorization || reason.Reason != reasonAuthorization {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestPreviewFixtureDiscoveryIsReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "fixture.json")
+	original := []byte(`{"resources":[],"versions":[],"releases":[]}`)
+	if err := os.WriteFile(fixture, original, 0400); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	// An empty inventory has no migration unit; discovery must fail without
+	// creating any output or modifying the operator file.
+	if err := run([]string{"preview", "--discover", "--fixture", fixture, "--source-plugin-id", "missing"}, &out); err == nil {
+		t.Fatal("empty inventory accepted")
+	}
+	after, _ := os.ReadFile(fixture)
 	if !bytes.Equal(original, after) {
-		t.Fatal("fixture mutated")
-	}
-}
-func TestWriteNeedsExplicitOperationAndFixtureCannotApply(t *testing.T) {
-	for _, args := range [][]string{{}, {"--apply", "--rollback"}, {"--fixture", "ignored", "--apply"}, {"--fixture", "ignored", "--rollback"}, {"--fixture", "ignored", "--all-spaces"}} {
-		var out bytes.Buffer
-		if err := run(args, &out); err == nil || out.Len() != 0 {
-			t.Fatalf("unsafe args accepted: %v", args)
-		}
-	}
-}
-func TestFixtureRejectsTrailingOrOversizedData(t *testing.T) {
-	for _, body := range [][]byte{[]byte(`{} {}`), bytes.Repeat([]byte{' '}, (32<<20)+1)} {
-		p := filepath.Join(t.TempDir(), "fixture.json")
-		if err := os.WriteFile(p, body, 0600); err != nil {
-			t.Fatal(err)
-		}
-		var out bytes.Buffer
-		if err := run([]string{"--fixture", p}, &out); err == nil || out.Len() != 0 {
-			t.Fatal("invalid fixture accepted")
-		}
+		t.Fatal("preview mutated the fixture")
 	}
 }
