@@ -15,9 +15,79 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
+
+func TestStockMigrationRemainsEditableAndPublishable(t *testing.T) {
+	for _, tc := range []struct{ old, migrated, next string }{
+		{"v1", "1.0.0", "1.0.1"},
+		{"1.2.999999999", "1.3.0", "1.3.1"},
+		{"1.999999999.999999999", "2.0.0", "2.0.1"},
+	} {
+		t.Run(tc.old, func(t *testing.T) {
+			database := reviewDB(t)
+			ctx := context.Background()
+			const id = "migration-upgrade"
+			seedStockRoot(t, database, id, "private", "published")
+			if _, err := database.Exec(`UPDATE plugins SET current_version=? WHERE plugin_id=?`, tc.old, id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Exec(`UPDATE plugin_versions SET declared_version=? WHERE plugin_id=?`, tc.old, id); err != nil {
+				t.Fatal(err)
+			}
+			evidence, err := stockmigration.Read(ctx, database, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := stockmigration.Build(evidence)
+			if len(plan.Exceptions) != 0 {
+				t.Fatalf("migration exceptions: %+v", plan.Exceptions)
+			}
+			if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "upgrade-batch", id, plan.Digest, true); err != nil {
+				t.Fatal(err)
+			}
+			svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(true)
+			owner := managedOwner()
+			detail, err := svc.CurrentDetail(ctx, owner, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := detail.Plugin
+			if p.CurrentVersion == nil || *p.CurrentVersion != tc.migrated {
+				t.Fatalf("migrated version = %v, want %s", p.CurrentVersion, tc.migrated)
+			}
+			migratedID := *p.CurrentVersionID
+			req := pluginsvc.WriteRequest{
+				Name: p.Name, Type: p.Type, Visibility: p.Visibility, Version: tc.next,
+				Tags: p.Tags, Manifest: p.Manifest,
+				Package: json.RawMessage(strings.ReplaceAll(string(p.Package), "team instructions", "updated team instructions")),
+			}
+			for _, rel := range detail.Relations {
+				req.Relations = append(req.Relations, pluginsvc.RelationRequest{
+					ID: rel.ID, TargetPluginID: rel.TargetPluginID, TargetVersionID: rel.TargetVersionID,
+					Type: rel.Type, SortOrder: rel.SortOrder, Data: rel.Data,
+				})
+			}
+			updated, err := svc.Update(ctx, owner, id, req)
+			if err != nil {
+				t.Fatalf("edit after migration: %v", err)
+			}
+			if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+				t.Fatalf("publish after migration: %v", err)
+			}
+			published, err := svc.ManagedVersion(ctx, owner, id, *updated.Plugin.CurrentVersionID, false)
+			if err != nil || published.Release == nil || published.Release.VersionLabel != tc.next || !published.IsPublished {
+				t.Fatalf("new release: %+v err=%v", published, err)
+			}
+			previous, err := svc.ManagedVersion(ctx, owner, id, migratedID, false)
+			if err != nil || previous.Release == nil || previous.Release.VersionLabel != tc.migrated || strings.Contains(string(previous.Package), "updated team instructions") {
+				t.Fatalf("migrated release mutated: %+v err=%v", previous, err)
+			}
+		})
+	}
+}
 
 func seedStockRoot(t *testing.T, database *sql.DB, id, visibility, listing string) {
 	t.Helper()

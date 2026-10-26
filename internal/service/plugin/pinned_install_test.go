@@ -137,7 +137,7 @@ func TestPinnedInstallationUsesFrozenFilesAndDistinctSameNames(t *testing.T) {
 	if f.pluginCalls != 3 || f.versionCalls != 3 {
 		t.Fatalf("not batched: plugin=%d version=%d", f.pluginCalls, f.versionCalls)
 	}
-	if !strings.Contains(string(f.versions[pluginrepo.InstallVersionKey{"skill-a", "skill-v1"}].Package), "name: Search") {
+	if !strings.Contains(string(f.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}].Package), "name: Search") {
 		t.Fatal("source was mutated")
 	}
 }
@@ -147,33 +147,33 @@ func TestPinnedInstallRejectsBeforeFleet(t *testing.T) {
 		mutate func(*pinnedFixtureStore)
 	}{
 		{"missing pin", func(f *pinnedFixtureStore) {
-			v := f.versions[pluginrepo.InstallVersionKey{"team", "root-v1"}]
+			v := f.versions[pluginrepo.InstallVersionKey{PluginID: "team", VersionID: "root-v1"}]
 			rels, _ := model.DecodeSnapshotRelations(v.Relations)
 			rels[0].TargetVersionID = nil
 			v.Relations, _ = model.EncodeSnapshotRelations(rels)
 		}},
 		{"unknown snapshot schema", func(f *pinnedFixtureStore) {
 			schema := 999
-			f.versions[pluginrepo.InstallVersionKey{"skill-a", "skill-v1"}].SnapshotSchemaVersion = &schema
+			f.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}].SnapshotSchemaVersion = &schema
 		}},
 		{"unreleased pin", func(f *pinnedFixtureStore) {
-			f.versions[pluginrepo.InstallVersionKey{"skill-a", "skill-v1"}].Release = nil
+			f.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}].Release = nil
 		}},
 		{"wrong resource", func(f *pinnedFixtureStore) {
-			f.versions[pluginrepo.InstallVersionKey{"skill-a", "skill-v1"}].PluginID = "skill-b"
+			f.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}].PluginID = "skill-b"
 		}},
 		{"foreign space", func(f *pinnedFixtureStore) { other := "other-space"; f.plugins["skill-a"].SpaceID = &other }},
 		{"private audience", func(f *pinnedFixtureStore) { f.plugins["expert-a"].Visibility = model.PluginVisibilitySpace }},
 		{"delisted root", func(f *pinnedFixtureStore) { f.plugins["team"].ListingState = model.PluginListingStateDelisted }},
 		{"draft connector", func(f *pinnedFixtureStore) { f.plugins["connector"].ListingState = model.PluginListingStateDraft }},
 		{"connector version", func(f *pinnedFixtureStore) {
-			v := f.versions[pluginrepo.InstallVersionKey{"expert-a", "expert-v1"}]
+			v := f.versions[pluginrepo.InstallVersionKey{PluginID: "expert-a", VersionID: "expert-v1"}]
 			rels, _ := model.DecodeSnapshotRelations(v.Relations)
 			rels[1].TargetVersionID = pin("made-up")
 			v.Relations, _ = model.EncodeSnapshotRelations(rels)
 		}},
 		{"duplicate leader", func(f *pinnedFixtureStore) {
-			v := f.versions[pluginrepo.InstallVersionKey{"team", "root-v1"}]
+			v := f.versions[pluginrepo.InstallVersionKey{PluginID: "team", VersionID: "root-v1"}]
 			rels, _ := model.DecodeSnapshotRelations(v.Relations)
 			rels[1].Data = json.RawMessage(`{"member_key":"b","is_leader":true}`)
 			v.Relations, _ = model.EncodeSnapshotRelations(rels)

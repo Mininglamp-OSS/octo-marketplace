@@ -32,6 +32,60 @@ func managedReviewer() pluginsvc.Caller {
 	return pluginsvc.Caller{UID: "reviewer", Name: "Reviewer", SpaceID: "space-a", SpaceRole: pluginsvc.SpaceRoleAdmin}
 }
 
+func TestManagedVersionReadsSeparateDraftAndReleasedAccess(t *testing.T) {
+	database := reviewDB(t)
+	ctx := context.Background()
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	owner := managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), true, owner.UID, owner.Name); err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.Create(ctx, owner, managedWrite("1.0.0", "released instructions", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Plugin.ID
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := repo.GetVersionState(ctx, tenantScope(), id)
+	if err != nil || state.PublishedVersionID == nil {
+		t.Fatalf("missing published version: %+v err=%v", state, err)
+	}
+	releasedID := *state.PublishedVersionID
+	draft, err := svc.Update(ctx, owner, id, managedWrite("1.0.1", "private draft instructions", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	draftID := *draft.Plugin.CurrentVersionID
+	for _, tc := range []struct {
+		name    string
+		caller  pluginsvc.Caller
+		version string
+		allowed bool
+	}{
+		{"owner draft", owner, draftID, true},
+		{"member draft", pluginsvc.Caller{UID: "member", SpaceID: owner.SpaceID}, draftID, false},
+		{"member release", pluginsvc.Caller{UID: "member", SpaceID: owner.SpaceID}, releasedID, true},
+		{"cross space draft", pluginsvc.Caller{UID: owner.UID, SpaceID: "space-b"}, draftID, false},
+		{"cross space release", pluginsvc.Caller{UID: owner.UID, SpaceID: "space-b"}, releasedID, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := svc.ManagedVersion(ctx, tc.caller, id, tc.version, false)
+			if !tc.allowed {
+				if !errors.Is(err, pluginsvc.ErrNotFound) {
+					t.Fatalf("hidden version: %+v err=%v", v, err)
+				}
+				return
+			}
+			if err != nil || v.ID != tc.version {
+				t.Fatalf("allowed version: %+v err=%v", v, err)
+			}
+		})
+	}
+}
+
 func TestManagedPrivateReleasePreservesDraft(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)

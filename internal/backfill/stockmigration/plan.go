@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -395,6 +394,10 @@ func Build(d Dataset) Plan {
 			label := "1.0.0"
 			if isRoot {
 				label = forwardLabel(old, d)
+				if label == "" {
+					fail(id, "unresolved_version_label")
+					return Mapping{}, false
+				}
 			}
 			version := identity("version", targetID, hash([]any{cp.Manifest, cp.Package, relations, label}))
 			if old.Type == model.PluginTypeSkill {
@@ -530,43 +533,62 @@ func audience(source, target model.Plugin) bool {
 	return b == "system" || (a != "system" && sameSpace(source.SpaceID, target.SpaceID) && (b == "space" || (a == "private" && b == "private" && source.OwnerUID == target.OwnerUID)))
 }
 func forwardLabel(p model.Plugin, d Dataset) string {
-	used := map[string]bool{}
+	// Stay inside the ordinary write contract and above every historical label.
+	// A numeric legacy label outside those bounds remains orderable by the model;
+	// quarantine it rather than producing a label that later writes cannot use.
+	const maxPart = 999999999
+	var highest [3]uint64
+	found := false
+	include := func(label string) bool {
+		parts, ok := model.ParseVersion(label)
+		if !ok {
+			return true // Unorderable legacy labels impose no numeric lower bound.
+		}
+		for _, part := range strings.Split(strings.TrimSpace(label), ".") {
+			if len(part) > 9 || strings.Trim(part, "0123456789") != "" {
+				return false
+			}
+		}
+		greater := !found
+		for i := range parts {
+			if parts[i] != highest[i] {
+				greater = parts[i] > highest[i]
+				break
+			}
+		}
+		if greater {
+			highest = parts
+		}
+		found = true
+		return true
+	}
+	if p.CurrentVersion != nil && !include(*p.CurrentVersion) {
+		return ""
+	}
 	for _, r := range d.Releases {
-		if r.PluginID == p.ID {
-			used[r.VersionLabel] = true
+		if r.PluginID == p.ID && !include(r.VersionLabel) {
+			return ""
 		}
 	}
 	for _, v := range d.Versions {
-		if v.PluginID == p.ID && v.DeclaredVersion != nil && *v.DeclaredVersion != "" {
-			used[*v.DeclaredVersion] = true
+		if v.PluginID == p.ID && v.DeclaredVersion != nil && !include(*v.DeclaredVersion) {
+			return ""
 		}
 	}
-	label := ""
-	if p.CurrentVersion != nil {
-		parts := strings.Split(*p.CurrentVersion, ".")
-		if len(parts) == 3 {
-			a, e1 := strconv.ParseUint(parts[0], 10, 32)
-			b, e2 := strconv.ParseUint(parts[1], 10, 32)
-			c, e3 := strconv.ParseUint(parts[2], 10, 32)
-			if e1 == nil && e2 == nil && e3 == nil {
-				for i := uint64(1); i < 10001; i++ {
-					candidate := fmt.Sprintf("%d.%d.%d", a, b, c+i)
-					if !used[candidate] {
-						label = candidate
-						break
-					}
-				}
-			}
-		}
+	if !found {
+		return "1.0.0"
 	}
-	if label != "" {
-		return label
-	}
-	for i := 1; i <= 10001; i++ {
-		candidate := fmt.Sprintf("2147483647.0.%d", i)
-		if !used[candidate] {
-			return candidate
+	for i := len(highest) - 1; i >= 0; i-- {
+		if highest[i] == maxPart {
+			highest[i] = 0
+			continue
 		}
+		highest[i]++
+		// Leave at least one valid successor for the next content publication.
+		if highest == [3]uint64{maxPart, maxPart, maxPart} {
+			return ""
+		}
+		return fmt.Sprintf("%d.%d.%d", highest[0], highest[1], highest[2])
 	}
 	return ""
 }

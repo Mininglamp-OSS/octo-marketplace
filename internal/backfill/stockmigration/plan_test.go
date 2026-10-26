@@ -107,9 +107,54 @@ func TestForwardLabelSkipsReleasedAndDoesNotReuseUnknownVersion(t *testing.T) {
 		t.Fatal(label)
 	}
 	d.Resources[0].Plugin.CurrentVersion = pointer("legacy-label")
-	if label := Build(d).Units[0].Nodes[3].Label; label != "2147483647.0.1" {
+	if label := Build(d).Units[0].Nodes[3].Label; label != "1.2.5" {
 		t.Fatal(label)
 	}
+}
+
+func TestForwardLabelStaysWithinWriteBoundsAndLeavesASuccessor(t *testing.T) {
+	for _, tc := range []struct{ current, want string }{
+		{"v1", "1.0.0"},
+		{"", "1.0.0"},
+		{"0.0.0", "0.0.1"},
+		{"1.2.999999999", "1.3.0"},
+		{"1.999999999.999999999", "2.0.0"},
+		{"999999999.999999999.999999997", "999999999.999999999.999999998"},
+		{"999999999.999999999.999999998", ""},
+		{"999999999.999999999.999999999", ""},
+		{"2147483647.0.1", ""},
+		{"1.0.0000000001", ""},
+	} {
+		t.Run(tc.current, func(t *testing.T) {
+			p := model.Plugin{ID: "root", CurrentVersion: pointer(tc.current)}
+			if got := forwardLabel(p, Dataset{}); got != tc.want {
+				t.Fatalf("forwardLabel(%q)=%q, want %q", tc.current, got, tc.want)
+			}
+		})
+	}
+	d := Dataset{
+		Releases: []model.PluginVersionRelease{{PluginID: "root", VersionLabel: "5.0.0"}},
+		Versions: []model.PluginVersion{{PluginID: "root", DeclaredVersion: pointer("5.0.1")}},
+	}
+	if got := forwardLabel(model.Plugin{ID: "root", CurrentVersion: pointer("v1")}, d); got != "5.0.2" {
+		t.Fatalf("historical lower bound ignored: %s", got)
+	}
+	d.Releases[0].VersionLabel = "2147483647.0.1"
+	if got := forwardLabel(model.Plugin{ID: "root"}, d); got != "" {
+		t.Fatalf("out-of-contract historical bound accepted: %s", got)
+	}
+}
+
+func TestPlanQuarantinesUnresolvedVersionLabel(t *testing.T) {
+	d := fixture()
+	d.Resources[0].Plugin.CurrentVersion = pointer("999999999.999999999.999999999")
+	p := Build(d)
+	for _, e := range p.Exceptions {
+		if e.ResourceID == "team" && e.Code == "unresolved_version_label" {
+			return
+		}
+	}
+	t.Fatalf("exhausted version namespace was not quarantined: %+v", p.Exceptions)
 }
 
 func equalJSON(a, b []byte) bool {

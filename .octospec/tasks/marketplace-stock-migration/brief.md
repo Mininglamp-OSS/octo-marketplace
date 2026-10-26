@@ -15,6 +15,9 @@ writer rejects inline bundles. Historical rows must remain immutable and readabl
   root expert/team snapshot; connectors have no versions.
 - New release identities never mark an old snapshot released. Keep old snapshots,
   files and rows. New container label advances deterministically.
+- Generated labels obey the ordinary nine-digit-per-component write contract,
+  exceed historical numeric labels, and leave room for a later publication.
+  Unresolvable numeric bounds quarantine the root before any write.
 - Rebuild source evidence under transaction locks before apply. Atomic root units
   and immutable batch mappings support interruption and repeat without duplicates.
 - Any unresolved exception blocks apply; operator must affirm G4 policy externally.
@@ -31,3 +34,5 @@ Dry run reconciles resources and reports exceptions. Isolated fixtures cover all
 visibility/listing combinations, skills/MCP/member extraction, role/order/leader,
 unchanged history, missing evidence, idempotent resume and pointer rollback.
 Package tests, full Go tests and build pass; no HTTP endpoint is introduced.
+Real SQL migration followed by the public edit and publish service paths passes
+for unorderable legacy labels and bounded patch rollover.
