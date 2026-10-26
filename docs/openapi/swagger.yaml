@@ -1783,8 +1783,10 @@ components:
             type: object
           type: array
           uniqueItems: false
-        revision_no:
+        revision:
           type: integer
+        revision_no:
+          type: string
         version_id:
           type: string
         version_label:
