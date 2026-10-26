@@ -9,9 +9,9 @@ ALTER TABLE plugin_install_attempts
  ADD COLUMN lease_until DATETIME(3) NULL,
  ADD COLUMN retry_until DATETIME(3) NULL,
  ADD CONSTRAINT chk_install_attempt_state CHECK (attempt_state IN ('PREPARED','DISPATCHING','SUCCEEDED','FAILED','UNKNOWN','EXPIRED'));
--- Existing attempts have no frozen payload. Retain uncertainty; never infer
--- a replacement plan from today's mutable catalog.
-UPDATE plugin_install_attempts SET attempt_state='UNKNOWN' WHERE completed=TRUE;
+-- Existing attempts have no frozen payload. The new column default is UNKNOWN,
+-- so historical rows keep uncertainty without an UPDATE that could overwrite a
+-- later terminal state on a partial/re-run migration.
 
 -- +migrate Down
 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Frozen installation plan downgrade refused';
