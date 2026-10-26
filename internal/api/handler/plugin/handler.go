@@ -789,6 +789,13 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, "Correct the request and try again.")
 	case errors.Is(err, pluginsvc.ErrDependencyUnavailable):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a dependency is not available in the current published graph", map[string]any{"reason": "dependency_unavailable"}, "Refresh the plugin and ask the publisher to repair the dependency.")
+	// A manual review window is only valid for the dependency releases observed at
+	// submit. A newer release/effective payload means the reviewer would approve a
+	// graph they did not inspect, so refuse and keep the request pending. The
+	// applicant cancels and resubmits; auto-approval retries internally instead of
+	// surfacing this.
+	case errors.Is(err, pluginsvc.ErrDependencyChanged):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "a dependency changed after this request was submitted", map[string]any{"reason": "dependency_changed"}, "Cancel this request and submit a new one against the current dependency releases.")
 	case errors.Is(err, pluginsvc.ErrZipOnlyRequired):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "expert/team content must use schema2 ZIP import", map[string]any{"field": "plugin_type", "reason": "zip_only_required"}, "Upload the expert or team through the container import endpoint.")
 	case errors.Is(err, pluginsvc.ErrInvalidRequest):

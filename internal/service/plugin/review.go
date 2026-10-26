@@ -87,7 +87,33 @@ var (
 	// plugin_name that disagrees with the live row. The submission reviews
 	// content, not identity; a rename must go through an upsert after delisting.
 	ErrReviewNameMismatch = errors.New("zip package name does not match the plugin")
+	// ErrDependencyChanged means the pending request's frozen dependency
+	// observations no longer match the latest formal releases (or the graph can
+	// no longer be resolved). Approval is refused with 409 so the reviewer never
+	// ships dependency versions the applicant did not submit against; the
+	// applicant cancels and resubmits to capture fresh observations.
+	ErrDependencyChanged = errors.New("review dependency observations changed")
 )
+
+// ReviewObservationStore is the repository extension used by the automatic
+// review retry. It is optional so legacy Store implementations and fakes keep
+// compiling; without it auto-approval simply surfaces ErrDependencyChanged.
+type ReviewObservationStore interface {
+	RefreshReviewObservations(context.Context, pluginrepo.Scope, string) error
+}
+
+// mapReviewStoreError maps the review-specific repository sentinel that
+// mapStoreError does not know about (keeping service.go's shared vocabulary
+// untouched), then delegates the rest.
+func mapReviewStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, pluginrepo.ErrDependencyChanged) {
+		return ErrDependencyChanged
+	}
+	return mapStoreError(err)
+}
 
 // ReviewFieldError is a validation error that names the offending field and
 // reason, so writeServiceError can surface it in details instead of collapsing
@@ -340,10 +366,25 @@ func (s *Service) submitReview(ctx context.Context, caller Caller, params Review
 // Canceling restores the single-pending slot and cleans up snapshot-only objects,
 // allowing the caller to retry the original operation.
 func (s *Service) autoApproveReview(ctx context.Context, caller Caller, review *model.PluginReviewRequest, parseTaskID string) (*model.Plugin, error) {
-	published, approveErr := s.approveWithVersionFiles(ctx, scope(caller), pluginrepo.ApproveReviewParams{
+	params := pluginrepo.ApproveReviewParams{
 		ReviewID: review.ID, ReviewerUID: caller.UID, ReviewerName: caller.Name,
 		DecisionSource: model.ReviewDecisionSourcePolicy, RequestID: caller.RequestID,
-	})
+	}
+	published, approveErr := s.approveWithVersionFiles(ctx, scope(caller), params)
+	// Automatic review has no human window, so a dependency release that landed
+	// between the submit-time observation and this decision is routine, not a
+	// conflict. Re-resolve the SAME frozen graph once and retry, exactly as the
+	// A15 contract allows; a second mismatch (or an unrefreshable row) surfaces
+	// as 409 dependency_changed rather than silently approving unreviewed drift.
+	if errors.Is(mapReviewStoreError(approveErr), ErrDependencyChanged) {
+		if refresher, ok := s.repo.(ReviewObservationStore); ok {
+			if refreshErr := refresher.RefreshReviewObservations(ctx, scope(caller), review.ID); refreshErr != nil {
+				approveErr = refreshErr
+			} else {
+				published, approveErr = s.approveWithVersionFiles(ctx, scope(caller), params)
+			}
+		}
+	}
 	if approveErr == nil {
 		return published, nil
 	}
@@ -355,7 +396,7 @@ func (s *Service) autoApproveReview(ctx context.Context, caller Caller, review *
 		// Compensation lost a decision race or the store is unavailable. Dispatch a
 		// card so a request that may still be pending is never left unnotified.
 		s.dispatchReviewCard(caller, review, nil)
-		return nil, fmt.Errorf("auto-approve review: %w (cancel compensation: %v)", mapStoreError(approveErr), mapStoreError(cancelErr))
+		return nil, fmt.Errorf("auto-approve review: %w (cancel compensation: %v)", mapReviewStoreError(approveErr), mapStoreError(cancelErr))
 	}
 	// CancelReview returns the frozen and retained sidecars from its transaction;
 	// use the normal cancel/reject GC so shared and version-owned objects survive.
@@ -375,7 +416,7 @@ func (s *Service) autoApproveReview(ctx context.Context, caller Caller, review *
 				zap.Error(releaseErr))
 		}
 	}
-	return nil, mapStoreError(approveErr)
+	return nil, mapReviewStoreError(approveErr)
 }
 
 // freezeSubmission builds the frozen snapshot a reviewer will decide on.
@@ -754,7 +795,7 @@ func (s *Service) ApproveReview(ctx context.Context, caller Caller, reviewID str
 		RequestID:      caller.RequestID,
 	})
 	if err != nil {
-		return nil, mapStoreError(err)
+		return nil, mapReviewStoreError(err)
 	}
 	plug.IconURL = s.resolveIcon(ctx, plug.Icon)
 	return plug, nil
@@ -1085,7 +1126,7 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 		// dedicated "stale" disposition, switch to it; display.reason carries the
 		// actionable message ("version moved past; applicant must resubmit") for a
 		// future richer renderer.
-		mapped := mapStoreError(applyErr)
+		mapped := mapReviewStoreError(applyErr)
 		switch {
 		case errors.Is(mapped, ErrNotFound):
 			// A concurrent soft-delete (delete or delist winning the row lock between
@@ -1110,11 +1151,13 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 			}, nil
 		case errors.Is(mapped, ErrConflict):
 			return s.cardConflict(ctx, req)
-		case errors.Is(mapped, ErrVersionRegressed), errors.Is(mapped, ErrLabelTaken):
-			// Both are permanent on a still-pending row: the label is either behind
-			// current (draft label moved) or already-taken (concurrent label
-			// collision). Ack as a handled refusal; display.reason distinguishes the
-			// two for a future richer renderer.
+		case errors.Is(mapped, ErrVersionRegressed), errors.Is(mapped, ErrLabelTaken), errors.Is(mapped, ErrDependencyChanged):
+			// All three are permanent on a still-pending row: the label is either
+			// behind current (draft label moved), already-taken (concurrent label
+			// collision), or a frozen dependency observation no longer matches the
+			// latest formal release. Ack as a handled refusal; display.reason
+			// distinguishes them for a future richer renderer. The applicant cancels
+			// and resubmits to capture fresh observations.
 			//
 			// Unreceipted on purpose. The row is still PENDING, so a later delivery
 			// of this event must be free to apply the decision once the applicant has
@@ -1125,8 +1168,11 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 			// reserved for the applied path, the only one where a differing replay
 			// would apply a decision twice.
 			reason := "version_moved_past_resubmit_required"
-			if errors.Is(mapped, ErrLabelTaken) {
+			switch {
+			case errors.Is(mapped, ErrLabelTaken):
 				reason = "version_label_taken_resubmit_required"
+			case errors.Is(mapped, ErrDependencyChanged):
+				reason = "dependency_changed_resubmit_required"
 			}
 			return &CardActionResult{
 				Disposition: cardDispositionForbidden,

@@ -562,3 +562,131 @@ func TestReviewDetailToleratesMalformedFrozenRelations(t *testing.T) {
 		t.Errorf("frozen_relations = %s, want []", envelope.Data.Relations)
 	}
 }
+
+// A15: the detail and list projections carry the persisted dependency
+// observations (Skill/Expert released version and Connector effective
+// revision/digest) without re-resolving the graph on read.
+func TestReviewResponsesCarryDependencyObservations(t *testing.T) {
+	f := &fakeService{}
+	base := reviewRequestFixture()
+	revision := uint64(5)
+	digest := "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	base.ObservationsPresent = true
+	base.ResolvedDependencyObservations = []model.ReviewDependencyObservation{
+		{PluginID: "skill-1", PluginType: model.PluginTypeSkill, VersionID: "skill-v1"},
+		{PluginID: "expert-1", PluginType: model.PluginTypeExpert, VersionID: "expert-v1"},
+	}
+	base.ConnectorObservations = []model.ReviewConnectorObservation{
+		{PluginID: "connector-1", EffectiveRevision: &revision, EffectiveDigest: &digest},
+		{PluginID: "connector-new"}, // first Connector submission: null/null baseline
+	}
+	f.review.request = base
+
+	assert := func(t *testing.T, data json.RawMessage) {
+		t.Helper()
+		var payload struct {
+			Deps []struct {
+				PluginID   string `json:"plugin_id"`
+				PluginType string `json:"plugin_type"`
+				VersionID  string `json:"version_id"`
+			} `json:"resolved_dependency_observations"`
+			Conns []struct {
+				PluginID          string  `json:"plugin_id"`
+				EffectiveRevision *uint64 `json:"effective_revision"`
+				EffectiveDigest   *string `json:"effective_digest"`
+			} `json:"connector_observations"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			t.Fatalf("decode observations: %v (%s)", err, data)
+		}
+		if len(payload.Deps) != 2 || payload.Deps[0].PluginID != "skill-1" || payload.Deps[0].PluginType != "skill" || payload.Deps[0].VersionID != "skill-v1" {
+			t.Fatalf("resolved_dependency_observations = %+v", payload.Deps)
+		}
+		if len(payload.Conns) != 2 || payload.Conns[0].EffectiveRevision == nil || *payload.Conns[0].EffectiveRevision != 5 ||
+			payload.Conns[0].EffectiveDigest == nil || *payload.Conns[0].EffectiveDigest != digest {
+			t.Fatalf("connector_observations = %+v", payload.Conns)
+		}
+		if payload.Conns[1].EffectiveRevision != nil || payload.Conns[1].EffectiveDigest != nil {
+			t.Fatalf("first Connector baseline = %+v, want null/null", payload.Conns[1])
+		}
+	}
+
+	t.Run("detail", func(t *testing.T) {
+		f.review.request = base
+		rec := doReview(t, f, http.MethodGet, "/api/v1/plugins/review_requests/review-1", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+		}
+		var envelope struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		assert(t, envelope.Data)
+	})
+
+	t.Run("list", func(t *testing.T) {
+		f.review.items = []*model.PluginReviewRequest{base}
+		f.review.total = 1
+		rec := doReview(t, f, http.MethodGet, "/api/v1/plugins/review_requests?mode=mine", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+		}
+		var envelope struct {
+			Data []json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if len(envelope.Data) != 1 {
+			t.Fatalf("rows = %d", len(envelope.Data))
+		}
+		assert(t, envelope.Data[0])
+	})
+}
+
+// Requests created before A15 have NULL observation columns. The wire must omit
+// the fields rather than fabricate an empty graph.
+func TestReviewDetailOmitsObservationsForLegacyRequests(t *testing.T) {
+	f := &fakeService{}
+	f.review.request = reviewRequestFixture()
+	rec := doReview(t, f, http.MethodGet, "/api/v1/plugins/review_requests/review-1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"resolved_dependency_observations", "connector_observations"} {
+		if _, present := envelope.Data[key]; present {
+			t.Errorf("legacy request rendered %q; it must be omitted", key)
+		}
+	}
+}
+
+// A dependency observation mismatch is a 409 CONFLICT with the fixed
+// dependency_changed reason, not a generic state conflict or a 500.
+func TestApproveMapsDependencyChangedToConflict(t *testing.T) {
+	f := &fakeService{}
+	f.review.approveErr = pluginsvc.ErrDependencyChanged
+	rec := doReview(t, f, http.MethodPost, "/api/v1/plugins/review_requests/review-1/approve", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != "CONFLICT" || envelope.Error.Details["reason"] != "dependency_changed" {
+		t.Fatalf("envelope = %s", rec.Body.String())
+	}
+}

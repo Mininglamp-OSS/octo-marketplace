@@ -276,6 +276,27 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 		return err
 	}
 
+	// A15: freeze the latest formal-release identities of the submitted graph in
+	// the same transaction that validates and stores it. Resolution failure is a
+	// submit failure, never an empty graph: an unresolved dependency would make
+	// approval unable to distinguish "no dependencies" from "could not verify".
+	var dependencyObservations, connectorObservations any
+	if r.observationsEnabled() {
+		obs, err := resolveReviewObservations(ctx, tx, *current, relations)
+		if err != nil {
+			if errors.Is(err, ErrDependencyUnavailable) {
+				return ErrDependencyUnavailable
+			}
+			return err
+		}
+		deps, conns, err := encodeReviewObservations(obs)
+		if err != nil {
+			return err
+		}
+		dependencyObservations = string(deps)
+		connectorObservations = string(conns)
+	}
+
 	now := r.now()
 	req.ID = r.id()
 	req.SubmittedAt = now
@@ -292,11 +313,15 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO plugin_review_requests
 		  (review_id,plugin_id,space_id,target_scope,status,kind,version,changelog,
-		   manifest_json,plugin_json,attachment_keys_json,relations_json,manifest_hash,plugin_hash,
+		   manifest_json,plugin_json,attachment_keys_json,relations_json,
+		   resolved_dependency_observations_json,connector_observations_json,
+		   manifest_hash,plugin_hash,
 		   applicant_uid,applicant_name,submitted_at,created_at,updated_at)
-		  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.ID, req.PluginID, req.SpaceID, targetScope, string(model.ReviewStatusPending), string(req.Kind), req.Version, changelog,
-		string(snap.Manifest), string(snap.Package), jsonColumn(snap.AttachmentKeys), string(relationsJSON), snap.ManifestHash, snap.PluginHash,
+		string(snap.Manifest), string(snap.Package), jsonColumn(snap.AttachmentKeys), string(relationsJSON),
+		dependencyObservations, connectorObservations,
+		snap.ManifestHash, snap.PluginHash,
 		req.ApplicantUID, req.ApplicantName, req.SubmittedAt, req.CreatedAt, req.UpdatedAt,
 	)
 	if err != nil {
@@ -358,6 +383,7 @@ func publishedVersionLabels(ctx context.Context, tx *sql.Tx, pluginID string, cu
 }
 
 const reviewSelectBase = `SELECT rr.review_id,rr.plugin_id,rr.space_id,rr.target_scope,rr.status,rr.kind,rr.version,rr.changelog,
+        rr.resolved_dependency_observations_json,rr.connector_observations_json,
         rr.manifest_hash,rr.plugin_hash,
         rr.applicant_uid,rr.applicant_name,rr.reviewer_uid,rr.reviewer_name,rr.reason,rr.decision_source,
         rr.submitted_at,rr.reviewed_at,
@@ -367,6 +393,7 @@ const reviewSelectBase = `SELECT rr.review_id,rr.plugin_id,rr.space_id,rr.target
 // detail read uses it; the list query must never carry a manifest, package and
 // relation graph per row.
 const reviewSelectSnapshot = `SELECT rr.review_id,rr.plugin_id,rr.space_id,rr.target_scope,rr.status,rr.kind,rr.version,rr.changelog,
+        rr.resolved_dependency_observations_json,rr.connector_observations_json,
         rr.manifest_json,rr.plugin_json,rr.attachment_keys_json,rr.relations_json,rr.manifest_hash,rr.plugin_hash,
         rr.applicant_uid,rr.applicant_name,rr.reviewer_uid,rr.reviewer_name,rr.reason,rr.decision_source,
         rr.submitted_at,rr.reviewed_at,
@@ -523,16 +550,19 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		pluginID, version, kind               string
 		changelog                             sql.NullString
 		manifest, pkg, attKeys, relationBytes []byte
+		dependencyObservations, connectors    []byte
 		manifestHash, pluginHash              string
 	)
 	err = tx.QueryRowContext(ctx,
 		`SELECT rr.plugin_id,rr.version,rr.kind,rr.changelog,rr.manifest_json,rr.plugin_json,rr.attachment_keys_json,rr.relations_json,
+		        rr.resolved_dependency_observations_json,rr.connector_observations_json,
 		        rr.manifest_hash,rr.plugin_hash
 		   FROM plugin_review_requests rr
 		  WHERE rr.review_id=? AND rr.status='pending' AND rr.deleted_at IS NULL
 		    AND rr.space_id=?
 		  FOR UPDATE`, p.ReviewID, scope.SpaceID).
-		Scan(&pluginID, &version, &kind, &changelog, &manifest, &pkg, &attKeys, &relationBytes, &manifestHash, &pluginHash)
+		Scan(&pluginID, &version, &kind, &changelog, &manifest, &pkg, &attKeys, &relationBytes,
+			&dependencyObservations, &connectors, &manifestHash, &pluginHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, classifyMissingPending(ctx, tx, p.ReviewID, scope.SpaceID)
@@ -542,6 +572,31 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	current, err := getReviewedPluginForUpdate(ctx, tx, scope.SpaceID, pluginID)
 	if err != nil {
 		return nil, err
+	}
+	// A15: the frozen observations are the review window's consistency evidence.
+	// Re-resolve the SAME frozen graph here, under the request/plugin locks, and
+	// refuse the approval if any observed version or effective revision moved.
+	// This runs before any write, so a mismatch leaves the request pending — the
+	// applicant cancels and resubmits instead of shipping an unseen dependency
+	// change. Requests created before observations existed have NULL columns and
+	// keep the legacy decision path.
+	if stored, present, err := decodeStoredReviewObservations(dependencyObservations, connectors); err != nil {
+		return nil, err
+	} else if present {
+		frozenForCheck, err := model.DecodeSnapshotRelations(relationBytes)
+		if err != nil {
+			return nil, err
+		}
+		fresh, err := resolveReviewObservations(ctx, tx, *current, frozenForCheck)
+		if err != nil {
+			// A dependency that vanished/unpublished (or an undecodable graph) can no
+			// longer be confirmed, which is exactly the dependency-changed condition.
+			// Transient store errors still surface as internal failures.
+			return nil, observationResolutionError(err)
+		}
+		if !reviewObservationsEqual(stored, fresh) {
+			return nil, ErrDependencyChanged
+		}
 	}
 	if r.versionManagement && current.Type == model.PluginTypeConnector {
 		return r.approveConnectorReview(ctx, tx, scope, p, current, version, manifest, pkg, attKeys, manifestHash, pluginHash)
@@ -1268,16 +1323,18 @@ func (r *Repo) InsertCardActionReceipt(ctx context.Context, rec *model.CardActio
 func scanReviewRequest(scan func(dest ...any) error, withSnapshot bool) (*model.PluginReviewRequest, error) {
 	rr := &model.PluginReviewRequest{}
 	var (
-		targetScope, st, knd              string
-		cl, rvu, rvn, rsn, ds             sql.NullString
-		rat                               sql.NullTime
-		pn, pt, pi, cv, pls               sql.NullString
-		mh, ph                            string
-		au, an                            string
-		sa                                time.Time
-		manifest, pkg, attKeys, relations []byte
+		targetScope, st, knd               string
+		cl, rvu, rvn, rsn, ds              sql.NullString
+		rat                                sql.NullTime
+		pn, pt, pi, cv, pls                sql.NullString
+		mh, ph                             string
+		au, an                             string
+		sa                                 time.Time
+		manifest, pkg, attKeys, relations  []byte
+		dependencyObservations, connectors []byte
 	)
-	base := []any{&rr.ID, &rr.PluginID, &rr.SpaceID, &targetScope, &st, &knd, &rr.Version, &cl}
+	base := []any{&rr.ID, &rr.PluginID, &rr.SpaceID, &targetScope, &st, &knd, &rr.Version, &cl,
+		&dependencyObservations, &connectors}
 	if withSnapshot {
 		base = append(base, &manifest, &pkg, &attKeys, &relations)
 	}
@@ -1292,6 +1349,13 @@ func scanReviewRequest(scan func(dest ...any) error, withSnapshot bool) (*model.
 		}
 		return nil, err
 	}
+	observations, present, err := decodeStoredReviewObservations(dependencyObservations, connectors)
+	if err != nil {
+		return nil, err
+	}
+	rr.ResolvedDependencyObservations = observations.Dependencies
+	rr.ConnectorObservations = observations.Connectors
+	rr.ObservationsPresent = present
 	rr.TargetScope = targetScope
 	rr.Status = model.ReviewStatus(st)
 	rr.Kind = model.ReviewKind(knd)

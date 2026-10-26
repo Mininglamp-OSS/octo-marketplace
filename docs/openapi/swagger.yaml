@@ -2434,6 +2434,15 @@ components:
           type: array
           uniqueItems: false
       type: object
+    internal_api_handler_plugin.reviewConnectorObservationResponse:
+      properties:
+        effective_digest:
+          type: string
+        effective_revision:
+          type: integer
+        plugin_id:
+          type: string
+      type: object
     internal_api_handler_plugin.reviewDecisionSourceResponse:
       description: DecisionSource identifies the human decision channel; omitted for
         policy approvals and undecided requests.
@@ -2444,6 +2453,15 @@ components:
       x-enum-varnames:
       - reviewDecisionSourceWeb
       - reviewDecisionSourceIM
+    internal_api_handler_plugin.reviewDependencyObservationResponse:
+      properties:
+        plugin_id:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        version_id:
+          type: string
+      type: object
     internal_api_handler_plugin.reviewPolicyResponse:
       properties:
         is_auto_approve_enabled:
@@ -2479,6 +2497,11 @@ components:
           type: string
         changelog:
           type: string
+        connector_observations:
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.reviewConnectorObservationResponse'
+          type: array
+          uniqueItems: false
         current_version:
           type: string
         decision_source:
@@ -2556,6 +2579,23 @@ components:
           type: string
         reason:
           type: string
+        resolved_dependency_observations:
+          description: 'ResolvedDependencyObservations and ConnectorObservations are
+            the latest
+
+            formal releases observed when the request was submitted. They are audit
+
+            evidence for the review window, not pins, and are stored alongside the
+
+            request so neither list nor detail has to resolve the graph while reading.
+
+            Omitted only for requests created before observations existed; a resolved
+
+            graph with no dependencies renders as [].'
+          items:
+            $ref: '#/components/schemas/internal_api_handler_plugin.reviewDependencyObservationResponse'
+          type: array
+          uniqueItems: false
         review_id:
           type: string
         reviewed_at:
@@ -8171,15 +8211,17 @@ paths:
       tags:
       - plugin
     post:
-      description: 'Freezes the reviewed content under a caller-supplied version label.
-        When the authenticated Space''s automatic-review policy is enabled (the default),
-        the request is approved immediately and the published Plugin is updated; otherwise
-        it remains pending for a Space owner/admin. Content is supplied one of three
-        ways: (1) parse_task_id for a skill zip upload processed server-side; (2)
-        manifest_json and plugin_json together for declared JSON documents; (3) neither,
-        which snapshots the live draft row and is valid only while the plugin is private.
-        Only the plugin owner may submit, only one request per plugin may be pending,
-        and a version label already published for that plugin is refused.'
+      description: 'Freezes the reviewed content under a caller-supplied version label
+        and records the frozen graph''s current latest formal dependency releases
+        (`resolved_dependency_observations`, `connector_observations`). When the authenticated
+        Space''s automatic-review policy is enabled (the default), the request is
+        approved immediately and the published Plugin is updated; otherwise it remains
+        pending for a Space owner/admin. Content is supplied one of three ways: (1)
+        parse_task_id for a skill zip upload processed server-side; (2) manifest_json
+        and plugin_json together for declared JSON documents; (3) neither, which snapshots
+        the live draft row and is valid only while the plugin is private. Only the
+        plugin owner may submit, only one request per plugin may be pending, and a
+        version label already published for that plugin is refused.'
       operationId: plugin.review_request.create
       requestBody:
         content:
@@ -8258,8 +8300,10 @@ paths:
   /plugins/review_requests/{review_id}:
     get:
       description: Returns the request plus readme_content extracted from the frozen
-        submission. Applicants see their own requests; Space owners/admins see every
-        request in the Space. A request in another Space is reported as not found.
+        submission and the dependency observations recorded at submit (`resolved_dependency_observations`,
+        `connector_observations`). Applicants see their own requests; Space owners/admins
+        see every request in the Space. A request in another Space is reported as
+        not found.
       operationId: plugin.review_request.get
       parameters:
       - description: Review request ID
@@ -8317,10 +8361,14 @@ paths:
       - plugin
   /plugins/review_requests/{review_id}/approve:
     post:
-      description: Requires the Space owner/admin role. Applies the frozen documents
-        and relation graph to the plugin, records a release version carrying the applicant's
-        label, and for a first listing flips visibility from private to space. Losing
-        a concurrent decision race returns CONFLICT.
+      description: 'Requires the Space owner/admin role. Applies the frozen documents
+        and relation graph to the plugin, records a release version carrying the applicant''s
+        label, and for a first listing flips visibility from private to space. Approval
+        re-resolves the frozen dependency graph: if any observed Skill/Expert release
+        or Connector effective revision changed since submit, no write happens and
+        the request stays pending (409 `dependency_changed`). Automatic approval retries
+        this check once before surfacing the conflict. Losing a concurrent decision
+        race returns CONFLICT.'
       operationId: plugin.review_request.approve
       parameters:
       - description: Review request ID
@@ -8370,7 +8418,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: 'CONFLICT: already decided'
+          description: 'CONFLICT: already decided, or a frozen dependency observation
+            changed (`details.reason=dependency_changed`)'
         '429':
           content:
             application/json:

@@ -49,6 +49,26 @@ type PluginReviewPolicy struct {
 // per-request reason; the web reject modal requires an explicit one.
 const DefaultIMDenyReason = "管理员在消息卡片中拒绝,未填写原因"
 
+// ReviewDependencyObservation is the latest formal release a Skill/Expert
+// dependency resolved to when a review request was submitted (or last
+// re-resolved). It is audit evidence for the review window, never a pin: the
+// approved resource keeps following the newest releases afterwards.
+type ReviewDependencyObservation struct {
+	PluginID   string     `json:"plugin_id"`
+	PluginType PluginType `json:"plugin_type"`
+	VersionID  string     `json:"version_id"`
+}
+
+// ReviewConnectorObservation is the effective revision/digest a Connector
+// dependency had when the review request was submitted. Both fields are
+// nullable only for a Connector's own first submission, which has no effective
+// row yet; a Connector target always requires an effective row.
+type ReviewConnectorObservation struct {
+	PluginID          string  `json:"plugin_id"`
+	EffectiveRevision *uint64 `json:"effective_revision"`
+	EffectiveDigest   *string `json:"effective_digest"`
+}
+
 // PluginReviewRequest is a frozen-snapshot submission waiting for Space
 // owner/admin approval (or its terminal outcome). Status lives on this entity,
 // not on the plugin, so a listed v1 can coexist with an in-review v2.
@@ -100,6 +120,15 @@ type PluginReviewRequest struct {
 	// snapshot (SKILL.md and friends) — the text a reviewer is actually deciding
 	// on. Populated on the detail read only.
 	ReadmeContent string `json:"readme_content,omitempty"`
+	// ResolvedDependencyObservations and ConnectorObservations are the latest
+	// formal-release identities captured at submit time (and refreshed by the
+	// automatic-review retry). They are small enough for the list projection and
+	// are stored as JSON columns so neither read has to rebuild the graph.
+	// ObservationsPresent distinguishes "this request predates observations"
+	// (omitted from the wire) from "resolved to no dependencies" (renders []).
+	ResolvedDependencyObservations []ReviewDependencyObservation `json:"-"`
+	ConnectorObservations          []ReviewConnectorObservation  `json:"-"`
+	ObservationsPresent            bool                          `json:"-"`
 }
 
 // CardActionReceipt records the response already returned for an octo-server

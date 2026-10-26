@@ -129,6 +129,30 @@ type reviewRequestResponse struct {
 	// endpoint must not reach back to the live plugin table to enrich frozen
 	// data with mutable state.
 	FrozenRelations *[]reviewRelationResponse `json:"frozen_relations,omitempty"`
+	// ResolvedDependencyObservations and ConnectorObservations are the latest
+	// formal releases observed when the request was submitted. They are audit
+	// evidence for the review window, not pins, and are stored alongside the
+	// request so neither list nor detail has to resolve the graph while reading.
+	// Omitted only for requests created before observations existed; a resolved
+	// graph with no dependencies renders as [].
+	ResolvedDependencyObservations *[]reviewDependencyObservationResponse `json:"resolved_dependency_observations,omitempty"`
+	ConnectorObservations          *[]reviewConnectorObservationResponse  `json:"connector_observations,omitempty"`
+}
+
+// reviewDependencyObservationResponse is one frozen Skill/Expert observation.
+type reviewDependencyObservationResponse struct {
+	PluginID   string           `json:"plugin_id"`
+	PluginType model.PluginType `json:"plugin_type"`
+	VersionID  string           `json:"version_id"`
+}
+
+// reviewConnectorObservationResponse is one frozen Connector effective
+// observation. effective_revision/effective_digest render as null only for a
+// Connector's own first submission, which has no effective row yet.
+type reviewConnectorObservationResponse struct {
+	PluginID          string  `json:"plugin_id"`
+	EffectiveRevision *uint64 `json:"effective_revision"`
+	EffectiveDigest   *string `json:"effective_digest"`
 }
 
 // reviewRelationResponse is one edge in the frozen membership graph carried on
@@ -290,6 +314,26 @@ func reviewDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 	if edges := decodeFrozenRelations(r.ID, r.PluginID, r.RelationsJSON); edges != nil {
 		out.FrozenRelations = &edges
 	}
+	if r.ObservationsPresent {
+		deps := make([]reviewDependencyObservationResponse, 0, len(r.ResolvedDependencyObservations))
+		for _, obs := range r.ResolvedDependencyObservations {
+			deps = append(deps, reviewDependencyObservationResponse{
+				PluginID:   obs.PluginID,
+				PluginType: obs.PluginType,
+				VersionID:  obs.VersionID,
+			})
+		}
+		out.ResolvedDependencyObservations = &deps
+		conns := make([]reviewConnectorObservationResponse, 0, len(r.ConnectorObservations))
+		for _, obs := range r.ConnectorObservations {
+			conns = append(conns, reviewConnectorObservationResponse{
+				PluginID:          obs.PluginID,
+				EffectiveRevision: obs.EffectiveRevision,
+				EffectiveDigest:   obs.EffectiveDigest,
+			})
+		}
+		out.ConnectorObservations = &conns
+	}
 	return out
 }
 
@@ -307,7 +351,7 @@ func reviewListDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 // SubmitReview submits a plugin for Space visibility review.
 //
 // @Summary Submit a plugin for Space review
-// @Description Freezes the reviewed content under a caller-supplied version label. When the authenticated Space's automatic-review policy is enabled (the default), the request is approved immediately and the published Plugin is updated; otherwise it remains pending for a Space owner/admin. Content is supplied one of three ways: (1) parse_task_id for a skill zip upload processed server-side; (2) manifest_json and plugin_json together for declared JSON documents; (3) neither, which snapshots the live draft row and is valid only while the plugin is private. Only the plugin owner may submit, only one request per plugin may be pending, and a version label already published for that plugin is refused.
+// @Description Freezes the reviewed content under a caller-supplied version label and records the frozen graph's current latest formal dependency releases (`resolved_dependency_observations`, `connector_observations`). When the authenticated Space's automatic-review policy is enabled (the default), the request is approved immediately and the published Plugin is updated; otherwise it remains pending for a Space owner/admin. Content is supplied one of three ways: (1) parse_task_id for a skill zip upload processed server-side; (2) manifest_json and plugin_json together for declared JSON documents; (3) neither, which snapshots the live draft row and is valid only while the plugin is private. Only the plugin owner may submit, only one request per plugin may be pending, and a version label already published for that plugin is refused.
 // @Tags plugin
 // @ID plugin.review_request.create
 // @Accept json
@@ -425,7 +469,7 @@ func (h *Handler) ListReviews(c *gin.Context) {
 // GetReview returns one review request including the frozen submission preview.
 //
 // @Summary Get a plugin review request
-// @Description Returns the request plus readme_content extracted from the frozen submission. Applicants see their own requests; Space owners/admins see every request in the Space. A request in another Space is reported as not found.
+// @Description Returns the request plus readme_content extracted from the frozen submission and the dependency observations recorded at submit (`resolved_dependency_observations`, `connector_observations`). Applicants see their own requests; Space owners/admins see every request in the Space. A request in another Space is reported as not found.
 // @Tags plugin
 // @ID plugin.review_request.get
 // @Accept json
@@ -461,7 +505,7 @@ func (h *Handler) GetReview(c *gin.Context) {
 // ApproveReview approves a pending request and applies the frozen submission.
 //
 // @Summary Approve a plugin review request
-// @Description Requires the Space owner/admin role. Applies the frozen documents and relation graph to the plugin, records a release version carrying the applicant's label, and for a first listing flips visibility from private to space. Losing a concurrent decision race returns CONFLICT.
+// @Description Requires the Space owner/admin role. Applies the frozen documents and relation graph to the plugin, records a release version carrying the applicant's label, and for a first listing flips visibility from private to space. Approval re-resolves the frozen dependency graph: if any observed Skill/Expert release or Connector effective revision changed since submit, no write happens and the request stays pending (409 `dependency_changed`). Automatic approval retries this check once before surfacing the conflict. Losing a concurrent decision race returns CONFLICT.
 // @Tags plugin
 // @ID plugin.review_request.approve
 // @Accept json
@@ -473,7 +517,7 @@ func (h *Handler) GetReview(c *gin.Context) {
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN: Space owner/admin role required"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT: already decided"
+// @Failure 409 {object} apiresponse.Error "CONFLICT: already decided, or a frozen dependency observation changed (`details.reason=dependency_changed`)"
 // @Failure 429 {object} apiresponse.Error "RATE_LIMITED"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /plugins/review_requests/{review_id}/approve [post]
