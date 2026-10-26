@@ -146,6 +146,7 @@ type dependencyEdge struct {
 	TargetVersionID                     *string
 	TargetExists, TargetActive          bool
 	TargetListed, ReleaseExists, Formal bool
+	TargetPublished                     string
 	RootID                              string
 	Via                                 []string
 }
@@ -282,6 +283,7 @@ func (r *Repo) batchDependencyTargetInfo(ctx context.Context, edges []*dependenc
 			continue
 		}
 		e.TargetExists, e.TargetActive, e.TargetListed, e.TargetName = m.exists, m.active, m.listed, m.name
+		e.TargetPublished = m.published
 		version := m.published
 		if e.TargetVersionID != nil {
 			version = *e.TargetVersionID
@@ -333,6 +335,88 @@ func (r *Repo) batchDependencyTargetInfo(ctx context.Context, edges []*dependenc
 			version = *e.TargetVersionID
 		}
 		_, e.ReleaseExists = releaseSet[e.TargetID+"\x00"+version]
+	}
+	return nil
+}
+
+// batchDependencyTargetNames replaces the target names loaded by
+// batchDependencyTargetInfo with a name from the edge's released version, and
+// only when the caller may see that target. A later private release must not
+// disclose its name through an owner's root diagnostics.
+func (r *Repo) batchDependencyTargetNames(ctx context.Context, scope Scope, edges []*dependencyEdge) error {
+	type nameKey struct{ id, version string }
+	pairSet := map[nameKey]struct{}{}
+	for _, e := range edges {
+		version := e.TargetPublished
+		if e.TargetVersionID != nil {
+			version = *e.TargetVersionID
+		}
+		pairSet[nameKey{e.TargetID, version}] = struct{}{}
+	}
+	if len(pairSet) == 0 {
+		return nil
+	}
+	pairs := make([]nameKey, 0, len(pairSet))
+	for pair := range pairSet {
+		pairs = append(pairs, pair)
+	}
+	parts := make([]string, len(pairs))
+	args := make([]any, 0, 2*len(pairs))
+	for i, pair := range pairs {
+		parts[i] = "SELECT ? AS plugin_id,? AS version_id"
+		args = append(args, pair.id, pair.version)
+	}
+	query := `SELECT x.plugin_id,x.version_id,p.visibility,p.space_id,p.owner_uid,p.plugin_type,p.plugin_name,
+ COALESCE(JSON_UNQUOTE(JSON_EXTRACT(snapshot.manifest_json,'$.plugin_name')),'')
+ FROM (` + strings.Join(parts, " UNION ALL ") + `) x
+ LEFT JOIN plugins p ON p.plugin_id=x.plugin_id
+ LEFT JOIN plugin_versions snapshot ON snapshot.plugin_id=x.plugin_id AND snapshot.version_id=x.version_id`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	names := map[nameKey]string{}
+	for rows.Next() {
+		var pair nameKey
+		var visibility, pluginType, pluginName, snapshotName string
+		var spaceID, ownerUID sql.NullString
+		if err := rows.Scan(&pair.id, &pair.version, &visibility, &spaceID, &ownerUID, &pluginType, &pluginName, &snapshotName); err != nil {
+			return err
+		}
+		authorized := scope.Admin
+		if !authorized {
+			switch model.PluginVisibility(visibility) {
+			case model.PluginVisibilityPublic, model.PluginVisibilitySystem:
+				authorized = true
+			case model.PluginVisibilitySpace:
+				authorized = spaceID.Valid && spaceID.String == scope.SpaceID
+			case model.PluginVisibilityPrivate:
+				authorized = spaceID.Valid && spaceID.String == scope.SpaceID && ownerUID.Valid && ownerUID.String == scope.CallerUID
+			}
+		}
+		if !authorized {
+			continue
+		}
+		if pluginType == string(model.PluginTypeConnector) {
+			names[pair] = pluginName
+		} else {
+			names[pair] = snapshotName
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, e := range edges {
+		version := e.TargetPublished
+		if e.TargetVersionID != nil {
+			version = *e.TargetVersionID
+		}
+		if name, ok := names[nameKey{e.TargetID, version}]; ok {
+			e.TargetName = name
+		} else {
+			e.TargetName = ""
+		}
 	}
 	return nil
 }
@@ -406,6 +490,9 @@ func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.
 		}
 	}
 	if err := r.batchDependencyTargetInfo(ctx, edges); err != nil {
+		return nil, err
+	}
+	if err := r.batchDependencyTargetNames(ctx, scope, edges); err != nil {
 		return nil, err
 	}
 	for _, e := range edges {

@@ -3,12 +3,18 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	pluginhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/plugin"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
+	"github.com/gin-gonic/gin"
 )
 
 func dependencyFixture(t *testing.T, db *sql.DB) {
@@ -333,6 +339,62 @@ func TestFrontendRelistPublishNewVersionRestoresDependency(t *testing.T) {
 	blocked, err := repo.HasUnavailableDependencies(ctx, pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}, "expert")
 	if err != nil || blocked {
 		t.Fatalf("expert after relist blocked=%v err=%v", blocked, err)
+	}
+}
+
+// A later private release of a dependency must not leak its name through the
+// owner's root diagnostics. The expert's frozen edge pins the old public v1
+// release; v2 is private and owned by another user.
+func TestDependencyDiagnosticsRedactsLaterPrivateTargetName(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	seedVersionRow(t, db, "skill-v2", "skill", "2")
+	if _, err := db.Exec(`UPDATE plugin_versions SET manifest_json=JSON_OBJECT('plugin_name','Later Private Name') WHERE plugin_id='skill' AND version_id='skill-v2'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('skill','skill-v2','2.0.0','author-a',NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET published_version_id='skill-v2',visibility='private',owner_uid='author-a',space_id='space-b' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET deleted_at=NOW(3) WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(true)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+	ctx := context.Background()
+	detail, err := svc.Detail(ctx, managedOwner(), "expert", true)
+	if err != nil {
+		t.Fatalf("owner detail: %v", err)
+	}
+	if len(detail.DependencyIssues) != 1 || detail.DependencyIssues[0].Reason != "deleted" {
+		t.Fatalf("diagnostics=%+v", detail.DependencyIssues)
+	}
+	if detail.DependencyIssues[0].TargetName != "" {
+		t.Fatalf("private later name leaked: %q", detail.DependencyIssues[0].TargetName)
+	}
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	auth := middleware.NewAuthenticator(false, nil, model.Identity{UID: "user-1", Name: "Owner"}, "space-a")
+	pluginhandler.New(svc).Register(engine.Group("/api/v1", auth.Handler()))
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/detail?plugin_id=expert", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			DependencyIssues []struct {
+				TargetName string `json:"target_name"`
+			} `json:"dependency_issues"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data.DependencyIssues) != 1 || body.Data.DependencyIssues[0].TargetName != "" {
+		t.Fatalf("HTTP diagnostics=%+v", body.Data.DependencyIssues)
 	}
 }
 
