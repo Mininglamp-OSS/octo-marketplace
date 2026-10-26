@@ -147,6 +147,11 @@ func TestDependencyTeamUsesPinnedMemberVersion(t *testing.T) {
 	if err != nil || blocked {
 		t.Fatalf("team false-hide blocked=%v err=%v", blocked, err)
 	}
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+	graph, err := svc.DetailGraph(ctx, pluginsvc.Caller{UID: "member", SpaceID: "space-a"}, "team")
+	if err != nil || graph.Plugin == nil || graph.Plugin.ID != "team" {
+		t.Fatalf("pinned team graph=%+v err=%v", graph, err)
+	}
 	ownerScope := pluginrepo.Scope{CallerUID: "user-1", SpaceID: "space-a"}
 	issues, err := repo.DependencyIssues(ctx, ownerScope, []model.Plugin{{ID: "team", Type: model.PluginTypeExpertTeam, ListingState: model.PluginListingStatePublished}})
 	if err != nil || len(issues["team"]) != 0 {
@@ -221,6 +226,65 @@ func TestDependencySnapshotHandlesHistoricalFieldNames(t *testing.T) {
 		if err != nil || !blocked {
 			t.Fatalf("historical %s blocked=%v err=%v", id, blocked, err)
 		}
+	}
+}
+
+func TestDependencyLegacyTeamHonorsLiveMemberPin(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	seed(t, db, seedPlugin{id: "skill2", typ: "skill", visibility: "space", listingState: "published"})
+	seedVersionRow(t, db, "skill2-v1", "skill2", "1")
+	if _, err := db.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('skill2','skill2-v1','1.0.0','user-1',NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET published_version_id='skill2-v1' WHERE plugin_id='skill2'`); err != nil {
+		t.Fatal(err)
+	}
+	seedVersionRow(t, db, "expert-v2", "expert", "2")
+	if _, err := db.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('expert','expert-v2','2.0.0','user-1',NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	pin := "skill2-v1"
+	setDependencySnapshotRelations(t, db, "expert", "expert-v2", []model.PluginRelation{{ID: "es2", SourcePluginID: "expert", TargetPluginID: "skill2", Type: "expert_skill", TargetVersionID: &pin, Status: 1}})
+	if _, err := db.Exec(`UPDATE plugins SET published_version_id='expert-v2' WHERE plugin_id='expert'`); err != nil {
+		t.Fatal(err)
+	}
+	// The team root is legacy (no published pointer), but its live member edge is
+	// pinned to expert-v1.
+	if _, err := db.Exec(`UPDATE plugins SET published_version_id=NULL WHERE plugin_id='team'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO plugin_relations(relation_id,source_plugin_id,target_plugin_id,relation_type,target_version_id,status,created_by,created_at,updated_at) VALUES ('team-live','team','expert','expert_team_expert','expert-v1',1,'user-1',NOW(3),NOW(3))`); err != nil {
+		t.Fatal(err)
+	}
+	repo := pluginrepo.New(db).WithVersionManagement(true).WithReferences(true)
+	ctx := context.Background()
+	sc := pluginrepo.Scope{CallerUID: "member", SpaceID: "space-a"}
+	ownerScope := pluginrepo.Scope{CallerUID: "user-1", SpaceID: "space-a"}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill2'`); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := repo.HasUnavailableDependencies(ctx, sc, "team")
+	if err != nil || blocked {
+		t.Fatalf("legacy team false-hide blocked=%v err=%v", blocked, err)
+	}
+	issues, err := repo.DependencyIssues(ctx, ownerScope, []model.Plugin{{ID: "team", Type: model.PluginTypeExpertTeam, ListingState: model.PluginListingStatePublished}})
+	if err != nil || len(issues["team"]) != 0 {
+		t.Fatalf("legacy team false-hide diagnostics=%+v err=%v", issues["team"], err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='published' WHERE plugin_id='skill2'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE plugins SET listing_state='delisted' WHERE plugin_id='skill'`); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err = repo.HasUnavailableDependencies(ctx, sc, "team")
+	if err != nil || !blocked {
+		t.Fatalf("legacy team false-show blocked=%v err=%v", blocked, err)
+	}
+	issues, err = repo.DependencyIssues(ctx, ownerScope, []model.Plugin{{ID: "team", Type: model.PluginTypeExpertTeam, ListingState: model.PluginListingStatePublished}})
+	if err != nil || len(issues["team"]) != 1 || issues["team"][0].TargetPluginID != "skill" || len(issues["team"][0].Via) != 1 || issues["team"][0].Via[0] != "expert" {
+		t.Fatalf("legacy team false-show diagnostics=%+v err=%v", issues["team"], err)
 	}
 }
 

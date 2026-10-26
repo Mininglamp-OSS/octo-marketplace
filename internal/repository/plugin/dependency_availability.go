@@ -100,7 +100,13 @@ func unavailableMemberLiveSQL(source availabilityAlias) string {
 
 func unavailableLiveSQL(source availabilityAlias) string {
 	s := source.sql()
-	member := `EXISTS (SELECT 1 FROM plugins member WHERE member.plugin_id=live.target_plugin_id AND ((member.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "member.published_version_id") + `) OR (member.published_version_id IS NULL AND ` + unavailableMemberLiveSQL(availabilityMember) + `)))`
+	member := `EXISTS (SELECT 1 FROM plugins member WHERE member.plugin_id=live.target_plugin_id AND (
+ (live.target_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "live.target_version_id") + `)
+ OR (live.target_version_id IS NULL AND (
+   (member.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "member.published_version_id") + `)
+   OR (member.published_version_id IS NULL AND ` + unavailableMemberLiveSQL(availabilityMember) + `)
+ ))
+))`
 	return `EXISTS (SELECT 1 FROM plugin_relations live
  LEFT JOIN plugins target ON target.plugin_id=live.target_plugin_id
  WHERE live.source_plugin_id=` + s + `.plugin_id AND live.status=1 AND live.deleted_at IS NULL
