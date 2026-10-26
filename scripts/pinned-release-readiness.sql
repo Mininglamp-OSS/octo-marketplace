@@ -1,10 +1,11 @@
--- Read-only P-model readiness gate for migrated marketplace assets.
+-- Read-only structural/B-latest readiness gate for migrated marketplace assets.
 --
--- Dependencies are followed via plugin_version_relation_refs.target_version_id
--- (the authoritative publish-time pin), never the target's current published
--- version. Every reachable pinned Skill/Expert version must have a formal
--- release; a NULL pin on a published Expert/Team ref is a blocker. Connector
--- edges remain ID + plugin_connector_effective.
+-- This query intentionally does NOT walk plugin_version_relation_refs.target_version_id:
+-- under the B model a dependency resolves to the target's CURRENT published
+-- version, and the old audit pin is not authority. Roots are the listed public
+-- Expert/Team rows; every reachable latest target must have a release snapshot,
+-- complete reference-index coverage, and an effective Connector row. Expert/Team
+-- latest snapshots must not retain legacy inline/embedded content.
 --
 -- Run with a SELECT-only account. Zero blockers is required, not sufficient for
 -- provider/Fleet/Daemon acceptance or permission to activate a deployment.
@@ -16,7 +17,7 @@ WITH RECURSIVE roots AS (
 ), reachable AS (
   SELECT plugin_id, version_id, plugin_type, depth FROM roots
   UNION
-  SELECT ref.target_plugin_id, ref.target_version_id, target.plugin_type, r.depth+1
+  SELECT ref.target_plugin_id, target.published_version_id, target.plugin_type, r.depth+1
   FROM reachable r
   JOIN plugin_version_relation_refs ref
     ON ref.source_plugin_id=r.plugin_id AND ref.source_version_id=r.version_id
@@ -50,13 +51,6 @@ WITH RECURSIVE roots AS (
     OR snapshot_digest IS NULL OR relation_count<>indexed_count
     OR relation_count<>JSON_LENGTH(relations_json)
     OR snapshot_digest<>SHA2(CAST(relations_json AS CHAR CHARACTER SET utf8mb4),256)
-  UNION
-  SELECT DISTINCT ref.source_plugin_id, ref.source_version_id
-  FROM plugin_version_relation_refs ref
-  JOIN plugins src ON src.plugin_id=ref.source_plugin_id
-  WHERE ref.relation_type IN ('expert_skill','expert_team_expert')
-    AND ref.target_version_id IS NULL
-    AND src.plugin_type IN ('expert','expert_team')
   UNION
   SELECT s.plugin_id, s.version_id FROM snapshots s
   WHERE s.plugin_type IN ('expert','expert_team') AND (
