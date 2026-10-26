@@ -64,7 +64,7 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: marketplace-stock-migration preview|apply|resume [flags]")
+		return fmt.Errorf("usage: marketplace-stock-migration preview|apply|resume|pin-backfill [flags]")
 	}
 	switch args[0] {
 	case "preview":
@@ -73,6 +73,8 @@ func run(args []string, out io.Writer) error {
 		return runApply(args[1:], out)
 	case "resume":
 		return runResume(args[1:], out)
+	case "pin-backfill":
+		return runPinBackfill(args[1:], out)
 	default:
 		return rejectLegacyFlags(args) // old --apply/--rollback/--all-spaces modes are not commands
 	}

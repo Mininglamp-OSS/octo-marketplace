@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/pinbackfill"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 )
 
@@ -124,5 +125,103 @@ func TestPreviewFixtureDiscoveryIsReadOnly(t *testing.T) {
 	after, _ := os.ReadFile(fixture)
 	if !bytes.Equal(original, after) {
 		t.Fatal("preview mutated the fixture")
+	}
+}
+
+func pinBackfillTestPlan() pinbackfill.Plan {
+	return pinbackfill.Plan{
+		SchemaVersion: pinbackfill.PlanSchemaVersion, SourceScope: pinbackfill.PlanSourceScope,
+		SourceIdentity: pinbackfill.PlanSourceIdentity, BatchID: pinbackfill.PlanBatchID,
+		Sources: []pinbackfill.SourcePlan{}, Blocked: []pinbackfill.BlockedSource{},
+	}
+}
+
+func TestPinBackfillRequiresExplicitModesAndArtifacts(t *testing.T) {
+	for _, args := range [][]string{
+		{"pin-backfill"},
+		{"pin-backfill", "preview"},
+		{"pin-backfill", "preview", "--output", ""},
+		{"pin-backfill", "apply"},
+		{"pin-backfill", "apply", "--plan", "p.json"},
+		{"pin-backfill", "apply", "--plan", "p.json", "--plan-digest", strings.Repeat("a", 64)},
+		{"pin-backfill", "resume"},
+	} {
+		if err := run(args, new(bytes.Buffer)); err == nil {
+			t.Fatalf("invalid pin-backfill invocation accepted: %v", args)
+		}
+	}
+}
+
+func TestPinBackfillDigestMismatchIsPlanStaleBeforeAuthorization(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "plan.json")
+	raw, _ := json.Marshal(pinBackfillTestPlan())
+	if err := os.WriteFile(planPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := run([]string{"pin-backfill", "apply", "--plan", planPath,
+		"--plan-digest", strings.Repeat("a", 64), "--authorization", filepath.Join(dir, "missing.json")}, &out)
+	var reason *reasonError
+	if !errors.As(err, &reason) || reason.Code != exitPlanStale || reason.Reason != reasonPlanStale {
+		t.Fatalf("error: %v", err)
+	}
+	if !strings.Contains(out.String(), reasonPlanStale) || strings.Contains(out.String(), "409") {
+		t.Fatalf("output: %s", out.String())
+	}
+}
+
+func TestPinBackfillWrapperDigestMismatchIsPlanStale(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "plan.json")
+	plan := pinBackfillTestPlan()
+	digest, err := pinbackfill.Digest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper, _ := json.Marshal(pinBackfillPreviewFile{PlanDigest: digest, Plan: plan})
+	if err = os.WriteFile(planPath, wrapper, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = run([]string{"pin-backfill", "apply", "--plan", planPath,
+		"--plan-digest", digest, "--authorization", filepath.Join(dir, "missing.json")}, &out)
+	var reason *reasonError
+	if !errors.As(err, &reason) || reason.Code != exitAuthorization {
+		t.Fatalf("error: %v", err)
+	}
+	// Corrupting the embedded digest must be rejected as a stale plan before the
+	// trust configuration is consulted.
+	wrapper, _ = json.Marshal(pinBackfillPreviewFile{PlanDigest: strings.Repeat("b", 64), Plan: plan})
+	if err = os.WriteFile(planPath, wrapper, 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	err = run([]string{"pin-backfill", "apply", "--plan", planPath,
+		"--plan-digest", digest, "--authorization", filepath.Join(dir, "missing.json")}, &out)
+	if !errors.As(err, &reason) || reason.Code != exitPlanStale {
+		t.Fatalf("tampered wrapper digest: %v", err)
+	}
+}
+
+func TestPinBackfillMissingTrustIsAuthorizationInvalid(t *testing.T) {
+	t.Setenv("MARKETPLACE_MIGRATION_TRUST_CONFIG", "")
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "plan.json")
+	plan := pinBackfillTestPlan()
+	digest, err := pinbackfill.Digest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(plan)
+	if err = os.WriteFile(planPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = run([]string{"pin-backfill", "apply", "--plan", planPath,
+		"--plan-digest", digest, "--authorization", filepath.Join(dir, "missing.json")}, &out)
+	var reason *reasonError
+	if !errors.As(err, &reason) || reason.Code != exitAuthorization || reason.Reason != reasonAuthorization {
+		t.Fatalf("error: %v", err)
 	}
 }

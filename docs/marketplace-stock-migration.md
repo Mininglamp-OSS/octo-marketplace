@@ -111,3 +111,33 @@ go test ./...
 实物演练涵盖中断后继续、重复执行、跨根精确 pin、SQL 中途失败无残留、根/子资源
 后续编辑阻断回滚、私有/Space 状态保留、原历史不改、原本未发布版本不伪造 release、
 带摘要的 stored 文本、可信旧 ZIP、来源文件变化阻断 apply，以及保留历史的回滚。
+
+## P 模型存量 pin 回填（独立子命令）
+
+`pin-backfill` 是 P 模型切换期的一次性显式变更，不属于上面的存量资源迁移，
+也不会在服务启动或读路径自动执行。
+
+```bash
+# 只读预览：输出确定性 plan（内含 JCS SHA-256 plan_digest）
+go run ./cmd/marketplace-stock-migration pin-backfill preview --output /tmp/pin-plan.json
+
+# 离线授权后按 source version 逐事务应用
+go run ./cmd/marketplace-stock-migration pin-backfill apply \
+  --plan /tmp/pin-plan.json \
+  --plan-digest <plan_digest> \
+  --authorization /absolute/authorization.json
+```
+
+- 与 `preview/apply/resume` 共用 `MARKETPLACE_STOCK_MIGRATION_DSN` 和
+  `MARKETPLACE_MIGRATION_TRUST_CONFIG`，但使用固定的
+  `pin-backfill@v1` source identity 与独立 scope；授权 artifact 必须绑定
+  plan digest。
+- 只修复已正式发布 Expert/Team 快照中缺失的 Skill/Expert
+  `target_version_id`：同时更新 `relations_json` 与
+  `plugin_version_relation_refs`，并刷新
+  `plugin_version_reference_index_state`。已有 pin 不会被改写。
+- Connector 边永不写入版本；不创建版本、不移动
+  `published_version_id`/`current_version_id`。目标不可用、来源在预览后变化、
+  plan/authorization 不匹配时按 `plan_stale`/`authorization_invalid` 拒绝。
+- 每个 source version 单独提交并写 `plugin_pin_backfill_runs` 审计行；同一
+  plan 重放命中审计唯一键，幂等返回 no-op。
