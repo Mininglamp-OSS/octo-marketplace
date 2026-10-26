@@ -87,14 +87,18 @@ func dependencyFixture(t *testing.T, db *sql.DB) {
 // The split-brain case from review (formal edge with a NULL pin) is rejected by
 // the schema check constraint; visibility still uses the diagnostics COALESCE as
 // defense in depth. Pin the schema invariant here.
-func TestDependencyFormalRefNullPinRejected(t *testing.T) {
+func TestDependencyFormalRefNullPinAllowedForDraft(t *testing.T) {
 	db := reviewDB(t)
 	dependencyFixture(t, db)
 	seed(t, db, seedPlugin{id: "unreleased-skill", typ: "skill", visibility: "space", listingState: "published"})
+	// P model: a draft relation may omit target_version_id; the publication
+	// transaction must resolve the pin before the snapshot is released. The DB
+	// CHECK intentionally cannot distinguish draft from published rows (the
+	// migration relaxed it), so this test asserts the draft shape only.
 	if _, err := db.Exec(`INSERT INTO plugin_version_relation_refs
 		(source_plugin_id,source_version_id,relation_id,relation_type,target_plugin_id,target_version_id)
-		VALUES ('expert','expert-v1','missing-release','expert_skill','unreleased-skill',NULL)`); err == nil {
-		t.Fatal("schema accepted a NULL-pinned expert_skill reference")
+		VALUES ('expert','expert-v1','missing-release','expert_skill','unreleased-skill',NULL)`); err != nil {
+		t.Fatalf("draft NULL pin rejected by schema: %v", err)
 	}
 }
 
