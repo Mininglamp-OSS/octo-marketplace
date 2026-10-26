@@ -58,6 +58,7 @@ func (r *Repo) ListTags(ctx context.Context, scope Scope, f TagListFilter) ([]mo
 		args = append(args, scope.CallerUID, scope.SpaceID)
 	} else {
 		where += listedSQL
+		where += dependencyAvailabilitySQL()
 	}
 	where += ` AND jt.tag IS NOT NULL AND jt.tag <> ''`
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {

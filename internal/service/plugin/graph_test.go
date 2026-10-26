@@ -59,7 +59,7 @@ func TestDetailGraph_ReturnsClosureWithoutDerivedMemberCounts(t *testing.T) {
 		{ID: "r2", SourcePluginID: "team-1", TargetPluginID: "m2", Type: "expert_team_expert", TargetPluginType: model.PluginTypeExpert},
 		{ID: "r3", SourcePluginID: "m1", TargetPluginID: "s1", Type: "expert_skill", TargetPluginType: model.PluginTypeSkill},
 	}
-	svc := fixedService(&fakeStore{detailGraphRoot: team, detailGraphRels: rels, detailGraphRelated: []*model.Plugin{m1, m2, s1}})
+	svc := fixedService(&fakeStore{plugins: map[string]*model.Plugin{"team-1": team}, detailGraphRoot: team, detailGraphRels: rels, detailGraphRelated: []*model.Plugin{m1, m2, s1}})
 	out, err := svc.DetailGraph(context.Background(), testCaller, "team-1")
 	if err != nil {
 		t.Fatal(err)

@@ -68,7 +68,12 @@ func (s *Service) AdminList(ctx context.Context, caller Caller, typ model.Plugin
 	if err := s.fillMemberCounts(ctx, items); err != nil {
 		return nil, 0, mapStoreError(err)
 	}
+	issues, err := s.repo.DependencyIssues(ctx, adminScope(caller), items)
+	if err != nil {
+		return nil, 0, mapStoreError(err)
+	}
 	for i := range items {
+		items[i].DependencyIssues = issues[items[i].ID]
 		items[i].IconURL = s.resolveIcon(ctx, items[i].Icon)
 	}
 	return items, total, nil
@@ -85,6 +90,10 @@ func (s *Service) AdminDetail(ctx context.Context, caller Caller, pluginID strin
 		return nil, mapStoreError(err)
 	}
 	p.IconURL = s.resolveIcon(ctx, p.Icon)
+	issues, err := s.repo.DependencyIssues(ctx, adminScope(caller), []model.Plugin{*p})
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
 	if !includeRelations {
 		rels = []model.PluginRelation{}
 	} else {
@@ -92,7 +101,7 @@ func (s *Service) AdminDetail(ctx context.Context, caller Caller, pluginID strin
 			rels[i].SourcePluginType = p.Type
 		}
 	}
-	return &Detail{Plugin: p, Relations: rels}, nil
+	return &Detail{Plugin: p, Relations: rels, DependencyIssues: issues[p.ID]}, nil
 }
 
 // conventionVisibility is the visibility an admin CREATE stamps: every plugin

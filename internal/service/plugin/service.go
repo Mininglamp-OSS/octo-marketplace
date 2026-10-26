@@ -78,6 +78,8 @@ type Caller struct {
 // Implementations must apply Scope to every tenant-owned lookup and mutation.
 type Store interface {
 	List(context.Context, pluginrepo.Scope, pluginrepo.ListFilter) ([]model.Plugin, int64, error)
+	DependencyIssues(context.Context, pluginrepo.Scope, []model.Plugin) (map[string][]model.DependencyIssue, error)
+	HasUnavailableDependencies(context.Context, pluginrepo.Scope, string) (bool, error)
 	GetWithRelations(context.Context, pluginrepo.Scope, string) (*model.Plugin, []model.PluginRelation, error)
 	Create(context.Context, pluginrepo.Scope, pluginrepo.Mutation) (*pluginrepo.RelationSync, error)
 	CreateGraph(context.Context, pluginrepo.Scope, []pluginrepo.Mutation) ([]*pluginrepo.RelationSync, error)
@@ -231,8 +233,9 @@ type ListParams struct {
 }
 
 type Detail struct {
-	Plugin    *model.Plugin
-	Relations []model.PluginRelation
+	Plugin           *model.Plugin
+	Relations        []model.PluginRelation
+	DependencyIssues []model.DependencyIssue
 	// RelationResult reports upsert relation synchronization; nil on reads.
 	RelationResult *RelationResult
 }
@@ -242,9 +245,10 @@ type Detail struct {
 // closure, and related plugins in light projection (manifest only, no
 // plugin_json), deduplicated by plugin_id.
 type DetailGraph struct {
-	Plugin    *model.Plugin
-	Relations []model.PluginRelation
-	Related   []*model.Plugin
+	Plugin           *model.Plugin
+	Relations        []model.PluginRelation
+	Related          []*model.Plugin
+	DependencyIssues []model.DependencyIssue
 }
 
 // RelationResult mirrors the target-state relation sync outcome on the wire:
@@ -342,6 +346,15 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) ([]mode
 	}
 	if err := s.fillMemberCounts(ctx, items); err != nil {
 		return nil, 0, mapStoreError(err)
+	}
+	if p.Mine {
+		issues, err := s.repo.DependencyIssues(ctx, scope(caller), items)
+		if err != nil {
+			return nil, 0, mapStoreError(err)
+		}
+		for i := range items {
+			items[i].DependencyIssues = issues[items[i].ID]
+		}
 	}
 	for i := range items {
 		items[i].IconURL = s.resolveIcon(ctx, items[i].Icon)
@@ -473,9 +486,41 @@ func (s *Service) Detail(ctx context.Context, caller Caller, pluginID string, in
 	if err != nil {
 		return nil, err
 	}
-	d, err = s.publishedDetail(ctx, scope(caller), d.Plugin, d.Relations)
+	owner := d.Plugin.OwnerUID == caller.UID && d.Plugin.SpaceID != nil && *d.Plugin.SpaceID == caller.SpaceID
+	var dependencyIssues []model.DependencyIssue
+	if owner {
+		issues, err := s.repo.DependencyIssues(ctx, scope(caller), []model.Plugin{*d.Plugin})
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		dependencyIssues = issues[d.Plugin.ID]
+	} else {
+		blocked, err := s.repo.HasUnavailableDependencies(ctx, scope(caller), d.Plugin.ID)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		if blocked {
+			return nil, ErrNotFound
+		}
+	}
+	// Enforce the historical-relation boundary for every caller, including the
+	// owner diagnostics path. If a released relation target is hidden, keep the
+	// root's released content and diagnostics but return no relation traversal
+	// content; diagnostics must not become a content-visibility bypass.
+	base := d
+	d, err = s.publishedDetail(ctx, scope(caller), base.Plugin, base.Relations, false)
 	if err != nil {
-		return nil, err
+		if !owner || !errors.Is(err, ErrDependencyHidden) {
+			return nil, err
+		}
+		d, err = s.publishedDetail(ctx, scope(caller), base.Plugin, base.Relations, true)
+		if err != nil {
+			return nil, err
+		}
+		d.Relations = []model.PluginRelation{}
+	}
+	if owner {
+		d.DependencyIssues = dependencyIssues
 	}
 	if !includeRelations {
 		d.Relations = []model.PluginRelation{}
@@ -532,6 +577,10 @@ func (s *Service) currentDetail(ctx context.Context, caller Caller, pluginID str
 // that needs a team's member count can count expert_team_expert edges in the
 // returned relation slice, which is also the only count consistent with the
 // caller's visibility.
+// DetailGraph is the public reader graph. A blocked published root returns 404
+// for non-owners; admins diagnose via the admin list/detail endpoints (which
+// include dependency_issues) rather than a public graph bypass. Keeping the
+// bypass out of this endpoint avoids widening the public graph surface.
 func (s *Service) DetailGraph(ctx context.Context, caller Caller, pluginID string) (*DetailGraph, error) {
 	if s.versionManagement {
 		id, err := parseStorageID(pluginID)
@@ -546,6 +595,13 @@ func (s *Service) DetailGraph(ctx context.Context, caller Caller, pluginID strin
 	storageID, err := parseStorageID(pluginID)
 	if err != nil {
 		return nil, err
+	}
+	detail, err := s.Detail(ctx, caller, storageID, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(detail.DependencyIssues) > 0 {
+		return &DetailGraph{Plugin: detail.Plugin, Relations: detail.Relations, Related: []*model.Plugin{}, DependencyIssues: detail.DependencyIssues}, nil
 	}
 	root, rels, nodes, err := s.repo.GetGraphClosure(ctx, scope(caller), storageID)
 	if err != nil {

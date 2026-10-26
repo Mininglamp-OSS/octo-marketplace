@@ -159,7 +159,7 @@ func (r *Repo) ListPlacementCategories(ctx context.Context, scope Scope, placeme
 	rows, err := r.db.QueryContext(ctx, `SELECT c.category_id,c.name,c.icon_key,c.plugin_types_json,cp.sort_order,c.status,c.created_at,c.updated_at,
 (SELECT COUNT(DISTINCT p.plugin_id) FROM plugin_placements pp JOIN plugins p ON p.plugin_id=pp.plugin_id
  WHERE pp.placement_code=cp.placement_code AND pp.category_id=c.category_id AND pp.visible=1
- AND p.plugin_type=? AND p.status=1 AND p.deleted_at IS NULL AND `+visibilitySQL+listedSQL+`) AS plugin_count
+ AND p.plugin_type=? AND p.status=1 AND p.deleted_at IS NULL AND `+visibilitySQL+listedSQL+dependencyAvailabilitySQL()+`) AS plugin_count
 FROM plugin_category_placements cp JOIN plugin_categories c ON c.category_id=cp.category_id
 WHERE cp.placement_code=? AND cp.plugin_type=? AND cp.visible=1 AND c.status=1 AND c.deleted_at IS NULL ORDER BY cp.sort_order,c.category_id`, typ, scope.SpaceID, scope.CallerUID, placementCode, typ)
 	if err != nil {

@@ -491,6 +491,22 @@ components:
       - CreatedByHuman
       - CreatedByBot
       - CreatedByImport
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue:
+      properties:
+        reason:
+          type: string
+        relation_type:
+          type: string
+        target_name:
+          type: string
+        target_plugin_id:
+          type: string
+        via:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.Detail:
       properties:
         category:
@@ -1741,6 +1757,11 @@ components:
       type: object
     internal_api_handler_plugin.detailGraphResponse:
       properties:
+        dependency_issues:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue'
+          type: array
+          uniqueItems: false
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginResponse'
         related_plugins:
@@ -1756,6 +1777,11 @@ components:
       type: object
     internal_api_handler_plugin.detailResponse:
       properties:
+        dependency_issues:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue'
+          type: array
+          uniqueItems: false
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginResponse'
         relation_result:
@@ -1841,6 +1867,11 @@ components:
           type: string
         current_version_id:
           type: string
+        dependency_issues:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue'
+          type: array
+          uniqueItems: false
         display_status:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
         download_count:
@@ -3582,8 +3613,9 @@ paths:
       - admin_plugin_scene
   /admin/plugins:
     get:
-      description: List plugins of one type across all Spaces, optionally narrowed
-        to a visibility class (e.g. system connectors). Admin only.
+      description: List plugins of one type across all Spaces, including experts hidden
+        from the ordinary catalog by unavailable dependencies. Such rows carry dependency_issues.
+        Admin only.
       operationId: admin_plugin.list
       parameters:
       - description: Plugin type
@@ -3773,8 +3805,8 @@ paths:
       tags:
       - admin_plugin
     get:
-      description: Return any plugin's full detail by id, ignoring Space scope. Admin
-        only.
+      description: Return any plugin's full detail by id, including dependency_issues
+        for unavailable published dependencies. Admin only.
       operationId: admin_plugin.get
       parameters:
       - description: Plugin ID
@@ -6652,7 +6684,8 @@ paths:
   /plugins:
     get:
       description: List Plugins visible in the authoritative caller Space using offset
-        pagination.
+        pagination. The catalog hides experts and teams with unavailable published
+        dependencies; mode=mine retains them and reports dependency_issues.
       operationId: plugin.list
       parameters:
       - description: Marketplace scene code
@@ -7402,7 +7435,10 @@ paths:
   /plugins/detail:
     get:
       description: Return one Plugin and its visible one-level relations without leaking
-        cross-Space existence.
+        cross-Space existence. An expert or team with unavailable published dependencies
+        returns NOT_FOUND to non-owners; its authenticated owner receives dependency_issues
+        and no relation traversal content for the hidden target. Ordinary readers
+        never receive dependency_issues.
       operationId: plugin.get
       parameters:
       - description: Plugin ID
@@ -7451,7 +7487,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: NOT_FOUND
+          description: 'NOT_FOUND: the plugin is missing, or the caller is not its
+            owner and its published dependencies are unavailable'
         '500':
           content:
             application/json:
@@ -7465,16 +7502,12 @@ paths:
       - plugin
   /plugins/detail_graph:
     get:
-      description: 'Return one Plugin (full projection identical to GET /plugins/detail,
-        including owner-only review state in the current Space) together with the
-        flat, deduplicated transitive closure of its relation graph and every edge
-        in that closure, up to the fixed depth enforced by the relation matrix. Every
-        related plugin — bundled (embedded) children included — is filtered by the
-        same per-row visibility predicate GET /plugins/detail applies; hidden ones
-        are silently omitted, edge and node. Related plugins include review state
-        only for the caller''s own nodes in the current Space. related_plugins is
-        a lookup table keyed by plugin_id rather than a tree: an entry is not guaranteed
-        to be referenced by an edge.'
+      description: Return one Plugin and its flat relation closure. An expert or team
+        with unavailable published dependencies returns NOT_FOUND to non-owners; its
+        authenticated owner receives dependency_issues and a root-only diagnostic
+        graph without hidden relation content. Ordinary readers never receive dependency_issues.
+        Other related plugins are filtered by the same per-row visibility predicate
+        as GET /plugins/detail.
       operationId: plugin.graph.get
       parameters:
       - description: Plugin ID
