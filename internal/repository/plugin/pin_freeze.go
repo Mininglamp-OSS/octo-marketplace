@@ -140,7 +140,7 @@ func (r *Repo) freezePublishedPins(ctx context.Context, tx *sql.Tx, scope Scope,
 // released snapshot is immutable, a changed (frozen) graph is materialized as a
 // NEW snapshot row with identical content; the draft row stays untouched. When
 // every pin is already present the release keeps pointing at the original row.
-func (r *Repo) freezePublishedSnapshotForRelease(ctx context.Context, tx *sql.Tx, newID func() string, current *model.Plugin, versionID *string, operator string) error {
+func (r *Repo) freezePublishedSnapshotForRelease(ctx context.Context, tx *sql.Tx, newID func() string, current *model.Plugin, versionID *string, operator string, refresh bool) error {
 	if !r.references || !versioned(current) || !pinBearingSource(current.Type) {
 		return nil
 	}
@@ -155,7 +155,12 @@ func (r *Repo) freezePublishedSnapshotForRelease(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return ErrInvalidRelation
 	}
-	if err = RefreshRelationPins(ctx, tx, *current, rels); err != nil {
+	if refresh {
+		err = RefreshRelationPins(ctx, tx, *current, rels)
+	} else {
+		err = FreezeRelationPins(ctx, tx, *current, rels)
+	}
+	if err != nil {
 		return err
 	}
 	// The frozen graph must stay attached to exactly the label/content the caller

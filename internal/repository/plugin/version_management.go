@@ -204,7 +204,7 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 	// selected draft snapshot is immutable, so a newly resolved graph is written
 	// as a replacement snapshot before the release row points at it.
 	versionID := *current.CurrentVersionID
-	if err = r.freezePublishedSnapshotForRelease(ctx, tx, r.id, current, &versionID, p.OperatorID); err != nil {
+	if err = r.freezePublishedSnapshotForRelease(ctx, tx, r.id, current, &versionID, p.OperatorID, true); err != nil {
 		return nil, err
 	}
 	if err = r.recordRelease(ctx, tx, current, versionID, *current.CurrentVersion, p.OperatorID, r.now()); err != nil {
@@ -321,7 +321,7 @@ func (r *Repo) AdoptPublishedBaseline(ctx context.Context, scope Scope, p AdoptP
 			return nil, ErrNotFound
 		}
 	}
-	if err = r.freezePublishedSnapshotForRelease(ctx, tx, r.id, current, &p.ExpectedVersionID, p.OperatorID); err != nil {
+	if err = r.freezePublishedSnapshotForRelease(ctx, tx, r.id, current, &p.ExpectedVersionID, p.OperatorID, false); err != nil {
 		return nil, err
 	}
 	if err = r.recordRelease(ctx, tx, current, p.ExpectedVersionID, declared.String, p.OperatorID, r.now()); err != nil {

@@ -182,7 +182,7 @@ func writeInstallationError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装服务尚未配置，请联系管理员。", map[string]any{"upstream": "fleet", "reason": "not_configured"}, installationRetryHint)
 	case errors.Is(err, pluginsvc.ErrAttemptExpired):
 		details := map[string]any{"reason": "installation_attempt_expired", "can_retry_same_key": false}
-		if attempt.RetryUntil != nil {
+		if attempt != nil && attempt.RetryUntil != nil {
 			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
 		}
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "原安装凭证已过期，请核对工作区已有资源后使用新幂等键。", details, "请先确认是否已安装；不要用原幂等键重复提交。")
