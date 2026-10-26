@@ -86,6 +86,10 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	from, where, args := buildListQuery(scope, f)
 	project := func(s string) string { return s }
 	if r.versionManagement && !f.Mine && !f.AllSpaces {
+		// Join the published snapshot once per row. The previous projection used
+		// correlated subqueries in SELECT, WHERE and ORDER BY, multiplying the
+		// lookup per row and defeating keyword/sort indexes.
+		from += publishedVersionJoin
 		project = publishedListProjection
 		where = project(where)
 	}

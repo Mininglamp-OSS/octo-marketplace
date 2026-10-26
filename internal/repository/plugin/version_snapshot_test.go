@@ -62,6 +62,38 @@ func TestSavedVersionReadsFailClosedAcrossOwnersSpacesAndResources(t *testing.T)
 	}
 }
 
+func TestVersionAccessArgsMatchVisibilitySQL(t *testing.T) {
+	where, args := versionAccess(Scope{SpaceID: "space", CallerUID: "owner"})
+	if len(args) != 4 || args[0] != "space" || args[1] != "owner" || args[2] != "owner" || args[3] != "space" {
+		t.Fatalf("tenant args = %#v", args)
+	}
+	if got := strings.Count(where, "?"); got != len(args) {
+		t.Fatalf("placeholders=%d args=%d where=%s", got, len(args), where)
+	}
+	if !strings.Contains(where, "p.space_id = ?") || !strings.Contains(where, "p.owner_uid=? AND p.space_id=?") {
+		t.Fatalf("unexpected tenant predicate: %s", where)
+	}
+
+	adminWhere, adminArgs := versionAccess(Scope{Admin: true, SpaceID: "space", CallerUID: "admin"})
+	if adminWhere != "1=1" || len(adminArgs) != 0 {
+		t.Fatalf("admin access = %q %#v", adminWhere, adminArgs)
+	}
+}
+
+func TestPublishedListProjectionUsesJoinedSnapshot(t *testing.T) {
+	projected := publishedListProjection("SELECT p.plugin_name,p.tags_json,p.manifest_json,p.current_version FROM plugins p")
+	if strings.Contains(projected, "(SELECT") {
+		t.Fatalf("projection still contains a correlated subquery: %s", projected)
+	}
+	if !strings.Contains(projected, "published_pv") {
+		t.Fatalf("projection does not reference the joined snapshot: %s", projected)
+	}
+	if !strings.Contains(publishedVersionJoin, "LEFT JOIN plugin_versions published_pv") ||
+		!strings.Contains(publishedVersionJoin, "published_pv.version_id=p.published_version_id") {
+		t.Fatalf("unexpected published join: %s", publishedVersionJoin)
+	}
+}
+
 func TestSavedVersionQueryShapeIsExplicit(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

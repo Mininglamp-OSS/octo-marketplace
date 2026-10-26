@@ -7028,7 +7028,9 @@ paths:
     get:
       description: Returns independently published resources compatible with the source
         audience. Already bound targets and missing release baselines are explicitly
-        unselectable; placements never determine eligibility.
+        unselectable; placements never determine eligibility. Owners in the source
+        Space see editable bindings; other readers, including non-owner platform admins
+        using this public route, see bindings from the published snapshot.
       operationId: plugin.references.list
       parameters:
       - description: Source plugin ID
@@ -7088,6 +7090,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: 'CONFLICT: release baseline required'
         '500':
           content:
             application/json:
@@ -7175,7 +7183,9 @@ paths:
     get:
       description: Requires enabled version management and current access. Authors
         and marketplace admins may manage drafts; other readers can access formally
-        released versions only. Original snapshots are immutable.
+        released versions only. Original snapshots are immutable. Files are bounded
+        to 20 MiB per attachment and 100 MiB per archive/legacy pointer; concurrent
+        downloads are capped by the service.
       operationId: plugin.version.download
       parameters:
       - description: Plugin ID
@@ -7239,6 +7249,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: CONFLICT
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: RATE_LIMITED
         '500':
           content:
             application/json:

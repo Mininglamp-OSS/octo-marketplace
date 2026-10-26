@@ -792,6 +792,13 @@ func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
 	if _, err = svc.Install(ctx, teammate, expert.Plugin.ID, pluginsvc.InstallParams{WorkspaceID: "ws", RuntimeID: "rt"}); !errors.Is(err, pluginsvc.ErrDependencyHidden) {
 		t.Fatalf("hidden released dependency install err=%v", err)
 	}
+	versions, _, err := svc.ListVersions(ctx, owner, expert.Plugin.ID, 10, 0)
+	if err != nil || len(versions) == 0 {
+		t.Fatalf("list released versions: %v %d", err, len(versions))
+	}
+	if _, err = svc.ManagedVersion(ctx, teammate, expert.Plugin.ID, versions[0].ID, false); !errors.Is(err, pluginsvc.ErrDependencyHidden) {
+		t.Fatalf("hidden released dependency historical read err=%v", err)
+	}
 }
 
 // Legacy released manifests may lack labels. Their tag projection must be empty,
@@ -834,6 +841,18 @@ func TestManagedMissingReleaseLabelsNeverExposeDraftTags(t *testing.T) {
 			tags, err := svc.ListTags(ctx, reader, pluginsvc.TagListParams{Type: model.PluginTypeExpert, Limit: 20})
 			if err != nil || len(tags) != 0 {
 				t.Fatalf("release %s labels exposed draft tags: %+v err=%v", labels, tags, err)
+			}
+			items, _, err := svc.List(ctx, reader, pluginsvc.ListParams{Type: model.PluginTypeExpert, Limit: 20})
+			if err != nil || len(items) != 1 || string(items[0].Tags) != "[]" {
+				t.Fatalf("release %s list leaked draft tags: %+v %v", labels, items, err)
+			}
+			detail, err := svc.Detail(ctx, reader, d.Plugin.ID, true)
+			if err != nil || string(detail.Plugin.Tags) != "[]" {
+				t.Fatalf("release %s detail leaked tags: %+v %v", labels, detail, err)
+			}
+			filtered, _, err := svc.List(ctx, reader, pluginsvc.ListParams{Type: model.PluginTypeExpert, Tags: []string{"secret-draft-tag"}, Limit: 20})
+			if err != nil || len(filtered) != 0 {
+				t.Fatalf("release %s draft tag matched public filter: %+v %v", labels, filtered, err)
 			}
 			mine, err := svc.ListTags(ctx, owner, pluginsvc.TagListParams{Type: model.PluginTypeExpert, Mine: true, Limit: 20})
 			if err != nil || len(mine) != 1 || mine[0].Name != "secret-draft-tag" {

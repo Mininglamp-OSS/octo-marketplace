@@ -26,7 +26,16 @@ func (s *LocalStorage) PutImmutable(ctx context.Context, key string, r io.Reader
 	if err = os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		return false, err
 	}
-	f, err := os.CreateTemp(filepath.Dir(full), ".version-*")
+	scratch, err := s.safePath(".scratch")
+	if err != nil {
+		return false, err
+	}
+	if err = os.MkdirAll(scratch, 0o700); err != nil {
+		return false, err
+	}
+	// Stage incomplete bytes outside the immutable object namespace. Link below
+	// publishes the complete file atomically without replacing an existing key.
+	f, err := os.CreateTemp(scratch, ".version-*")
 	if err != nil {
 		return false, err
 	}

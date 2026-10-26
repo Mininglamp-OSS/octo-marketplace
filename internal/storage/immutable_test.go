@@ -184,3 +184,48 @@ func TestLocalImmutableCannotBeModifiedThroughSymlinkAlias(t *testing.T) {
 		t.Fatalf("aliased delete: %v", err)
 	}
 }
+
+type scratchCheckingReader struct {
+	t         *testing.T
+	root, key string
+	checked   bool
+}
+
+func (r *scratchCheckingReader) Read(p []byte) (int, error) {
+	if r.checked {
+		return 0, io.EOF
+	}
+	r.checked = true
+	entries, err := os.ReadDir(filepath.Join(r.root, filepath.Dir(r.key)))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		r.t.Fatalf("incomplete immutable objects exposed: %+v", entries)
+	}
+	scratch, err := os.ReadDir(filepath.Join(r.root, ".scratch"))
+	if err != nil || len(scratch) != 1 {
+		r.t.Fatalf("missing scratch file: %+v %v", scratch, err)
+	}
+	return copy(p, "data"), nil
+}
+func TestLocalImmutableStagesOutsideVersionNamespace(t *testing.T) {
+	for _, size := range []int64{4, 5} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			root := t.TempDir()
+			s := NewLocal(root, "http://localhost")
+			key := "plugins/space-a/attachments/versions/hash"
+			ok, err := s.PutImmutable(context.Background(), key, &scratchCheckingReader{t: t, root: root, key: key}, size, "")
+			if size == 4 && (!ok || err != nil) {
+				t.Fatalf("publish: %v %v", ok, err)
+			}
+			if size == 5 && (ok || err == nil) {
+				t.Fatal("accepted incomplete file")
+			}
+			scratch, err := os.ReadDir(filepath.Join(root, ".scratch"))
+			if err != nil || len(scratch) != 0 {
+				t.Fatalf("staging leak: %+v %v", scratch, err)
+			}
+		})
+	}
+}

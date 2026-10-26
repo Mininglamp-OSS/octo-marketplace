@@ -91,7 +91,11 @@ func (s *Service) parseReferenceContainer(p ContainerImportParams) (WriteRequest
 	if err != nil {
 		return WriteRequest{}, err
 	}
-	return WriteRequest{Name: doc.Name, Type: typ, CategoryID: p.CategoryID, Version: p.Version, Manifest: manifest, Package: pkg, Relations: rels}, nil
+	tags, err := json.Marshal(nonNilTags(doc.Tags))
+	if err != nil {
+		return WriteRequest{}, ErrInvalidContainer
+	}
+	return WriteRequest{Name: doc.Name, Type: typ, CategoryID: p.CategoryID, Version: p.Version, Tags: tags, Manifest: manifest, Package: pkg, Relations: rels}, nil
 }
 func (s *Service) importReferenceContainer(ctx context.Context, caller Caller, p ContainerImportParams, pluginID string) (*Detail, error) {
 	req, err := s.parseReferenceContainer(p)

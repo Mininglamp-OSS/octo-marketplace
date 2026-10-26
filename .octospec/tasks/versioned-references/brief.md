@@ -10,6 +10,7 @@ Legacy containers own embedded children and resolve mutable target IDs. Independ
 - Resource ownership and audience remain authoritative and are rechecked under transactional locks.
 - New expert/team edges cannot reference embedded resources or carry inline capability overrides.
 - Every newly saved reference snapshot receives an immutable reverse index in the same transaction.
+- Internal writes with an explicit expected saved head reject stale mutations under the resource lock, without adding a public concurrency field.
 - Publishing and approval validate frozen references, not a later editable graph.
 - Ever-published resources cannot be deleted or narrow scope; shared targets are never cascade-deleted.
 

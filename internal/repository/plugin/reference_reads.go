@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"fmt"
+
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
@@ -95,6 +96,35 @@ func (r *Repo) ReferenceCandidates(ctx context.Context, scope Scope, sourceID, r
 	if !validPersistedRelation(relationType, source.Type, targetType) {
 		return nil, 0, ErrInvalidRelation
 	}
+	// Ordinary readers see released binding state, just like published details.
+	// Only draft editors may observe the mutable relation table.
+	editable := scope.Admin || (source.OwnerUID == scope.CallerUID && source.SpaceID != nil && *source.SpaceID == scope.SpaceID)
+	bound := map[string]bool{}
+	if !editable {
+		state, err := r.GetVersionState(ctx, scope, sourceID)
+		if err != nil {
+			return nil, 0, err
+		}
+		if state.PublishedVersionID == nil {
+			return nil, 0, ErrVersionBaselineUnavailable
+		}
+		version, err := r.GetManagedVersion(ctx, scope, sourceID, *state.PublishedVersionID)
+		if err != nil {
+			return nil, 0, err
+		}
+		if version.Release == nil {
+			return nil, 0, ErrVersionBaselineUnavailable
+		}
+		relations, err := model.DecodeSnapshotRelations(version.Relations)
+		if err != nil {
+			return nil, 0, ErrVersionBaselineUnavailable
+		}
+		for _, relation := range relations {
+			if relation.SourcePluginID == sourceID && relation.Type == relationType && relation.Status == 1 && relation.DeletedAt == nil {
+				bound[relation.TargetPluginID] = true
+			}
+		}
+	}
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
@@ -104,7 +134,7 @@ func (r *Repo) ReferenceCandidates(ctx context.Context, scope Scope, sourceID, r
 	// Audience compatibility is narrower than admin visibility. It is evaluated
 	// from the source's immutable owner/Space, never admin caller privilege.
 	audience := `p.visibility IN ('system','public')`
-	args := []any{sourceID, relationType, targetType}
+	args := []any{sourceID, relationType, editable, targetType}
 	if referenceVisibility(source.Visibility) != model.PluginVisibilitySystem && source.SpaceID != nil {
 		audience += ` OR (p.space_id=? AND p.visibility='space')`
 		args = append(args, *source.SpaceID)
@@ -113,7 +143,7 @@ func (r *Repo) ReferenceCandidates(ctx context.Context, scope Scope, sourceID, r
 			args = append(args, *source.SpaceID, source.OwnerUID)
 		}
 	}
-	from := ` FROM plugins p LEFT JOIN plugin_version_releases v ON v.plugin_id=p.plugin_id AND v.version_id=p.published_version_id LEFT JOIN plugin_versions snapshot ON snapshot.plugin_id=v.plugin_id AND snapshot.version_id=v.version_id LEFT JOIN plugin_relations edge ON edge.source_plugin_id=? AND edge.relation_type=? AND edge.target_plugin_id=p.plugin_id AND edge.status=1 AND edge.deleted_at IS NULL WHERE p.plugin_type=? AND p.is_embedded=0 AND p.status=1 AND p.deleted_at IS NULL AND p.listing_state='published' AND (` + audience + `)`
+	from := ` FROM plugins p LEFT JOIN plugin_version_releases v ON v.plugin_id=p.plugin_id AND v.version_id=p.published_version_id LEFT JOIN plugin_versions snapshot ON snapshot.plugin_id=v.plugin_id AND snapshot.version_id=v.version_id LEFT JOIN plugin_relations edge ON edge.source_plugin_id=? AND edge.relation_type=? AND ? AND edge.target_plugin_id=p.plugin_id AND edge.status=1 AND edge.deleted_at IS NULL WHERE p.plugin_type=? AND p.is_embedded=0 AND p.status=1 AND p.deleted_at IS NULL AND p.listing_state='published' AND (` + audience + `)`
 	var total int
 	if err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.plugin_id)`+from, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -128,6 +158,9 @@ func (r *Repo) ReferenceCandidates(ctx context.Context, scope Scope, sourceID, r
 		var x ReferenceCandidate
 		if err = rows.Scan(&x.PluginID, &x.Name, &x.Type, &x.VersionID, &x.AlreadyBound); err != nil {
 			return nil, 0, err
+		}
+		if !editable {
+			x.AlreadyBound = bound[x.PluginID]
 		}
 		x.IsSelectable = !x.AlreadyBound && (x.Type == model.PluginTypeConnector || x.VersionID != nil)
 		if !x.IsSelectable {

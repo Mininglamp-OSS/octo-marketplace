@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestVersionAndReviewDTOsAcceptBothPersistedRelationFormats(t *testing.T) {
@@ -26,5 +29,23 @@ func TestVersionAndReviewDTOsAcceptBothPersistedRelationFormats(t *testing.T) {
 		if len(review) != 1 || review[0].TargetPluginID != "skill" || review[0].RelationID != "relation" || review[0].RelationType != "expert_skill" || review[0].SortOrder != 4 {
 			t.Fatalf("review relation lost: %+v", review)
 		}
+	}
+}
+
+func TestVersionRelationEmptySnapshotsDoNotWarn(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	restore := logging.Replace(zap.New(core))
+	defer restore()
+	for _, raw := range []json.RawMessage{nil, {}, []byte(" "), []byte("null"), []byte(" \n null "), []byte("[]")} {
+		if got := versionRelationSlice("plugin", "version", raw); len(got) != 0 {
+			t.Fatalf("unexpected relations: %+v", got)
+		}
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("empty legacy snapshots warned: %+v", logs.All())
+	}
+	versionRelationSlice("plugin", "version", []byte("broken"))
+	if logs.Len() != 1 {
+		t.Fatal("malformed nonempty snapshot must warn")
 	}
 }

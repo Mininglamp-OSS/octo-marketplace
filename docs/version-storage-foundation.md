@@ -55,7 +55,9 @@ files and freezes them at `plugins/<space>/attachments/versions/<full-sha256>`.
 Identical bytes can share an object within that Space. Local storage creates an
 absent object atomically using a hard link; S3-compatible storage uses conditional
 PUT with `If-None-Match: *`. Existing objects are read and checked rather than
-overwritten. Unsupported conditional writes fail closed.
+overwritten. Unsupported conditional writes fail closed. The bucket/proxy in
+front of OSS **must** honor `If-None-Match: *`; a gateway that strips or ignores
+the header breaks the immutability guarantee and is not supported.
 
 Generic upload, copy and delete operations cannot modify that reserved namespace.
 Changing/removing a file, publishing another version, soft-deleting a resource,
@@ -68,11 +70,26 @@ save may already refer to the same bytes; failure compensation only removes
 ordinary staging objects. There is no new physical garbage collector. This also
 protects shared objects during concurrent retries and abandoned reviews.
 
-The inverse is not true: once a write commits, its mutable staging uploads are
-unreferenced and are deleted best-effort. The same cleanup runs after a review
-submission commits, so a later reject/cancel is not the only chance to reclaim
-them (and the frozen sidecar no longer names the staging keys). A failed delete
-leaves an orphan for audit; it never removes a frozen key.
+Import and review flows delete mutable staging uploads best-effort after commit
+only when those flows created and tracked the keys for that request. A failed
+delete leaves an orphan for audit; it never removes a frozen key.
+
+Ordinary Create/Update accepts existing same-Space storage keys as well as new
+uploads. It has no per-request proof of upload ownership or exclusive use, so it
+retains those caller-supplied keys: deleting them could break another legacy
+resource or pending operation sharing the source. The saved version references
+only the verified immutable copy. Reclaiming these potentially shared mutable
+keys requires provenance/reference-aware audit and GC; it is not implemented
+here. This retention affects storage usage, not the saved snapshot's immutability.
+
+Legacy `skill/ref.json` without hash/size may establish a baseline **during a new
+save/review**: read the authorized same-Space bytes with size limits, copy them to
+the content-addressed immutable namespace, and record the measured digest/size.
+Any supplied hash/size must match. This is an explicit compatibility conversion,
+not proof that the bytes match an earlier release. No old snapshot is rewritten
+or certified by that conversion; historical reads and legacy review approval
+still require their existing integrity inventory or fail closed. A second save
+using the converted descriptor verifies its recorded digest/size.
 
 `PresignGet` and `PublicURL` refuse the immutable namespace just like
 `PresignPut`, `Delete` and `Copy`. A historical file is served through an

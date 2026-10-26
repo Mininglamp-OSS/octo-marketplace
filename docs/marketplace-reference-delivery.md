@@ -46,6 +46,9 @@ are diagnostic and do not grant permission to delete published resources.
 - `GET /plugins/{plugin_id}/reference_candidates?relation_type=...`: compatible
   independently listed targets, published version identity, `already_bound`,
   `is_selectable`, and an actionable unselectable reason. No placement requirement.
+  Owners in the source Space see editable bindings. Other public-route readers,
+  including non-owner platform admins, see released bindings; this route never
+  promotes a caller into repository admin scope.
 
 Names in diagnostics come from released/historical snapshots rather than an
 unpublished editable version. Dependents fail with `409 CONFLICT`, reason
@@ -62,3 +65,17 @@ revalidation, frozen review pins, lifecycle, relation ID preservation, connector
 clearing, transitive historical impact, candidate disabling and draft-name privacy.
 Package tests additionally cover container rejection and metadata/audience rules.
 No production migration or rollout has been performed.
+
+## Concurrent writes and legacy approval
+
+Internal mutations with a nonempty `ExpectedCurrentVersionID` compare the saved
+head under the resource row lock and reject stale writers atomically. This is an
+opt-in internal guard, not a new wire field or a claim that all public saves
+require an expected version. Explicit publication separately checks its selected
+version under the same lock.
+
+With version management disabled, legacy approval first replaces live relations
+with the frozen review graph, then promotes embedded children in the same locked
+transaction. The live table at that point contains the reviewed graph, not the
+later draft. `TestApproveAppliesTheFrozenRelationGraph` covers a draft-only member
+added after submission and verifies that member stays private.

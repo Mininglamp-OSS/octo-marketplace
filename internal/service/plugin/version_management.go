@@ -154,7 +154,11 @@ func (s *Service) publishedDetail(ctx context.Context, sc pluginrepo.Scope, p *m
 	if manifest.PluginName != "" {
 		copy.Name = manifest.PluginName
 	}
-	if len(manifest.Labels) > 0 {
+	// Missing/null legacy labels are an empty released tag set. Never inherit
+	// editable tags from the current row when projecting a published snapshot.
+	copy.Tags = json.RawMessage(`[]`)
+	var labels []json.RawMessage
+	if json.Unmarshal(manifest.Labels, &labels) == nil && labels != nil {
 		copy.Tags = manifest.Labels
 	}
 	return &Detail{Plugin: &copy, Relations: frozen}, nil
