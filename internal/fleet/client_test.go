@@ -120,6 +120,26 @@ func TestCreateSkillReturnsID(t *testing.T) {
 	}
 }
 
+func TestListSkillsForwardsScopeAndDecodesIdentities(t *testing.T) {
+	var cap capture
+	srv := newFakeFleet(t, http.StatusOK, `[{"id":"skill-1","name":"browser-use","description":"existing"}]`, &cap)
+	defer srv.Close()
+
+	skills, err := New(srv.URL).ListSkills(context.Background(), "tok", "space-1", "ws-1")
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 1 || skills[0].ID != "skill-1" || skills[0].Name != "browser-use" {
+		t.Fatalf("skills = %#v", skills)
+	}
+	if cap.method != http.MethodGet || cap.path != "/api/skills" {
+		t.Fatalf("got %s %s, want GET /api/skills", cap.method, cap.path)
+	}
+	if cap.token != "tok" || cap.workspaceID != "ws-1" || cap.spaceID != "space-1" {
+		t.Fatalf("headers token=%q ws=%q space=%q", cap.token, cap.workspaceID, cap.spaceID)
+	}
+}
+
 func TestSetAgentSkillsSendsSkillIDs(t *testing.T) {
 	var cap capture
 	srv := newFakeFleet(t, http.StatusOK, `{}`, &cap)
