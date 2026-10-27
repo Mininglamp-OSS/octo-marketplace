@@ -166,7 +166,21 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 			return err
 		}
 	}
-	publishedKey, _, nameErr := pluginNameColumns(p.Name, p.Type, p.SpaceID)
+	// The market displays the selected version's manifest name, not the mutable
+	// draft name. Read the name from the version being released; p.Name can be a
+	// later draft (adoption/historical flows) and must not release or misreserve a
+	// different display name.
+	var releaseName string
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(manifest_json,'$.plugin_name')),'') FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, versionID).Scan(&releaseName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrConflict
+		}
+		return err
+	}
+	if strings.TrimSpace(releaseName) == "" {
+		releaseName = p.Name
+	}
+	publishedKey, _, nameErr := pluginNameColumns(releaseName, p.Type, p.SpaceID)
 	if nameErr != nil {
 		return nameErr
 	}

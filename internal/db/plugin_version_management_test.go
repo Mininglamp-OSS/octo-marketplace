@@ -459,12 +459,26 @@ func TestManagedLegacyPublishedBaselineAdoption(t *testing.T) {
 			if _, err = database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id=?`, id); err != nil {
 				t.Fatal(err)
 			}
+			// The editable draft is already differently named from the selected
+			// release snapshot. Adoption must reserve the snapshot name, not this
+			// mutable draft name.
+			if _, err = database.Exec(`UPDATE plugins SET plugin_name='Draft Beta',name_key='draft beta',name_scope='space-a' WHERE plugin_id=?`, id); err != nil {
+				t.Fatal(err)
+			}
 			adopted, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
 			if err != nil {
 				t.Fatalf("adoption failed: %v", err)
 			}
 			if adopted.Review != nil {
 				t.Fatal("adoption opened a review instead of registering the baseline")
+			}
+			var publishedNameKey string
+			if err = database.QueryRow(`SELECT published_name_key FROM plugins WHERE plugin_id=?`, id).Scan(&publishedNameKey); err != nil || publishedNameKey != "versioned expert" {
+				t.Fatalf("adoption published key=%q err=%v; must come from released snapshot", publishedNameKey, err)
+			}
+			var reserved int
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_name_reservations WHERE plugin_id=? AND name_key='versioned expert'`, id).Scan(&reserved); err != nil || reserved != 1 {
+				t.Fatalf("adoption snapshot reservation=%d err=%v", reserved, err)
 			}
 			state, err := repo.GetVersionState(ctx, tenantScope(), id)
 			if err != nil || state.PublishedVersionID == nil {
