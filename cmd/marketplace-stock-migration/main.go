@@ -340,7 +340,10 @@ func executeAndReport(ctx context.Context, db *sql.DB, run *stockmigration.Migra
 	case stockmigration.RunCompleted:
 		return writeJSON(out, output)
 	case stockmigration.RunWaitingReview:
-		return writeJSON(out, output)
+		if writeErr := writeJSON(out, output); writeErr != nil {
+			return fmt.Errorf("write waiting_review result: %w", writeErr)
+		}
+		return &reasonError{Reason: "waiting_review", Code: exitBlocked, RunID: run.RunID, Err: fmt.Errorf("migration is waiting for review")}
 	default:
 		return returnReasonWithRun(out, reason, exitBlocked, run.RunID, err, output)
 	}
@@ -372,7 +375,13 @@ func returnReasonWithRun(out io.Writer, reason string, code int, runID string, e
 			output["run_id"] = runID
 		}
 	}
-	_ = writeJSON(out, output)
+	if writeErr := writeJSON(out, output); writeErr != nil {
+		if err == nil {
+			err = writeErr
+		} else {
+			err = fmt.Errorf("%w; write JSON result: %v", err, writeErr)
+		}
+	}
 	return &reasonError{Reason: reason, Code: code, RunID: runID, Err: err}
 }
 
