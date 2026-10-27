@@ -52,10 +52,12 @@ func NormalizePluginName(name string) (string, error) {
 func PluginNameReservationKeys(draft, published string) ([]string, error) {
 	keys := make([]string, 0, 2)
 	seen := map[string]struct{}{}
-	add := func(name string) error {
-		if strings.TrimSpace(name) == "" {
+	add := func(name string, optional bool) error {
+		if name == "" && optional {
 			return nil
 		}
+		// A present name, including whitespace-only historical data, is not
+		// optional: report it instead of silently dropping the reservation.
 		key, err := NormalizePluginName(name)
 		if err != nil {
 			return err
@@ -66,14 +68,11 @@ func PluginNameReservationKeys(draft, published string) ([]string, error) {
 		}
 		return nil
 	}
-	if err := add(draft); err != nil {
+	if err := add(draft, false); err != nil {
 		return nil, err
 	}
-	if err := add(published); err != nil {
+	if err := add(published, true); err != nil {
 		return nil, err
-	}
-	if len(keys) == 0 {
-		return nil, ErrPluginNameEmpty
 	}
 	return keys, nil
 }

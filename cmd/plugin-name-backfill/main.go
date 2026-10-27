@@ -156,13 +156,19 @@ func analyzeRows(rows []row) report {
 			continue
 		}
 		r.Scope = scope
-		if draftKey, e := model.NormalizePluginName(r.Name); e == nil {
-			r.Key = draftKey
+		draftKey, draftErr := model.NormalizePluginName(r.Name)
+		if draftErr != nil {
+			out.Invalid = append(out.Invalid, r.ID)
+			continue
 		}
+		r.Key = draftKey
 		if r.PublishedName != "" {
-			if publishedKey, e := model.NormalizePluginName(r.PublishedName); e == nil {
-				r.PublishedKey = publishedKey
+			publishedKey, publishedErr := model.NormalizePluginName(r.PublishedName)
+			if publishedErr != nil {
+				out.Invalid = append(out.Invalid, r.ID)
+				continue
 			}
+			r.PublishedKey = publishedKey
 		}
 		if r.DeletedAt != nil {
 			out.SkippedDeleted++

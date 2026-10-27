@@ -208,7 +208,7 @@ func checkPlannedNames(unit *Unit, resources []Resource) error {
 		}
 		keys, err := model.PluginNameReservationKeys(r.Plugin.Name, r.PublishedName)
 		if err != nil {
-			continue
+			return fmt.Errorf("%w: invalid historical display name for %s", ErrNameConflict, r.Plugin.ID)
 		}
 		scope := ""
 		if r.Plugin.SpaceID != nil {

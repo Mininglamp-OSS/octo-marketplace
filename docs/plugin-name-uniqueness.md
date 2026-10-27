@@ -59,8 +59,12 @@ Run the read-only report first:
 MYSQL_DSN='...' go run ./cmd/plugin-name-backfill --all-spaces
 ```
 
-The report groups by the same active key (published name when present, draft name
-otherwise), and includes both the draft and published normalized keys.
+The report groups by **every** normalized reservation key: the draft name and,
+when present, the published name. Equal keys belonging to the same plugin are
+deduplicated; a key shared with a different plugin is reported as a duplicate
+group. A missing draft is not optional for an Expert/Skill; whitespace-only or
+otherwise invalid historical draft/published names are reported as invalid and
+block apply.
 
 Resolve every reported duplicate group without automatic suffixing:
 

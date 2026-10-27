@@ -51,3 +51,14 @@ func TestCheckPlannedNamesPublishedDraftReservation(t *testing.T) {
 		t.Fatalf("published Alpha / draft Beta reservation was not enforced: %v", err)
 	}
 }
+
+func TestCheckPlannedNamesRejectsBlankHistoricalDraft(t *testing.T) {
+	space := "space-a"
+	resources := []Resource{{
+		Plugin:        model.Plugin{ID: "blank", Name: " ", Type: model.PluginTypeSkill, SpaceID: &space},
+		PublishedName: "Alpha",
+	}}
+	if err := checkPlannedNames(&Unit{}, resources); !errors.Is(err, ErrNameConflict) {
+		t.Fatalf("blank historical draft was silently ignored: %v", err)
+	}
+}

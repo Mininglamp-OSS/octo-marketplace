@@ -17,3 +17,15 @@ func TestAnalyzeRowsReportsDraftPublishedCollision(t *testing.T) {
 		t.Fatalf("group=%+v", g)
 	}
 }
+
+func TestAnalyzeRowsRejectsBlankDraftDespitePublishedName(t *testing.T) {
+	space := "space-a"
+	rows := []row{
+		{ID: "blank", Name: "   ", PublishedName: "Alpha", Type: "skill", SpaceID: &space},
+		{ID: "valid", Name: "Alpha", Type: "skill", SpaceID: &space},
+	}
+	out := analyzeRows(rows)
+	if len(out.Invalid) != 1 || out.Invalid[0] != "blank" {
+		t.Fatalf("report=%+v", out)
+	}
+}
