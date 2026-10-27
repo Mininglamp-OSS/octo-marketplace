@@ -10,10 +10,12 @@ import (
 // InstallVersionKey identifies an immutable released dependency, never a label.
 type InstallVersionKey struct{ PluginID, VersionID string }
 
-// installAccess deliberately ignores placement and listing for existing pins.
-// The resolver separately requires the ROOT to be listed. Delisting stops new
-// references, but does not revoke an already-released dependency. Private access
-// still requires both the owning user and owning Space, even for administrators.
+// installAccess scopes reads of current rows and released evidence; it is not
+// installation eligibility. SQL deliberately omits listing filters so retained
+// history can be read, but the service requires BOTH root and dependencies to be
+// published before dispatch, including frozen-plan retries. A released pin does
+// not exempt a delisted target. Private reads still require owner and Space,
+// even for administrators.
 const installAccess = `(p.visibility IN ('system','public') OR (p.space_id=? AND (p.visibility='space' OR (p.visibility='private' AND p.owner_uid=?))))`
 
 // GetInstallPlugins batches one dependency wave. Scope.Admin never bypasses the

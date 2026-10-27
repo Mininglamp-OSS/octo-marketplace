@@ -30,14 +30,19 @@ shared targets. With the gate disabled, existing legacy container handling remai
 The same transaction rechecks target ownership, audience, release identity and
 listing state during saves, review submissions, approval and publication. An
 unchanged existing pin may remain in a draft after target delisting; new pins and
-new publication require listed targets. Existing released pins remain available
-to the installation resolver. Releasing a source never follows a target's latest
+new publication require listed targets. Existing pins and release evidence are
+retained as history, but installation preparation and frozen-plan retries require
+both the root and all dependencies to be currently published and authorized.
+A retained pin does not allow a new Fleet dispatch after target delisting. Releasing a source never follows a target's latest
 editable version. Saved snapshots and their reverse index are written together.
 
-Published or previously published/delisted resources cannot be deleted or change
-visibility through ordinary writes. Drafts with no publication evidence remain
-deletable; deleting a source never deletes an independent target. Impact queries
-are diagnostic and do not grant permission to delete published resources.
+Previously published/delisted Skills and Experts may be soft-deleted only when
+no protected live, current published or Team-pinned indirect incoming reference
+survives. Historical releases remain; delisting alone does not release incoming
+references. This does not change the existing visibility-narrowing policy.
+Deleting a source never deletes an independent target. Impact queries remain
+diagnostic, not deletion authorization. See [the current lifecycle and rollout
+contract](marketplace-v2-release.md).
 
 ## Diagnostic reads
 

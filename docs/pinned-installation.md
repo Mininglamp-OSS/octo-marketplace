@@ -1,9 +1,10 @@
 # Pinned installation (local delivery, disabled by default)
 
 Refs #119 and #120. `PLUGIN_PINNED_INSTALLATION_ENABLED=false` preserves the
-existing paths. The new path requires version management and reference-format
-released resources. Activation is a separate operation; this change does not
-activate a deployment or migrate data.
+legacy-content selection through the shared capability executor. The pinned
+path requires version management and reference-format released resources.
+Activation is a separate operation; this change does not activate a deployment
+or migrate data.
 
 ## Resolution and access
 
@@ -11,14 +12,29 @@ Both existing Marketplace install entrypoints resolve one common in-memory plan:
 root published version → pinned expert versions → pinned skill versions; connector
 IDs select the current configuration. Missing/foreign/unreleased pins, embedded
 resources, unknown schemas or inaccessible files stop before any Fleet write.
-Existing pins can use delisted dependencies; the root must still be listed.
+The root AND every dependency (including Connector rows) must currently be
+published and pass status/deletion/access checks before Fleet is called. A pin
+proves which immutable content was released; it does not grant a delisting
+exemption. This applies both to the first dispatch and to same-key retries of a
+frozen plan. Retain the pin, release history and any uncertain attempt when
+eligibility fails; rejection is not proof that an earlier call did not commit.
 Private reads require owner and Space even when the caller is an administrator.
-Source audiences are rechecked through each member's frozen references.
+A private target also requires a private source with the same owner and Space;
+source audiences are rechecked through each member's frozen references.
+
+Delisted legacy data stays historical. Conversion is an explicit operator action
+for a specific republish/install need and preserves delisted state; restore the
+required source/dependencies through normal publication before installing again.
+There is no request-time conversion, automatic re-listing, alternate-version
+fallback or permission bypass. See the current
+[rollout and incident contract](marketplace-v2-release.md#3-下架历史与按需转换).
+This replaces the older released-pin delisting exemption.
 
 Repository reads batch each dependency wave and cache only within the request.
-Same-name skills receive stable `-mk1-<digest>` names from resource/version IDs;
-only temporary SKILL.md frontmatter changes. The market keeps its original name
-and bytes. Skill bindings preserve the exact selected version for each expert.
+Skills retain their original market names, SKILL.md bytes and supporting files;
+there are no generated aliases or frontmatter rewrites. Same-name identical
+content can be shared; conflicting content is rejected. Skill bindings preserve
+the exact selected version for each expert.
 MCP comes from connector resources, never the expert's old embedded mcp.json.
 Duplicate MCP server names fail instead of overwriting another connector.
 An expert/team snapshot containing inline MCP, skill/member bundles or inline
@@ -34,10 +50,11 @@ final checks so the evidence remains current until the authorized cutover.
 
 1. Run M1 (`marketplace-inventory --all-spaces`) and resolve unknown publication,
    missing-release and source-integrity findings. Review the full distribution.
-2. Rehearse M3 on an isolated copy, then separately authorize its bounded apply
-   window. All applicable root units must be migrated and historical indexes
-   verified. A fresh M3 preview must have zero remaining units and exceptions;
-   an interrupted/partial batch is not readiness evidence.
+2. Rehearse the needed M3 single-root conversion on an isolated copy, then
+   separately authorize its bounded apply window. Verify the resources intended
+   for the rollout and their historical indexes. Delisted unused history is not
+   automatically converted or re-listed; an incomplete selected graph or
+   unresolved exception is not readiness evidence.
 3. Check current released graphs with the committed read-only SQL. It checks
    released roots and their reachable pins, schema/index coverage and inline
    capability shapes. Retained old releases not reachable from a root do not
@@ -65,14 +82,21 @@ final checks so the evidence remains current until the authorized cutover.
 
 ## Retry and rollback
 
-The capability entrypoint records scoped key digests, selected root/version,
-adapter and input/request fingerprints. No token, environment value, instruction
-or complete request is persisted. Root upgrades do not change an existing key's
-selection. Changed input or current connector content returns conflict before
-Fleet. Identical retries still reach Fleet so current workspace authorization
-and the remote receipt remain authoritative. Records older than Fleet's 24-hour
-receipt window fail closed and need explicit reconciliation; they are not deleted
-and blindly retried. No automatic fallback follows an uncertain Fleet outcome.
+The capability entrypoint records scoped key digests and HMAC fingerprints,
+plus the first secret-free frozen definition, selected versions, names, file
+bytes, Connector configuration and eligibility edges. Tokens and custom
+runtime environment values are not persisted; retries supply the same input.
+Normal root/dependency publications and Connector edits do not rebuild an
+existing plan; changed explicit input conflicts. Before every resend, current
+caller, graph (including listing state) and Fleet workspace permissions remain
+mandatory. A delisted/deleted/inaccessible node blocks dispatch without deleting
+the original plan, extending its deadline or clearing earlier uncertainty.
+
+Identical eligible retries still reach Fleet, including completed attempts, so
+current workspace authorization and the remote receipt remain authoritative.
+Records outside the original retry deadline (bounded by Fleet's 24-hour receipt
+window) fail closed and need explicit reconciliation; they are not deleted and
+blindly retried. No automatic fallback follows an uncertain Fleet outcome.
 
 ### Expired receipt reconciliation
 
@@ -117,16 +141,17 @@ This resolves the client operation without unlocking a spent key. Bulk archival
 or receipt compaction requires a separate design that retains key tombstones;
 the service does not claim to provide an automated reconciliation endpoint.
 
-The legacy entrypoint uses the same prepared plan, then its existing create/bind
-operations. It is not globally idempotent. A shared skill is created once and
-bound to every declaring member. Rollback deletes only IDs created by this
-attempt, separately from IDs merely bound to another member.
+Both installation URLs use one capability executor with the same configured
+content mode. The legacy URL preserves its old request/response contract; it
+has no separate create/bind/compensation provisioner or delisted/private
+exemption. Without a client key, an uncertain result requires workspace
+inspection before a new operation, not a same-key retry the caller cannot make.
 
 ## Verification boundary
 
 Unit tests exercise fixed versions, same-name skills, visibility failures,
-connector updates, both entrypoints, retry drift and partial rollback. Dedicated
-synthetic MySQL tests exercise actual scope SQL, release ownership, concurrent
+frozen Connector configuration, both entrypoints, retry uncertainty and delisted
+root/dependency refusal. Dedicated synthetic MySQL tests exercise actual scope SQL, release ownership, concurrent
 attempt claiming and root upgrades. These do not constitute I4 acceptance:
 unmodified real Fleet/Daemon installation, materialization and skill/tool
 discovery still need a separately available isolated environment.

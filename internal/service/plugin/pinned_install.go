@@ -12,9 +12,10 @@ import (
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
 
-// InstallationReadStore is intentionally independent of ordinary detail reads:
-// a released pin may read a delisted dependency, but never another user's private
-// content. Each wave is batched; no per-user permission result survives a request.
+// InstallationReadStore batches caller-scoped rows and released evidence without
+// granting installation eligibility. The resolver rejects delisted roots AND
+// dependencies; retained pins are history, not a distribution exemption. Private
+// reads require owner and Space. No permission result survives a request.
 type InstallationReadStore interface {
 	GetInstallPlugins(context.Context, pluginrepo.Scope, []string) (map[string]*model.Plugin, error)
 	GetInstallVersions(context.Context, pluginrepo.Scope, []pluginrepo.InstallVersionKey) (map[pluginrepo.InstallVersionKey]*model.PluginVersion, error)

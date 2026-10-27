@@ -20,7 +20,14 @@ Local implementation is not deployment approval. Default configuration keeps ver
 
 Historical index preview proves exact edges and explicit empty graphs. A coverage marker is written in the same transaction as verified facts. Unknown legacy pins remain exceptions; a migrated container's new version does not prove the old version's dependencies. Dependents queries return an index-incomplete conflict rather than claiming no consumers when authorized history lacks verified coverage. This diagnostic limitation does not decide deletion permissions.
 
-New container uploads use reference format. An old-format archive is rejected when reference writes are enabled. Existing legacy rows require the dedicated migration tool; there is no automatic import/conversion fallback. Connector IDs resolve current configuration and have no versions. Existing pinned references may retain delisted dependencies, while new references require listed, authorized resources.
+New container uploads use reference format. An old-format archive is rejected when reference writes are enabled. Existing legacy rows require the dedicated migration tool; there is no automatic import/conversion fallback. Connector IDs resolve current configuration and have no versions.
+
+Existing pins may remain in historical/editing records after a dependency is
+delisted; this does not authorize installation. Both the root and every dependency
+must be published and authorized before the first installation dispatch or a
+frozen-plan retry. New references also require listed, authorized resources.
+Delisted unused history is retained; follow the explicit per-root conversion and
+publication procedure in `docs/marketplace-v2-release.md` only when needed.
 
 ## Rollback boundaries
 

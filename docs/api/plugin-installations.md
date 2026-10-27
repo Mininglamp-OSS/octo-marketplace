@@ -90,6 +90,13 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
 Marketplace resolves the root expert/team and every dependency under the
 authenticated caller's visibility. An embedded member cannot be installed as a
 standalone root. Hidden dependencies reject the entire operation before Fleet.
+For pinned installation, the root and every dependency must currently be
+published, active, undeleted and authorized, on both first dispatch and frozen-plan
+retry. A retained release/pin does not exempt a delisted dependency. Blocked
+retries retain the original plan, deadline and any earlier unknown outcome;
+reconcile that outcome before starting a new operation. Conversion preserves
+listing state and is an explicit operator action, never an installation fallback.
+See [the rollout procedure](../marketplace-v2-release.md#3-下架历史与按需转换).
 
 For a single expert, `definition.experts` contains one item and `expert_team` is
 absent; referenced Skills still appear under `definition.skills`. A team contains
