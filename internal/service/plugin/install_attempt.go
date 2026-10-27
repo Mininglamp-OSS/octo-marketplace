@@ -68,7 +68,10 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if err != nil {
 			return nil, ErrIntegrity
 		}
-		request := pinnedPlanRequest(plan, p)
+		request, err := pinnedPlanRequest(plan, p)
+		if err != nil {
+			return nil, err
+		}
 		// Escaping and repeated environment bindings count toward the wire limit.
 		// Reject before persisting an attempt as well as before contacting Fleet.
 		body, err := json.Marshal(request)
@@ -133,7 +136,15 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 			return nil, ErrDependencyHidden
 		}
 	}
-	request := pinnedPlanRequest(&plan, p)
+	if plan.Definition.Name != "marketplace:"+id ||
+		(root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) ||
+		(root.Type == model.PluginTypeExpertTeam) != (plan.Definition.ExpertTeam != nil) {
+		return nil, ErrIntegrity
+	}
+	request, err := pinnedPlanRequest(&plan, p)
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, ErrIntegrity
@@ -229,11 +240,19 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 	s.trackInstall(recovery, id)
 	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
 }
-func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) *fleet.CapabilityInstallRequest {
+func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) (*fleet.CapabilityInstallRequest, error) {
+	if plan == nil {
+		return nil, ErrIntegrity
+	}
 	// Copy nested slices/pointers before adding per-request runtime secrets.
-	raw, _ := json.Marshal(plan.Definition)
+	raw, err := json.Marshal(plan.Definition)
+	if err != nil {
+		return nil, ErrIntegrity
+	}
 	var def fleet.CapabilityDefinition
-	_ = json.Unmarshal(raw, &def)
+	if json.Unmarshal(raw, &def) != nil || !validPinnedDefinition(def) {
+		return nil, ErrIntegrity
+	}
 	if p.ResourceName != "" {
 		if def.ExpertTeam != nil {
 			def.ExpertTeam.Name = p.ResourceName
@@ -247,5 +266,53 @@ func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) *flee
 		e.CustomEnv = p.CustomEnv
 		in.Bindings.Experts = append(in.Bindings.Experts, fleet.CapabilityExpertBinding{ExpertName: e.Name, RuntimeID: p.RuntimeID})
 	}
-	return in
+	return in, nil
+}
+
+// Recovery must check structure before indexing or binding names. The request
+// HMAC still verifies the exact frozen content after runtime inputs are added.
+func validPinnedDefinition(def fleet.CapabilityDefinition) bool {
+	if def.SchemaVersion != "1.0" || len(def.Experts) == 0 || len(def.Experts) > 30 {
+		return false
+	}
+	skills := map[string]bool{}
+	for _, skill := range def.Skills {
+		if !installationName(skill.Name, 128) || skills[skill.Name] {
+			return false
+		}
+		skills[skill.Name] = true
+	}
+	experts := map[string]bool{}
+	for _, expert := range def.Experts {
+		if !installationName(expert.Name, 128) || experts[expert.Name] || expert.Instructions == "" || len(expert.CustomEnv) != 0 {
+			return false
+		}
+		experts[expert.Name] = true
+		seen := map[string]bool{}
+		for _, name := range expert.SkillNames {
+			if !skills[name] || seen[name] {
+				return false
+			}
+			seen[name] = true
+		}
+	}
+	if def.ExpertTeam == nil {
+		return len(def.Experts) == 1
+	}
+	team := def.ExpertTeam
+	if !installationName(team.Name, 128) || len(team.Members) != len(def.Experts) {
+		return false
+	}
+	seen := map[string]bool{}
+	leaders := 0
+	for _, member := range team.Members {
+		if !experts[member.ExpertName] || seen[member.ExpertName] || (!member.IsLeader && member.Role == "leader") {
+			return false
+		}
+		seen[member.ExpertName] = true
+		if member.IsLeader {
+			leaders++
+		}
+	}
+	return leaders == 1
 }

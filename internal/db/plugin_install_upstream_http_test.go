@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -378,5 +379,35 @@ func TestInstallHTTPExpiredReceiptReconciliation(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestInstallHTTPRejectsCorruptFrozenPlanWithoutDispatch(t *testing.T) {
+	for _, route := range []string{"new-keyed", "legacy-keyed"} {
+		t.Run(route, func(t *testing.T) {
+			remote := &recoveryHTTPInstaller{err: errors.New("timeout")}
+			engine, root, database := installationHTTPFixture(t, true, remote)
+			first := httptest.NewRecorder()
+			engine.ServeHTTP(first, installationHTTPRequest(root, route, "corrupt-plan"))
+			if first.Code != 503 || remote.calls != 1 {
+				t.Fatalf("first=%d calls=%d", first.Code, remote.calls)
+			}
+			if _, err := database.Exec(`UPDATE plugin_install_attempts SET frozen_plan_json=JSON_SET(frozen_plan_json,'$.Definition.experts',JSON_ARRAY()) WHERE plugin_id=?`, root); err != nil {
+				t.Fatal(err)
+			}
+			const evidence = `SELECT JSON_OBJECT('state',attempt_state,'unknown',had_unknown,'completed',completed,'plan',frozen_plan_json,'request',request_fingerprint,'deadline',retry_until,'lease',lease_token,'lease_until',lease_until) FROM plugin_install_attempts WHERE plugin_id=?`
+			var before, after string
+			if err := database.QueryRow(evidence, root).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			retry := httptest.NewRecorder()
+			engine.ServeHTTP(retry, installationHTTPRequest(root, route, "corrupt-plan"))
+			if err := database.QueryRow(evidence, root).Scan(&after); err != nil {
+				t.Fatal(err)
+			}
+			if retry.Code != 500 || !strings.Contains(retry.Body.String(), "artifact_unavailable") || remote.calls != 1 || before != after {
+				t.Fatalf("retry=%d body=%s calls=%d unchanged=%t", retry.Code, retry.Body.String(), remote.calls, before == after)
+			}
+		})
 	}
 }

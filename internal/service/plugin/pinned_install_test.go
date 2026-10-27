@@ -445,3 +445,76 @@ func TestSuccessfulRemoteCompletionFailureKeepsRetryDeadline(t *testing.T) {
 		t.Fatalf("durable retry deadline lost: %+v", attemptErr)
 	}
 }
+
+// A persisted plan is untrusted on recovery, even when the original attempt
+// was valid. Reject malformed structure before dispatch without changing state.
+func TestPinnedRetryRejectsMalformedDefinition(t *testing.T) {
+	for _, name := range []string{"", "Custom name"} {
+		for _, corruption := range []string{"empty_experts", "missing_team", "duplicate_expert", "missing_member", "unknown_member", "duplicate_member", "no_leader", "unknown_skill", "wrong_schema", "wrong_root_kind"} {
+			t.Run(name+"/"+corruption, func(t *testing.T) {
+				s, f, remote := fixturePinned()
+				p := installationParams()
+				p.ResourceName = name
+				remote.err = errors.New("timeout")
+				_, _ = s.CreateInstallation(context.Background(), testCaller, "team", p)
+				a := f.attempts[p.WorkspaceID+digestInstall(p.IdempotencyKey)]
+				if a == nil || remote.calls != 1 {
+					t.Fatal("initial attempt missing")
+				}
+				var plan pinnedInstallationPlan
+				if err := json.Unmarshal(a.FrozenPlan, &plan); err != nil {
+					t.Fatal(err)
+				}
+				switch corruption {
+				case "empty_experts":
+					plan.Definition.Experts = nil
+					plan.Definition.ExpertTeam = nil
+				case "missing_team":
+					plan.Definition.ExpertTeam = nil
+				case "duplicate_expert":
+					plan.Definition.Experts[1].Name = plan.Definition.Experts[0].Name
+				case "missing_member":
+					plan.Definition.ExpertTeam.Members = nil
+				case "unknown_member":
+					plan.Definition.ExpertTeam.Members[0].ExpertName = "missing"
+				case "duplicate_member":
+					plan.Definition.ExpertTeam.Members[1].ExpertName = plan.Definition.ExpertTeam.Members[0].ExpertName
+				case "no_leader":
+					plan.Definition.ExpertTeam.Members[0].IsLeader = false
+				case "unknown_skill":
+					plan.Definition.Experts[0].SkillNames = []string{"missing"}
+				case "wrong_schema":
+					plan.Definition.SchemaVersion = "invalid"
+				case "wrong_root_kind":
+					f.plugins["team"].Type = model.PluginTypeExpert
+				}
+				var err error
+				a.FrozenPlan, err = json.Marshal(plan)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, _ := json.Marshal(a)
+				_, err = s.CreateInstallation(context.Background(), testCaller, "team", p)
+				after, _ := json.Marshal(a)
+				if !errors.Is(err, ErrIntegrity) || remote.calls != 1 || string(before) != string(after) {
+					t.Fatalf("error=%v calls=%d state unchanged=%t", err, remote.calls, string(before) == string(after))
+				}
+			})
+		}
+	}
+}
+
+func TestPinnedPlanRequestRejectsCloneFailure(t *testing.T) {
+	s, _, _ := fixturePinned()
+	plan, err := s.resolvePinnedInstallation(context.Background(), testCaller, "team", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Definition.Experts[0].MCPConfig = json.RawMessage(`{"broken":`)
+	if _, err = pinnedPlanRequest(plan, installationParams()); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("clone error=%v", err)
+	}
+	if _, err = pinnedPlanRequest(nil, installationParams()); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("nil plan error=%v", err)
+	}
+}

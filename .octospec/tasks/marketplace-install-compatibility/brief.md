@@ -10,6 +10,10 @@ Delisted legacy data remains historical until a specific republish/install need.
 - Deletion checks live incoming relations, current published references and Team
   member-version indirect references under the existing mutation transaction.
   With the independent-reference flag off, read immutable release snapshots.
+- All independent targets, including Space resources, obey source-audience checks
+  in legacy/Admin writes and publication. Embedded intra-graph wiring retains its
+  existing bounded exception. Frozen-plan recovery rejects malformed definitions
+  before binding/dispatch without mutating the durable attempt.
 - The existing owner/Space/audience rule applies to both reference types,
   including legacy writes/publication and installation expansion before cache reuse.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.

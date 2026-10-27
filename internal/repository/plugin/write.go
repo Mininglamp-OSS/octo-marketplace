@@ -1143,8 +1143,9 @@ func mustAffect(res sql.Result) error {
 }
 
 // lockRelationTargets revalidates every edge at the persistence boundary in the
-// mutation transaction. The visibility predicate prevents cross-scope edges,
-// and FOR UPDATE prevents a target from being deleted between validation and
+// mutation transaction. The lookup checks caller visibility unless Admin; every
+// independent target then checks the source audience, including Admin lookups.
+// FOR UPDATE prevents a target from being deleted between validation and
 // insertion.
 //
 // inGraph is the set of plugin IDs created/rebuilt inside THIS transaction. An
@@ -1189,7 +1190,7 @@ func lockRelationTargets(ctx context.Context, tx *sql.Tx, scope Scope, source mo
 			}
 		}
 		target.SpaceID = nullString(space)
-		if !target.IsEmbedded && target.Visibility == model.PluginVisibilityPrivate && !referenceAudience(source, target) {
+		if !target.IsEmbedded && !referenceAudience(source, target) {
 			return ErrNotFound
 		}
 

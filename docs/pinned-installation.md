@@ -21,6 +21,18 @@ eligibility fails; rejection is not proof that an earlier call did not commit.
 Private reads require owner and Space even when the caller is an administrator.
 A private target also requires a private source with the same owner and Space;
 source audiences are rechecked through each member's frozen references.
+Independent-reference writes and publication enforce the source audience for
+Space targets too, including Admin and legacy `public` sources: a system/public
+source cannot reference a Space target, and Space targets require the same Space.
+Only embedded children created/rebuilt within the current graph transaction keep
+the existing intra-graph exception.
+
+Frozen-plan recovery validates the schema, root kind, expert/team cardinality,
+unique expert/skill names, member/leader wiring and skill references before
+constructing bindings. JSON clone failures or malformed persisted definitions
+return the existing integrity error without dispatching to Fleet or changing the
+attempt. Exact request HMAC checks and current governance/Workspace authorization
+remain mandatory; corruption never causes plan regeneration or a new key.
 
 Delisted legacy data stays historical. Conversion is an explicit operator action
 for a specific republish/install need and preserves delisted state; restore the
