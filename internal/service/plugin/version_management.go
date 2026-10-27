@@ -444,8 +444,8 @@ func (s *Service) publishedPlugin(ctx context.Context, sc pluginrepo.Scope, id s
 }
 
 // Read the published graph rather than a graph built from later draft edges.
-// Version pins are intentionally introduced by PR3; this traverses release edges
-// with current authorization and a bounded request-local resource cache.
+// Each pinned release is a distinct graph node. Current authorization and graph
+// caps still apply; legacy unpinned edges resolve the current published release.
 func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) (*DetailGraph, error) {
 	root, err := s.Detail(ctx, caller, id, true)
 	if err != nil {
@@ -457,8 +457,10 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 		return &DetailGraph{Plugin: root.Plugin, Relations: root.Relations, Related: []*model.Plugin{}, DependencyIssues: root.DependencyIssues}, nil
 	}
 	out := &DetailGraph{Plugin: root.Plugin, Relations: []model.PluginRelation{}, Related: []*model.Plugin{}}
-	seen := map[string]bool{id: true}
-	omitted := map[string]bool{}
+	rootKey := publishedGraphVersionKey(id, root.Plugin.CurrentVersionID)
+	seen := map[pluginrepo.InstallVersionKey]bool{rootKey: true}
+	projected := map[pluginrepo.InstallVersionKey]bool{rootKey: true}
+	omitted := map[pluginrepo.InstallVersionKey]bool{}
 	queue := []*Detail{root}
 	for len(queue) > 0 {
 		d := queue[0]
@@ -468,23 +470,33 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 		}
 		out.Relations = append(out.Relations, d.Relations...)
 		for _, r := range d.Relations {
-			if seen[r.TargetPluginID] {
+			key := publishedGraphVersionKey(r.TargetPluginID, r.TargetVersionID)
+			if seen[key] {
 				continue
 			}
-			seen[r.TargetPluginID] = true
-			if len(seen) > pluginrepo.MaxGraphNodes() {
+			seen[key] = true
+			// The repository cap counts related nodes; the root is tracked too.
+			if len(seen) > pluginrepo.MaxGraphNodes()+1 {
 				return nil, ErrGraphTooLarge
 			}
 			next, err := s.publishedGraphDetail(ctx, caller, r.TargetPluginID, r.TargetVersionID)
 			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrDependencyHidden) {
 				// Match GetGraphClosure: omit a blocked node and its edges rather
 				// than failing the whole graph request.
-				omitted[r.TargetPluginID] = true
+				omitted[key] = true
 				continue
 			}
 			if err != nil {
 				return nil, err
 			}
+			// A legacy unpinned edge and an explicit pin may select the same
+			// release. Project/expand that snapshot once, while retaining both
+			// edges. Connector edges use the same current-resource identity.
+			selected := publishedGraphVersionKey(next.Plugin.ID, next.Plugin.CurrentVersionID)
+			if projected[selected] {
+				continue
+			}
+			projected[selected] = true
 			light := *next.Plugin
 			light.Package = nil
 			light.AttachmentKeys = nil
@@ -495,13 +507,21 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 	if len(omitted) > 0 {
 		kept := out.Relations[:0]
 		for _, rel := range out.Relations {
-			if !omitted[rel.TargetPluginID] {
+			if !omitted[publishedGraphVersionKey(rel.TargetPluginID, rel.TargetVersionID)] {
 				kept = append(kept, rel)
 			}
 		}
 		out.Relations = kept
 	}
 	return out, nil
+}
+
+func publishedGraphVersionKey(id string, version *string) pluginrepo.InstallVersionKey {
+	key := pluginrepo.InstallVersionKey{PluginID: id}
+	if version != nil {
+		key.VersionID = *version
+	}
+	return key
 }
 
 // publishedGraphDetail resolves a related node without the public catalog gate.

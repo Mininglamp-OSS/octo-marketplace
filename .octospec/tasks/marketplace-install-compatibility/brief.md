@@ -19,6 +19,10 @@ Delisted legacy data remains historical until a specific republish/install need.
   original input/request fingerprints. Verify before using metadata for reads;
   the request HMAC and current permissions remain required. Unsigned legacy or
   mismatched attempts retain evidence and cannot be signed/rebuilt on retry.
+- Published graph traversal/omission identity includes the selected version.
+  Distinct pins for one Skill remain independently addressable via existing
+  plugin_id/current_version_id fields; shared releases dedupe without dropping
+  edges. Preserve authorization, diagnostics and traversal bounds.
 - The existing owner/Space/audience rule applies to both reference types,
   including legacy writes/publication and installation expansion before cache reuse.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.

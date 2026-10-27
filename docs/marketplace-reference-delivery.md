@@ -44,6 +44,26 @@ Deleting a source never deletes an independent target. Impact queries remain
 diagnostic, not deletion authorization. See [the current lifecycle and rollout
 contract](marketplace-v2-release.md).
 
+## Published graph identity
+
+`GET /plugins/detail_graph` traverses each released target by
+`(plugin_id, target_version_id)`, rather than collapsing every release of one
+plugin into a single node. `related_plugins` may repeat `plugin_id` for distinct
+released versions. Match a pinned relation to the node with that `plugin_id` and
+`current_version_id == target_version_id`; the existing `current_version_id`
+field describes the selected immutable snapshot, not a later editable version.
+Names, manifests and hashes all come from that same selected release. No new
+wire field is added, and full packages/storage attachment keys remain omitted.
+
+The same release shared by multiple edges is projected/expanded once; all its
+incoming edges remain. Legacy unpinned edges select the current published
+release, while Connector edges retain their existing current-resource behavior.
+If a selected release is unavailable after root admission, omit only that
+version's incoming edges, preserving other readable releases of the same plugin.
+Current caller/Space access, root diagnostics and graph-size limits still apply;
+this is not an exemption for hidden/deleted dependencies. Installation resolution
+and its authenticated frozen plans are unchanged by the graph projection fix.
+
 ## Diagnostic reads
 
 - `GET /plugins/{plugin_id}/dependents` and Admin equivalent: authorized historical
