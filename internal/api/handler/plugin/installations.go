@@ -83,7 +83,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	// backward-compatible alias. Exactly one occurrence across both is required.
 	var workspaceHeaders []string
 	for key, values := range c.Request.Header {
-		if strings.EqualFold(key, "X-Workspace-Id") {
+		if strings.EqualFold(key, "X-Workspace-Id") || strings.EqualFold(key, "X-Workspace-ID") {
 			workspaceHeaders = append(workspaceHeaders, values...)
 		}
 	}
