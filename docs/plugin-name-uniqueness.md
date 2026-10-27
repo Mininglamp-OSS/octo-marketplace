@@ -17,9 +17,11 @@ Marketplace display names are unique per Space and per Plugin type:
 - Soft-deleted rows (`deleted_at IS NOT NULL`) do not reserve a name.
 - Delisted rows are not deleted and continue to reserve their name.
 - With version management, the market displays the published snapshot's name,
-  not the editable draft name. The active key therefore uses the published name
-  when one exists and falls back to the draft name otherwise. Renaming a draft
-  does not release the published display name.
+  not the editable draft name. The database `active_name_key` therefore uses the
+  published name when one exists and falls back to the draft name otherwise.
+  Renaming a draft does not release the published display name. Preflight and the
+  backfill report group by the complete draft-plus-published reservation set
+  described below, not by this single active key.
 - Names are normalized with Unicode NFKC, leading/trailing whitespace trimming,
   and Unicode case folding. Internal whitespace is preserved. The implementation
   lives in `internal/model/plugin_name.go`; MySQL LOWER/TRIM is not equivalent.
