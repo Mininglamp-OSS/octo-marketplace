@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
 
@@ -19,7 +20,11 @@ const installReceiptWindow = 24 * time.Hour
 type InstallationAttemptStore interface {
 	GetInstallAttempt(context.Context, pluginrepo.Scope, string, string) (*pluginrepo.InstallAttempt, error)
 	ClaimInstallAttempt(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt) (*pluginrepo.InstallAttempt, error)
-	CompleteInstallAttempt(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt) error
+	AcquireInstallDispatch(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt, string, time.Time, time.Duration, time.Duration) (bool, error)
+	SetInstallDispatchUnknown(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt, string) error
+	FinishInstallDispatch(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt, string) (bool, error)
+	FailInstallDispatch(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt, string) (bool, error)
+	ExpireInstallAttempt(context.Context, pluginrepo.Scope, pluginrepo.InstallAttempt) error
 }
 
 func digestInstall(v any) string {
@@ -33,78 +38,204 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		return nil, ErrInvalidRequest
 	}
 	key := digestInstall(p.IdempotencyKey)
-	// Token rotation does not change the operation. Environment values affect the
-	// fingerprint but only its digest is stored; neither values nor payload persist.
-	input := digestInstall(struct {
-		PluginID, RuntimeID, ResourceName string
-		CustomEnv                         map[string]string
-	}{id, p.RuntimeID, p.ResourceName, p.CustomEnv})
 	attempt, err := store.GetInstallAttempt(ctx, scope(caller), p.WorkspaceID, key)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
-	version := ""
+	keyID := s.installHMACKeyID
 	if attempt != nil {
-		if err = s.checkInstallAttempt(attempt, id, input); err != nil {
-			return nil, err
-		}
-		version = attempt.RootVersionID
+		keyID = attempt.HMACKeyID
 	}
-	plan, err := s.resolvePinnedInstallation(ctx, caller, id, version)
+	intent := digestInstall(struct{ Root, Space, Workspace, Runtime, Name string }{id, caller.SpaceID, p.WorkspaceID, p.RuntimeID, p.ResourceName})
+	if attempt != nil {
+		if attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion {
+			return nil, ErrConflict
+		}
+	}
+	input, err := s.installationHMAC(keyID, "input", struct {
+		Intent string
+		Env    map[string]string
+	}{intent, p.CustomEnv})
 	if err != nil {
 		return nil, err
 	}
-	in := pinnedPlanRequest(plan, p)
-	body, err := json.Marshal(in)
-	if err != nil {
-		return nil, installationInvalid("definition", "invalid_json")
-	}
-	if len(body) > maxCapabilityBytes {
-		return nil, ErrTooLarge
-	}
-	fingerprint := digestInstall(in)
 	if attempt == nil {
-		attempt, err = store.ClaimInstallAttempt(ctx, scope(caller), pluginrepo.InstallAttempt{WorkspaceID: p.WorkspaceID, KeyDigest: key, PluginID: id, RootVersionID: plan.RootVersionID, AdapterVersion: SkillInstallAdapterVersion, InputFingerprint: input, RequestFingerprint: fingerprint})
+		plan, err := s.resolvePinnedInstallation(ctx, caller, id, "")
+		if err != nil {
+			return nil, err
+		}
+		frozen, err := json.Marshal(plan)
+		if err != nil {
+			return nil, ErrIntegrity
+		}
+		request := pinnedPlanRequest(plan, p)
+		// Escaping and repeated environment bindings count toward the wire limit.
+		// Reject before persisting an attempt as well as before contacting Fleet.
+		body, err := json.Marshal(request)
+		if err != nil {
+			return nil, ErrIntegrity
+		}
+		if len(body) > maxCapabilityBytes {
+			return nil, ErrTooLarge
+		}
+		fingerprint, err := s.installationHMAC(keyID, "request", request)
+		if err != nil {
+			return nil, err
+		}
+		attempt, err = store.ClaimInstallAttempt(ctx, scope(caller), pluginrepo.InstallAttempt{WorkspaceID: p.WorkspaceID, KeyDigest: key, PluginID: id, RootVersionID: plan.RootVersionID, AdapterVersion: SkillInstallAdapterVersion, InputFingerprint: input, RequestFingerprint: fingerprint, FrozenPlan: frozen, HMACKeyID: keyID, IntentDigest: intent})
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
 	}
-	if attempt == nil {
+	if attempt == nil || attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion {
 		return nil, ErrConflict
 	}
-	if err = s.checkInstallAttempt(attempt, id, input); err != nil {
+	// A concurrent contender may have won under the previous active HMAC key.
+	input, err = s.installationHMAC(attempt.HMACKeyID, "input", struct {
+		Intent string
+		Env    map[string]string
+	}{intent, p.CustomEnv})
+	if err != nil {
 		return nil, err
 	}
-	if attempt.RootVersionID != plan.RootVersionID || attempt.RequestFingerprint != fingerprint {
+	if !equalInstallationHMAC(attempt.InputFingerprint, input) {
 		return nil, ErrConflict
 	}
-	// Fleet remains the workspace authorization and receipt authority even for
-	// completed local attempts: always re-submit the identical same-key request.
-	completed := attempt.Completed
-	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey, *in)
-	if err != nil {
-		return nil, &InstallationAttemptError{Err: err}
+	if len(attempt.FrozenPlan) == 0 {
+		return nil, ErrIntegrity
 	}
-	if result == nil {
-		return nil, &InstallationAttemptError{Err: errors.New("missing installation result")}
+	var plan pinnedInstallationPlan
+	if json.Unmarshal(attempt.FrozenPlan, &plan) != nil || plan.RootVersionID != attempt.RootVersionID || len(plan.NodeIDs) == 0 {
+		return nil, ErrIntegrity
+	}
+	// Governance is current; content and selected versions remain frozen.
+	read, ok := s.repo.(InstallationReadStore)
+	if !ok {
+		return nil, ErrVersionBaselineUnavailable
+	}
+	current, err := read.GetInstallPlugins(ctx, scope(caller), plan.NodeIDs)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	root := current[id]
+	if root == nil {
+		return nil, ErrNotFound
+	}
+	for _, node := range plan.NodeIDs {
+		p := current[node]
+		if p == nil || p.IsEmbedded || p.Status != 1 || p.DeletedAt != nil || p.ListingState != model.PluginListingStatePublished || !installAudience(root, p) {
+			return nil, ErrDependencyHidden
+		}
+	}
+	for _, edge := range plan.Edges {
+		source, target := current[edge.Source], current[edge.Target]
+		if source == nil || target == nil || !installAudience(source, target) {
+			return nil, ErrDependencyHidden
+		}
+	}
+	request := pinnedPlanRequest(&plan, p)
+	body, err := json.Marshal(request)
+	if err != nil {
+		return nil, ErrIntegrity
+	}
+	if len(body) > maxCapabilityBytes {
+		return nil, ErrTooLarge
+	}
+	fingerprint, err := s.installationHMAC(attempt.HMACKeyID, "request", request)
+	if err != nil {
+		return nil, err
+	}
+	if !equalInstallationHMAC(attempt.RequestFingerprint, fingerprint) {
+		return nil, ErrIntegrity
+	}
+	now := s.now()
+	if attempt.RetryUntil == nil && attempt.Completed {
+		return nil, ErrConflict // historical receipt has no safe resend deadline
+	}
+	if attempt.RetryUntil != nil && !now.Before(*attempt.RetryUntil) {
+		_ = store.ExpireInstallAttempt(context.WithoutCancel(ctx), scope(caller), *attempt)
+		return nil, &InstallationAttemptError{Err: ErrAttemptExpired, AttemptID: digestInstall([]string{caller.SpaceID, caller.UID, p.WorkspaceID, key}), RetryUntil: attempt.RetryUntil}
+	}
+	completed := attempt.Completed
+	token := s.id()
+	if !completed {
+		acquired, err := store.AcquireInstallDispatch(ctx, scope(caller), *attempt, token, now, 3*time.Minute, installReceiptWindow-time.Minute)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		if !acquired {
+			return nil, ErrConflict
+		}
+		// AcquireInstallDispatch persists the retry deadline with COALESCE so a
+		// retry never extends it, but it does not mutate this in-memory attempt.
+		// Reload that durable value before any later completion failure can be
+		// reported as non-retryable; never derive a fresh deadline here.
+		refreshed, readErr := store.GetInstallAttempt(ctx, scope(caller), p.WorkspaceID, key)
+		if readErr != nil {
+			return nil, mapStoreError(readErr)
+		}
+		if refreshed == nil || refreshed.RetryUntil == nil {
+			return nil, ErrIntegrity
+		}
+		attempt.RetryUntil = refreshed.RetryUntil
+		attempt.LeaseToken = refreshed.LeaseToken
+		attempt.LeaseUntil = refreshed.LeaseUntil
+		attempt.State = refreshed.State
+		attempt.HadUnknown = refreshed.HadUnknown
+	}
+	// Until local Workspace authorization is wired, Fleet remains the authority
+	// even for a known result: submit exactly the frozen same-key request.
+	attemptID := digestInstall([]string{caller.SpaceID, caller.UID, p.WorkspaceID, key})
+	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, attemptID, *request)
+	if err != nil || result == nil {
+		if err == nil {
+			err = errors.New("missing installation result")
+		}
+		unknown := true
+		var rejected *fleet.CapabilityAPIError
+		if completed && errors.As(err, &rejected) && (rejected.Status == 400 || rejected.Status == 401 || rejected.Status == 403 || rejected.Status == 404 || rejected.Status == 413 || rejected.Status == 415 || rejected.Status == 422) {
+			unknown = false
+		}
+		if !completed {
+			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			var upstream *fleet.CapabilityAPIError
+			if errors.As(err, &upstream) && (upstream.Status == 400 || upstream.Status == 401 || upstream.Status == 403 || upstream.Status == 404 || upstream.Status == 413 || upstream.Status == 415 || upstream.Status == 422) {
+				rejected, writeErr := store.FailInstallDispatch(recovery, scope(caller), *attempt, token)
+				unknown = writeErr != nil || !rejected
+			}
+			if unknown {
+				_ = store.SetInstallDispatchUnknown(recovery, scope(caller), *attempt, token)
+			}
+			cancel()
+		}
+		cutoff := attempt.RetryUntil
+		if cutoff == nil {
+			v := now.Add(installReceiptWindow - time.Minute)
+			cutoff = &v
+		}
+		return nil, &InstallationAttemptError{Err: err, Unknown: unknown, AttemptID: digestInstall([]string{caller.SpaceID, caller.UID, p.WorkspaceID, key}), RetryUntil: cutoff}
+	}
+	if completed {
+		if attempt.AgentID != result.ExpertID || attempt.TeamID != result.ExpertTeamID {
+			return nil, ErrIntegrity
+		}
+		return &InstallationOutcome{AgentID: attempt.AgentID, SquadID: attempt.TeamID, Replayed: true}, nil
 	}
 	attempt.AgentID, attempt.TeamID = result.ExpertID, result.ExpertTeamID
-	// A failed receipt write follows a possible Fleet commit. Same-key retry must
-	// go back to Fleet, never fall back to the legacy non-idempotent entrypoint.
-	if err = store.CompleteInstallAttempt(ctx, scope(caller), *attempt); err != nil {
-		return nil, &InstallationAttemptError{Err: err}
+	recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	transitioned, err := store.FinishInstallDispatch(recovery, scope(caller), *attempt, token)
+	if err != nil || !transitioned {
+		return nil, &InstallationAttemptError{Err: errors.New("installation result persistence uncertain"), Unknown: true, AttemptID: digestInstall([]string{caller.SpaceID, caller.UID, p.WorkspaceID, key}), RetryUntil: attempt.RetryUntil}
 	}
-	s.trackInstall(ctx, id)
-	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: completed || (result.ReplayKnown && result.Replayed)}, nil
-}
-func (s *Service) checkInstallAttempt(a *pluginrepo.InstallAttempt, id, input string) error {
-	if a.PluginID != id || a.InputFingerprint != input || a.AdapterVersion != SkillInstallAdapterVersion || a.CreatedAt.IsZero() || s.now().Sub(a.CreatedAt) >= installReceiptWindow || a.CreatedAt.After(s.now().Add(time.Minute)) {
-		return ErrConflict
-	}
-	return nil
+	s.trackInstall(recovery, id)
+	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
 }
 func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) *fleet.CapabilityInstallRequest {
-	def := plan.Definition
+	// Copy nested slices/pointers before adding per-request runtime secrets.
+	raw, _ := json.Marshal(plan.Definition)
+	var def fleet.CapabilityDefinition
+	_ = json.Unmarshal(raw, &def)
 	if p.ResourceName != "" {
 		if def.ExpertTeam != nil {
 			def.ExpertTeam.Name = p.ResourceName

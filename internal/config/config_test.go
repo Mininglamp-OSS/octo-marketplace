@@ -501,3 +501,27 @@ func TestPluginReferencesRolloutDefaultsOffAndRequiresVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInstallationHMACConfigFailsClosed(t *testing.T) {
+	c := Load()
+	c.PluginVersionManagementEnabled = true
+	c.PluginReferencesEnabled = true
+	c.PluginPinnedInstallationEnabled = true
+	c.MySQLDSN = "test"
+	c.AuthEnabled = false
+	c.InstallationHMACKeyID = "active"
+	for _, keys := range []map[string]string{nil, {"active": "short"}, {"other": strings.Repeat("x", 32)}} {
+		c.InstallationHMACKeys = keys
+		if err := c.ValidateAPI(); err == nil || !strings.Contains(err.Error(), "HMAC") {
+			t.Fatalf("invalid key ring accepted: %v", err)
+		}
+	}
+	c.InstallationHMACKeys = map[string]string{"active": strings.Repeat("x", 32), "previous": strings.Repeat("y", 32)}
+	if err := c.ValidateAPI(); err != nil {
+		t.Fatalf("valid key ring rejected: %v", err)
+	}
+	t.Setenv("INSTALLATION_HMAC_KEYS", `{"active":"bad json"`)
+	if Load().InstallationHMACKeys != nil {
+		t.Fatal("malformed key ring accepted")
+	}
+}

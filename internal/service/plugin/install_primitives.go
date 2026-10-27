@@ -1,8 +1,6 @@
 package plugin
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -12,9 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SkillInstallAdapterVersion is part of the identity algorithm. Future changes
-// must explicitly version the adapter rather than mutate an installed identity.
-const SkillInstallAdapterVersion = "mk1"
+// SkillInstallAdapterVersion identifies serialization, never a runtime alias.
+const SkillInstallAdapterVersion = "original-v1"
 
 // PinnedSkillFiles contains a verified, authorized immutable snapshot, not the
 // current display name or an unresolved storage reference. Files are root-relative
@@ -29,8 +26,7 @@ type PinnedSkillFiles struct {
 }
 
 // PreparedSkill retains source identity for callers' bindings/result mapping.
-// Directory is the runtime directory slug; Fleet receives Name through its
-// existing protocol and the same name in the temporary SKILL.md frontmatter.
+// Directory and Fleet Name preserve the market name; file bytes are unchanged.
 type PreparedSkill struct {
 	PluginID       string
 	VersionID      string
@@ -46,6 +42,13 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 	if len(inputs) > 600 {
 		return nil, ErrTooLarge
 	}
+	inputs = append([]PinnedSkillFiles(nil), inputs...)
+	sort.Slice(inputs, func(i, j int) bool {
+		if inputs[i].PluginID != inputs[j].PluginID {
+			return inputs[i].PluginID < inputs[j].PluginID
+		}
+		return inputs[i].VersionID < inputs[j].VersionID
+	})
 	b := capabilityBuilder{remaining: maxCapabilityBytes}
 	out := make([]PreparedSkill, 0, len(inputs))
 	seen := map[string]string{}
@@ -64,8 +67,16 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 			}
 			continue
 		}
-		if previous, exists := seen[name]; exists && previous != identity {
-			return nil, installationInvalid("definition.skills", "install_name_collision")
+		contentBytes, _ := json.Marshal(struct {
+			Description string
+			Files       map[string]string
+		}{input.Description, input.Files})
+		if previous, exists := seen[name]; exists {
+			if previous != string(contentBytes) {
+				return nil, installationInvalid("definition.skills", "same_install_identity_different_content")
+			}
+			identities[identity] = string(original)
+			continue
 		}
 		if len(input.Files) == 0 || len(input.Files) > 51 {
 			return nil, installationInvalid("definition.skills.files", "invalid_count")
@@ -88,8 +99,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 				return nil, err
 			}
 			value := input.Files[p]
-			// Validate the original before transformation, so oversized/binary input
-			// cannot become acceptable through a shorter rewritten header.
+			// Validate and forward the original bytes without rewriting metadata.
 			if !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
 				return nil, installationInvalid("definition.skills.files", "text_only")
 			}
@@ -97,7 +107,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 				return nil, ErrTooLarge
 			}
 			if p == "SKILL.md" {
-				value, err = rewriteInstallFrontmatter(value, name)
+				err = validateInstallFrontmatter(value)
 				if err != nil {
 					return nil, err
 				}
@@ -113,7 +123,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 				return nil, err
 			}
 		}
-		seen[name], identities[identity] = identity, string(original)
+		seen[name], identities[identity] = string(contentBytes), string(original)
 		out = append(out, PreparedSkill{PluginID: input.PluginID, VersionID: input.VersionID, AdapterVersion: SkillInstallAdapterVersion, Directory: name, Skill: skill})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Skill.Name < out[j].Skill.Name })
@@ -129,24 +139,7 @@ func pinnedSkillName(input PinnedSkillFiles) (string, error) {
 	if !installationName(input.Name, 128) {
 		return "", installationInvalid("definition.skills", "invalid_name")
 	}
-	var prefix strings.Builder
-	for _, r := range strings.ToLower(input.Name) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			prefix.WriteRune(r)
-		} else if prefix.Len() > 0 && !strings.HasSuffix(prefix.String(), "-") {
-			prefix.WriteByte('-')
-		}
-		if prefix.Len() >= 24 {
-			break
-		}
-	}
-	slug := strings.Trim(prefix.String(), "-")
-	if slug == "" {
-		slug = "skill"
-	}
-	encoded, _ := json.Marshal([3]string{SkillInstallAdapterVersion, input.PluginID, input.VersionID})
-	digest := sha256.Sum256(encoded)
-	return slug + "-" + SkillInstallAdapterVersion + "-" + hex.EncodeToString(digest[:16]), nil
+	return input.Name, nil
 }
 
 func validateInstallFilePath(p string) error {
@@ -165,69 +158,50 @@ func validateInstallFilePath(p string) error {
 	return nil
 }
 
-func rewriteInstallFrontmatter(content, name string) (string, error) {
-	// Keep the Markdown body byte-for-byte. Only the YAML header is serialized.
+// Validate frontmatter without serializing it: install preserves every byte.
+func validateInstallFrontmatter(content string) error {
+	invalid := func(reason string) error { return installationInvalid("definition.skills.content", reason) }
 	if strings.HasPrefix(content, "\ufeff") {
-		return "", installationInvalid("definition.skills.content", "unsupported_frontmatter")
+		return invalid("unsupported_frontmatter")
 	}
 	lines := strings.SplitAfter(content, "\n")
 	if strings.TrimSuffix(strings.TrimSuffix(lines[0], "\n"), "\r") != "---" {
-		return "---\nname: " + name + "\n---\n" + content, nil
+		return nil
 	}
 	offset := len(lines[0])
 	end := -1
-	bodyStart := 0
 	for _, line := range lines[1:] {
 		if strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r") == "---" {
 			end = offset
-			bodyStart = offset + len(line)
 			break
 		}
 		offset += len(line)
 	}
 	if end < 0 {
-		return "", installationInvalid("definition.skills.content", "invalid_frontmatter")
+		return invalid("invalid_frontmatter")
 	}
-	header := content[len(lines[0]):end]
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(header), &doc); err != nil {
-		return "", installationInvalid("definition.skills.content", "invalid_frontmatter")
+	if yaml.Unmarshal([]byte(content[len(lines[0]):end]), &doc) != nil {
+		return invalid("invalid_frontmatter")
 	}
-	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	if len(doc.Content) > 0 {
-		mapping = doc.Content[0]
+	if len(doc.Content) == 0 {
+		return nil
 	}
-	if mapping.Kind != yaml.MappingNode {
-		return "", installationInvalid("definition.skills.content", "invalid_frontmatter")
-	}
-	// Reject aliases/anchors rather than changing other metadata through a name
-	// anchor. Duplicate or non-string keys also cannot be safely interpreted.
-	if !plainInstallYAML(mapping) {
-		return "", installationInvalid("definition.skills.content", "unsupported_frontmatter")
+	mapping := doc.Content[0]
+	if mapping.Kind != yaml.MappingNode || !plainInstallYAML(mapping) {
+		return invalid("unsupported_frontmatter")
 	}
 	var check map[string]any
-	if err := mapping.Decode(&check); err != nil {
-		return "", installationInvalid("definition.skills.content", "invalid_frontmatter")
+	if mapping.Decode(&check) != nil {
+		return invalid("invalid_frontmatter")
 	}
-	found := false
 	for i := 0; i < len(mapping.Content); i += 2 {
 		key := mapping.Content[i]
 		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
-			return "", installationInvalid("definition.skills.content", "unsupported_frontmatter")
-		}
-		if key.Value == "name" {
-			mapping.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
-			found = true
+			return invalid("unsupported_frontmatter")
 		}
 	}
-	if !found {
-		mapping.Content = append(mapping.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "name"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name})
-	}
-	encoded, err := yaml.Marshal(mapping)
-	if err != nil {
-		return "", installationInvalid("definition.skills.content", "invalid_frontmatter")
-	}
-	return "---\n" + string(encoded) + "---\n" + content[bodyStart:], nil
+	return nil
 }
 
 func plainInstallYAML(node *yaml.Node) bool {

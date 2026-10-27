@@ -846,7 +846,7 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	if err != nil {
 		return err
 	}
-	if err = r.rejectPublishedMutation(ctx, tx, before); err != nil {
+	if err = r.rejectPublishedIncomingRelations(ctx, tx, before.ID); err != nil {
 		return err
 	}
 	if err = rejectLiveIncomingRelations(ctx, tx, pluginID); err != nil {
@@ -947,7 +947,7 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	if err != nil {
 		return err
 	}
-	if err = r.rejectPublishedMutation(ctx, tx, before); err != nil {
+	if err = r.rejectPublishedIncomingRelations(ctx, tx, before.ID); err != nil {
 		return err
 	}
 	if err = rejectLiveIncomingRelations(ctx, tx, topID); err != nil {

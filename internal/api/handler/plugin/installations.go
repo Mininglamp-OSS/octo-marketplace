@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
@@ -74,7 +75,15 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	}
 	// This route uses only the explicit Workspace ID. Reject the legacy slug
 	// selector rather than silently ignoring a conflicting second target.
-	if c.GetHeader("X-Workspace-Slug") != "" || len(c.Request.Header.Values("X-Workspace-ID")) != 1 || len(c.Request.Header.Values("Idempotency-Key")) != 1 {
+	// HTTP header names are case-insensitive. Count every occurrence, including
+	// unusual casing in an intermediary or a manually constructed request.
+	var workspaceHeaders []string
+	for key, values := range c.Request.Header {
+		if strings.EqualFold(key, "X-Workspace-ID") {
+			workspaceHeaders = append(workspaceHeaders, values...)
+		}
+	}
+	if c.GetHeader("X-Workspace-Slug") != "" || len(workspaceHeaders) != 1 || len(c.Request.Header.Values("Idempotency-Key")) != 1 {
 		installationValidation(c, "headers")
 		return
 	}
@@ -82,6 +91,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	if !decodeInstallation(c, &req) {
 		return
 	}
+	workspaceID := workspaceHeaders[0]
 	var customEnv map[string]string
 	if req.CustomEnv != nil {
 		customEnv = make(map[string]string, len(req.CustomEnv))
@@ -89,7 +99,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 			customEnv[key] = string(value)
 		}
 	}
-	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{WorkspaceID: c.GetHeader("X-Workspace-ID"), RuntimeID: req.RuntimeID, ResourceName: req.ResourceName, CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c)})
+	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{WorkspaceID: workspaceID, RuntimeID: req.RuntimeID, ResourceName: req.ResourceName, CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c)})
 	if err != nil {
 		writeInstallationError(c, err)
 		return
@@ -146,10 +156,24 @@ func writeInstallationError(c *gin.Context, err error) {
 	var upstream *fleet.CapabilityAPIError
 	var attempt *pluginsvc.InstallationAttemptError
 	switch {
+	case errors.As(err, &attempt) && attempt.Unknown:
+		details := map[string]any{"reason": "installation_result_unknown", "attempt_id": attempt.AttemptID, "can_retry_same_key": attempt.RetryUntil != nil && time.Now().Before(*attempt.RetryUntil)}
+		if attempt != nil && attempt.RetryUntil != nil {
+			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
+		}
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装结果未知，请使用原幂等键和原参数核对或重试。", details, installationRetryHint)
+	case errors.As(err, &field) && field.Reason == "same_install_identity_different_content":
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装名称或目标已存在但内容不同，不能覆盖。", map[string]any{"field": field.Field, "reason": field.Reason}, "请修改市场内容或使用不同的资源名称后重试。")
 	case errors.As(err, &field):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "安装参数不正确。", map[string]any{"field": field.Field, "reason": field.Reason}, "请检查工作区、运行环境、名称和环境变量后重试。")
 	case errors.Is(err, expertsvc.ErrFleetNotConfigured):
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装服务尚未配置，请联系管理员。", map[string]any{"upstream": "fleet", "reason": "not_configured"}, installationRetryHint)
+	case errors.Is(err, pluginsvc.ErrAttemptExpired):
+		details := map[string]any{"reason": "installation_attempt_expired", "can_retry_same_key": false}
+		if attempt != nil && attempt.RetryUntil != nil {
+			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
+		}
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "原安装凭证已过期，请核对工作区已有资源后使用新幂等键。", details, "请先确认是否已安装；不要用原幂等键重复提交。")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装请求与首次提交的参数或依赖状态不一致，或原安装凭证已过期。", nil, "请先核对工作区已有资源和依赖状态，不要直接更换幂等键重复安装。")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
