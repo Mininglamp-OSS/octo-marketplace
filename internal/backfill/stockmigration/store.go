@@ -206,11 +206,7 @@ func checkPlannedNames(unit *Unit, resources []Resource) error {
 		if r.Plugin.Type != model.PluginTypeExpert && r.Plugin.Type != model.PluginTypeSkill {
 			continue
 		}
-		displayName := r.Plugin.Name
-		if r.PublishedName != "" {
-			displayName = r.PublishedName
-		}
-		name, err := model.NormalizePluginName(displayName)
+		keys, err := model.PluginNameReservationKeys(r.Plugin.Name, r.PublishedName)
 		if err != nil {
 			continue
 		}
@@ -218,13 +214,19 @@ func checkPlannedNames(unit *Unit, resources []Resource) error {
 		if r.Plugin.SpaceID != nil {
 			scope = *r.Plugin.SpaceID
 		}
-		occupied[key{scope, string(r.Plugin.Type), name}] = r.Plugin.ID
+		for _, name := range keys {
+			k := key{scope, string(r.Plugin.Type), name}
+			if existing := occupied[k]; existing != "" && existing != r.Plugin.ID {
+				return fmt.Errorf("%w: %s %q is already reserved by %s", ErrNameConflict, r.Plugin.Type, name, existing)
+			}
+			occupied[k] = r.Plugin.ID
+		}
 	}
 	for _, n := range unit.Nodes {
 		if !n.Clone || (n.Type != model.PluginTypeExpert && n.Type != model.PluginTypeSkill) {
 			continue
 		}
-		name, err := model.NormalizePluginName(n.Plugin.Name)
+		keys, err := model.PluginNameReservationKeys(n.Plugin.Name, "")
 		if err != nil {
 			return ErrWrite
 		}
@@ -232,14 +234,16 @@ func checkPlannedNames(unit *Unit, resources []Resource) error {
 		if n.Plugin.SpaceID != nil {
 			scope = *n.Plugin.SpaceID
 		}
-		k := key{scope, string(n.Type), name}
-		if existing := occupied[k]; existing != "" && existing != n.TargetID {
-			return fmt.Errorf("%w: %s %q already belongs to %s", ErrNameConflict, n.Type, n.Plugin.Name, existing)
+		for _, name := range keys {
+			k := key{scope, string(n.Type), name}
+			if existing := occupied[k]; existing != "" && existing != n.TargetID {
+				return fmt.Errorf("%w: %s %q already belongs to %s", ErrNameConflict, n.Type, n.Plugin.Name, existing)
+			}
+			if previous := planned[k]; previous != "" && previous != n.TargetID {
+				return fmt.Errorf("%w: %s %q appears twice in this migration unit", ErrNameConflict, n.Type, n.Plugin.Name)
+			}
+			planned[k] = n.TargetID
 		}
-		if previous := planned[k]; previous != "" && previous != n.TargetID {
-			return fmt.Errorf("%w: %s %q appears twice in this migration unit", ErrNameConflict, n.Type, n.Plugin.Name)
-		}
-		planned[k] = n.TargetID
 	}
 	return nil
 }

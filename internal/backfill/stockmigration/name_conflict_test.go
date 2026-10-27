@@ -39,3 +39,15 @@ func TestCheckPlannedNames(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckPlannedNamesPublishedDraftReservation(t *testing.T) {
+	space := "space-a"
+	resources := []Resource{{
+		Plugin:        model.Plugin{ID: "existing", Name: "Beta", Type: model.PluginTypeSkill, SpaceID: &space},
+		PublishedName: "Alpha",
+	}}
+	node := Node{Clone: true, Mapping: Mapping{SourceID: "new", TargetID: "new", Type: model.PluginTypeSkill}, Plugin: model.Plugin{ID: "new", Name: "Beta", Type: model.PluginTypeSkill, SpaceID: &space}}
+	if err := checkPlannedNames(&Unit{Nodes: []Node{node}}, resources); !errors.Is(err, ErrNameConflict) {
+		t.Fatalf("published Alpha / draft Beta reservation was not enforced: %v", err)
+	}
+}

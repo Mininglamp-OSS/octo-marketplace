@@ -81,66 +81,8 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	out := report{Applied: *apply, Total: len(rows)}
-	groups := map[string]*duplicateGroup{}
-	for i := range rows {
-		r := &rows[i]
-		if r.Type != string(model.PluginTypeExpert) && r.Type != string(model.PluginTypeSkill) {
-			continue
-		}
-		// Embedded legacy rows are not market-display names and are excluded by
-		// active_name_key; only their extracted standalone replacements participate.
-		if r.IsEmbedded {
-			continue
-		}
-		scope := ""
-		if r.SpaceID != nil {
-			scope = *r.SpaceID
-		}
-		key, nerr := model.NormalizePluginName(r.Name)
-		if nerr != nil {
-			out.Invalid = append(out.Invalid, r.ID)
-			continue
-		}
-		r.Key, r.Scope = key, scope
-		if r.PublishedName != "" {
-			publishedKey, perr := model.NormalizePluginName(r.PublishedName)
-			if perr != nil {
-				out.Invalid = append(out.Invalid, r.ID)
-				continue
-			}
-			r.PublishedKey = publishedKey
-		}
-		// Soft-deleted rows are skipped: their active_name_key is NULL and they must
-		// not reserve a name. Delisted rows are active and do participate.
-		if r.DeletedAt != nil {
-			out.SkippedDeleted++
-			continue
-		}
-		activeKey := r.Key
-		if r.PublishedKey != "" {
-			activeKey = r.PublishedKey
-		}
-		gkey := scope + "\x00" + r.Type + "\x00" + activeKey
-		g := groups[gkey]
-		if g == nil {
-			g = &duplicateGroup{Scope: scope, Type: r.Type, Key: key}
-			groups[gkey] = g
-		}
-		g.IDs = append(g.IDs, r.ID)
-	}
-	for _, g := range groups {
-		if len(g.IDs) > 1 {
-			sort.Strings(g.IDs)
-			out.DuplicateGroups = append(out.DuplicateGroups, *g)
-		}
-	}
-	sort.Slice(out.DuplicateGroups, func(i, j int) bool {
-		if out.DuplicateGroups[i].Scope != out.DuplicateGroups[j].Scope {
-			return out.DuplicateGroups[i].Scope < out.DuplicateGroups[j].Scope
-		}
-		return out.DuplicateGroups[i].Key < out.DuplicateGroups[j].Key
-	})
+	out := analyzeRows(rows)
+	out.Applied = *apply
 	if len(out.Invalid) > 0 || len(out.DuplicateGroups) > 0 {
 		if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
 			return err
@@ -186,6 +128,77 @@ func run(args []string) error {
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(out)
+}
+
+// analyzeRows is the preview authority: it normalizes both the draft and the
+// published display name, groups every active reservation key, and reports a
+// collision even when one plugin's published name collides with another plugin's
+// draft name. The apply path revalidates and writes the same two keys.
+func analyzeRows(rows []row) report {
+	out := report{Total: len(rows)}
+	groups := map[string]*duplicateGroup{}
+	seenInGroup := map[string]map[string]struct{}{}
+	for i := range rows {
+		r := &rows[i]
+		if r.Type != string(model.PluginTypeExpert) && r.Type != string(model.PluginTypeSkill) {
+			continue
+		}
+		if r.IsEmbedded {
+			continue
+		}
+		scope := ""
+		if r.SpaceID != nil {
+			scope = *r.SpaceID
+		}
+		keys, err := model.PluginNameReservationKeys(r.Name, r.PublishedName)
+		if err != nil {
+			out.Invalid = append(out.Invalid, r.ID)
+			continue
+		}
+		r.Scope = scope
+		if draftKey, e := model.NormalizePluginName(r.Name); e == nil {
+			r.Key = draftKey
+		}
+		if r.PublishedName != "" {
+			if publishedKey, e := model.NormalizePluginName(r.PublishedName); e == nil {
+				r.PublishedKey = publishedKey
+			}
+		}
+		if r.DeletedAt != nil {
+			out.SkippedDeleted++
+			continue
+		}
+		for _, key := range keys {
+			gkey := scope + "\x00" + r.Type + "\x00" + key
+			g := groups[gkey]
+			if g == nil {
+				g = &duplicateGroup{Scope: scope, Type: r.Type, Key: key}
+				groups[gkey] = g
+				seenInGroup[gkey] = map[string]struct{}{}
+			}
+			if _, ok := seenInGroup[gkey][r.ID]; ok {
+				continue
+			}
+			seenInGroup[gkey][r.ID] = struct{}{}
+			g.IDs = append(g.IDs, r.ID)
+		}
+	}
+	for _, g := range groups {
+		if len(g.IDs) > 1 {
+			sort.Strings(g.IDs)
+			out.DuplicateGroups = append(out.DuplicateGroups, *g)
+		}
+	}
+	sort.Slice(out.DuplicateGroups, func(i, j int) bool {
+		if out.DuplicateGroups[i].Scope != out.DuplicateGroups[j].Scope {
+			return out.DuplicateGroups[i].Scope < out.DuplicateGroups[j].Scope
+		}
+		if out.DuplicateGroups[i].Type != out.DuplicateGroups[j].Type {
+			return out.DuplicateGroups[i].Type < out.DuplicateGroups[j].Type
+		}
+		return out.DuplicateGroups[i].Key < out.DuplicateGroups[j].Key
+	})
+	return out
 }
 
 func readRows(ctx context.Context, db *sql.DB) ([]row, error) {

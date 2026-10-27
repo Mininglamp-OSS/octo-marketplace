@@ -44,3 +44,36 @@ func NormalizePluginName(name string) (string, error) {
 	}
 	return normalized, nil
 }
+
+// PluginNameReservationKeys returns the unique normalized names a Plugin must
+// reserve: its editable draft name and, when version management has released
+// one, its published display name. Callers group/report by every key; using only
+// the published name would miss a draft collision and vice versa.
+func PluginNameReservationKeys(draft, published string) ([]string, error) {
+	keys := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	add := func(name string) error {
+		if strings.TrimSpace(name) == "" {
+			return nil
+		}
+		key, err := NormalizePluginName(name)
+		if err != nil {
+			return err
+		}
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+		return nil
+	}
+	if err := add(draft); err != nil {
+		return nil, err
+	}
+	if err := add(published); err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return nil, ErrPluginNameEmpty
+	}
+	return keys, nil
+}
