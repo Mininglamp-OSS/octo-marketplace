@@ -254,26 +254,34 @@ func TestInstallationErrorMappingAndSafeRetry(t *testing.T) {
 	}
 }
 
-func TestInstallationConflictUsesUpstreamMessage(t *testing.T) {
-	for _, message := range []string{"技能名称已被不同内容占用", "Conflict from Fleet", "", "  "} {
-		f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: &fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", IdempotencyKeyReused: true, Message: message}}
+func TestInstallationConflictUsesSafeMessage(t *testing.T) {
+	for _, tc := range []struct {
+		err     fleet.CapabilityAPIError
+		message string
+	}{
+		{fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", IdempotencyKeyReused: true}, "幂等键已用于其他安装参数，请核对原安装记录。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "CONFLICT", ConflictResource: "skill"}, "安装发生技能资源冲突，请核对工作区已有资源。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", ConflictResource: "expert"}, "安装发生专家资源冲突，请核对工作区已有资源。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "CONFLICT", ConflictResource: "expert_team"}, "安装发生专家团资源冲突，请核对工作区已有资源。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", ConflictResource: "untrusted-secret"}, "安装发生冲突，请检查已有资源或安装参数。"},
+	} {
+		f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: &tc.err}
 		rec := httptest.NewRecorder()
 		testEngine(f).ServeHTTP(rec, installationRequest(installationBody))
 		var out struct {
 			Error struct {
 				Code, Message string
 				Details       map[string]any
-			} `json:"error"`
+			}
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)
 		}
-		want := message
-		if strings.TrimSpace(message) == "" {
-			want = "安装发生冲突，请检查已有资源或安装参数。"
+		if rec.Code != 409 || out.Error.Message != tc.message || strings.Contains(rec.Body.String(), "untrusted-secret") {
+			t.Fatalf("unsafe conflict response: %s", rec.Body.String())
 		}
-		if rec.Code != 409 || out.Error.Code != "DUPLICATE" || out.Error.Message != want || out.Error.Details["conflict_reason"] != "idempotency_key_reused" {
-			t.Fatalf("unexpected conflict response: %s", rec.Body.String())
+		if tc.err.IdempotencyKeyReused && out.Error.Details["conflict_reason"] != "idempotency_key_reused" {
+			t.Fatal("safe conflict reason lost")
 		}
 	}
 }
@@ -282,7 +290,7 @@ func TestInstallationFailureLogsOnlySafeClassification(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	restore := logging.Replace(zap.New(core))
 	defer restore()
-	for _, err := range []error{errors.New("private-submitted-content"), &pluginsvc.InstallationAttemptError{Err: errors.New("private-submitted-content")}, &fleet.CapabilityAPIError{Status: 500, Message: "private-submitted-content"}} {
+	for _, err := range []error{errors.New("private-submitted-content"), &pluginsvc.InstallationAttemptError{Err: errors.New("private-submitted-content")}, &fleet.CapabilityAPIError{Status: 500}} {
 		f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: err}
 		testEngine(f).ServeHTTP(httptest.NewRecorder(), installationRequest(installationBody))
 	}

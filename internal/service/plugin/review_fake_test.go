@@ -35,6 +35,7 @@ type reviewFake struct {
 	cancelScope    pluginrepo.Scope
 	cancelCalls    int
 	receiptInserts []*model.CardActionReceipt
+	receipts       map[string]*model.CardActionReceipt
 	anySpaceCalls  int
 	pendingScope   pluginrepo.Scope
 	pendingPlugin  string
@@ -201,6 +202,9 @@ func (f *fakeStore) ApproveReview(_ context.Context, s pluginrepo.Scope, p plugi
 	if f.review.approveErr != nil {
 		return nil, f.review.approveErr
 	}
+	if err := f.recordDecisionReceipt(p.CardReceipt); err != nil {
+		return nil, err
+	}
 	if f.review.stored != nil {
 		f.review.stored.Status = model.ReviewStatusApproved
 		source := p.DecisionSource
@@ -214,7 +218,10 @@ func (f *fakeStore) ApproveReview(_ context.Context, s pluginrepo.Scope, p plugi
 
 func (f *fakeStore) RejectReview(_ context.Context, _ pluginrepo.Scope, p pluginrepo.RejectReviewParams) (json.RawMessage, map[string]struct{}, error) {
 	f.review.rejectParams = p
-	return nil, nil, f.review.rejectErr
+	if f.review.rejectErr != nil {
+		return nil, nil, f.review.rejectErr
+	}
+	return nil, nil, f.recordDecisionReceipt(p.CardReceipt)
 }
 
 func (f *fakeStore) CancelReview(_ context.Context, s pluginrepo.Scope, reviewID, callerUID string) (json.RawMessage, map[string]struct{}, error) {
@@ -240,16 +247,38 @@ func (f *fakeStore) GetReviewRequestAnySpace(_ context.Context, _ string) (*mode
 	return f.review.anySpaceReq, nil
 }
 
-func (f *fakeStore) GetCardActionReceipt(_ context.Context, _ string) (*model.CardActionReceipt, error) {
+func (f *fakeStore) GetCardActionReceipt(_ context.Context, eventID string) (*model.CardActionReceipt, error) {
 	if f.review.receiptErr != nil {
 		return nil, f.review.receiptErr
 	}
-	return f.review.receipt, nil
+	if f.review.receipt != nil && f.review.receipt.EventID == eventID {
+		return f.review.receipt, nil
+	}
+	return f.review.receipts[eventID], nil
 }
-
 func (f *fakeStore) InsertCardActionReceipt(_ context.Context, rec *model.CardActionReceipt) error {
 	f.review.receiptInserts = append(f.review.receiptInserts, rec)
-	return f.review.insertRecErr
+	if f.review.insertRecErr != nil {
+		return f.review.insertRecErr
+	}
+	if existing, _ := f.GetCardActionReceipt(context.Background(), rec.EventID); existing != nil {
+		return pluginrepo.ErrConflict
+	}
+	if f.review.receipts == nil {
+		f.review.receipts = map[string]*model.CardActionReceipt{}
+	}
+	copy := *rec
+	f.review.receipts[rec.EventID] = &copy
+	return nil
+}
+func (f *fakeStore) recordDecisionReceipt(rec *model.CardActionReceipt) error {
+	if rec == nil {
+		return nil
+	}
+	if existing, _ := f.GetCardActionReceipt(context.Background(), rec.EventID); existing != nil {
+		return pluginrepo.ErrCardActionReplayed
+	}
+	return f.InsertCardActionReceipt(context.Background(), rec)
 }
 
 // fakeNotifier stands in for *notify.Client. `roleErr` models the case the

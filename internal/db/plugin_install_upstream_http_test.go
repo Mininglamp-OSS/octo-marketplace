@@ -15,11 +15,14 @@ import (
 
 	pluginhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/plugin"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type installHTTPReply struct {
@@ -90,7 +93,21 @@ func installationHTTPRequest(root, route, key string) *http.Request {
 // Keep the real Fleet HTTP decoder in the path: injecting a preclassified
 // InstallationAttemptError into the handler misses the service regression.
 func TestInstallUpstreamHTTPContracts(t *testing.T) {
-	const conflictMessage = "  同名资源内容不同，请核对已有资源。  "
+	const conflictMessage = "upstream-secret: synthetic-credential"
+	core, logs := observer.New(zap.DebugLevel)
+	restore := logging.Replace(zap.New(core))
+	defer restore()
+	defer func() {
+		for _, entry := range logs.All() {
+			raw, err := json.Marshal(entry.ContextMap())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(entry.Message+string(raw), "upstream-secret") {
+				t.Fatal("Fleet text leaked in logs")
+			}
+		}
+	}()
 	for _, pinned := range []bool{false, true} {
 		t.Run(fmt.Sprintf("pinned=%t", pinned), func(t *testing.T) {
 			var current atomic.Pointer[installHTTPReply]
@@ -107,13 +124,13 @@ func TestInstallUpstreamHTTPContracts(t *testing.T) {
 				status                            int
 				code, message, reason, retryAfter string
 			}{
-				{name: "key-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"idempotency_key","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: conflictMessage, reason: "idempotency_key_reused"},
-				{name: "skill-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: conflictMessage},
-				{name: "expert-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "DUPLICATE", message: conflictMessage},
-				{name: "skill-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "CONFLICT", message: conflictMessage},
-				{name: "expert-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "CONFLICT", message: conflictMessage},
-				{name: "team-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert_team"}}}`}, status: 409, code: "CONFLICT", message: conflictMessage},
-				{name: "legacy-key-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"IDEMPOTENCY_KEY_REUSED","message":"` + conflictMessage + `"}}`}, status: 409, code: "CONFLICT", message: conflictMessage, reason: "idempotency_key_reused"},
+				{name: "key-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"idempotency_key","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: "幂等键已用于其他安装参数，请核对原安装记录。", reason: "idempotency_key_reused"},
+				{name: "skill-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: "安装发生技能资源冲突，请核对工作区已有资源。"},
+				{name: "expert-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "DUPLICATE", message: "安装发生专家资源冲突，请核对工作区已有资源。"},
+				{name: "skill-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "CONFLICT", message: "安装发生技能资源冲突，请核对工作区已有资源。"},
+				{name: "expert-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "CONFLICT", message: "安装发生专家资源冲突，请核对工作区已有资源。"},
+				{name: "team-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert_team"}}}`}, status: 409, code: "CONFLICT", message: "安装发生专家团资源冲突，请核对工作区已有资源。"},
+				{name: "legacy-key-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"IDEMPOTENCY_KEY_REUSED","message":"` + conflictMessage + `"}}`}, status: 409, code: "CONFLICT", message: "幂等键已用于其他安装参数，请核对原安装记录。", reason: "idempotency_key_reused"},
 				{name: "duplicate-blank-message", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"   "}}`}, status: 409, code: "DUPLICATE", message: "安装发生冲突，请检查已有资源或安装参数。"},
 				{name: "rate-limited", reply: installHTTPReply{status: 429, body: `{"error":{"code":"RATE_LIMITED","message":"upstream-secret"}}`, retryAfter: "7"}, status: 429, code: "RATE_LIMITED", retryAfter: "7"},
 				{name: "rate-limited-invalid-delay", reply: installHTTPReply{status: 429, body: `{"error":{"code":"RATE_LIMITED"}}`, retryAfter: "invalid"}, status: 429, code: "RATE_LIMITED"},

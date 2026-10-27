@@ -228,14 +228,21 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 	case 409:
 		hint = "请核对工作区已有资源和冲突原因；相同参数重试无法解决内容冲突，请勿直接更换幂等键重复安装。"
 		code, message = errcode.Conflict, "安装发生冲突，请检查已有资源或安装参数。"
-		if strings.TrimSpace(err.Message) != "" {
-			message = err.Message
-		}
 		if err.Code == "DUPLICATE" {
 			code = errcode.Duplicate
 		}
 		if err.IdempotencyKeyReused || err.Code == "IDEMPOTENCY_KEY_REUSED" {
 			details["conflict_reason"] = "idempotency_key_reused"
+			message = "幂等键已用于其他安装参数，请核对原安装记录。"
+		} else {
+			switch err.ConflictResource {
+			case "skill":
+				message = "安装发生技能资源冲突，请核对工作区已有资源。"
+			case "expert":
+				message = "安装发生专家资源冲突，请核对工作区已有资源。"
+			case "expert_team":
+				message = "安装发生专家团资源冲突，请核对工作区已有资源。"
+			}
 		}
 	case 413:
 		code, message = errcode.FileTooLarge, "安装内容超出服务允许的大小或数量限制。"

@@ -166,15 +166,25 @@ default API convention of English messages. Authentication failures on this
 route also use Chinese; existing routes keep their original text.
 
 Recognized Fleet `DUPLICATE`, legacy `IDEMPOTENCY_KEY_REUSED`, and `CONFLICT`
-identifying a Skill/Expert/Team resource collision return HTTP **409 and preserve Fleet's `error.message` verbatim**, including its language.
-Only a missing, invalid, or whitespace-only message uses the Chinese fallback.
+identifying a Skill/Expert/Team resource collision return HTTP **409 with fixed
+Chinese safety messages**. Arbitrary Fleet `error.message` text is discarded,
+including on conflicts; it is neither retained in the typed error nor returned
+or logged. Structured, whitelisted metadata alone selects the message:
+
+| Conflict | Fixed `message` |
+| --- | --- |
+| Idempotency key reuse | 幂等键已用于其他安装参数，请核对原安装记录。 |
+| Skill resource | 安装发生技能资源冲突，请核对工作区已有资源。 |
+| Expert resource | 安装发生专家资源冲突，请核对工作区已有资源。 |
+| Expert team resource | 安装发生专家团资源冲突，请核对工作区已有资源。 |
+| Other recognized conflict | 安装发生冲突，请检查已有资源或安装参数。 |
+
 Fleet's `DUPLICATE` is retained. For `details.resource = "idempotency_key"`,
 Marketplace adds `details.conflict_reason = "idempotency_key_reused"` without
 forwarding the raw name/key or arbitrary upstream details. The earlier draft's
 `IDEMPOTENCY_KEY_REUSED` mapping remains supported as `CONFLICT`.
-Other upstream status codes do not expose Fleet's message or raw response body.
-Conflict messages are display text, not trusted HTML, and must not be logged
-with submitted content or credentials. The client should render them as text.
+This applies to both installation URLs and both content modes. The approved
+safety policy supersedes the earlier verbatim-conflict-text requirement.
 
 Preparation failures such as unreadable/corrupt artifacts or catalog failures
 return `500 INTERNAL_ERROR` with `details.phase = "preparation"`. Unknown errors

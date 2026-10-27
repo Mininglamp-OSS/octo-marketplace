@@ -254,25 +254,24 @@ tenant `Authenticator`):
   in `space_id` via the resolver (cached by `auth.CachedResolver`),
   otherwise return `{"disposition":"forbidden","state":"pending"}`
   (HTTP 200, per protocol).
-- Idempotency + ordering follows the consumer doc transaction template
-  exactly:
-  1. `BEGIN`
-  2. `SELECT stored_response FROM card_action_receipt WHERE event_id=?`; if
-     found, `COMMIT` and replay that stored_response verbatim.
-  3. Validate `decision` is `"approve"` or `"deny"`; reject other values
-     with `{"disposition":"forbidden","state":"pending"}` (the reserved
-     decisions approve/deny are produced by the default button set).
-  4. `SELECT ... FROM plugin_review_requests WHERE id=? AND status='pending' FOR UPDATE`;
-     if not found or not pending → `disposition:"conflict"` (already decided)
-     with the actual final `state` and `requester_uid`.
-  5. Re-verify operator is still a reviewer of that Space.
-  6. Apply the approve/reject service logic (reuse the same tx path as the
-     web handlers; reject fills `defaultIMDenyReason` and stamps
-     `decision_source=im`).
-  7. `INSERT INTO card_action_receipt(event_id, stored_response_json, created_at) VALUES (...)`.
-  8. `COMMIT`.
-  9. Return the stored response. UNIQUE-key collisions must re-read and
-     replay the winner's response.
+- Current idempotency ordering (PR142 review hardening; see
+  `docs/api/card-review-callback.md`):
+  1. Verify the signed request and validate required fields and approve/deny.
+     Malformed signed input is HTTP 400, not an acknowledged refusal.
+  2. Read `plugin_card_action_receipts` by event ID. An existing receipt replays
+     its result without a new decision; validate review/decision and, for new
+     receipts, the private operator binding. The binding is never on the wire.
+  3. Load the review and resolve the operator's current role. Every handled
+     refusal (forbidden, not_found, conflict, stale/taken version label) must
+     insert its immutable receipt before HTTP 200. Duplicate keys replay the
+     committed winner. Role/database lookup faults remain retryable errors.
+  4. For an applied decision, begin the existing approve/reject transaction;
+     insert the intended receipt FIRST to arbitrate the event ID, then lock and
+     mutate the pending review. Commit decision and receipt atomically. Any
+     mutation failure rolls back both. A duplicate event cannot apply again.
+  5. Return the persisted result. Redelivery never changes a handled refusal
+     after role/state changes; a fresh intentional action needs a new event ID.
+     Temporary write faults/deadlocks produce 503 and leave no final receipt.
 - Response is exactly the 4-field `DecisionResult`
   (`disposition`/`state`/`requester_uid`/`display`), `DisallowUnknownFields`;
   `state ∈ {approved,denied}` requires `requester_uid` set to
@@ -282,10 +281,13 @@ tenant `Authenticator`):
   outcomes (including business rejection); 408/429/5xx for transient failure
   (octo-server retries with backoff); other 4xx goes to DLQ (avoid except
   for truly permanent errors).
-- The `card_action_receipt` table stores `event_id` as a decimal-string
-  `VARCHAR(32) PRIMARY KEY` (int64 over JS Number.MAX_SAFE_INTEGER), plus
-  `stored_response_json`, `created_at`; no replay UI, ops use octo-server's
-  `tools/card-action-dlq` for replay.
+- `plugin_card_action_receipts` retains its decimal-string event primary key,
+  review/decision binding, stored response and timestamp. New stored responses
+  include a private operator binding; old receipts stay readable. The terminal
+  receipt migration removes only the review-parent FK so a missing review can
+  have a durable refusal. Receipts are preserved; Down is refused. There is no
+  replay UI; ops use octo-server's `tools/card-action-dlq` for delivery replay.
+
 
 **Not in v1 (called out explicitly)**:
 

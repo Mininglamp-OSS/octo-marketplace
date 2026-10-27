@@ -939,11 +939,10 @@ var (
 // DecideReviewFromCard is the IM-callback entry: idempotency, operator
 // re-verification, and the decision itself.
 //
-// Every value it RETURNS is a handled outcome the transport answers with 200. A
-// returned ERROR means "transient, ask octo-server to retry" — the caller turns
-// it into a 5xx. Keeping that distinction is the whole reliability story: a
-// forbidden/conflict/not_found body is acked and never redelivered, so nothing
-// that might succeed later may be reported that way.
+// Every returned result is a durable handled outcome answered with 200. Storage
+// and authorization-lookup faults remain retryable errors; malformed signed
+// input returns ErrCardBadDecision. A business refusal is final for that event
+// even if a fresh action could succeed later. Redelivery replays its receipt.
 //
 // Missing/invalid review_id, empty event_id or operator_uid are treated as
 // malformed payloads (ErrCardBadDecision) rather than authorization failures,
@@ -965,22 +964,79 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 		// acking as "forbidden" so protocol drift is loud, not silent.
 		return nil, ErrCardBadDecision
 	}
-	// Idempotency first: a redelivered event must replay the stored answer
-	// verbatim rather than re-running the decision. Cross-check the receipt's
-	// ReviewID against the signed path param so an event_id reused across two
-	// reviews cannot silently render the wrong response.
+	// Existing receipts (including pre-fix applied receipts) never re-run a decision.
 	if existing, err := s.repo.GetCardActionReceipt(ctx, eventID); err != nil {
 		return nil, err
 	} else if existing != nil {
-		if existing.ReviewID != reviewID {
-			return nil, ErrCardBadDecision
-		}
-		var out CardActionResult
-		if err := json.Unmarshal([]byte(existing.StoredResponse), &out); err != nil {
-			return nil, err
-		}
-		return &out, nil
+		return decodeCardActionReceipt(existing, reviewID, decision, operatorUID)
 	}
+	result, err := s.decideCardAction(ctx, eventID, operatorUID, decision, reviewID)
+	if errors.Is(err, pluginrepo.ErrCardActionReplayed) {
+		return s.replayCardAction(ctx, eventID, reviewID, decision, operatorUID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Applied outcomes were persisted by the decision's transaction. All other
+	// handled outcomes must be durable before the transport can acknowledge them.
+	if result.Disposition == cardDispositionApplied {
+		return result, nil
+	}
+	receipt, err := s.cardActionReceipt(eventID, reviewID, decision, operatorUID, result)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.repo.InsertCardActionReceipt(ctx, receipt); err != nil {
+		if errors.Is(err, pluginrepo.ErrConflict) {
+			return s.replayCardAction(ctx, eventID, reviewID, decision, operatorUID)
+		}
+		return nil, err
+	}
+	return result, nil
+}
+
+// The private actor binding is stored only in the receipt, never on the wire.
+type storedCardAction struct {
+	CardActionResult
+	OperatorUID string `json:"_operator_uid,omitempty"`
+}
+
+func (s *Service) cardActionReceipt(eventID, reviewID, decision, operatorUID string, result *CardActionResult) (*model.CardActionReceipt, error) {
+	body, err := json.Marshal(storedCardAction{CardActionResult: *result, OperatorUID: operatorUID})
+	if err != nil {
+		return nil, err
+	}
+	return &model.CardActionReceipt{EventID: eventID, ReviewID: reviewID, Decision: decision, StoredResponse: string(body), CreatedAt: s.now()}, nil
+}
+
+func decodeCardActionReceipt(rec *model.CardActionReceipt, reviewID, decision, operatorUID string) (*CardActionResult, error) {
+	if rec.ReviewID != reviewID || rec.Decision != decision {
+		return nil, ErrCardBadDecision
+	}
+	var stored storedCardAction
+	if err := json.Unmarshal([]byte(rec.StoredResponse), &stored); err != nil {
+		return nil, err
+	}
+	// Older receipts lack the private actor binding, but still replay the saved
+	// result without executing anything. New receipts bind all signed inputs.
+	if stored.OperatorUID != "" && stored.OperatorUID != operatorUID {
+		return nil, ErrCardBadDecision
+	}
+	return &stored.CardActionResult, nil
+}
+
+func (s *Service) replayCardAction(ctx context.Context, eventID, reviewID, decision, operatorUID string) (*CardActionResult, error) {
+	existing, err := s.repo.GetCardActionReceipt(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, errors.New("card action receipt unavailable")
+	}
+	return decodeCardActionReceipt(existing, reviewID, decision, operatorUID)
+}
+
+func (s *Service) decideCardAction(ctx context.Context, eventID, operatorUID, decision, reviewID string) (*CardActionResult, error) {
 	// Load the request cross-scope to learn its Space. There is no tenant context
 	// on this path — the review_id arrived inside a signed card payload — so the
 	// operator is authorized against the Space this lookup returns, below.
@@ -995,7 +1051,7 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 		// (cancelPendingReviewFor), so cancelled is also the accurate reading; an
 		// id that never existed at all is indistinguishable from here and renders
 		// the same way. No requester is knowable on this branch, and cancelled does
-		// not require one (see the contract note on the applied result below).
+		// not require one in the callback contract.
 		if errors.Is(mapStoreError(err), ErrNotFound) {
 			return &CardActionResult{Disposition: cardDispositionNotFound, State: cardStateCancelled}, nil
 		}
@@ -1017,11 +1073,20 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 		return s.cardConflict(ctx, req)
 	}
 
+	state := cardStateApproved
+	if decision == "deny" {
+		state = cardStateDenied
+	}
+	result := &CardActionResult{Disposition: cardDispositionApplied, State: state, Requester: req.ApplicantUID, Display: map[string]string{"title": req.PluginName}}
+	receipt, err := s.cardActionReceipt(eventID, reviewID, decision, operatorUID, result)
+	if err != nil {
+		return nil, err
+	}
 	adminScope := pluginrepo.Scope{CallerUID: operatorUID, SpaceID: req.SpaceID}
-	var state string
 	var applyErr error
 	if decision == "approve" {
 		_, applyErr = s.approveWithVersionFiles(ctx, adminScope, pluginrepo.ApproveReviewParams{
+			CardReceipt: receipt,
 			ReviewID:    reviewID,
 			ReviewerUID: operatorUID,
 			// TODO(cross-repo): stamp the operator's DISPLAY NAME here once the
@@ -1032,11 +1097,11 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 			ReviewerName:   operatorUID,
 			DecisionSource: model.ReviewDecisionSourceIM,
 		})
-		state = cardStateApproved
 	} else {
 		var frozenKeys json.RawMessage
 		var retained map[string]struct{}
 		frozenKeys, retained, applyErr = s.repo.RejectReview(ctx, adminScope, pluginrepo.RejectReviewParams{
+			CardReceipt: receipt,
 			ReviewID:    reviewID,
 			ReviewerUID: operatorUID,
 			// TODO(cross-repo): same as the approve path above — record the
@@ -1052,7 +1117,6 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 			// leaving IM denies leaking every object their submission spilled.
 			s.cleanupOrphanedReviewObjects(context.WithoutCancel(ctx), frozenKeys, retained)
 		}
-		state = cardStateDenied
 	}
 	if applyErr != nil {
 		// Losing the CAS race is an expected outcome, not an error: another admin
@@ -1094,14 +1158,6 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 			// try to re-read and re-return ErrNotFound; treat it as terminal here so
 			// the re-read does not loop as 503.
 			//
-			// Deliberately UNRECEIPTED, like the two refusals below: the event is
-			// answered in-band but nothing is stored under its event_id, so a
-			// redelivery of the same event re-runs the decision. That is the right
-			// trade for a transient-looking outcome (a retry that finds the row back
-			// — restored, or a re-read that now succeeds — must be able to apply it)
-			// and it is why the answer for one event_id is not guaranteed verbatim
-			// across deliveries. Only the applied path is receipted, which is the
-			// case where a differing replay would double-apply.
 			return &CardActionResult{
 				Disposition: cardDispositionNotFound,
 				State:       cardStateCancelled,
@@ -1116,14 +1172,6 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 			// collision). Ack as a handled refusal; display.reason distinguishes the
 			// two for a future richer renderer.
 			//
-			// Unreceipted on purpose. The row is still PENDING, so a later delivery
-			// of this event must be free to apply the decision once the applicant has
-			// resubmitted — storing a refusal under this event_id would swallow that
-			// retry. The cost is that one event_id can answer `{forbidden, pending}`
-			// now and `{conflict, cancelled}` after the applicant cancels; the answer
-			// is not verbatim-idempotent, only never-double-applying. Receipting is
-			// reserved for the applied path, the only one where a differing replay
-			// would apply a decision twice.
 			reason := "version_moved_past_resubmit_required"
 			if errors.Is(mapped, ErrLabelTaken) {
 				reason = "version_label_taken_resubmit_required"
@@ -1140,50 +1188,7 @@ func (s *Service) DecideReviewFromCard(ctx context.Context, eventID, operatorUID
 		}
 		return nil, mapped
 	}
-	result := &CardActionResult{
-		Disposition: cardDispositionApplied,
-		State:       state,
-		// approved/denied MUST carry requester_uid. Those two are what octo-server
-		// calls a terminal decision, and both of its layers reject a response
-		// without one: DecodeDecisionResult (cardactiondispatch/contract.go:228)
-		// errors on `(approved|denied) && requester_uid == ""`, and
-		// StandardActionFinalizer (modules/notify/standard_action_finalizer.go:34-36)
-		// repeats the check before DMing the applicant. A rejected response reads as
-		// a callback failure, which octo-server redelivers.
-		//
-		// `cancelled` is NOT in that set on either side — the finalizer edits the
-		// card and returns before the applicant DM — so the not_found branches below
-		// are accepted without a requester. They send one anyway: it costs nothing
-		// and the field stays present if octo-server ever widens its terminal set.
-		// Do not read this as "every terminal state requires it"; an earlier
-		// revision of this comment said so and that is not what the companion
-		// repository enforces.
-		Requester: req.ApplicantUID,
-		Display:   map[string]string{"title": req.PluginName},
-	}
-	body, err := json.Marshal(result)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.repo.InsertCardActionReceipt(ctx, &model.CardActionReceipt{
-		EventID:        eventID,
-		ReviewID:       reviewID,
-		Decision:       decision,
-		StoredResponse: string(body),
-		CreatedAt:      s.now(),
-	}); err != nil {
-		// Two deliveries of the SAME event raced past the read above; the winner's
-		// stored response is authoritative.
-		if errors.Is(err, pluginrepo.ErrConflict) {
-			if existing, _ := s.repo.GetCardActionReceipt(ctx, eventID); existing != nil {
-				var out CardActionResult
-				if json.Unmarshal([]byte(existing.StoredResponse), &out) == nil {
-					return &out, nil
-				}
-			}
-		}
-		return nil, err
-	}
+
 	return result, nil
 }
 

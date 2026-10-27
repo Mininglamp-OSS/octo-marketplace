@@ -96,7 +96,11 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
-	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 2 {
+	all, err := source.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != len(all)-len(prior.Migrations) {
 		t.Fatalf("index upgrade: n=%d err=%v", n, err)
 	}
 	for _, tc := range []struct{ table, index, columns string }{
