@@ -166,8 +166,15 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE plugins SET published_version_id=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, p.ID)
-	return err
+	publishedKey, _, nameErr := pluginNameColumns(p.Name, p.Type, p.SpaceID)
+	if nameErr != nil {
+		return nameErr
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE plugins SET published_version_id=?,published_name_key=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, publishedKey, p.ID)
+	if err != nil {
+		return wrapped("publish release", mapPluginNameTaken(err))
+	}
+	return nil
 }
 
 // PublishManaged publishes the explicitly selected draft. ExpectedVersionID

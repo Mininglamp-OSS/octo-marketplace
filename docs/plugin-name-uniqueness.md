@@ -16,15 +16,23 @@ Marketplace display names are unique per Space and per Plugin type:
 - The same name may exist in different Spaces.
 - Soft-deleted rows (`deleted_at IS NOT NULL`) do not reserve a name.
 - Delisted rows are not deleted and continue to reserve their name.
+- With version management, the market displays the published snapshot's name,
+  not the editable draft name. The active key therefore uses the published name
+  when one exists and falls back to the draft name otherwise. Renaming a draft
+  does not release the published display name.
 - Names are normalized with Unicode NFKC, leading/trailing whitespace trimming,
   and Unicode case folding. Internal whitespace is preserved. The implementation
   lives in `internal/model/plugin_name.go`; MySQL LOWER/TRIM is not equivalent.
+  The indexed columns use binary collation so MySQL cannot add accent/case
+  equivalences that the Go normalizer did not produce.
 
 ## Storage
 
-`plugins.name_key` stores the normalized key. `plugins.name_scope` stores the
-Space key (`''` for a system row). `plugins.active_name_key` is a generated column
-that is non-NULL only for active, non-embedded Expert/Skill rows. The unique index is:
+`plugins.name_key` stores the normalized draft key. `plugins.published_name_key`
+stores the normalized published display name when version management has released
+one. `plugins.name_scope` stores the Space key (`''` for a system row).
+`plugins.active_name_key` is a generated column that is non-NULL only for active,
+non-embedded Expert/Skill rows and uses `COALESCE(published_name_key,name_key)`. The unique index is:
 
 ```text
 uq_plugins_active_name (name_scope, plugin_type, active_name_key)
@@ -47,6 +55,9 @@ Run the read-only report first:
 MYSQL_DSN='...' go run ./cmd/plugin-name-backfill --all-spaces
 ```
 
+The report groups by the same active key (published name when present, draft name
+otherwise), and includes both the draft and published normalized keys.
+
 Resolve every reported duplicate group without automatic suffixing:
 
 - same content: choose one canonical row and reuse/merge it;
@@ -60,8 +71,11 @@ Then apply the backfill:
 MYSQL_DSN='...' go run ./cmd/plugin-name-backfill --all-spaces --apply
 ```
 
-The command refuses to apply while duplicate groups or invalid names remain. Do
-not delete rows or disable the unique index to force it through.
+The apply transaction locks each row with `FOR UPDATE` and revalidates its name,
+type, Space, deletion state and published name before writing; a concurrent rename
+or publish aborts the run instead of leaving a stale key. The command refuses to
+apply while duplicate groups or invalid names remain. Do not delete rows or disable
+the unique index to force it through.
 
 ## Migration
 

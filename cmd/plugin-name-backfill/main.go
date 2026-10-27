@@ -20,14 +20,16 @@ import (
 )
 
 type row struct {
-	ID         string  `json:"plugin_id"`
-	Name       string  `json:"plugin_name"`
-	Type       string  `json:"plugin_type"`
-	SpaceID    *string `json:"space_id,omitempty"`
-	DeletedAt  *string `json:"deleted_at,omitempty"`
-	IsEmbedded bool    `json:"is_embedded,omitempty"`
-	Key        string  `json:"-"`
-	Scope      string  `json:"-"`
+	ID            string  `json:"plugin_id"`
+	Name          string  `json:"plugin_name"`
+	Type          string  `json:"plugin_type"`
+	SpaceID       *string `json:"space_id,omitempty"`
+	DeletedAt     *string `json:"deleted_at,omitempty"`
+	IsEmbedded    bool    `json:"is_embedded,omitempty"`
+	Key           string  `json:"-"`
+	PublishedKey  string  `json:"-"`
+	PublishedName string  `json:"-"`
+	Scope         string  `json:"-"`
 }
 
 type duplicateGroup struct {
@@ -101,13 +103,25 @@ func run(args []string) error {
 			continue
 		}
 		r.Key, r.Scope = key, scope
+		if r.PublishedName != "" {
+			publishedKey, perr := model.NormalizePluginName(r.PublishedName)
+			if perr != nil {
+				out.Invalid = append(out.Invalid, r.ID)
+				continue
+			}
+			r.PublishedKey = publishedKey
+		}
 		// Soft-deleted rows are skipped: their active_name_key is NULL and they must
 		// not reserve a name. Delisted rows are active and do participate.
 		if r.DeletedAt != nil {
 			out.SkippedDeleted++
 			continue
 		}
-		gkey := scope + "\x00" + r.Type + "\x00" + key
+		activeKey := r.Key
+		if r.PublishedKey != "" {
+			activeKey = r.PublishedKey
+		}
+		gkey := scope + "\x00" + r.Type + "\x00" + activeKey
 		g := groups[gkey]
 		if g == nil {
 			g = &duplicateGroup{Scope: scope, Type: r.Type, Key: key}
@@ -145,7 +159,23 @@ func run(args []string) error {
 		if r.Key == "" || r.DeletedAt != nil {
 			continue
 		}
-		res, err := tx.ExecContext(ctx, `UPDATE plugins SET name_key=?,name_scope=? WHERE plugin_id=? AND deleted_at IS NULL`, r.Key, r.Scope, r.ID)
+		// Lock and revalidate the row against the snapshot before writing. A
+		// concurrent rename must abort the backfill rather than be overwritten by
+		// a stale key.
+		var name, typ, publishedName string
+		var scope sql.NullString
+		var deleted sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT p.plugin_name,p.plugin_type,p.space_id,DATE_FORMAT(p.deleted_at,'%Y-%m-%dT%H:%i:%s.%fZ'),COALESCE(JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name')),'') FROM plugins p LEFT JOIN plugin_versions pv ON pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id WHERE p.plugin_id=? FOR UPDATE`, r.ID).Scan(&name, &typ, &scope, &deleted, &publishedName); err != nil {
+			return fmt.Errorf("lock %s: %w", r.ID, err)
+		}
+		if name != r.Name || typ != r.Type || (scope.Valid != (r.SpaceID != nil)) || (scope.Valid && r.SpaceID != nil && scope.String != *r.SpaceID) || deleted.Valid != (r.DeletedAt != nil) || publishedName != r.PublishedName {
+			return fmt.Errorf("backfill %s: row changed after snapshot; re-run", r.ID)
+		}
+		var published any
+		if r.PublishedKey != "" {
+			published = r.PublishedKey
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE plugins SET name_key=?,published_name_key=?,name_scope=? WHERE plugin_id=? AND deleted_at IS NULL`, r.Key, published, r.Scope, r.ID)
 		if err != nil {
 			return fmt.Errorf("backfill %s: %w", r.ID, err)
 		}
@@ -159,8 +189,9 @@ func run(args []string) error {
 }
 
 func readRows(ctx context.Context, db *sql.DB) ([]row, error) {
-	rows, err := db.QueryContext(ctx, `SELECT plugin_id,plugin_name,plugin_type,is_embedded,space_id,DATE_FORMAT(deleted_at,'%Y-%m-%dT%H:%i:%s.%fZ')
-FROM plugins WHERE plugin_type IN ('expert','skill') ORDER BY plugin_id`)
+	rows, err := db.QueryContext(ctx, `SELECT p.plugin_id,p.plugin_name,p.plugin_type,p.is_embedded,p.space_id,DATE_FORMAT(p.deleted_at,'%Y-%m-%dT%H:%i:%s.%fZ'),COALESCE(JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name')),'')
+FROM plugins p LEFT JOIN plugin_versions pv ON pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id
+WHERE p.plugin_type IN ('expert','skill') ORDER BY p.plugin_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +200,7 @@ FROM plugins WHERE plugin_type IN ('expert','skill') ORDER BY plugin_id`)
 	for rows.Next() {
 		var r row
 		var space, deleted sql.NullString
-		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.IsEmbedded, &space, &deleted); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.IsEmbedded, &space, &deleted, &r.PublishedName); err != nil {
 			return nil, err
 		}
 		if space.Valid {

@@ -7,15 +7,16 @@
 -- backfill command has normalized historical names; the unique index takes
 -- effect for every newly written row and for rows filled by the backfill.
 ALTER TABLE plugins
-  ADD COLUMN name_key VARCHAR(160) NULL DEFAULT NULL,
-  ADD COLUMN name_scope VARCHAR(64) NOT NULL DEFAULT '',
-  ADD COLUMN active_name_key VARCHAR(160) GENERATED ALWAYS AS (
+  ADD COLUMN name_key VARCHAR(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL DEFAULT NULL,
+  ADD COLUMN published_name_key VARCHAR(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL DEFAULT NULL,
+  ADD COLUMN name_scope VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '',
+  ADD COLUMN active_name_key VARCHAR(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (
     CASE
       WHEN deleted_at IS NULL
-       AND name_key IS NOT NULL
+       AND COALESCE(published_name_key,name_key) IS NOT NULL
        AND is_embedded = 0
        AND plugin_type IN ('expert','skill')
-      THEN name_key
+      THEN COALESCE(published_name_key,name_key)
       ELSE NULL
     END
   ) STORED,

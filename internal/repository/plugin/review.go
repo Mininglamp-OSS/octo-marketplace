@@ -672,7 +672,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 			string(model.PluginVisibilitySpace), string(model.PluginListingStatePublished), now, nameKey, nameScope, pluginID, scope.SpaceID,
 			string(model.PluginVisibilitySpace), string(model.PluginListingStatePublished))
 		if err != nil {
-			return nil, wrapped("apply approved snapshot", err)
+			return nil, wrapped("apply approved snapshot", mapPluginNameTaken(err))
 		}
 		// The isFirst branch was selected from the FOR UPDATE-locked row, so under
 		// normal operation zero rows here means "predicate already matches" and the

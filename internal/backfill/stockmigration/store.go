@@ -44,7 +44,7 @@ func read(ctx context.Context, tx *sql.Tx, limit int, lock bool) (Dataset, error
 		suffix += " FOR UPDATE"
 	}
 	d := Dataset{Resources: []Resource{}, Versions: []model.PluginVersion{}, Releases: []model.PluginVersionRelease{}}
-	rows, e := tx.QueryContext(ctx, `SELECT plugin_id,plugin_name,plugin_type,is_embedded,tags_json,owner_uid,space_id,visibility,listing_state,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version_id,published_version_id,current_version,status,deleted_at,EXISTS(SELECT 1 FROM plugin_review_requests rr WHERE rr.plugin_id=plugins.plugin_id AND rr.status='pending' AND rr.deleted_at IS NULL) FROM plugins ORDER BY plugin_id`+suffix, limit+1)
+	rows, e := tx.QueryContext(ctx, `SELECT p.plugin_id,p.plugin_name,p.plugin_type,p.is_embedded,p.tags_json,p.owner_uid,p.space_id,p.visibility,p.listing_state,p.manifest_json,p.plugin_json,p.attachment_keys_json,p.manifest_hash,p.plugin_hash,p.current_version_id,p.published_version_id,p.current_version,p.status,p.deleted_at,EXISTS(SELECT 1 FROM plugin_review_requests rr WHERE rr.plugin_id=p.plugin_id AND rr.status='pending' AND rr.deleted_at IS NULL),COALESCE(JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name')),'') FROM plugins p LEFT JOIN plugin_versions pv ON pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id ORDER BY p.plugin_id`+suffix, limit+1)
 	if e != nil {
 		return d, ErrRead
 	}
@@ -54,7 +54,7 @@ func read(ctx context.Context, tx *sql.Tx, limit int, lock bool) (Dataset, error
 		var deleted sql.NullTime
 		var tags, manifest, pkg, keys []byte
 		p := &r.Plugin
-		if rows.Scan(&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &tags, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &manifest, &pkg, &keys, &p.ManifestHash, &p.PluginHash, &current, &pub, &label, &p.Status, &deleted, &r.PendingReview) != nil {
+		if rows.Scan(&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &tags, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &manifest, &pkg, &keys, &p.ManifestHash, &p.PluginHash, &current, &pub, &label, &p.Status, &deleted, &r.PendingReview, &r.PublishedName) != nil {
 			rows.Close()
 			return Dataset{}, ErrRead
 		}
@@ -206,7 +206,11 @@ func checkPlannedNames(unit *Unit, resources []Resource) error {
 		if r.Plugin.Type != model.PluginTypeExpert && r.Plugin.Type != model.PluginTypeSkill {
 			continue
 		}
-		name, err := model.NormalizePluginName(r.Plugin.Name)
+		displayName := r.Plugin.Name
+		if r.PublishedName != "" {
+			displayName = r.PublishedName
+		}
+		name, err := model.NormalizePluginName(displayName)
 		if err != nil {
 			continue
 		}
@@ -448,7 +452,19 @@ func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Ti
 			return ErrWrite
 		}
 	}
-	if _, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=?,updated_at=? WHERE plugin_id=?`, n.VersionID, n.Label, published(n), now, p.ID); e != nil {
+	if n.Release {
+		publishedKey := any(nil)
+		if p.Type == model.PluginTypeExpert || p.Type == model.PluginTypeSkill {
+			key, err := model.NormalizePluginName(p.Name)
+			if err != nil {
+				return ErrWrite
+			}
+			publishedKey = key
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=?,published_name_key=?,updated_at=? WHERE plugin_id=?`, n.VersionID, n.Label, published(n), publishedKey, now, p.ID); e != nil {
+			return ErrWrite
+		}
+	} else if _, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=?,updated_at=? WHERE plugin_id=?`, n.VersionID, n.Label, published(n), now, p.ID); e != nil {
 		return ErrWrite
 	}
 	return nil
