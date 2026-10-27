@@ -38,10 +38,11 @@ type pinnedInstallResolver struct {
 }
 
 type pinnedInstallationPlan struct {
-	RootVersionID string
-	Definition    fleet.CapabilityDefinition
-	NodeIDs       []string
-	Edges         []planEligibilityEdge
+	EligibilityHMAC string
+	RootVersionID   string
+	Definition      fleet.CapabilityDefinition
+	NodeIDs         []string
+	Edges           []planEligibilityEdge
 }
 
 type planEligibilityEdge struct{ Source, Target string }

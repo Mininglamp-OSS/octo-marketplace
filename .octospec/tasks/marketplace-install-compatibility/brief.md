@@ -14,6 +14,11 @@ Delisted legacy data remains historical until a specific republish/install need.
   in legacy/Admin writes and publication. Embedded intra-graph wiring retains its
   existing bounded exception. Frozen-plan recovery rejects malformed definitions
   before binding/dispatch without mutating the durable attempt.
+- Eligibility metadata (nodes, edges, root version) is authenticated in a separate
+  HMAC domain bound to caller/Space/workspace/key/adapter/intent/key ID and the
+  original input/request fingerprints. Verify before using metadata for reads;
+  the request HMAC and current permissions remain required. Unsigned legacy or
+  mismatched attempts retain evidence and cannot be signed/rebuilt on retry.
 - The existing owner/Space/audience rule applies to both reference types,
   including legacy writes/publication and installation expansion before cache reuse.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.

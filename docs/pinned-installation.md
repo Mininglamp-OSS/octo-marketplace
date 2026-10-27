@@ -31,7 +31,16 @@ Frozen-plan recovery validates the schema, root kind, expert/team cardinality,
 unique expert/skill names, member/leader wiring and skill references before
 constructing bindings. JSON clone failures or malformed persisted definitions
 return the existing integrity error without dispatching to Fleet or changing the
-attempt. Exact request HMAC checks and current governance/Workspace authorization
+attempt. A domain-separated `EligibilityHMAC` in the existing frozen-plan JSON
+protects the exact `NodeIDs`/`Edges`, root version and immutable operation context
+(caller/Space/workspace/key/adapter/intent/key ID plus input/request fingerprints).
+The existing request HMAC authenticates the reconstructed Fleet content/runtime
+bindings; the eligibility MAC binds that fingerprint to the governance graph.
+Verify eligibility authentication before using the persisted node/edge lists for
+current reads, then still verify current eligibility and exact request HMAC.
+Neither MAC grants distribution or Workspace access. Unsigned/mismatched plans
+fail closed without dispatch, plan rebuild, signing-on-read or attempt mutation.
+Exact request HMAC checks and current governance/Workspace authorization
 remain mandatory; corruption never causes plan regeneration or a new key.
 
 Delisted legacy data stays historical. Conversion is an explicit operator action
@@ -109,6 +118,27 @@ current workspace authorization and the remote receipt remain authoritative.
 Records outside the original retry deadline (bounded by Fleet's 24-hour receipt
 window) fail closed and need explicit reconciliation; they are not deleted and
 blindly retried. No automatic fallback follows an uncertain Fleet outcome.
+
+### Unsigned or damaged eligibility metadata
+
+This update adds no database column or wire field: `EligibilityHMAC` is stored
+inside the existing JSON document. Pre-update attempts lack it and are not safe
+to resend automatically, including completed receipts. New installations through
+either adapter receive authenticated plans normally. Retain the configured old
+HMAC keys during rotation so authentic existing plans remain verifiable.
+
+Before rollout, inventory unsigned attempts with a read-only query (select only
+operation IDs/state, not full payloads/secrets); rehearse on a database copy. An
+unsigned, mismatched or damaged plan returns the existing safe integrity failure.
+Pause that operation and reconcile its original key/workspace with Fleet and its
+receipt. Preserve the plan, result IDs, deadline and unknown-result evidence.
+Do not bulk-sign stored lists, synthesize a signature from unverified metadata,
+re-resolve latest content or delete/reset the attempt. Restore only an independently
+verified authentic backup when available; a legacy unsigned backup cannot acquire
+trusted metadata merely by restoration. If no authenticated record exists, use
+explicit incident reconciliation/forward repair, not automatic resend/new-key
+fallback. A rollback image must preserve this verification; otherwise keep
+installation writes paused. See the rollout runbook for operator steps.
 
 ### Expired receipt reconciliation
 

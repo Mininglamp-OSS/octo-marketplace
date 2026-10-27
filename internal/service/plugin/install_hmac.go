@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+
+	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
 
 // WithInstallationHMACKeys copies the deployment key ring. Rotation changes the
@@ -40,4 +42,27 @@ func equalInstallationHMAC(a, b string) bool {
 		return false
 	}
 	return hmac.Equal(aa, bb)
+}
+
+// installationEligibilityHMAC authenticates the frozen governance graph and its
+// operation context. RequestFingerprint binds the existing content/runtime MAC,
+// so neither a plan nor its node/edge lists can be transplanted to another key,
+// caller, Space or workspace. Only immutable fields participate; leases, outcome
+// and deadlines may change without re-signing. No secret runtime values persist.
+// Typed strings/arrays keep this MAC stable across MySQL JSON object formatting.
+func (s *Service) installationEligibilityHMAC(caller Caller, a pluginrepo.InstallAttempt, plan *pinnedInstallationPlan) (string, error) {
+	return s.installationHMAC(a.HMACKeyID, "eligibility-v1", struct {
+		Space, Caller         string
+		Workspace, Key        string
+		Plugin, RootVersion   string
+		Adapter, Intent       string
+		Input, Request, KeyID string
+		NodeIDs               []string
+		Edges                 []planEligibilityEdge
+	}{
+		Space: caller.SpaceID, Caller: caller.UID, Workspace: a.WorkspaceID, Key: a.KeyDigest,
+		Plugin: a.PluginID, RootVersion: plan.RootVersionID, Adapter: a.AdapterVersion,
+		Intent: a.IntentDigest, Input: a.InputFingerprint, Request: a.RequestFingerprint, KeyID: a.HMACKeyID,
+		NodeIDs: plan.NodeIDs, Edges: plan.Edges,
+	})
 }

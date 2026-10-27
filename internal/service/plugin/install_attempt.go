@@ -64,10 +64,6 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if err != nil {
 			return nil, err
 		}
-		frozen, err := json.Marshal(plan)
-		if err != nil {
-			return nil, ErrIntegrity
-		}
 		request, err := pinnedPlanRequest(plan, p)
 		if err != nil {
 			return nil, err
@@ -85,7 +81,16 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if err != nil {
 			return nil, err
 		}
-		attempt, err = store.ClaimInstallAttempt(ctx, scope(caller), pluginrepo.InstallAttempt{WorkspaceID: p.WorkspaceID, KeyDigest: key, PluginID: id, RootVersionID: plan.RootVersionID, AdapterVersion: SkillInstallAdapterVersion, InputFingerprint: input, RequestFingerprint: fingerprint, FrozenPlan: frozen, HMACKeyID: keyID, IntentDigest: intent})
+		candidate := pluginrepo.InstallAttempt{WorkspaceID: p.WorkspaceID, KeyDigest: key, PluginID: id, RootVersionID: plan.RootVersionID, AdapterVersion: SkillInstallAdapterVersion, InputFingerprint: input, RequestFingerprint: fingerprint, HMACKeyID: keyID, IntentDigest: intent}
+		plan.EligibilityHMAC, err = s.installationEligibilityHMAC(caller, candidate, plan)
+		if err != nil {
+			return nil, err
+		}
+		candidate.FrozenPlan, err = json.Marshal(plan)
+		if err != nil {
+			return nil, ErrIntegrity
+		}
+		attempt, err = store.ClaimInstallAttempt(ctx, scope(caller), candidate)
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
@@ -109,6 +114,15 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 	}
 	var plan pinnedInstallationPlan
 	if json.Unmarshal(attempt.FrozenPlan, &plan) != nil || plan.RootVersionID != attempt.RootVersionID || len(plan.NodeIDs) == 0 {
+		return nil, ErrIntegrity
+	}
+	// Authenticate the persisted eligibility lists before using them as query
+	// inputs. Unsigned historical attempts cannot be safely upgraded on retry.
+	eligibility, err := s.installationEligibilityHMAC(caller, *attempt, &plan)
+	if err != nil {
+		return nil, err
+	}
+	if !equalInstallationHMAC(plan.EligibilityHMAC, eligibility) {
 		return nil, ErrIntegrity
 	}
 	// Governance is current; content and selected versions remain frozen.
