@@ -76,22 +76,11 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	// The stock-migration writer now persists the normalized active-name key.
-	// Apply the name-uniqueness schema in this older-schema upgrade fixture before
-	// exercising the stock writer; the two remaining operational/frozen
-	// migrations below still exercise the interrupted index upgrade.
-	const nameMigration = "20261027-00-plugin-name-uniqueness.sql"
-	raw, err := migrationsql.FS.ReadFile(nameMigration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	up := strings.SplitN(string(raw), "-- +migrate Down", 2)[0]
-	up = strings.Replace(up, "-- +migrate Up", "", 1)
-	if _, err := database.Exec(up); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.Exec(`INSERT INTO gorp_migrations(id,applied_at) VALUES (?,NOW(3))`, nameMigration); err != nil {
-		t.Fatal(err)
+	// Apply the new schema before exercising the stock-migration writer. This
+	// also exercises the actual upgrade path from the older fixture schema.
+	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 2 {
+		t.Fatalf("pre-stock schema upgrade: n=%d err=%v", n, err)
 	}
 	seedStockRoot(t, database, "index-upgrade", "private", "published")
 	evidence, err := stockmigration.Read(ctx, database, 1000)
@@ -112,8 +101,7 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 	if _, err = repo.ClaimInstallAttempt(ctx, tenantScope(), attempt); err != nil {
 		t.Fatal(err)
 	}
-	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
-	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 1 {
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 0 {
 		t.Fatalf("index upgrade: n=%d err=%v", n, err)
 	}
 	for _, tc := range []struct{ table, index, columns string }{

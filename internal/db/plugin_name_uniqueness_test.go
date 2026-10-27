@@ -132,9 +132,17 @@ func TestPluginNamePublishedReservationSurvivesDraftRename(t *testing.T) {
 	if !errors.Is(err, pluginrepo.ErrNameTaken) {
 		t.Fatalf("published Alpha was released by draft rename: %v", err)
 	}
-	// The editable draft Beta is a different market-display reservation and may be
-	// created while Alpha remains published.
-	nameFixture(t, db, repo, "skill-new-beta", "Beta", "skill", "space-a", "draft")
+	// The published row also reserves its editable draft name Beta, so another
+	// active draft Beta must not be created.
+	err = func() error {
+		_, e := repo.Create(ctx, scope, pluginrepo.Mutation{
+			Plugin: model.Plugin{ID: "skill-new-beta", Name: "Beta", Type: model.PluginTypeSkill, Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStateDraft, Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{}`), ManifestHash: strings.Repeat("a", 71), PluginHash: strings.Repeat("b", 71), Status: 1, CreatedByType: string(model.CreatedByHuman), CreatorName: "Owner"}, OperatorID: "owner", OperatorName: "Owner",
+		})
+		return e
+	}()
+	if !errors.Is(err, pluginrepo.ErrNameTaken) {
+		t.Fatalf("draft Beta reservation was released: %v", err)
+	}
 }
 
 func TestPluginNameBinaryKeyKeepsAccentsDistinct(t *testing.T) {

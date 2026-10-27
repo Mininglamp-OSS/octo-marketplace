@@ -32,7 +32,11 @@ Marketplace display names are unique per Space and per Plugin type:
 stores the normalized published display name when version management has released
 one. `plugins.name_scope` stores the Space key (`''` for a system row).
 `plugins.active_name_key` is a generated column that is non-NULL only for active,
-non-embedded Expert/Skill rows and uses `COALESCE(published_name_key,name_key)`. The unique index is:
+non-embedded Expert/Skill rows and uses `COALESCE(published_name_key,name_key)`.
+`plugin_name_reservations` stores every draft and published name a row reserves;
+database triggers keep it in sync on insert/update/delete. This prevents a
+published row's draft rename from releasing either name and catches the
+cross-row draft/published collisions that two independent indexes would miss. The unique index is:
 
 ```text
 uq_plugins_active_name (name_scope, plugin_type, active_name_key)

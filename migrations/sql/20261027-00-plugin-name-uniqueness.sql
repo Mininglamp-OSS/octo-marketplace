@@ -26,5 +26,36 @@ ALTER TABLE plugins
 -- deleted_at, and active_name_key becomes NULL for deleted rows. Delisted rows
 -- keep deleted_at NULL and therefore continue to occupy their name.
 
+CREATE TABLE plugin_name_reservations (
+  plugin_id  VARCHAR(64)  NOT NULL,
+  name_scope VARCHAR(64)  CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  plugin_type ENUM('expert','expert_team','skill','connector') NOT NULL,
+  name_key   VARCHAR(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  PRIMARY KEY (plugin_id, name_key),
+  UNIQUE KEY uq_plugin_name_reservation (name_scope, plugin_type, name_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+  COMMENT='Every active display name reserved by a plugin (draft and published)';
+
+CREATE TRIGGER plugins_name_reservations_ai AFTER INSERT ON plugins FOR EACH ROW
+INSERT INTO plugin_name_reservations(plugin_id,name_scope,plugin_type,name_key)
+SELECT NEW.plugin_id,COALESCE(NEW.space_id,''),NEW.plugin_type,NEW.name_key
+WHERE NEW.deleted_at IS NULL AND NEW.is_embedded=0 AND NEW.plugin_type IN ('expert','skill') AND NEW.name_key IS NOT NULL
+UNION ALL
+SELECT NEW.plugin_id,COALESCE(NEW.space_id,''),NEW.plugin_type,NEW.published_name_key
+WHERE NEW.deleted_at IS NULL AND NEW.is_embedded=0 AND NEW.plugin_type IN ('expert','skill') AND NEW.published_name_key IS NOT NULL AND NEW.published_name_key <> NEW.name_key;
+
+CREATE TRIGGER plugins_name_reservations_bu BEFORE UPDATE ON plugins FOR EACH ROW
+DELETE FROM plugin_name_reservations WHERE plugin_id=OLD.plugin_id;
+
+CREATE TRIGGER plugins_name_reservations_au AFTER UPDATE ON plugins FOR EACH ROW
+INSERT INTO plugin_name_reservations(plugin_id,name_scope,plugin_type,name_key)
+SELECT NEW.plugin_id,COALESCE(NEW.space_id,''),NEW.plugin_type,NEW.name_key
+WHERE NEW.deleted_at IS NULL AND NEW.is_embedded=0 AND NEW.plugin_type IN ('expert','skill') AND NEW.name_key IS NOT NULL
+UNION ALL
+SELECT NEW.plugin_id,COALESCE(NEW.space_id,''),NEW.plugin_type,NEW.published_name_key
+WHERE NEW.deleted_at IS NULL AND NEW.is_embedded=0 AND NEW.plugin_type IN ('expert','skill') AND NEW.published_name_key IS NOT NULL AND NEW.published_name_key <> NEW.name_key;
+
+CREATE TRIGGER plugins_name_reservations_ad AFTER DELETE ON plugins FOR EACH ROW
+DELETE FROM plugin_name_reservations WHERE plugin_id=OLD.plugin_id;
 -- +migrate Down
 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Plugin name uniqueness downgrade refused';
