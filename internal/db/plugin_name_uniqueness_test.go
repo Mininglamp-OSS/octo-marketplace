@@ -230,3 +230,26 @@ func TestPluginNameRepositoryRejectsBlankWrites(t *testing.T) {
 		t.Fatalf("blank update error = %v, want ErrInvalidName", err)
 	}
 }
+
+// A historical saved version is not a formal publication. The legacy backfill
+// must leave published_name_key NULL; otherwise renaming the draft frees the
+// draft but leaves a phantom published reservation.
+func TestSavedVersionDoesNotReservePublishedName(t *testing.T) {
+	db := reviewDB(t)
+	repo := pluginrepo.New(db)
+	ctx := context.Background()
+	scope := pluginrepo.Scope{CallerUID: "owner", SpaceID: "space-a"}
+	nameFixture(t, db, repo, "saved-version", "Alpha", "skill", "space-a", "draft")
+	if _, err := db.Exec(`UPDATE plugins SET name_key='alpha',name_scope='space-a',published_name_key=NULL WHERE plugin_id='saved-version'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, scope, "saved-version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Name = "Beta"
+	if _, err := repo.Update(ctx, scope, pluginrepo.Mutation{Plugin: *got, OperatorID: "owner"}); err != nil {
+		t.Fatal(err)
+	}
+	nameFixture(t, db, repo, "saved-version-alpha", "Alpha", "skill", "space-a", "draft")
+}

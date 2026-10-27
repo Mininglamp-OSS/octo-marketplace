@@ -994,10 +994,18 @@ func legacyNameColumns(x plugRow) (draftKey, publishedKey any, scope string, err
 		return nil, nil, "", e
 	}
 	draftKey = draft
-	if x.versionID != "" {
-		publishedKey = draft
+	// A current_version_id is a saved version, not a formal published pointer or
+	// release. Do not invent a published reservation from it; publication is
+	// derived from authoritative release state elsewhere.
+	return draftKey, nil, scope, nil
+}
+
+func nullStringMatches(got sql.NullString, want any) bool {
+	if want == nil {
+		return !got.Valid
 	}
-	return draftKey, publishedKey, scope, nil
+	text, ok := want.(string)
+	return ok && got.Valid && got.String == text
 }
 
 func applyRow(ctx context.Context, tx *sql.Tx, rep *Report, table, keyColumn string, key any, exactQuery, insertQuery string, exactArgs, insertArgs []any) error {
@@ -1110,7 +1118,9 @@ func (r *Runner) verify(ctx context.Context, p plan, issues []Issue) (Counts, st
 	for _, x := range p.plugins {
 		var typ, h string
 		var embedded int
-		e := r.db.QueryRowContext(ctx, `SELECT plugin_type,is_embedded,plugin_hash FROM plugins WHERE plugin_id=?`, x.id).Scan(&typ, &embedded, &h)
+		var nameKey, publishedKey sql.NullString
+		var nameScope string
+		e := r.db.QueryRowContext(ctx, `SELECT plugin_type,is_embedded,plugin_hash,name_key,published_name_key,name_scope FROM plugins WHERE plugin_id=?`, x.id).Scan(&typ, &embedded, &h, &nameKey, &publishedKey, &nameScope)
 		if errors.Is(e, sql.ErrNoRows) {
 			c.Missing += 2
 			continue
@@ -1118,9 +1128,15 @@ func (r *Runner) verify(ctx context.Context, p plan, issues []Issue) (Counts, st
 		if e != nil {
 			return c, "", issues, e
 		}
-		if typ != x.typ || embedded != x.embedded || h != x.phash {
+		expectedDraft, expectedPublished, expectedScope, nameErr := legacyNameColumns(x)
+		if nameErr != nil {
+			return c, "", issues, nameErr
+		}
+		draftOK := nullStringMatches(nameKey, expectedDraft)
+		publishedOK := nullStringMatches(publishedKey, expectedPublished)
+		if typ != x.typ || embedded != x.embedded || h != x.phash || nameScope != expectedScope || !draftOK || !publishedOK {
 			c.Conflicts++
-			issues = append(issues, Issue{"error", "plugin_conflict", "plugins", x.id, "type, embedded flag, or hash differs"})
+			issues = append(issues, Issue{"error", "plugin_conflict", "plugins", x.id, "type, embedded flag, hash, or name-index fields differ"})
 		}
 		c.Plugins++
 		l = append(l, "p:"+x.id+":"+h)
