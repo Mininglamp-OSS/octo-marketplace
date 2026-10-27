@@ -350,7 +350,7 @@ const publishedVersionJoin = ` LEFT JOIN plugin_versions published_pv ON publish
 func publishedListProjection(query string) string {
 	value := func(column, fallback string) string { return `COALESCE(` + column + `,` + fallback + `)` }
 	effective := func(column, other string) string {
-		return `CASE WHEN p.plugin_type='connector' THEN effective_ce.` + column + ` ELSE ` + other + ` END`
+		return `CASE WHEN p.plugin_type='connector' THEN COALESCE(effective_ce.` + column + `, ` + other + `) ELSE ` + other + ` END`
 	}
 	return strings.NewReplacer(
 		"p.plugin_name", effective("plugin_name", value(`JSON_UNQUOTE(JSON_EXTRACT(published_pv.manifest_json,'$.plugin_name'))`, "p.plugin_name")),
