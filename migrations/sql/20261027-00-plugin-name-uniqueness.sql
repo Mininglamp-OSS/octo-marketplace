@@ -57,5 +57,16 @@ WHERE NEW.deleted_at IS NULL AND NEW.is_embedded=0 AND NEW.plugin_type IN ('expe
 
 CREATE TRIGGER plugins_name_reservations_ad AFTER DELETE ON plugins FOR EACH ROW
 DELETE FROM plugin_name_reservations WHERE plugin_id=OLD.plugin_id;
+
 -- +migrate Down
-SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Plugin name uniqueness downgrade refused';
+DROP TRIGGER IF EXISTS plugins_name_reservations_ai;
+DROP TRIGGER IF EXISTS plugins_name_reservations_bu;
+DROP TRIGGER IF EXISTS plugins_name_reservations_au;
+DROP TRIGGER IF EXISTS plugins_name_reservations_ad;
+DROP TABLE IF EXISTS plugin_name_reservations;
+ALTER TABLE plugins
+  DROP INDEX uq_plugins_active_name,
+  DROP COLUMN active_name_key,
+  DROP COLUMN name_scope,
+  DROP COLUMN published_name_key,
+  DROP COLUMN name_key;

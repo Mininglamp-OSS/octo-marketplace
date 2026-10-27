@@ -176,11 +176,12 @@ func pluginNameColumns(name string, typ model.PluginType, spaceID *string) (any,
 	if typ != model.PluginTypeExpert && typ != model.PluginTypeSkill {
 		return nil, scope, nil
 	}
-	// The service rejects empty display names; repository-level fixtures and
-	// historical rows may still carry empty names. They stay outside the unique
-	// index until the backfill command reports them.
+	// Enforce the invariant at the repository boundary too: an admin/internal
+	// caller must not create a blank Expert/Skill that bypasses the unique index.
+	// Historical malformed rows are normalized only by the explicit backfill
+	// command, which writes directly rather than through this path.
 	if strings.TrimSpace(name) == "" {
-		return nil, scope, nil
+		return nil, scope, ErrInvalidName
 	}
 	key, err := model.NormalizePluginName(name)
 	if err != nil {

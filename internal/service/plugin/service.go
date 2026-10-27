@@ -1120,6 +1120,8 @@ func mapStoreError(err error) error {
 		return ErrConflict
 	case errors.Is(err, pluginrepo.ErrNameTaken):
 		return ErrNameTaken
+	case errors.Is(err, pluginrepo.ErrInvalidName):
+		return ErrInvalidRequest
 	case errors.Is(err, pluginrepo.ErrRelationInUse):
 		return ErrRelationInUse
 	case errors.Is(err, pluginrepo.ErrGraphTooLarge):

@@ -1,0 +1,26 @@
+package db
+
+import (
+	"testing"
+
+	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
+	migrate "github.com/rubenv/sql-migrate"
+)
+
+func TestPluginNameMigrationDownRemovesDerivedObjects(t *testing.T) {
+	database := isolatedTestDB(t)
+	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	if _, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := migrate.ExecMax(database, "mysql", source, migrate.Down, 1); err != nil || n != 1 {
+		t.Fatalf("down: n=%d err=%v", n, err)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='plugin_name_reservations'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("reservation table remains: count=%d err=%v", count, err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='plugins' AND column_name IN ('name_key','published_name_key','name_scope','active_name_key')`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("derived columns remain: count=%d err=%v", count, err)
+	}
+}

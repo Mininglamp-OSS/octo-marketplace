@@ -210,3 +210,23 @@ func TestPluginNameApprovalConflictMapsToNameTaken(t *testing.T) {
 		t.Fatalf("service approval name conflict = %v, want ErrNameTaken", err)
 	}
 }
+
+func TestPluginNameRepositoryRejectsBlankWrites(t *testing.T) {
+	db := reviewDB(t)
+	repo := pluginrepo.New(db)
+	ctx := context.Background()
+	scope := pluginrepo.Scope{CallerUID: "owner", SpaceID: "space-a"}
+	blank := model.Plugin{ID: "blank-create", Name: "   ", Type: model.PluginTypeSkill, Visibility: model.PluginVisibilitySpace, ListingState: model.PluginListingStateDraft, Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: json.RawMessage(`{}`), ManifestHash: strings.Repeat("a", 71), PluginHash: strings.Repeat("b", 71), Status: 1, CreatedByType: string(model.CreatedByHuman), CreatorName: "Owner"}
+	if _, err := repo.Create(ctx, scope, pluginrepo.Mutation{Plugin: blank, OperatorID: "owner", OperatorName: "Owner"}); !errors.Is(err, pluginrepo.ErrInvalidName) {
+		t.Fatalf("blank create error = %v, want ErrInvalidName", err)
+	}
+	nameFixture(t, db, repo, "valid-name", "Valid", "skill", "space-a", "draft")
+	got, err := repo.Get(ctx, scope, "valid-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Name = " "
+	if _, err := repo.Update(ctx, scope, pluginrepo.Mutation{Plugin: *got, OperatorID: "owner"}); !errors.Is(err, pluginrepo.ErrInvalidName) {
+		t.Fatalf("blank update error = %v, want ErrInvalidName", err)
+	}
+}

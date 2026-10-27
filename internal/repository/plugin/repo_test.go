@@ -184,7 +184,7 @@ func TestUpdateSnapshotsIncrementingVersion(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	_, err := r.Update(context.Background(), scope, Mutation{
-		Plugin:          model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m2", PluginHash: "sha256:p2", Status: 1},
+		Plugin:          model.Plugin{ID: "plugin-id", Name: "Name", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m2", PluginHash: "sha256:p2", Status: 1},
 		OperatorID:      "caller",
 		SnapshotVersion: true,
 	})
@@ -224,7 +224,7 @@ func TestUpdateSkipsSnapshotWhenContentUnchanged(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	sync, err := r.Update(context.Background(), scope, Mutation{
-		Plugin:          model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
+		Plugin:          model.Plugin{ID: "plugin-id", Name: "Name", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
 		OperatorID:      "caller",
 		SnapshotVersion: true,
 	})
@@ -275,7 +275,7 @@ func TestUpdateSnapshotsOnLabelOnlyChange(t *testing.T) {
 	mock.ExpectCommit()
 	label := "2.0.0"
 	_, err := r.Update(context.Background(), scope, Mutation{
-		Plugin:          model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", CurrentVersion: &label, Status: 1},
+		Plugin:          model.Plugin{ID: "plugin-id", Name: "Name", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", CurrentVersion: &label, Status: 1},
 		OperatorID:      "caller",
 		SnapshotVersion: true,
 	})
@@ -319,7 +319,7 @@ func TestUpdateSnapshotsOnChangelogOnly(t *testing.T) {
 	mock.ExpectCommit()
 	changelog := "fixed a typo"
 	_, err := r.Update(context.Background(), scope, Mutation{
-		Plugin:          model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
+		Plugin:          model.Plugin{ID: "plugin-id", Name: "Name", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
 		OperatorID:      "caller",
 		Changelog:       &changelog,
 		SnapshotVersion: true,
@@ -367,7 +367,7 @@ func TestUpdateSnapshotsOnRelationOnly(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	_, err := r.Update(context.Background(), scope, Mutation{
-		Plugin: model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
+		Plugin: model.Plugin{ID: "plugin-id", Name: "Name", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
 		Relations: []model.PluginRelation{
 			{TargetPluginID: "target-1", Type: "expert_skill", Status: 1},
 		},
@@ -415,7 +415,7 @@ func TestUpdateSnapshotsOnSidecarOnly(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	_, err := r.Update(context.Background(), scope, Mutation{
-		Plugin:          model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), AttachmentKeys: []byte(`{"assets/logo.bin":"plugins/space/attachments/logo-abc.bin"}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
+		Plugin:          model.Plugin{ID: "plugin-id", Name: "Name", Type: model.PluginTypeExpert, Tags: []byte(`[]`), Manifest: []byte(`{}`), Package: []byte(`{}`), AttachmentKeys: []byte(`{"assets/logo.bin":"plugins/space/attachments/logo-abc.bin"}`), ManifestHash: "sha256:m", PluginHash: "sha256:p", Status: 1},
 		OperatorID:      "caller",
 		SnapshotVersion: true,
 	})
@@ -497,7 +497,7 @@ func TestCreateRejectsInvisibleRelationTargetBeforeWriting(t *testing.T) {
 	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .*p.space_id = \?.*p.owner_uid = \?.*FOR UPDATE`).WithArgs("foreign", scope.SpaceID, scope.CallerUID).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}))
 	mock.ExpectRollback()
 
-	_, err := New(db).Create(context.Background(), scope, Mutation{Plugin: model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert}, Relations: []model.PluginRelation{{TargetPluginID: "foreign", Type: "expert_skill"}}})
+	_, err := New(db).Create(context.Background(), scope, Mutation{Plugin: model.Plugin{ID: "plugin-id", Name: "Name", Type: model.PluginTypeExpert}, Relations: []model.PluginRelation{{TargetPluginID: "foreign", Type: "expert_skill"}}})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err=%v, want ErrNotFound", err)
 	}
