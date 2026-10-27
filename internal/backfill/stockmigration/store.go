@@ -378,6 +378,38 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 func validID(v string) bool {
 	return v != "" && len(v) <= 64 && strings.TrimSpace(v) == v && !strings.ContainsAny(v, "\x00\r\n")
 }
+
+// rollbackNameColumns reconstructs the three derived name-index fields from the
+// saved pre-migration resource. The triggers then rebuild the reservation set in
+// the same rollback transaction; without this, rollback restores content/pointer
+// state while leaving the new reservation state in place.
+func rollbackNameColumns(r Resource) (draftKey, publishedKey any, scope string, err error) {
+	p := r.Plugin
+	if p.SpaceID != nil {
+		scope = *p.SpaceID
+	}
+	if p.Type != model.PluginTypeExpert && p.Type != model.PluginTypeSkill {
+		return nil, nil, scope, nil
+	}
+	draft, e := model.NormalizePluginName(p.Name)
+	if e != nil {
+		return nil, nil, "", e
+	}
+	draftKey = draft
+	publishedName := r.PublishedName
+	if publishedName == "" && r.PublishedVersionID != nil {
+		publishedName = p.Name
+	}
+	if publishedName != "" {
+		published, e := model.NormalizePluginName(publishedName)
+		if e != nil {
+			return nil, nil, "", e
+		}
+		publishedKey = published
+	}
+	return draftKey, publishedKey, scope, nil
+}
+
 func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Time) error {
 	p := n.Plugin
 	if n.Clone {
@@ -545,7 +577,11 @@ func Rollback(ctx context.Context, db *sql.DB, batch string) error {
 		if pub.String != expectedPub || status != 1 || deleted.Valid || visibility != string(item.after.Plugin.Visibility) || listing != string(item.after.Plugin.ListingState) || item.after.Plugin.CurrentVersionID == nil || current.String != *item.after.Plugin.CurrentVersionID || mh != item.after.Plugin.ManifestHash || ph != item.after.Plugin.PluginHash {
 			return ErrConflict
 		}
-		if _, e = tx.ExecContext(ctx, `UPDATE plugins SET manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,current_version_id=?,published_version_id=?,current_version=?,visibility=?,listing_state=?,updated_at=? WHERE plugin_id=?`, string(p.Manifest), string(p.Package), nullableJSON(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, item.before.PublishedVersionID, p.CurrentVersion, p.Visibility, p.ListingState, time.Now().UTC(), p.ID); e != nil {
+		nameKey, publishedKey, nameScope, nameErr := rollbackNameColumns(item.before)
+		if nameErr != nil {
+			return ErrWrite
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE plugins SET manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,current_version_id=?,published_version_id=?,current_version=?,visibility=?,listing_state=?,name_key=?,published_name_key=?,name_scope=?,updated_at=? WHERE plugin_id=?`, string(p.Manifest), string(p.Package), nullableJSON(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, item.before.PublishedVersionID, p.CurrentVersion, p.Visibility, p.ListingState, nameKey, publishedKey, nameScope, time.Now().UTC(), p.ID); e != nil {
 			return ErrWrite
 		}
 		if _, e = tx.ExecContext(ctx, `UPDATE plugin_relations SET deleted_at=NOW(3) WHERE source_plugin_id=? AND deleted_at IS NULL`, p.ID); e != nil {
