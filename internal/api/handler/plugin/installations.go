@@ -175,7 +175,9 @@ func writeInstallationError(c *gin.Context, err error) {
 		if attempt != nil && attempt.RetryUntil != nil {
 			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
 		}
-		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "原安装凭证已过期，请核对工作区已有资源后使用新幂等键。", details, "请先确认是否已安装；不要用原幂等键重复提交。")
+		// A completed receipt may still exist. Expiry must not encourage a new
+		// operation or expose stored IDs without current workspace verification.
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "原安装重试窗口已结束，请先在工作区核对原安装记录。", details, "如已完成，请使用已有资源；结果不明时停止重试并联系管理员核对。不要自动更换幂等键或重复安装。")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装请求与首次提交的参数或依赖状态不一致，或原安装凭证已过期。", nil, "请先核对工作区已有资源和依赖状态，不要直接更换幂等键重复安装。")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):

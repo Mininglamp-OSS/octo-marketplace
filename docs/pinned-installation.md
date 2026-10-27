@@ -106,6 +106,12 @@ is no automatic TTL deletion, key reset or GC: table growth is an explicit curre
 limitation, and must be capacity-planned. Deleting a completed row would allow
 the same key to create duplicates after Fleet forgets its receipt.
 
+An HTTP expiry conflict does not say that a prior successful installation failed.
+Its completed receipt/IDs are retained, while current workspace access must still
+be verified before returning or using that result. The client is told to use the
+existing resource if completed, or stop and reconcile if unclear; it is not told
+to automatically replace the key.
+
 Use this operator procedure after a key expires (never retry with a new key to
 discover whether the previous call committed):
 

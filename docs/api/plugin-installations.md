@@ -245,3 +245,21 @@ Before switching Client, verify single expert and multi-member team installs,
 custom naming, MCP, provider environment, complete Skill files, cross-Space and
 runtime denials, same-key replay, changed-input conflict, and uncertain-response
 recovery against Fleet. Keep the legacy route available throughout migration.
+
+## Expired receipt recovery
+
+The original resend deadline applies to completed and uncertain attempts alike:
+after Fleet's receipt window, another mutation is not licensed by the old key.
+`409 CONFLICT` with `reason = "installation_attempt_expired"` and
+`can_retry_same_key = false` does not mean the original installation failed.
+A successful local receipt and its IDs remain stored; earlier uncertainty is
+retained. The response asks the caller to inspect the original workspace record,
+use the existing resource if completed, or stop and reconcile with an operator
+if unclear. It does **not** instruct automatic replacement of the key.
+
+Do not bypass current Workspace access by returning stored IDs locally, or
+resend after the remote window merely because a local success exists. Follow
+[receipt reconciliation](../pinned-installation.md#expired-receipt-reconciliation).
+A new key is a distinct, explicitly authorized operation only after reconciliation
+proves it appropriate; expiry alone is not such proof. Both installation URLs
+retain the same expiry response and recovery boundary.

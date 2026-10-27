@@ -124,6 +124,10 @@ func TestInstallUpstreamHTTPContracts(t *testing.T) {
 				status                            int
 				code, message, reason, retryAfter string
 			}{
+				{name: "upstream-validation", reply: installHTTPReply{status: 400, body: `{"error":{"code":"VALIDATION_ERROR"}}`}, status: 400, code: "VALIDATION_ERROR"},
+				{name: "upstream-auth", reply: installHTTPReply{status: 401, body: `{"error":{"code":"AUTH_REQUIRED"}}`}, status: 401, code: "AUTH_REQUIRED"},
+				{name: "upstream-permission", reply: installHTTPReply{status: 403, body: `{"error":{"code":"FORBIDDEN"}}`}, status: 403, code: "FORBIDDEN"},
+				{name: "upstream-missing", reply: installHTTPReply{status: 404, body: `{"error":{"code":"NOT_FOUND"}}`}, status: 404, code: "NOT_FOUND"},
 				{name: "key-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"idempotency_key","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: "幂等键已用于其他安装参数，请核对原安装记录。", reason: "idempotency_key_reused"},
 				{name: "skill-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: "安装发生技能资源冲突，请核对工作区已有资源。"},
 				{name: "expert-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "DUPLICATE", message: "安装发生专家资源冲突，请核对工作区已有资源。"},
@@ -290,6 +294,87 @@ func TestInstallHTTPRateLimitSameKeyRetry(t *testing.T) {
 				}
 				if calls.Load() != 2 {
 					t.Fatalf("calls=%d", calls.Load())
+				}
+			})
+		}
+	}
+}
+
+// A local success does not authorize another mutation after Fleet's receipt
+// window, or a local-only replay that bypasses current workspace permissions.
+func TestInstallHTTPExpiredReceiptReconciliation(t *testing.T) {
+	for _, route := range []string{"legacy-keyed", "new-keyed"} {
+		for _, state := range []string{"SUCCEEDED", "UNKNOWN"} {
+			t.Run(route+"/"+state, func(t *testing.T) {
+				remote := &recoveryHTTPInstaller{}
+				if state == "UNKNOWN" {
+					remote.err = context.DeadlineExceeded
+				}
+				engine, root, database := installationHTTPFixture(t, true, remote)
+				first := httptest.NewRecorder()
+				engine.ServeHTTP(first, installationHTTPRequest(root, route, "expired-original-operation"))
+				wantFirst := 200
+				if state == "UNKNOWN" {
+					wantFirst = 503
+				}
+				if first.Code != wantFirst || remote.calls != 1 {
+					t.Fatalf("initial status=%d calls=%d body=%s", first.Code, remote.calls, first.Body.String())
+				}
+				if _, err := database.Exec(`UPDATE plugin_install_attempts SET created_at=UTC_TIMESTAMP(3)-INTERVAL 25 HOUR,retry_until=UTC_TIMESTAMP(3)-INTERVAL 61 MINUTE WHERE space_id='space-a' AND caller_uid='user-1' AND workspace_id='workspace-1' AND plugin_id=?`, root); err != nil {
+					t.Fatal(err)
+				}
+				const evidence = `SELECT JSON_OBJECT('state',attempt_state,'completed',completed,'had_unknown',had_unknown,'agent_id',agent_id,'team_id',team_id,'plan',frozen_plan_json,'request',request_fingerprint,'input',input_fingerprint,'deadline',retry_until,'created_at',created_at,'lease_token',lease_token,'lease_until',lease_until) FROM plugin_install_attempts WHERE space_id='space-a' AND caller_uid='user-1' AND workspace_id='workspace-1' AND plugin_id=?`
+				var before string
+				if err := database.QueryRow(evidence, root).Scan(&before); err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				engine.ServeHTTP(rec, installationHTTPRequest(root, route, "expired-original-operation"))
+				var response struct {
+					Error struct {
+						Code, Message, Hint string
+						Details             map[string]any
+					}
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != 409 || response.Error.Code != "CONFLICT" || response.Error.Details["reason"] != "installation_attempt_expired" || response.Error.Details["can_retry_same_key"] != false {
+					t.Fatalf("expired response=%d %s", rec.Code, rec.Body.String())
+				}
+				if !strings.Contains(response.Error.Hint, "如已完成，请使用已有资源") || !strings.Contains(response.Error.Hint, "不要自动更换幂等键") || strings.Contains(response.Error.Message, "后使用新幂等键") {
+					t.Fatalf("unsafe expiry guidance: %s", rec.Body.String())
+				}
+				if remote.calls != 1 {
+					t.Fatal("expired key reached Fleet again")
+				}
+				if strings.Contains(rec.Body.String(), "created") {
+					t.Fatal("local result exposed without workspace verification")
+				}
+				var after string
+				if err := database.QueryRow(evidence, root).Scan(&after); err != nil {
+					t.Fatal(err)
+				}
+				var b, a map[string]any
+				if err := json.Unmarshal([]byte(before), &b); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal([]byte(after), &a); err != nil {
+					t.Fatal(err)
+				}
+				if state == "UNKNOWN" {
+					b["state"] = "EXPIRED"
+				}
+				normalizedBefore, _ := json.Marshal(b)
+				normalizedAfter, _ := json.Marshal(a)
+				if string(normalizedBefore) != string(normalizedAfter) {
+					t.Fatal("expiry deleted or rewrote success/unknown/frozen-plan evidence")
+				}
+				if state == "SUCCEEDED" && (a["state"] != "SUCCEEDED" || a["agent_id"] != "created" || a["completed"] != float64(1)) {
+					t.Fatal("known success lost")
+				}
+				if state == "UNKNOWN" && a["had_unknown"] != true && a["had_unknown"] != float64(1) {
+					t.Fatal("unknown outcome erased")
 				}
 			})
 		}

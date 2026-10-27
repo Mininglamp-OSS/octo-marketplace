@@ -320,3 +320,45 @@ func TestInstallationUnavailableWithoutNewService(t *testing.T) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestInstallationWrappedFleetRejections(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   string
+	}{
+		{400, "VALIDATION_ERROR"}, {401, "AUTH_REQUIRED"}, {403, "FORBIDDEN"},
+		{404, "NOT_FOUND"}, {409, "DUPLICATE"}, {429, "RATE_LIMITED"},
+	} {
+		for _, unknown := range []bool{false, true} {
+			upstream := &fleet.CapabilityAPIError{Status: tc.status, Code: "DUPLICATE", RetryAfter: "3"}
+			wrapped := &pluginsvc.InstallationAttemptError{Err: upstream, Unknown: unknown}
+			rec := httptest.NewRecorder()
+			testEngine(&fakeInstallationService{fakeService: &fakeService{}, installationErr: wrapped}).ServeHTTP(rec, installationRequest(installationBody))
+			var out struct {
+				Error struct {
+					Code    string
+					Details map[string]any
+				}
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			wantStatus, wantCode := tc.status, tc.code
+			if unknown {
+				wantStatus, wantCode = 503, "UPSTREAM_UNAVAILABLE"
+			}
+			if rec.Code != wantStatus || out.Error.Code != wantCode {
+				t.Fatalf("upstream=%d unknown=%t status=%d body=%s", tc.status, unknown, rec.Code, rec.Body.String())
+			}
+			if unknown && out.Error.Details["reason"] != "installation_result_unknown" {
+				t.Fatal("earlier uncertainty lost")
+			}
+			if !unknown && tc.status == 429 && rec.Header().Get("Retry-After") != "3" {
+				t.Fatal("wrapped rate-limit header lost")
+			}
+			if unknown && rec.Header().Get("Retry-After") != "" {
+				t.Fatal("unknown outcome mislabeled as safe rate-limit retry")
+			}
+		}
+	}
+}
