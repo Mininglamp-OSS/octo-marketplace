@@ -659,13 +659,17 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	// the UPDATE predicate the way PublishPlugin/DelistPlugin carry theirs, so the
 	// branch the code took is the branch the row commits to.
 	isFirst := !(current.Visibility == model.PluginVisibilitySpace && current.ListingState == model.PluginListingStatePublished)
+	nameKey, nameScope, nameErr := pluginNameColumns(frozenName, current.Type, current.SpaceID)
+	if nameErr != nil {
+		return nil, nameErr
+	}
 	if isFirst {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,visibility=?,listing_state=?,updated_at=?
+			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,visibility=?,listing_state=?,updated_at=?,name_key=?,name_scope=?
 			  WHERE plugin_id=? AND space_id=? AND deleted_at IS NULL
 			    AND NOT (visibility=? AND listing_state=?)`,
 			frozenName, frozenTags, string(manifest), string(pkg), jsonColumn(attKeys), manifestHash, pluginHash,
-			string(model.PluginVisibilitySpace), string(model.PluginListingStatePublished), now, pluginID, scope.SpaceID,
+			string(model.PluginVisibilitySpace), string(model.PluginListingStatePublished), now, nameKey, nameScope, pluginID, scope.SpaceID,
 			string(model.PluginVisibilitySpace), string(model.PluginListingStatePublished))
 		if err != nil {
 			return nil, wrapped("apply approved snapshot", err)
@@ -686,10 +690,10 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		}
 	} else {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,updated_at=?
+			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,updated_at=?,name_key=?,name_scope=?
 			  WHERE plugin_id=? AND space_id=? AND deleted_at IS NULL`,
-			frozenName, frozenTags, string(manifest), string(pkg), jsonColumn(attKeys), manifestHash, pluginHash, now, pluginID, scope.SpaceID); err != nil {
-			return nil, wrapped("apply approved snapshot", err)
+			frozenName, frozenTags, string(manifest), string(pkg), jsonColumn(attKeys), manifestHash, pluginHash, now, nameKey, nameScope, pluginID, scope.SpaceID); err != nil {
+			return nil, wrapped("apply approved snapshot", mapPluginNameTaken(err))
 		}
 	}
 	// Approval is the only moment that promises "this plugin is in the market now",

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	"github.com/go-sql-driver/mysql"
 )
 
 // Mutation contains current state, replacement relations, and append-only audit metadata.
@@ -162,6 +164,42 @@ func jsonColumn(raw []byte) any {
 	return string(raw)
 }
 
+// pluginNameColumns returns the normalized name key and scope for the unique
+// active-name index. Only Experts and Skills participate; Connectors and Teams
+// keep the historical duplicate-name behavior. The same normalization MUST be
+// used by the backfill command and migration preflight.
+func pluginNameColumns(name string, typ model.PluginType, spaceID *string) (any, string, error) {
+	scope := ""
+	if spaceID != nil {
+		scope = *spaceID
+	}
+	if typ != model.PluginTypeExpert && typ != model.PluginTypeSkill {
+		return nil, scope, nil
+	}
+	// The service rejects empty display names; repository-level fixtures and
+	// historical rows may still carry empty names. They stay outside the unique
+	// index until the backfill command reports them.
+	if strings.TrimSpace(name) == "" {
+		return nil, scope, nil
+	}
+	key, err := model.NormalizePluginName(name)
+	if err != nil {
+		return nil, scope, err
+	}
+	return key, scope, nil
+}
+
+// mapPluginNameTaken translates the unique active-name index violation into a
+// stable repository error. All name-bearing write paths must use it so callers
+// can return a 409 instead of an opaque 500.
+func mapPluginNameTaken(err error) error {
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 && strings.Contains(mysqlErr.Message, "uq_plugins_active_name") {
+		return ErrNameTaken
+	}
+	return err
+}
+
 // insertPlugin writes one current-state plugin row. Callers hold the
 // transaction and have already locked the category and relation targets.
 //
@@ -175,11 +213,15 @@ func insertPlugin(ctx context.Context, tx *sql.Tx, now interface{}, p model.Plug
 	if listing == "" {
 		listing = model.PluginListingStateDraft
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO plugins (plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,
-creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version_id,current_version,status,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Type, p.IsEmbedded, p.CategoryID, string(p.Tags), p.Publisher, p.OwnerUID, p.SpaceID, p.Visibility, listing, p.CreatorName, p.CreatedByType, p.CreatedByBotUID, p.CreatedByBotName, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, p.CurrentVersion, p.Status, now, now)
+	nameKey, nameScope, err := pluginNameColumns(p.Name, p.Type, p.SpaceID)
 	if err != nil {
-		return wrapped("create", err)
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO plugins (plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,
+creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version_id,current_version,status,created_at,updated_at,name_key,name_scope)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Type, p.IsEmbedded, p.CategoryID, string(p.Tags), p.Publisher, p.OwnerUID, p.SpaceID, p.Visibility, listing, p.CreatorName, p.CreatedByType, p.CreatedByBotUID, p.CreatedByBotName, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, p.CurrentVersion, p.Status, now, now, nameKey, nameScope)
+	if err != nil {
+		return wrapped("create", mapPluginNameTaken(err))
 	}
 	return nil
 }
@@ -480,10 +522,14 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	if scope.Admin {
 		updWhere, updTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{topPlugin.ID}
 	}
-	updArgs := append([]any{topPlugin.Name, topPlugin.Type, topPlugin.CategoryID, string(topPlugin.Tags), topPlugin.Publisher, topPlugin.Visibility, topPlugin.Icon, topPlugin.ToolCount, string(topPlugin.Manifest), string(topPlugin.Package), jsonColumn(topPlugin.AttachmentKeys), topPlugin.ManifestHash, topPlugin.PluginHash, topPlugin.Status, now}, updTail...)
-	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
+	nameKey, nameScope, nameErr := pluginNameColumns(topPlugin.Name, topPlugin.Type, topPlugin.SpaceID)
+	if nameErr != nil {
+		return nil, nameErr
+	}
+	updArgs := append([]any{topPlugin.Name, topPlugin.Type, topPlugin.CategoryID, string(topPlugin.Tags), topPlugin.Publisher, topPlugin.Visibility, topPlugin.Icon, topPlugin.ToolCount, string(topPlugin.Manifest), string(topPlugin.Package), jsonColumn(topPlugin.AttachmentKeys), topPlugin.ManifestHash, topPlugin.PluginHash, topPlugin.Status, now, nameKey, nameScope}, updTail...)
+	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?,name_key=?,name_scope=?
 `+updWhere, updArgs...); err != nil {
-		return nil, wrapped("rebuild", err)
+		return nil, wrapped("rebuild", mapPluginNameTaken(err))
 	}
 	if err = syncDefaultPlacement(ctx, tx, r.id, now, topPlugin.ID, topPlugin.CategoryID); err != nil {
 		return nil, err
@@ -711,11 +757,15 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if resetListing {
 		listingReset = `listing_state='draft',`
 	}
-	updArgs := append([]any{p.Name, p.Type, p.CategoryID, string(p.Tags), p.Publisher, p.Visibility, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.Status, now}, updTail...)
-	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
+	nameKey, nameScope, nameErr := pluginNameColumns(p.Name, p.Type, p.SpaceID)
+	if nameErr != nil {
+		return nil, nameErr
+	}
+	updArgs := append([]any{p.Name, p.Type, p.CategoryID, string(p.Tags), p.Publisher, p.Visibility, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.Status, now, nameKey, nameScope}, updTail...)
+	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?,name_key=?,name_scope=?
 `+updWhere, updArgs...)
 	if err != nil {
-		return nil, wrapped("update", err)
+		return nil, wrapped("update", mapPluginNameTaken(err))
 	}
 	// Placements filter list pages by their own category copy; keep it in sync
 	// with the current-state category on every update — including clearing it to

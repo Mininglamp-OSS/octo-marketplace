@@ -88,9 +88,9 @@ func seed(t *testing.T, database *sql.DB, p seedPlugin) {
 		(plugin_id, plugin_name, plugin_type, is_embedded, tags_json, owner_uid, space_id, visibility, listing_state,
 		 manifest_json, plugin_json, manifest_hash, plugin_hash, current_version_id, current_version,
 		 created_at, updated_at)
-		VALUES (?, 'Fixture', ?, ?, JSON_ARRAY(), ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON),
+		VALUES (?, ?, ?, ?, JSON_ARRAY(), ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON),
 		        REPEAT('a',71), REPEAT('b',71), ?, ?, NOW(3), NOW(3))`,
-		p.id, p.typ, p.embedded, p.owner, p.space, p.visibility, p.listingState, p.manifest, p.pkg, versionID, current); err != nil {
+		p.id, p.id, p.typ, p.embedded, p.owner, p.space, p.visibility, p.listingState, p.manifest, p.pkg, versionID, current); err != nil {
 		t.Fatalf("seed %s: %v", p.id, err)
 	}
 	// Every create attaches a visible default placement; the review gate never
@@ -1391,7 +1391,7 @@ func TestApproveSelfHealsTheDefaultPlacement(t *testing.T) {
 	approve := func(t *testing.T, pluginID string) {
 		t.Helper()
 		req := newRequest(pluginID, "1.0.0")
-		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Frozen"}`, `{"attachments":[]}`, nil)); err != nil {
+		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Frozen `+pluginID+`"}`, `{"attachments":[]}`, nil)); err != nil {
 			t.Fatalf("InsertReviewRequest: %v", err)
 		}
 		out, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{

@@ -841,6 +841,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "historical reference indexes require verification", map[string]any{"reason": "reference_index_incomplete", "conflict_reason": "reference_index_incomplete"}, "Run the verified historical reference index backfill before querying impact.")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "version history migration is required", map[string]any{"reason": "version_migration_required"}, "Establish a verified publication baseline before enabling managed edits for this legacy resource.")
+	case errors.Is(err, pluginsvc.ErrNameTaken):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Duplicate, "a plugin with this name already exists in this Space", map[string]any{"field": "plugin_name", "conflict_reason": "name_taken"}, "Choose a different name or update the existing plugin.")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin state conflicts with an existing resource", map[string]any{"conflict_reason": "state"}, "Refresh the resource and try again.")
 	// Transient InnoDB lock contention (a deadlock victim, or a lock-wait timeout)

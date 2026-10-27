@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,11 @@ var ErrRead = errors.New("stock migration evidence read failed")
 var ErrConflict = errors.New("stock migration evidence changed or batch conflicts")
 var ErrExceptions = errors.New("stock migration has unresolved exceptions; apply blocked")
 var ErrWrite = errors.New("stock migration write failed")
+
+// ErrNameConflict means an extracted Expert/Skill would collide with an active
+// marketplace display name in the same Space. The operator must rename or
+// explicitly reuse the existing asset; migration never auto-suffixes a name.
+var ErrNameConflict = errors.New("migration target name conflicts with an active marketplace plugin")
 var ErrG4 = errors.New("stock migration requires explicit confirmed G4 exception policy")
 
 // Read is operator-only, bounded, and never starts application migrations.
@@ -184,6 +190,56 @@ func read(ctx context.Context, tx *sql.Tx, limit int, lock bool) (Dataset, error
 	return d, nil
 }
 
+// checkPlannedNames blocks any clone that would introduce a duplicate active
+// Expert/Skill display name. The check uses the caller's full bounded inventory,
+// not just the rows that happened to be cloned, so a name occupied by an
+// unrelated active plugin is caught too. Soft-deleted rows are ignored; delisted
+// rows still reserve the name.
+func checkPlannedNames(unit *Unit, resources []Resource) error {
+	type key struct{ scope, typ, name string }
+	occupied := map[key]string{}
+	planned := map[key]string{}
+	for _, r := range resources {
+		if r.Plugin.DeletedAt != nil || r.Plugin.IsEmbedded {
+			continue
+		}
+		if r.Plugin.Type != model.PluginTypeExpert && r.Plugin.Type != model.PluginTypeSkill {
+			continue
+		}
+		name, err := model.NormalizePluginName(r.Plugin.Name)
+		if err != nil {
+			continue
+		}
+		scope := ""
+		if r.Plugin.SpaceID != nil {
+			scope = *r.Plugin.SpaceID
+		}
+		occupied[key{scope, string(r.Plugin.Type), name}] = r.Plugin.ID
+	}
+	for _, n := range unit.Nodes {
+		if !n.Clone || (n.Type != model.PluginTypeExpert && n.Type != model.PluginTypeSkill) {
+			continue
+		}
+		name, err := model.NormalizePluginName(n.Plugin.Name)
+		if err != nil {
+			return ErrWrite
+		}
+		scope := ""
+		if n.Plugin.SpaceID != nil {
+			scope = *n.Plugin.SpaceID
+		}
+		k := key{scope, string(n.Type), name}
+		if existing := occupied[k]; existing != "" && existing != n.TargetID {
+			return fmt.Errorf("%w: %s %q already belongs to %s", ErrNameConflict, n.Type, n.Plugin.Name, existing)
+		}
+		if previous := planned[k]; previous != "" && previous != n.TargetID {
+			return fmt.Errorf("%w: %s %q appears twice in this migration unit", ErrNameConflict, n.Type, n.Plugin.Name)
+		}
+		planned[k] = n.TargetID
+	}
+	return nil
+}
+
 // ApplyRoot is one atomic migration unit. A completed mapping wins on repeat,
 // while another root can be previewed and applied after interruption. All rows
 // and publication evidence are locked before comparing the preview digest.
@@ -265,6 +321,9 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 	if unit == nil {
 		return 0, ErrConflict
 	}
+	if err := checkPlannedNames(unit, d.Resources); err != nil {
+		return 0, err
+	}
 	localVersions := map[string]bool{}
 	for _, n := range unit.Nodes {
 		if n.Release {
@@ -318,9 +377,22 @@ func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Ti
 		if n.Type == model.PluginTypeConnector {
 			source = strings.TrimSuffix(source, ":mcp")
 		}
+		nameKey, nameScope := "", ""
+		if p.Type == model.PluginTypeExpert || p.Type == model.PluginTypeSkill {
+			key, err := model.NormalizePluginName(p.Name)
+			if err != nil {
+				return ErrWrite
+			}
+			nameKey = key
+			if p.SpaceID != nil {
+				nameScope = *p.SpaceID
+			}
+		}
 		// Copy provenance and placement metadata; authoritative ownership/audience is
 		// explicitly inherited from the container, rather than from caller identity.
-		result, e := tx.ExecContext(ctx, `INSERT INTO plugins(plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,status,created_at,updated_at) SELECT ?,?,?,0,NULL,?,publisher,?,?,?,?,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,0,?,?,NULL,?,?,1,?,? FROM plugins WHERE plugin_id=?`, p.ID, p.Name, p.Type, string(p.Tags), p.OwnerUID, p.SpaceID, p.Visibility, p.ListingState, string(p.Manifest), string(p.Package), p.ManifestHash, p.PluginHash, now, now, source)
+		// name_key/name_scope are computed by the same normalizer as the API write
+		// path so migration-created Experts/Skills cannot bypass the active-name index.
+		result, e := tx.ExecContext(ctx, `INSERT INTO plugins(plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,status,created_at,updated_at,name_key,name_scope) SELECT ?,?,?,0,NULL,?,publisher,?,?,?,?,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,0,?,?,NULL,?,?,1,?,?,?,? FROM plugins WHERE plugin_id=?`, p.ID, p.Name, p.Type, string(p.Tags), p.OwnerUID, p.SpaceID, p.Visibility, p.ListingState, string(p.Manifest), string(p.Package), p.ManifestHash, p.PluginHash, now, now, nameKey, nameScope, source)
 		if e != nil {
 			return ErrWrite
 		}

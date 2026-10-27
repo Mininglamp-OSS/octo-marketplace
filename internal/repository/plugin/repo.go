@@ -15,6 +15,10 @@ var (
 	ErrNotFound = errors.New("plugin not found")
 	// ErrConflict indicates an immutable version or placement uniqueness conflict.
 	ErrConflict = errors.New("plugin conflict")
+	// ErrNameTaken indicates an active Expert/Skill display name collides with
+	// another active row in the same Space. Soft-deleted rows are excluded by the
+	// database's active-name key.
+	ErrNameTaken = errors.New("plugin name is already taken")
 	// ErrRelationInUse indicates deletion was refused because another live plugin
 	// still references the target. Callers can surface an actionable conflict
 	// instead of collapsing this into a generic state race.

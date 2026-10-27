@@ -129,7 +129,10 @@ func TestManagedPrivateReleasePreservesDraft(t *testing.T) {
 	if _, err = svc.ManagedVersion(ctx, outsider, id, v1, false); !errors.Is(err, pluginsvc.ErrNotFound) {
 		t.Fatalf("cross-space err=%v", err)
 	}
-	second, err := svc.Create(ctx, owner, managedWrite("1.0.0", "second", model.PluginVisibilityPrivate))
+	secondReq := managedWrite("1.0.0", "second", model.PluginVisibilityPrivate)
+	secondReq.Name = "Second Versioned Expert"
+	secondReq.Manifest = json.RawMessage(strings.Replace(string(secondReq.Manifest), `"plugin_name":"Versioned Expert"`, `"plugin_name":"Second Versioned Expert"`, 1))
+	second, err := svc.Create(ctx, owner, secondReq)
 	if err != nil {
 		t.Fatal(err)
 	}

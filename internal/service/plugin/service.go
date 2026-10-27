@@ -22,6 +22,7 @@ import (
 var (
 	ErrNotFound       = errors.New("plugin not found")
 	ErrConflict       = errors.New("plugin conflict")
+	ErrNameTaken      = errors.New("plugin name is already taken")
 	ErrRelationInUse  = errors.New("plugin is referenced by another live plugin")
 	ErrInvalidRequest = errors.New("invalid plugin request")
 	ErrTooLarge       = errors.New("plugin artifact exceeds size limit")
@@ -959,6 +960,11 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	if !validName(name) || !validPluginType(req.Type) || !validVisibility(req.Visibility, c.IsSystemAdmin) {
 		return nil, nil, ErrInvalidRequest
 	}
+	if req.Type == model.PluginTypeExpert || req.Type == model.PluginTypeSkill {
+		if _, err := model.NormalizePluginName(name); err != nil {
+			return nil, nil, ErrInvalidRequest
+		}
+	}
 	if s.references {
 		if err := rejectInlineCapabilities(req.Type, req.Manifest); err != nil {
 			return nil, nil, err
@@ -1112,6 +1118,8 @@ func mapStoreError(err error) error {
 		return ErrNotFound
 	case errors.Is(err, pluginrepo.ErrConflict):
 		return ErrConflict
+	case errors.Is(err, pluginrepo.ErrNameTaken):
+		return ErrNameTaken
 	case errors.Is(err, pluginrepo.ErrRelationInUse):
 		return ErrRelationInUse
 	case errors.Is(err, pluginrepo.ErrGraphTooLarge):
