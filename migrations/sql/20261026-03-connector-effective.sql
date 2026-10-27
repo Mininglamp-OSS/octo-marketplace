@@ -23,7 +23,7 @@ CREATE TABLE plugin_connector_effective (
 -- Only currently published, active rows are evidence for the initial effective.
 INSERT INTO plugin_connector_effective
 (plugin_id,effective_revision,effective_digest,plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,updated_by,updated_at)
-SELECT plugin_id,1,CONCAT('sha256:',SHA2(CONCAT('v3',CHAR(31),manifest_hash,CHAR(31),plugin_hash,CHAR(31),plugin_name,CHAR(31),REPLACE(REPLACE(CAST(tags_json AS CHAR),', ',','),': ',':'),CHAR(31),tool_count,CHAR(31),COALESCE(current_version,''),CHAR(31),visibility),256)),plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,owner_uid,updated_at
+SELECT plugin_id,1,CONCAT('sha256:',SHA2(CONCAT('v3',CHAR(31),manifest_hash,CHAR(31),plugin_hash,CHAR(31),plugin_name,CHAR(31),REPLACE(REPLACE(CAST(tags_json AS CHAR), '", "', '","'), '": "', '":"'),CHAR(31),tool_count,CHAR(31),COALESCE(current_version,''),CHAR(31),visibility),256)),plugin_name,tags_json,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version,visibility,owner_uid,updated_at
 FROM plugins WHERE plugin_type='connector' AND status=1 AND deleted_at IS NULL AND listing_state='published';
 
 -- +migrate Down
