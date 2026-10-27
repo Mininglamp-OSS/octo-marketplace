@@ -34,7 +34,8 @@ func promotionArchive(t *testing.T, files map[string][]byte) []byte {
 }
 
 // Exercise the service path that can legitimately create a standalone expert
-// with private bundled skills. No SQL topology insertion is used in this probe.
+// with private bundled skills. A visibility-only fixture mutation models an old
+// invalid Team; neither manual nor automatic review may expose its private member.
 func TestManagedTeamApprovalRespectsStandalonePrivateExpertBoundary(t *testing.T) {
 	for _, auto := range []bool{false, true} {
 		t.Run(map[bool]string{false: "manual", true: "automatic"}[auto], func(t *testing.T) {
@@ -75,7 +76,7 @@ func TestManagedTeamApprovalRespectsStandalonePrivateExpertBoundary(t *testing.T
 					t.Fatalf("private resource readable before approval: %s %v", id, err)
 				}
 			}
-			teamReq := managedWrite("1.0.0", "team instructions", model.PluginVisibilitySpace)
+			teamReq := managedWrite("1.0.0", "team instructions", model.PluginVisibilityPrivate)
 			teamReq.Type = model.PluginTypeExpertTeam
 			var teamManifest map[string]any
 			if err := json.Unmarshal(teamReq.Manifest, &teamManifest); err != nil {
@@ -88,17 +89,24 @@ func TestManagedTeamApprovalRespectsStandalonePrivateExpertBoundary(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: team.Plugin.ID})
-			if err != nil {
+			// New space→private writes are rejected. Preserve the historical graph
+			// fixture so publication itself must also enforce the private boundary.
+			if _, err = database.Exec(`UPDATE plugins SET visibility='space' WHERE plugin_id=?`, team.Plugin.ID); err != nil {
 				t.Fatal(err)
 			}
-			if !auto {
+			pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: team.Plugin.ID})
+			if err == nil {
 				if pub.Review == nil {
-					t.Fatal("expected pending review")
+					t.Fatal("private member graph published without review")
 				}
-				if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
-					t.Fatal(err)
-				}
+				_, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID)
+			}
+			if !errors.Is(err, pluginsvc.ErrNotFound) {
+				t.Fatalf("publication did not reject standalone private member: %v", err)
+			}
+			var listing string
+			if err := database.QueryRow(`SELECT listing_state FROM plugins WHERE plugin_id=?`, team.Plugin.ID).Scan(&listing); err != nil || listing == "published" {
+				t.Fatalf("rejected publication changed Team state: %s %v", listing, err)
 			}
 			for _, id := range []string{expert.Plugin.ID, skillID} {
 				if _, err := svc.Detail(ctx, other, id, false); !errors.Is(err, pluginsvc.ErrNotFound) {

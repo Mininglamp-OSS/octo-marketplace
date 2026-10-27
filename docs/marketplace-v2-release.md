@@ -9,7 +9,7 @@
 | --- | --- |
 | 曾发布、已下架但无引用 | 可以软删除；版本、正式发布证据和审计记录保留。 |
 | 有存活来源的编辑引用、当前发布引用，或 Team→旧 Expert 版本→Skill 引用 | 拒绝删除；下架不会自动解除引用。只有不再使用的纯历史版本不形成永久删除锁。 |
-| private Expert→private Skill、private Team→private Expert | 同 owner、同 Space 时合法；space/system 来源、不同 owner 或跨 Space 均不可引用。写入规则在 main 已存在；本 PR 补回归验证，并让旧数据格式安装也沿用这一来源受众检查。 |
+| private Expert→private Skill、private Team→private Expert | 同 owner、同 Space 时合法；space/system 来源、不同 owner 或跨 Space 均不可引用。独立引用开关开启或关闭时，创建、更新和发布均检查此规则；旧数据格式安装也沿用这一来源受众检查。已有容器内嵌副本保留原有归属校验。 |
 | 旧 `POST /api/v1/plugins/install` | 保留 `plugin_id/workspace_id/runtime_id/custom_env` 请求体及 `agent_id/squad_id` 响应。旧式非 UUID runtime 仍由 Fleet 校验；不新增必填头。可选 `Idempotency-Key`；沿用旧身份接入，最终工作区/runtime 权限由 Fleet 校验。 |
 | 新 `POST /api/v1/plugins/{plugin_id}/installations` | 保留必填 `X-Workspace-ID`、`Idempotency-Key` 及 runtime UUID；支持可选资源名称。 |
 
@@ -45,7 +45,9 @@
    `PLUGIN_REFERENCES_ENABLED`、`PLUGIN_PINNED_INSTALLATION_ENABLED` 的依赖顺序不变。
    开启最后一个开关前，实际要安装的资源必须具有独立引用、正式版本/pin及完整文件。
    没有完成转换的旧内嵌图会拒绝安装，不能仅打开开关后声称所有存量资源均已可安装。
-   删除保护要求现有引用索引完整；用 `cmd/marketplace-reference-index` 逐版本预览、
+   独立引用开关关闭时，删除直接检查存活来源的正式发布快照（含 Team 固定的旧成员版本），
+   不要求回填新索引。开启独立引用后，删除保护要求现有引用索引完整；
+   用 `cmd/marketplace-reference-index` 逐版本预览、
    核对 digest 后回填，不能关闭引用检查来绕过阻断。索引回填只读取历史关系，
    不抽取文件、不改写历史快照，也不要求把下架内容批量转换。
 5. **对照验收。** 在隔离工作区分别验证 Expert/Team 两条 URL；检查内容和成员
@@ -76,11 +78,15 @@
 ## 4. 超时、故障与恢复
 
 - **带 key 的结果未知：** 保留首次 key、原参数和环境变量，在响应 `retry_until`
-  之前重试；plan 不重新解析新版。每次仍检查当前资源权限，并向 Fleet 验证工作区
+  之前重试；plan 不重新解析新版。未开启版本化安装时没有本地 `retry_until`，
+  沿用 Fleet 的首次请求 24 小时幂等窗口，不把每次重试当成新窗口；旧内容模式
+  不承诺冻结 plan。每次仍检查当前资源权限，并向 Fleet 验证工作区
   权限；不直接从本地成功回执返回资源。不要跨接口更换 key。只有输入确实相同且
   有同一个 key 的新旧入口才能关联到同一操作。
 - **旧客户端没有 key：** 每次请求是新操作，网络超时后无法保证自动去重。先在
-  工作区核对资源，再决定是否重试；错误提示不会宣称可以使用原 key 自动重放。
+  工作区核对资源，再决定是否重试；错误提示不会宣称可以使用原 key 自动重放。两种内容模式下，网络超时、Fleet 5xx
+  或空结果均视为结果未知；明确的 Fleet 4xx 拒绝保留原错误分类（408/429 等
+  不确定响应不能当作已确认失败）。
   后续客户端可选传稳定 key，不影响没有升级的客户端正常安装。
 - **凭证过期或旧 schema 凭证没有 frozen plan：** 不再重发可能重复创建的请求。
   先核对 Fleet 工作区已有资源，再用新 key。保留安装尝试记录供排查；不清表。

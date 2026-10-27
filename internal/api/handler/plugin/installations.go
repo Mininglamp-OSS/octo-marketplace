@@ -157,7 +157,9 @@ func writeInstallationError(c *gin.Context, err error) {
 	var attempt *pluginsvc.InstallationAttemptError
 	switch {
 	case errors.As(err, &attempt) && attempt.Unknown:
-		details := map[string]any{"reason": "installation_result_unknown", "attempt_id": attempt.AttemptID, "can_retry_same_key": attempt.RetryUntil != nil && time.Now().Before(*attempt.RetryUntil)}
+		// Legacy-content attempts rely on Fleet receipts and have no local deadline.
+		// The keyless adapter overrides this advice because its key was never returned.
+		details := map[string]any{"reason": "installation_result_unknown", "attempt_id": attempt.AttemptID, "can_retry_same_key": attempt.RetryUntil == nil || time.Now().Before(*attempt.RetryUntil)}
 		if attempt != nil && attempt.RetryUntil != nil {
 			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
 		}

@@ -9,8 +9,9 @@ Delisted legacy data remains historical until a specific republish/install need.
 ## Load-bearing behavior
 - Deletion checks live incoming relations, current published references and Team
   member-version indirect references under the existing mutation transaction.
+  With the independent-reference flag off, read immutable release snapshots.
 - The existing owner/Space/audience rule applies to both reference types,
-  including legacy-content installation expansion before cache reuse.
+  including legacy writes/publication and installation expansion before cache reuse.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.
   A32 keeps its required headers and runtime UUID validation.
 - Both adapters use the same capability executor. Existing feature flags select
@@ -18,6 +19,8 @@ Delisted legacy data remains historical until a specific republish/install need.
   executor. No fallback to create/bind/compensate provisioning exists.
 - The versioned installation path freezes the first plan and protects same-key
   retry, current authorization, immutable bytes and secret-free persistence.
+  Both content modes classify timeout/5xx/empty outcomes as unknown; keyless old
+  clients must inspect their workspace rather than retry an unavailable key.
 
 ## Out of scope
 Fleet changes; bulk migration/run-ledger platform; public distribution endpoint;

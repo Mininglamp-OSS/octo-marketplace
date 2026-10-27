@@ -1156,7 +1156,7 @@ func mustAffect(res sql.Result) error {
 // container top legitimately wiring its just-created embedded children, whose IDs
 // are all in inGraph. The single Create/Update path passes nil (any embedded
 // target → ErrInvalidRelation); CreateGraph/RebuildGraph pass every node ID.
-func lockRelationTargets(ctx context.Context, tx *sql.Tx, scope Scope, sourceType model.PluginType, relations []model.PluginRelation, inGraph map[string]struct{}) error {
+func lockRelationTargets(ctx context.Context, tx *sql.Tx, scope Scope, source model.Plugin, relations []model.PluginRelation, inGraph map[string]struct{}) error {
 	seen := make(map[string]struct{}, len(relations))
 	for _, relation := range relations {
 		if relation.TargetPluginID == "" {
@@ -1171,23 +1171,28 @@ func lockRelationTargets(ctx context.Context, tx *sql.Tx, scope Scope, sourceTyp
 		if scope.Admin {
 			relWhere, relArgs = "1=1", []any{relation.TargetPluginID}
 		}
-		row := tx.QueryRowContext(ctx, `SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=? AND p.status=1 AND p.deleted_at IS NULL AND `+relWhere+` FOR UPDATE`, relArgs...)
-		var targetType model.PluginType
-		var embedded bool
-		if err := row.Scan(&targetType, &embedded); err != nil {
+		row := tx.QueryRowContext(ctx, `SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=? AND p.status=1 AND p.deleted_at IS NULL AND `+relWhere+` FOR UPDATE`, relArgs...)
+		var target model.Plugin
+		var space sql.NullString
+		if err := row.Scan(&target.Type, &target.IsEmbedded, &target.Visibility, &target.OwnerUID, &space); err != nil {
 			if err == sql.ErrNoRows {
 				return ErrNotFound
 			}
 			return err
 		}
-		if !validPersistedRelation(relation.Type, sourceType, targetType) {
+		if !validPersistedRelation(relation.Type, source.Type, target.Type) {
 			return ErrInvalidRelation
 		}
-		if embedded {
+		if target.IsEmbedded {
 			if _, ok := inGraph[relation.TargetPluginID]; !ok {
 				return ErrInvalidRelation
 			}
 		}
+		target.SpaceID = nullString(space)
+		if !target.IsEmbedded && target.Visibility == model.PluginVisibilityPrivate && !referenceAudience(source, target) {
+			return ErrNotFound
+		}
+
 	}
 	return nil
 }

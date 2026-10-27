@@ -69,7 +69,7 @@ func TestCreateCommitsCurrentRelationsAndAuditTogether(t *testing.T) {
 	ids := []string{"relation-id", "audit-id"}
 	r.id = func() string { x := ids[0]; ids = ids[1:]; return x }
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .* FOR UPDATE`).WithArgs("target-id", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .* FOR UPDATE`).WithArgs("target-id", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectExec(`INSERT INTO plugins`).WithArgs("plugin-id", "Name", model.PluginTypeExpert, false, nil, "[]", "pub", "caller", "space", model.PluginVisibilityPrivate, model.PluginListingStateDraft, "Creator", "human", nil, nil, "", 0, "{}", "{}", nil, "sha256:m", "sha256:p", nil, nil, 1, now, now).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO plugin_relations`).WithArgs("relation-id", "plugin-id", "target-id", "expert_skill", 0, "{}", 1, "caller", now, now).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WithArgs("audit-id", "plugin-id", "create", "caller", "Caller", "request-id", nil, "sha256:p", "{}", "{}", nil, now).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -349,8 +349,8 @@ func TestUpdateSnapshotsOnRelationOnly(t *testing.T) {
 		WithArgs("plugin-id", scope.CallerUID, scope.SpaceID).WillReturnRows(ownedPluginRow("plugin-id", scope, now))
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).
 		WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}))
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .* FOR UPDATE`).
-		WithArgs("target-1", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .* FOR UPDATE`).
+		WithArgs("target-1", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectExec(`UPDATE plugins SET plugin_name=`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
 	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -461,9 +461,9 @@ func TestLockRelationTargetsRequiresActiveTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := Scope{CallerUID: "caller", SpaceID: "space"}
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL.*FOR UPDATE`).
-		WithArgs("inactive", scope.SpaceID, scope.CallerUID).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}))
-	err = lockRelationTargets(context.Background(), tx, scope, model.PluginTypeExpert, []model.PluginRelation{{TargetPluginID: "inactive", Type: "expert_skill"}}, nil)
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL.*FOR UPDATE`).
+		WithArgs("inactive", scope.SpaceID, scope.CallerUID).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}))
+	err = lockRelationTargets(context.Background(), tx, scope, model.Plugin{Type: model.PluginTypeExpert}, []model.PluginRelation{{TargetPluginID: "inactive", Type: "expert_skill"}}, nil)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("lockRelationTargets error = %v, want ErrNotFound", err)
 	}
@@ -479,10 +479,10 @@ func TestLockRelationTargetsValidatesRowType(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := Scope{CallerUID: "caller", SpaceID: "space"}
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL.*FOR UPDATE`).
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL.*FOR UPDATE`).
 		WithArgs("opaque-target", scope.SpaceID, scope.CallerUID).
-		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeConnector, false))
-	err = lockRelationTargets(context.Background(), tx, scope, model.PluginTypeExpert, []model.PluginRelation{{TargetPluginID: "opaque-target", Type: "expert_skill"}}, nil)
+		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeConnector, false, "space", "caller", "space"))
+	err = lockRelationTargets(context.Background(), tx, scope, model.Plugin{Type: model.PluginTypeExpert}, []model.PluginRelation{{TargetPluginID: "opaque-target", Type: "expert_skill"}}, nil)
 	if !errors.Is(err, ErrInvalidRelation) {
 		t.Fatalf("lockRelationTargets error = %v, want ErrInvalidRelation", err)
 	}
@@ -494,7 +494,7 @@ func TestCreateRejectsInvisibleRelationTargetBeforeWriting(t *testing.T) {
 	defer db.Close()
 	scope := Scope{CallerUID: "caller", SpaceID: "space"}
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .*p.space_id = \?.*p.owner_uid = \?.*FOR UPDATE`).WithArgs("foreign", scope.SpaceID, scope.CallerUID).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .*p.space_id = \?.*p.owner_uid = \?.*FOR UPDATE`).WithArgs("foreign", scope.SpaceID, scope.CallerUID).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}))
 	mock.ExpectRollback()
 
 	_, err := New(db).Create(context.Background(), scope, Mutation{Plugin: model.Plugin{ID: "plugin-id", Type: model.PluginTypeExpert}, Relations: []model.PluginRelation{{TargetPluginID: "foreign", Type: "expert_skill"}}})
@@ -553,6 +553,7 @@ func TestDeleteRejectsLiveIncomingRelationWithoutMutatingGraph(t *testing.T) {
 	mock.ExpectQuery(`SELECT .* FROM plugins p WHERE p.plugin_id=\? AND p.owner_uid=\? AND p.space_id=\?.*FOR UPDATE`).
 		WithArgs("target", scope.CallerUID, scope.SpaceID).
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("target", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", scope.CallerUID, scope.SpaceID, model.PluginVisibilitySpace, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{"manifest":true}`), []byte(`{"package":true}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil))
+	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*JOIN plugins source ON source.plugin_id=r.source_plugin_id.*r.target_plugin_id=\?.*r.deleted_at IS NULL.*source.deleted_at IS NULL AND source.status=1.*FOR UPDATE`).
 		WithArgs("target").
 		WillReturnRows(sqlmock.NewRows([]string{"relation_id"}).AddRow("incoming"))
@@ -580,6 +581,7 @@ func TestDeleteInvalidatesOnlyOutgoingRelationsAfterReferenceCheck(t *testing.T)
 	mock.ExpectQuery(`SELECT .* FROM plugins p WHERE p.plugin_id=\? AND p.owner_uid=\? AND p.space_id=\?.*FOR UPDATE`).
 		WithArgs("plugin-id", scope.CallerUID, scope.SpaceID).
 		WillReturnRows(ownedPluginRow("plugin-id", scope, now))
+	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("plugin-id").
 		WillReturnRows(sqlmock.NewRows([]string{"relation_id"}))
@@ -638,9 +640,9 @@ func TestUpdateExemptsOwnEmbeddedChildFromAdoptionGuard(t *testing.T) {
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).
 		WithArgs("expert-1").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}).AddRow("skill-emb"))
 	// The relation target is is_embedded=1 but IS in the owned set → allowed.
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .* FOR UPDATE`).
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .* FOR UPDATE`).
 		WithArgs("skill-emb", "space", "caller").
-		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, true))
+		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, true, "space", "caller", "space"))
 	mock.ExpectExec(`UPDATE plugins SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
 	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -681,9 +683,9 @@ func TestUpdateRejectsAdoptingForeignEmbeddedChild(t *testing.T) {
 	// The source owns no live edges, so the foreign embedded target is not exempt.
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).
 		WithArgs("expert-1").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}))
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .* FOR UPDATE`).
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .* FOR UPDATE`).
 		WithArgs("foreign-emb", "space", "caller").
-		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, true))
+		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, true, "space", "caller", "space"))
 	mock.ExpectRollback()
 
 	_, err := r.Update(context.Background(), scope, Mutation{
@@ -733,8 +735,8 @@ func TestUpdateSynchronizesRelationsToTargetState(t *testing.T) {
 		WithArgs("plugin-id", scope.CallerUID, scope.SpaceID).
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("plugin-id", "Plugin", model.PluginTypeExpert, 0, nil, []byte(`[]`), "pub", "caller", "space", model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:before", nil, nil, 1, now, now, nil))
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}).AddRow("target-0").AddRow("target-1"))
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .* FOR UPDATE`).WithArgs("target-1", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .* FOR UPDATE`).WithArgs("target-2", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .* FOR UPDATE`).WithArgs("target-1", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .* FOR UPDATE`).WithArgs("target-2", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectExec(`UPDATE plugins SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
 	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -785,7 +787,7 @@ func TestUpdateRejectsUnknownSubmittedRelationID(t *testing.T) {
 		WithArgs("plugin-id", scope.CallerUID, scope.SpaceID).
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("plugin-id", "Plugin", model.PluginTypeExpert, 0, nil, []byte(`[]`), "pub", "caller", "space", model.PluginVisibilityPrivate, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:before", nil, nil, 1, now, now, nil))
 	mock.ExpectQuery(`SELECT target_plugin_id FROM plugin_relations WHERE source_plugin_id=\? AND deleted_at IS NULL`).WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"target_plugin_id"}))
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p .* FOR UPDATE`).WithArgs("target-1", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p .* FOR UPDATE`).WithArgs("target-1", "space", "caller").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectExec(`UPDATE plugins SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
 	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -951,7 +953,7 @@ func TestCreateGraphInsertsAllPluginsBeforeRelationsAndCommitsAtomically(t *test
 	mock.ExpectExec(`INSERT INTO plugins`).WithArgs("expert-id", "E", model.PluginTypeExpert, false, nil, "[]", "", "admin", "", model.PluginVisibilityPublic, model.PluginListingStateDraft, "Root", "human", nil, nil, "", 0, "{}", "{}", nil, "sha256:em", "sha256:ep", nil, nil, 1, now, now).WillReturnResult(sqlmock.NewResult(1, 1))
 	// Phase 2: the expert's relation target (the just-inserted skill) is locked
 	// cross-Space (admin) and the edge inserted.
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-id").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-id").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectExec(`INSERT INTO plugin_relations`).WithArgs("rel-1", "expert-id", "skill-id", "expert_skill", 0, "{}", 1, "admin", now, now).WillReturnResult(sqlmock.NewResult(1, 1))
 	// Phase 3: one create audit per plugin.
 	mock.ExpectExec(`INSERT INTO plugin_audit_logs`).WithArgs("audit-1", "skill-id", "create", "admin", "Root", "req", nil, "sha256:sp", "{}", "{}", nil, now).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -994,7 +996,7 @@ func TestCreateGraphInsertsPlacementForMarkedNode(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO plugins`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO plugins`).WillReturnResult(sqlmock.NewResult(1, 1))
 	// expert node: relation target lock, relation insert, then its placement.
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-id").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-id").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectExec(`INSERT INTO plugin_relations`).WithArgs("rel-1", "expert-id", "skill-id", "expert_skill", 0, "{}", 1, "admin", now, now).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO plugin_placements \(placement_id,placement_code,plugin_id,category_id,visible,sort_order,created_at,updated_at\)`).
 		WithArgs("placement-1", "default", "expert-id", nil, true, 0, now, now).
@@ -1083,7 +1085,7 @@ func TestRebuildGraphSwapsChildrenPreservesTopAndSoftDeletesOld(t *testing.T) {
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
 	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).WillReturnResult(sqlmock.NewResult(0, 1))
 	// Phase 4: resync the top's relations to the new child.
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-new").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-new").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectQuery(`SELECT relation_id,target_plugin_id,relation_type,sort_order,relation_json,status FROM plugin_relations\s+WHERE source_plugin_id=\? AND deleted_at IS NULL ORDER BY relation_id FOR UPDATE`).
 		WithArgs("expert-9").
 		WillReturnRows(sqlmock.NewRows([]string{"relation_id", "target_plugin_id", "relation_type", "sort_order", "relation_json", "status"}).
@@ -1153,10 +1155,10 @@ func TestLockRelationTargetsRejectsEmbeddedExternalTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := Scope{CallerUID: "caller", SpaceID: "space"}
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL.*FOR UPDATE`).
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL.*FOR UPDATE`).
 		WithArgs("embedded", scope.SpaceID, scope.CallerUID).
-		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, true))
-	err = lockRelationTargets(context.Background(), tx, scope, model.PluginTypeExpert, []model.PluginRelation{{TargetPluginID: "embedded", Type: "expert_skill"}}, nil)
+		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, true, "space", "caller", "space"))
+	err = lockRelationTargets(context.Background(), tx, scope, model.Plugin{Type: model.PluginTypeExpert}, []model.PluginRelation{{TargetPluginID: "embedded", Type: "expert_skill"}}, nil)
 	if !errors.Is(err, ErrInvalidRelation) {
 		t.Fatalf("lockRelationTargets error = %v, want ErrInvalidRelation", err)
 	}
@@ -1175,11 +1177,11 @@ func TestLockRelationTargetsAllowsEmbeddedIntraGraphTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := Scope{CallerUID: "admin", Admin: true}
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).
 		WithArgs("bundled-skill").
-		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, true))
+		WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, true, "space", "caller", "space"))
 	inGraph := map[string]struct{}{"bundled-skill": {}, "expert-top": {}}
-	if err = lockRelationTargets(context.Background(), tx, scope, model.PluginTypeExpert, []model.PluginRelation{{TargetPluginID: "bundled-skill", Type: "expert_skill"}}, inGraph); err != nil {
+	if err = lockRelationTargets(context.Background(), tx, scope, model.Plugin{Type: model.PluginTypeExpert}, []model.PluginRelation{{TargetPluginID: "bundled-skill", Type: "expert_skill"}}, inGraph); err != nil {
 		t.Fatalf("intra-graph embedded edge rejected: %v", err)
 	}
 	_ = tx.Rollback()
@@ -1206,6 +1208,7 @@ func TestDeleteGraphSoftDeletesTopAndEmbeddedChildren(t *testing.T) {
 		WithArgs("expert-9").
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("expert-9", "E", model.PluginTypeExpert, 0, nil, []byte(`[]`), "", "owner-1", "", model.PluginVisibilityPublic, model.PluginListingStatePublished, "Orig", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:ptop", nil, nil, 1, now, now, nil))
 	// No live incoming relation to the top.
+	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("expert-9").WillReturnRows(sqlmock.NewRows([]string{"relation_id"}))
 	// In-tx child derivation: AFTER the top lock + incoming-relation guard, the
@@ -1253,6 +1256,7 @@ func TestDeleteGraphRejectsLiveIncomingRelationToTop(t *testing.T) {
 	mock.ExpectQuery(`SELECT .* FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL FOR UPDATE`).
 		WithArgs("expert-9").
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("expert-9", "E", model.PluginTypeExpert, 0, nil, []byte(`[]`), "", "owner-1", "", model.PluginVisibilityPublic, model.PluginListingStatePublished, "Orig", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:ptop", nil, nil, 1, now, now, nil))
+	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("expert-9").WillReturnRows(sqlmock.NewRows([]string{"relation_id"}).AddRow("incoming"))
 	mock.ExpectRollback()
@@ -1301,7 +1305,7 @@ func TestRebuildGraphSoftDeletesCurrentChildFromCommittedGraph(t *testing.T) {
 	mock.ExpectExec(`UPDATE plugins SET plugin_name=.*WHERE plugin_id=\? AND deleted_at IS NULL`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM plugin_placements WHERE plugin_id=\? AND placement_code=\?`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(1))
 	mock.ExpectExec(`UPDATE plugin_placements SET category_id=\?,updated_at=\? WHERE plugin_id=\?`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-new").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded"}).AddRow(model.PluginTypeSkill, false))
+	mock.ExpectQuery(`SELECT p.plugin_type,p.is_embedded,p.visibility,p.owner_uid,p.space_id FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL AND 1=1 FOR UPDATE`).WithArgs("skill-new").WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "is_embedded", "visibility", "owner_uid", "space_id"}).AddRow(model.PluginTypeSkill, false, "space", "caller", "space"))
 	mock.ExpectQuery(`SELECT relation_id,target_plugin_id,relation_type,sort_order,relation_json,status FROM plugin_relations\s+WHERE source_plugin_id=\? AND deleted_at IS NULL ORDER BY relation_id FOR UPDATE`).
 		WithArgs("expert-9").
 		WillReturnRows(sqlmock.NewRows([]string{"relation_id", "target_plugin_id", "relation_type", "sort_order", "relation_json", "status"}).AddRow("rel-old", "skill-current", "expert_skill", 0, nil, 1))
@@ -1352,6 +1356,7 @@ func TestDeleteGraphDerivesEmbeddedSquadChildrenUnderLock(t *testing.T) {
 		WithArgs("team-1").
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("team-1", "T", model.PluginTypeExpertTeam, 0, nil, []byte(`[]`), "", "owner-1", "", model.PluginVisibilityPublic, model.PluginListingStatePublished, "Orig", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:ptop", nil, nil, 1, now, now, nil))
 	// No live incoming relation to the top.
+	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("team-1").WillReturnRows(sqlmock.NewRows([]string{"relation_id"}))
 	// In-tx derivation, level 1: the team's embedded member experts.

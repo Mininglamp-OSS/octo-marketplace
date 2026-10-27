@@ -163,10 +163,20 @@ func (s *Service) createInstallation(ctx context.Context, caller Caller, pluginI
 	}
 	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey, *in)
 	if err != nil {
-		return nil, &InstallationAttemptError{Err: err}
+		unknown := true
+		var upstream *fleet.CapabilityAPIError
+		if errors.As(err, &upstream) {
+			// Match the pinned path's definite rejections. Other statuses may
+			// report a timeout/conflict after Fleet has started processing.
+			switch upstream.Status {
+			case 400, 401, 403, 404, 413, 415, 422:
+				unknown = false
+			}
+		}
+		return nil, &InstallationAttemptError{Err: err, Unknown: unknown}
 	}
 	if result == nil {
-		return nil, &InstallationAttemptError{Err: errors.New("capability installation returned no result")}
+		return nil, &InstallationAttemptError{Err: errors.New("capability installation returned no result"), Unknown: true}
 	}
 	// Match legacy /plugins/install: count successful API invocations, including
 	// receipt replays. This is not a count of uniquely created Fleet resources.

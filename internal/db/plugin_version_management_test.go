@@ -830,13 +830,17 @@ func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
 	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: hidden.Plugin.ID}); err != nil {
 		t.Fatal(err)
 	}
-	req := managedWrite("1.0.0", "expert", model.PluginVisibilitySpace)
+	req := managedWrite("1.0.0", "expert", model.PluginVisibilityPrivate)
 	req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: hidden.Plugin.ID, Type: "expert_skill"}}
 	expert, err := svc.Create(ctx, owner, req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	publishManaged(t, svc, owner, expert.Plugin.ID)
+	// Model a pre-validation historical graph; current writes reject this audience.
+	if _, err = database.Exec(`UPDATE plugins SET visibility='space' WHERE plugin_id=?`, expert.Plugin.ID); err != nil {
+		t.Fatal(err)
+	}
 	teammate := pluginsvc.Caller{UID: "teammate", SpaceID: "space-a"}
 	if _, err = svc.Install(ctx, teammate, expert.Plugin.ID, pluginsvc.InstallParams{WorkspaceID: "ws", RuntimeID: "rt"}); !errors.Is(err, pluginsvc.ErrDependencyHidden) {
 		t.Fatalf("hidden released dependency install err=%v", err)

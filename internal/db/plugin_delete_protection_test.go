@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"testing"
+
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
-	"testing"
 )
 
 func TestDeletePreviouslyPublishedOnlyProtectsCurrentReferences(t *testing.T) {
@@ -60,29 +62,33 @@ func TestDeletePreviouslyPublishedOnlyProtectsCurrentReferences(t *testing.T) {
 }
 
 func TestDeleteProtectsSkillInTeamsOlderPinnedMember(t *testing.T) {
-	database := reviewDB(t)
-	ctx := context.Background()
-	for _, p := range []seedPlugin{{id: "skill", typ: "skill", visibility: "private", listingState: "published"}, {id: "expert", typ: "expert", visibility: "private", listingState: "published"}, {id: "team", typ: "expert_team", visibility: "private", listingState: "published"}} {
-		seed(t, database, p)
-	}
-	releasePinnedVersion(t, database, "skill", "s1", "1.0.0", nil)
-	releasePinnedVersion(t, database, "expert", "e1", "1.0.0", []model.PluginRelation{pinnedTestEdge("expert", "skill", "expert_skill", "s1")})
-	releasePinnedVersion(t, database, "expert", "e2", "2.0.0", nil)
-	releasePinnedVersion(t, database, "team", "t1", "1.0.0", []model.PluginRelation{pinnedTestEdge("team", "expert", "expert_team_expert", "e1")})
-	if _, err := database.Exec(`INSERT INTO plugin_version_relation_refs VALUES ('expert','e1','e-s','expert_skill','skill','s1'),('team','t1','t-e','expert_team_expert','expert','e1')`); err != nil {
-		t.Fatal(err)
-	}
-	markReferenceIndexFixtures(t, database)
-	repo := pluginrepo.New(database).WithReferences(true)
-	if err := repo.Delete(ctx, tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrRelationInUse) {
-		t.Fatalf("pinned Team did not protect Skill: %v", err)
-	}
-	releasePinnedVersion(t, database, "team", "t2", "2.0.0", nil)
-	if _, err := database.Exec(`INSERT INTO plugin_version_reference_index_state(source_plugin_id,source_version_id,relation_count,snapshot_digest,verified_at) SELECT plugin_id,version_id,0,SHA2(CAST(relations_json AS CHAR CHARACTER SET utf8mb4),256),NOW(3) FROM plugin_versions WHERE version_id='t2'`); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.Delete(ctx, tenantScope(), "skill", "user-1", "", "", nil); err != nil {
-		t.Fatalf("old Team history permanently protected Skill: %v", err)
+	for _, references := range []bool{false, true} {
+		t.Run(fmt.Sprintf("references=%t", references), func(t *testing.T) {
+			database := reviewDB(t)
+			ctx := context.Background()
+			for _, p := range []seedPlugin{{id: "skill", typ: "skill", visibility: "private", listingState: "published"}, {id: "expert", typ: "expert", visibility: "private", listingState: "published"}, {id: "team", typ: "expert_team", visibility: "private", listingState: "published"}} {
+				seed(t, database, p)
+			}
+			releasePinnedVersion(t, database, "skill", "s1", "1.0.0", nil)
+			releasePinnedVersion(t, database, "expert", "e1", "1.0.0", []model.PluginRelation{pinnedTestEdge("expert", "skill", "expert_skill", "s1")})
+			releasePinnedVersion(t, database, "expert", "e2", "2.0.0", nil)
+			releasePinnedVersion(t, database, "team", "t1", "1.0.0", []model.PluginRelation{pinnedTestEdge("team", "expert", "expert_team_expert", "e1")})
+			if _, err := database.Exec(`INSERT INTO plugin_version_relation_refs VALUES ('expert','e1','e-s','expert_skill','skill','s1'),('team','t1','t-e','expert_team_expert','expert','e1')`); err != nil {
+				t.Fatal(err)
+			}
+			markReferenceIndexFixtures(t, database)
+			repo := pluginrepo.New(database).WithReferences(references)
+			if err := repo.Delete(ctx, tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrRelationInUse) {
+				t.Fatalf("pinned Team did not protect Skill: %v", err)
+			}
+			releasePinnedVersion(t, database, "team", "t2", "2.0.0", nil)
+			if _, err := database.Exec(`INSERT INTO plugin_version_reference_index_state(source_plugin_id,source_version_id,relation_count,snapshot_digest,verified_at) SELECT plugin_id,version_id,0,SHA2(CAST(relations_json AS CHAR CHARACTER SET utf8mb4),256),NOW(3) FROM plugin_versions WHERE version_id='t2'`); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.Delete(ctx, tenantScope(), "skill", "user-1", "", "", nil); err != nil {
+				t.Fatalf("old Team history permanently protected Skill: %v", err)
+			}
+		})
 	}
 }
 

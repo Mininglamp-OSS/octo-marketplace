@@ -121,7 +121,7 @@ func ValidateReferenceMetadata(source model.PluginType, rels []model.PluginRelat
 
 func (r *Repo) lockReferences(ctx context.Context, tx *sql.Tx, scope Scope, source model.Plugin, rels []model.PluginRelation, inGraph map[string]struct{}) error {
 	if !r.references {
-		return lockRelationTargets(ctx, tx, scope, source.Type, rels, inGraph)
+		return lockRelationTargets(ctx, tx, scope, source, rels, inGraph)
 	}
 	if source.IsEmbedded {
 		return ErrInvalidRelation
@@ -237,9 +237,6 @@ func writeReferenceIndex(ctx context.Context, tx *sql.Tx, source, version string
 }
 
 func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p model.Plugin, versionID string) error {
-	if !r.references {
-		return nil
-	}
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, versionID).Scan(&raw); err != nil {
 		return err
@@ -247,6 +244,20 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 	rels, err := model.DecodeSnapshotRelations(raw)
 	if err != nil {
 		return ErrInvalidRelation
+	}
+	if !r.references {
+		if len(rels) == 0 {
+			return nil
+		}
+		owned, err := liveRelationTargetSet(ctx, tx, p.ID)
+		if err != nil {
+			return err
+		}
+		sc := Scope{CallerUID: p.OwnerUID, Admin: p.SpaceID == nil}
+		if p.SpaceID != nil {
+			sc.SpaceID = *p.SpaceID
+		}
+		return lockRelationTargets(ctx, tx, sc, p, rels, owned)
 	}
 	return validateReferenceTree(ctx, tx, p, p, rels, true, map[string]bool{}, 0)
 }
@@ -299,7 +310,7 @@ func (r *Repo) ensureReferenceIndexComplete(ctx context.Context, scope Scope) er
 // The target row is already locked, serializing concurrent reference writers.
 func (r *Repo) rejectPublishedIncomingRelations(ctx context.Context, tx *sql.Tx, target string) error {
 	if !r.references {
-		return nil
+		return rejectSnapshotIncomingRelations(ctx, tx, target)
 	}
 	var incomplete bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(

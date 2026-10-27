@@ -644,7 +644,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	// get here; `live` exempts targets this source already owns from the
 	// embedded-adoption guard, exactly as Update does.
 	ownerScope := Scope{CallerUID: current.OwnerUID, SpaceID: scope.SpaceID}
-	if err := lockRelationTargets(ctx, tx, ownerScope, current.Type, frozen, live); err != nil {
+	exposed := *current
+	exposed.Visibility = model.PluginVisibilitySpace
+	if err := lockRelationTargets(ctx, tx, ownerScope, exposed, frozen, live); err != nil {
 		return nil, err
 	}
 
