@@ -214,6 +214,7 @@ func logInstallationFailure(c *gin.Context, phase, reason string, upstreamStatus
 
 func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError) {
 	status, code, message := err.Status, errcode.UpstreamUnavailable, "暂时无法确认安装结果。"
+	hint := installationRetryHint
 	details := map[string]any{"upstream": "fleet", "phase": "fleet"}
 	switch status {
 	case 400:
@@ -225,6 +226,7 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 	case 404:
 		code, message = errcode.NotFound, "所选工作区或运行环境不存在或不可访问。"
 	case 409:
+		hint = "请核对工作区已有资源和冲突原因；相同参数重试无法解决内容冲突，请勿直接更换幂等键重复安装。"
 		code, message = errcode.Conflict, "安装发生冲突，请检查已有资源或安装参数。"
 		if strings.TrimSpace(err.Message) != "" {
 			message = err.Message
@@ -240,6 +242,7 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 	case 415:
 		code, message = "UNSUPPORTED_MEDIA_TYPE", "安装服务不支持当前请求格式。"
 	case 429:
+		hint = "请等待限流解除后，使用原幂等键和原参数重试；无幂等键的旧客户端请先核对工作区已有资源。"
 		code, message = errcode.RateLimited, "安装请求过于频繁，请稍后重试。"
 		if seconds, parseErr := strconv.Atoi(strings.TrimSpace(err.RetryAfter)); parseErr == nil && seconds >= 0 {
 			c.Header("Retry-After", strconv.Itoa(seconds))
@@ -248,5 +251,5 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 		status = http.StatusServiceUnavailable
 		logInstallationFailure(c, "fleet", "upstream_error", err.Status)
 	}
-	apiresponse.Fail(c, status, code, message, details, installationRetryHint)
+	apiresponse.Fail(c, status, code, message, details, hint)
 }

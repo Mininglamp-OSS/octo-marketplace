@@ -163,17 +163,7 @@ func (s *Service) createInstallation(ctx context.Context, caller Caller, pluginI
 	}
 	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey, *in)
 	if err != nil {
-		unknown := true
-		var upstream *fleet.CapabilityAPIError
-		if errors.As(err, &upstream) {
-			// Match the pinned path's definite rejections. Other statuses may
-			// report a timeout/conflict after Fleet has started processing.
-			switch upstream.Status {
-			case 400, 401, 403, 404, 413, 415, 422:
-				unknown = false
-			}
-		}
-		return nil, &InstallationAttemptError{Err: err, Unknown: unknown}
+		return nil, &InstallationAttemptError{Err: err, Unknown: !definiteInstallationRejection(err)}
 	}
 	if result == nil {
 		return nil, &InstallationAttemptError{Err: errors.New("capability installation returned no result"), Unknown: true}
@@ -182,4 +172,23 @@ func (s *Service) createInstallation(ctx context.Context, caller Caller, pluginI
 	// receipt replays. This is not a count of uniquely created Fleet resources.
 	s.trackInstall(ctx, pluginID)
 	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
+}
+
+// Only recognized rejections prove that this send did not install anything.
+// Generic/in-progress 409s, transport errors and 5xx remain uncertain; never use
+// an upstream display message to infer whether a mutation committed.
+func definiteInstallationRejection(err error) bool {
+	var upstream *fleet.CapabilityAPIError
+	if !errors.As(err, &upstream) {
+		return false
+	}
+	switch upstream.Status {
+	case 400, 401, 403, 404, 413, 415, 422, 429:
+		return true
+	case 409:
+		return upstream.Code == "DUPLICATE" || upstream.Code == "IDEMPOTENCY_KEY_REUSED" ||
+			(upstream.Code == "CONFLICT" && upstream.ConflictResource != "")
+	default:
+		return false
+	}
 }

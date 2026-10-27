@@ -61,7 +61,7 @@ func TestInstallRecoveryHTTPAcrossContentModes(t *testing.T) {
 				{"missing-result", nil, true, true, 503},
 				{"upstream-500", &fleet.CapabilityAPIError{Status: 500}, false, true, 503},
 				{"upstream-timeout", &fleet.CapabilityAPIError{Status: 408}, false, true, 503},
-				{"upstream-busy", &fleet.CapabilityAPIError{Status: 429}, false, true, 503},
+				{"upstream-busy", &fleet.CapabilityAPIError{Status: 429}, false, false, 429},
 				{"forbidden", &fleet.CapabilityAPIError{Status: 403}, false, false, 403},
 				{"invalid", &fleet.CapabilityAPIError{Status: 400}, false, false, 400},
 			} {

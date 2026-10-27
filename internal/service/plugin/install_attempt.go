@@ -192,14 +192,12 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 			err = errors.New("missing installation result")
 		}
 		unknown := true
-		var rejected *fleet.CapabilityAPIError
-		if completed && errors.As(err, &rejected) && (rejected.Status == 400 || rejected.Status == 401 || rejected.Status == 403 || rejected.Status == 404 || rejected.Status == 413 || rejected.Status == 415 || rejected.Status == 422) {
+		if completed && definiteInstallationRejection(err) {
 			unknown = false
 		}
 		if !completed {
 			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			var upstream *fleet.CapabilityAPIError
-			if errors.As(err, &upstream) && (upstream.Status == 400 || upstream.Status == 401 || upstream.Status == 403 || upstream.Status == 404 || upstream.Status == 413 || upstream.Status == 415 || upstream.Status == 422) {
+			if definiteInstallationRejection(err) {
 				rejected, writeErr := store.FailInstallDispatch(recovery, scope(caller), *attempt, token)
 				unknown = writeErr != nil || !rejected
 			}

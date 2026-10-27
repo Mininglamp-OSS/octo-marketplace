@@ -165,7 +165,8 @@ and `details` keys remain stable. This is a route-specific exception to the
 default API convention of English messages. Authentication failures on this
 route also use Chinese; existing routes keep their original text.
 
-HTTP **409 preserves Fleet's `error.message` verbatim**, including its language.
+Recognized Fleet `DUPLICATE`, legacy `IDEMPOTENCY_KEY_REUSED`, and `CONFLICT`
+identifying a Skill/Expert/Team resource collision return HTTP **409 and preserve Fleet's `error.message` verbatim**, including its language.
 Only a missing, invalid, or whitespace-only message uses the Chinese fallback.
 Fleet's `DUPLICATE` is retained. For `details.resource = "idempotency_key"`,
 Marketplace adds `details.conflict_reason = "idempotency_key_reused"` without
@@ -180,7 +181,12 @@ return `500 INTERNAL_ERROR` with `details.phase = "preparation"`. Unknown errors
 after invoking the Fleet adapter return `503 UPSTREAM_UNAVAILABLE` with
 `details.phase = "fleet"`: the installation may have committed. Known Fleet
 errors keep the status-specific mapping (400/401/403/404/409/413/415/429), and
-other Fleet statuses map to 503. Valid numeric `Retry-After` is forwarded on 429.
+other Fleet statuses map to 503. Unrecognized/generic/in-progress 409 responses
+remain uncertain; a display message alone never proves rejection. Valid numeric
+`Retry-After` is forwarded on 429. A definite rate limit can retry the original
+key and request within the original receipt window; it does not extend that window.
+For pinned attempts, an earlier uncertain send remains unknown even if a later
+send returns a definite 409 or 429.
 Safe phase/reason/status and request identity are logged, never upstream message,
 request body, tokens, environment values, or raw internal error text.
 

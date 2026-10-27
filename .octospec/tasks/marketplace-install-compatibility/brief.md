@@ -21,6 +21,9 @@ Delisted legacy data remains historical until a specific republish/install need.
   retry, current authorization, immutable bytes and secret-free persistence.
   Both content modes classify timeout/5xx/empty outcomes as unknown; keyless old
   clients must inspect their workspace rather than retry an unavailable key.
+  Recognized duplicate/key conflicts retain 409; rate limits retain 429 and a
+  validated Retry-After. Same-key retry retains bytes/deadline, and a later
+  rejection cannot erase earlier uncertainty.
 
 ## Out of scope
 Fleet changes; bulk migration/run-ledger platform; public distribution endpoint;

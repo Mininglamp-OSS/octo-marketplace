@@ -24,6 +24,7 @@ type CapabilityAPIError struct {
 	Message              string // Only a nonblank error.message from an HTTP 409 response.
 	RetryAfter           string
 	IdempotencyKeyReused bool
+	ConflictResource     string // Only a recognized conflicting Skill/Expert/Team resource kind.
 }
 
 func (e *CapabilityAPIError) Error() string { return "Fleet capability installation failed" }
@@ -88,11 +89,15 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 				if strings.TrimSpace(conflict.Error.Message) != "" {
 					apiErr.Message = conflict.Error.Message
 				}
-				if apiErr.Code == "DUPLICATE" {
-					var details struct {
-						Resource string `json:"resource"`
+				var details struct {
+					Resource string `json:"resource"`
+				}
+				if json.Unmarshal(conflict.Error.Details, &details) == nil {
+					apiErr.IdempotencyKeyReused = apiErr.Code == "DUPLICATE" && details.Resource == "idempotency_key"
+					switch details.Resource {
+					case "skill", "expert", "expert_team":
+						apiErr.ConflictResource = details.Resource
 					}
-					apiErr.IdempotencyKeyReused = json.Unmarshal(conflict.Error.Details, &details) == nil && details.Resource == "idempotency_key"
 				}
 			}
 		}

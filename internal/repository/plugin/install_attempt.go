@@ -72,13 +72,15 @@ func installInitialState(a InstallAttempt) string {
 }
 
 // AcquireInstallDispatch atomically claims a short send lease. retry_until is
-// fixed on the first possible send and is never extended by a retry.
+// fixed on the first possible send and is never extended by a retry. A definite
+// rejection (including rate limiting) may retry the same frozen request; the
+// had_unknown latch still prevents a later rejection from erasing uncertainty.
 func (r *Repo) AcquireInstallDispatch(ctx context.Context, sc Scope, a InstallAttempt, token string, now time.Time, lease, retry time.Duration) (bool, error) {
 	result, err := r.db.ExecContext(ctx, `UPDATE plugin_install_attempts SET
  had_unknown=IF(attempt_state='DISPATCHING',TRUE,had_unknown),attempt_state='DISPATCHING',lease_token=?,lease_until=?,retry_until=COALESCE(retry_until,?)
  WHERE space_id=? AND caller_uid=? AND workspace_id=? AND key_digest=?
  AND frozen_plan_json IS NOT NULL AND request_fingerprint=?
- AND attempt_state IN ('PREPARED','UNKNOWN','DISPATCHING')
+ AND attempt_state IN ('PREPARED','UNKNOWN','DISPATCHING','FAILED')
  AND (lease_until IS NULL OR lease_until<=?) AND (retry_until IS NULL OR retry_until>?)`, token, now.Add(lease), now.Add(retry), sc.SpaceID, sc.CallerUID, a.WorkspaceID, a.KeyDigest, a.RequestFingerprint, now, now)
 	if err != nil {
 		return false, err
