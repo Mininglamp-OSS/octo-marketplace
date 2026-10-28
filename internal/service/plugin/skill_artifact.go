@@ -138,7 +138,11 @@ func (s *Service) skillMarkdown(ctx context.Context, sc pluginrepo.Scope, plugin
 		return string(data), err
 	}
 	ref := s.skillRef(p)
-	if s.storage != nil && trustedArtifactKey(ref.ObjectKey, p.SpaceID) {
+	if strings.HasPrefix(ref.ObjectKey, "platform/") || strings.HasPrefix(attachmentKeyMap(p.AttachmentKeys)["SKILL.md"], "platform/") {
+		data, err := s.versionFileBytes(ctx, p, &model.PluginVersion{Package: p.Package, AttachmentKeys: p.AttachmentKeys}, "SKILL.md")
+		return string(data), err
+	}
+	if s.storage != nil && trustedPluginArtifactKey(ref.ObjectKey, p) {
 		body, err := s.storage.GetObject(ctx, ref.ObjectKey)
 		if err == nil {
 			defer body.Close()
@@ -200,7 +204,7 @@ func (s *Service) openSkillPackage(ctx context.Context, sc pluginrepo.Scope, plu
 	if p.Type != model.PluginTypeSkill {
 		return nil, ErrInvalidRequest
 	}
-	if s.versionManagement && !sc.Admin {
+	if (s.versionManagement && !sc.Admin) || hasPlatformArtifacts(p) {
 		if err = s.verifyVersionFiles(ctx, p, &model.PluginVersion{Package: p.Package, AttachmentKeys: p.AttachmentKeys}); err != nil {
 			return nil, err
 		}
@@ -255,10 +259,10 @@ func (s *Service) openSkillPackage(ctx context.Context, sc pluginrepo.Scope, plu
 // skill/ref.json. Expanded and freshly imported skills carry neither and fall
 // through to attachment-tree reconstruction.
 func (s *Service) legacyZipKey(p *model.Plugin, ref skillRefDocument) (string, bool) {
-	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && p.SpaceID != nil && validReferencedObjectKey(managed, *p.SpaceID) {
+	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && trustedPluginArtifactKey(managed, p) {
 		return managed, true
 	}
-	if trustedArtifactKey(ref.zipKey(), p.SpaceID) {
+	if trustedPluginArtifactKey(ref.zipKey(), p) {
 		return ref.zipKey(), true
 	}
 	return "", false
@@ -268,10 +272,10 @@ func (s *Service) legacyZipKey(p *model.Plugin, ref skillRefDocument) (string, b
 // legacy roots. It is used ONLY by ExpandSkillPackage (the server-driven
 // expand-skills migration), never on a caller-facing request.
 func (s *Service) migrationZipKey(p *model.Plugin, ref skillRefDocument) (string, bool) {
-	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && p.SpaceID != nil && validReferencedObjectKey(managed, *p.SpaceID) {
+	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && trustedPluginArtifactKey(managed, p) {
 		return managed, true
 	}
-	if migrationArtifactKey(ref.zipKey(), p.SpaceID) {
+	if trustedPluginArtifactKey(ref.zipKey(), p) || migrationArtifactKey(ref.zipKey(), p.SpaceID) {
 		return ref.zipKey(), true
 	}
 	return "", false
@@ -307,7 +311,10 @@ func (s *Service) writeSkillZip(ctx context.Context, p *model.Plugin, attachment
 		// Validate a storage key BEFORE creating the entry (Q11'): an untrusted or
 		// cross-Space reference is skipped entirely rather than left as a silently
 		// empty file in the delivered archive.
-		if a.ContentType != "raw" && (p.SpaceID == nil || !validReferencedObjectKey(storageKey, *p.SpaceID)) {
+		if a.ContentType != "raw" && !trustedPluginArtifactKey(storageKey, p) {
+			if strings.HasPrefix(storageKey, "platform/") {
+				return ErrIntegrity
+			}
 			continue
 		}
 		if entries >= maxSkillZipEntries {
@@ -397,8 +404,8 @@ func artifactKeyShape(key string) bool {
 // caller-writable through upsert, so a pointer is honored only when it sits in
 // the plugin's OWN managed Space prefix — every other key, including another
 // Space's managed prefix and the shared legacy roots, fails closed. Legacy
-// backfilled skills are served only after `-phase=expand-skills` rewrites them
-// into own-Space attachment trees; until then their legacy-root pointer is not
+// backfilled skills require conversion into owned attachment trees; until
+// then their legacy-root pointer is not
 // trusted (skill_md falls back to the inline SKILL.md).
 func trustedArtifactKey(key string, spaceID *string) bool {
 	if !artifactKeyShape(key) {

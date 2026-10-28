@@ -178,7 +178,7 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 // Unlike the legacy best-effort attachment reader, this path fails closed on
 // missing/corrupt files so Fleet never commits an accidentally partial Skill.
 func (b *capabilityBuilder) object(ctx context.Context, p *model.Plugin, key string, limit, wantSize int64, wantHash string) ([]byte, error) {
-	if b.service.storage == nil || p.SpaceID == nil || !validReferencedObjectKey(key, *p.SpaceID) {
+	if b.service.storage == nil || !trustedPluginArtifactKey(key, p) {
 		return nil, installationInvalid("definition.skills.files", "unavailable_source")
 	}
 	if limit < 0 {

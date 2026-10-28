@@ -722,6 +722,12 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if req.Type != old.Type {
 		return nil, ErrInvalidRequest
 	}
+	// Saved platform versions retain per-resource object keys. Moving only the
+	// current row into a Space/private scope would make that immutable history
+	// unreadable; a scope transfer needs its own complete history contract.
+	if old.Visibility == model.PluginVisibilitySystem && req.Visibility != old.Visibility {
+		return nil, ErrInvalidRequest
+	}
 	// A LISTED, org-visible plugin may not be modified through this path at all.
 	// Every field a tenant can change here is org-visible — the documents, and
 	// through the manifest the name/description/labels, plus category, publisher
@@ -789,7 +795,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	// Re-inject the stored key for unchanged storage content so the round-trip is
 	// not rejected by splitStorageKeys.
 	req.Package = reinjectUpdateStorageKeys(req.Package, old.Package, old.AttachmentKeys)
-	p, rels, err := s.buildWrite(ctx, caller, storageID, req, now, false)
+	p, rels, err := s.buildWrite(ctx, caller, storageID, req, now, false, old)
 	if err != nil {
 		return nil, err
 	}
@@ -956,7 +962,7 @@ func (s *Service) ListVersions(ctx context.Context, caller Caller, pluginID stri
 	return items, total, mapStoreError(err)
 }
 
-func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req WriteRequest, now time.Time, admin bool) (*model.Plugin, []model.PluginRelation, error) {
+func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req WriteRequest, now time.Time, admin bool, resources ...*model.Plugin) (*model.Plugin, []model.PluginRelation, error) {
 	name := strings.TrimSpace(req.Name)
 	if !validName(name) || !validPluginType(req.Type) || !validVisibility(req.Visibility, c.IsSystemAdmin) {
 		return nil, nil, ErrInvalidRequest
@@ -969,7 +975,11 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 			return nil, nil, err
 		}
 	}
-	docs, err := CanonicalizeDocuments(name, req.Type, req.Tags, req.Manifest, req.Package, c.SpaceID)
+	var resource *model.Plugin
+	if len(resources) > 0 {
+		resource = resources[0]
+	}
+	docs, err := canonicalizePluginDocuments(resource, name, req.Type, req.Tags, req.Manifest, req.Package, c.SpaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -994,11 +1004,18 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	spaceID := c.SpaceID
 	createdBy, botUID, botName := provenance(c)
 	p := &model.Plugin{ID: pluginID, Name: name, Type: req.Type, CategoryID: trimOptional(req.CategoryID), Tags: docs.Tags, Publisher: strings.TrimSpace(req.Publisher), OwnerUID: c.UID, SpaceID: &spaceID, Visibility: req.Visibility, ListingState: model.PluginListingStateDraft, CreatorName: c.Name, CreatedByType: createdBy, CreatedByBotUID: botUID, CreatedByBotName: botName, Icon: icon, IconURL: s.resolveIcon(ctx, icon), ToolCount: toolCount, Manifest: docs.Manifest, Package: docs.Package, AttachmentKeys: docs.AttachmentKeys, ManifestHash: docs.ManifestHash, PluginHash: docs.PluginHash, CurrentVersion: &currentVersion, Status: 1, CreatedAt: now, UpdatedAt: now}
+	if resource != nil {
+		p.SpaceID = resource.SpaceID
+	}
 	rels, err := s.buildRelations(ctx, c, admin, p, req.Relations, now)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.freezeVersionArtifacts(ctx, req.Type, docs, c.SpaceID); err != nil {
+	artifactResources := []*model.Plugin{resource}
+	if resource != nil {
+		artifactResources = append(artifactResources, p)
+	}
+	if err := s.freezeVersionArtifacts(ctx, req.Type, docs, c.SpaceID, artifactResources...); err != nil {
 		return nil, nil, err
 	}
 	p.Package, p.PluginHash, p.AttachmentKeys = docs.Package, docs.PluginHash, docs.AttachmentKeys

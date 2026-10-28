@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
@@ -23,13 +22,13 @@ func (r *migratedGraphInstaller) InstallCapability(_ context.Context, _, _, _, _
 	return &fleet.CapabilityInstallResult{ExpertTeamID: "fixture-fleet-team"}, nil
 }
 
-// Test the seam between M3's actual SQL writes and I's actual version resolver.
+// Test the seam between the current single-database converter and version resolver.
 // The remote mutation is captured here; the separate rehearsal tool runs the
 // unchanged real Fleet handler/Postgres and Daemon filesystem implementation.
 func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 	database := reviewDB(t)
 	ctx := context.Background()
-	seedStockRoot(t, database, "migration-install", "private", "published")
+	seedMigrationRoot(t, database, "migration-install", "private", "published")
 	gateSQL, err := os.ReadFile("../../scripts/pinned-release-readiness.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -46,17 +45,7 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 		}
 	}
 	checkGate(false)
-	evidence, err := stockmigration.Read(ctx, database, 1000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := stockmigration.Build(evidence)
-	if len(plan.Exceptions) != 0 {
-		t.Fatalf("migration fixture: %+v", plan.Exceptions)
-	}
-	if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "migration-install-batch", "migration-install", plan.Digest, true); err != nil {
-		t.Fatal(err)
-	}
+	applyCurrentMigration(t, database)
 	checkGate(true)
 	remote := &migratedGraphInstaller{}
 	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(remote)
