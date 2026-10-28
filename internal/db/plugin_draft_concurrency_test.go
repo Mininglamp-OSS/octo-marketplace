@@ -229,3 +229,42 @@ func TestSavedRevisionMatchesFormattedDatabaseJSON(t *testing.T) {
 		t.Fatalf("write/read revision mismatch %q / %q", saved.DraftRevision, read.DraftRevision)
 	}
 }
+
+func TestConnectorSavedRevisionMatchesCommittedLabel(t *testing.T) {
+	for _, label := range []string{"1.1.0", "1.0.0", ""} {
+		t.Run("label="+label, func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			seed(t, database, seedPlugin{id: "revision-connector", typ: "connector", visibility: "private", listingState: "draft", currentVersion: "1.0.0"})
+			ctx := context.Background()
+			before, err := repo.Get(ctx, tenantScope(), "revision-connector")
+			if err != nil {
+				t.Fatal(err)
+			}
+			token := model.PluginDraftRevision(before)
+			before.CurrentVersion = &label
+			saved, err := repo.Update(ctx, tenantScope(), pluginrepo.Mutation{Plugin: *before, ExpectedDraftRevision: &token, SnapshotVersion: true, OperatorID: "user-1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			read, err := repo.Get(ctx, tenantScope(), before.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantLabel := label
+			if wantLabel == "" {
+				wantLabel = "1.0.0"
+			}
+			if read.CurrentVersion == nil || *read.CurrentVersion != wantLabel || read.CurrentVersionID != nil {
+				t.Fatalf("unexpected connector version: %+v", read)
+			}
+			if saved.DraftRevision == "" || saved.DraftRevision != model.PluginDraftRevision(read) {
+				t.Fatalf("committed revision mismatch: %s / %s", saved.DraftRevision, model.PluginDraftRevision(read))
+			}
+			read.Publisher = "second save"
+			if _, err := repo.Update(ctx, tenantScope(), pluginrepo.Mutation{Plugin: *read, ExpectedDraftRevision: &saved.DraftRevision, SnapshotVersion: true, OperatorID: "user-1"}); err != nil {
+				t.Fatalf("reuse saved revision: %v", err)
+			}
+		})
+	}
+}

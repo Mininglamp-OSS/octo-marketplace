@@ -986,7 +986,7 @@ func (p plan) hash() string {
 // version pointer, that same name is the published reservation.
 func legacyNameColumns(x plugRow) (draftKey, publishedKey any, scope string, err error) {
 	scope = x.space
-	if x.typ != string(model.PluginTypeExpert) && x.typ != string(model.PluginTypeSkill) {
+	if x.typ != string(model.PluginTypeExpert) && x.typ != string(model.PluginTypeSkill) && x.typ != string(model.PluginTypeExpertTeam) {
 		return nil, nil, scope, nil
 	}
 	draft, e := model.NormalizePluginName(x.name)

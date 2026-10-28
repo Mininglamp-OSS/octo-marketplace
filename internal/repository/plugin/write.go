@@ -583,7 +583,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 			return nil, err
 		}
 	}
-	sync.DraftRevision = savedDraftRevision(*before, topPlugin, sync.NewVersionID, false)
+	sync.DraftRevision = savedDraftRevision(*before, topPlugin, sync.NewVersionID, false, top.SnapshotVersion)
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -864,7 +864,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err = insertAudit(ctx, tx, r.id(), now, p, "update", m, before.PluginHash, p.PluginHash); err != nil {
 		return nil, err
 	}
-	sync.DraftRevision = savedDraftRevision(*before, p, sync.NewVersionID, resetListing)
+	sync.DraftRevision = savedDraftRevision(*before, p, sync.NewVersionID, resetListing, m.SnapshotVersion)
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -1570,7 +1570,7 @@ func ensureVisibleDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func()
 	return nil
 }
 
-func savedDraftRevision(before, written model.Plugin, newVersion string, resetListing bool) string {
+func savedDraftRevision(before, written model.Plugin, newVersion string, resetListing, snapshotEnabled bool) string {
 	requestedVersion := written.CurrentVersion
 	written.OwnerUID, written.SpaceID = before.OwnerUID, before.SpaceID
 	written.ListingState = before.ListingState
@@ -1583,6 +1583,10 @@ func savedDraftRevision(before, written model.Plugin, newVersion string, resetLi
 			label = *requestedVersion
 		}
 		written.CurrentVersion = &label
+	}
+	if snapshotEnabled && written.Type == model.PluginTypeConnector && requestedVersion != nil && *requestedVersion != "" {
+		// Connectors persist the label without creating a version pointer.
+		written.CurrentVersion = requestedVersion
 	}
 	if resetListing {
 		written.ListingState = model.PluginListingStateDraft

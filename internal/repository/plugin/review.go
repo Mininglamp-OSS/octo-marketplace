@@ -678,6 +678,11 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	if nameErr != nil {
 		return nil, nameErr
 	}
+	if nameKey != nil && !current.IsEmbedded {
+		if err := rejectPluginNameCollision(ctx, tx, *current, nameKey.(string), nameScope); err != nil {
+			return nil, err
+		}
+	}
 	if isFirst {
 		res, err := tx.ExecContext(ctx,
 			`UPDATE plugins SET plugin_name=?,tags_json=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,visibility=?,listing_state=?,updated_at=?,name_key=?,name_scope=?

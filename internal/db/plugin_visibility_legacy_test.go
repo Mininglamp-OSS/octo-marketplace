@@ -91,8 +91,8 @@ func legacyAudienceGraph(t *testing.T, kind model.PluginType, embedded bool, vis
 
 func TestVisibilityNarrowingRevokesOwnedEmbeddedGraph(t *testing.T) {
 	for _, kind := range []model.PluginType{model.PluginTypeExpert, model.PluginTypeExpertTeam} {
-		for _, newerDraft := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/newer-draft=%t", kind, newerDraft), func(t *testing.T) {
+		for _, topology := range []string{"unchanged", "draft", "released"} {
+			t.Run(fmt.Sprintf("%s/topology=%s", kind, topology), func(t *testing.T) {
 				f := legacyAudienceGraph(t, kind, true, model.PluginVisibilitySpace, true)
 				ctx, owner := context.Background(), managedOwner()
 				member := pluginsvc.Caller{UID: "member", SpaceID: owner.SpaceID}
@@ -105,10 +105,17 @@ func TestVisibilityNarrowingRevokesOwnedEmbeddedGraph(t *testing.T) {
 						t.Fatalf("fixture child not readable: %v", err)
 					}
 				}
-				if newerDraft {
+				if topology != "unchanged" {
 					req := f.write
 					req.Version, req.Relations = "2.0.0", nil
 					if _, err := f.svc.Update(ctx, owner, f.root.ID, req); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if topology == "released" {
+					publishManaged(t, f.svc, owner, f.root.ID)
+					state, err = f.repo.GetVersionState(ctx, tenantScope(), f.root.ID)
+					if err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -178,6 +185,13 @@ func TestVisibilityNarrowingRevokesOwnedEmbeddedGraph(t *testing.T) {
 				// unchanged released embedded graph.
 				if _, err := f.svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: f.root.ID, ExpectedPublishedVersionID: *state.PublishedVersionID, Visibility: model.PluginVisibilitySpace}); err != nil {
 					t.Fatalf("restore released graph: %v", err)
+				}
+				if topology == "released" {
+					for _, id := range f.embedded {
+						if _, err := f.svc.Detail(ctx, member, id, true); !errors.Is(err, pluginsvc.ErrNotFound) {
+							t.Fatalf("re-widen exposed removed historical child %s: %v", id, err)
+						}
+					}
 				}
 
 			})

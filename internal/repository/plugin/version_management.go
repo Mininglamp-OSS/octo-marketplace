@@ -180,9 +180,14 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 	if strings.TrimSpace(releaseName) == "" {
 		releaseName = p.Name
 	}
-	publishedKey, _, nameErr := pluginNameColumns(releaseName, p.Type, p.SpaceID)
+	publishedKey, nameScope, nameErr := pluginNameColumns(releaseName, p.Type, p.SpaceID)
 	if nameErr != nil {
 		return nameErr
+	}
+	if publishedKey != nil && !p.IsEmbedded {
+		if err := rejectPluginNameCollision(ctx, tx, *p, publishedKey.(string), nameScope); err != nil {
+			return err
+		}
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE plugins SET published_version_id=?,published_name_key=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, publishedKey, p.ID)
 	if err != nil {

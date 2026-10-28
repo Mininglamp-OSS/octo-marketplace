@@ -10,8 +10,8 @@ import (
 )
 
 // Only container-owned embedded rows inherit an audience change. Narrowing also
-// visits live edges so previously promoted children cannot remain readable after
-// a newer draft changes the topology. Widening visits the released topology only:
+// visits live and historically released edges so previously promoted children
+// cannot remain readable after a newer draft or release changes the topology. Widening visits the released topology only:
 // an editable draft must not publish additional children through this operation.
 func syncVisibilityEmbeddedAudience(ctx context.Context, tx *sql.Tx, root *model.Plugin, target model.PluginVisibility, now time.Time) error {
 	if root.SpaceID == nil {
@@ -84,6 +84,31 @@ func visibilityOwnedRelations(ctx context.Context, tx *sql.Tx, id string, pin *s
 	}
 	if !includeLive {
 		return rels, nil
+	}
+	// A replacement release may have removed an embedded descendant from both
+	// the live graph and the published pointer. Release evidence, not every saved
+	// draft, identifies additional topologies whose audience must be revoked.
+	history, err := tx.QueryContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases r ON r.plugin_id=v.plugin_id AND r.version_id=v.version_id WHERE v.plugin_id=? ORDER BY v.version_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	for history.Next() {
+		var snapshot []byte
+		if err := history.Scan(&snapshot); err != nil {
+			history.Close()
+			return nil, err
+		}
+		previous, err := model.DecodeSnapshotRelations(snapshot)
+		if err != nil {
+			history.Close()
+			return nil, ErrInvalidRelation
+		}
+		rels = append(rels, previous...)
+	}
+	err = history.Err()
+	history.Close()
+	if err != nil {
+		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT target_plugin_id,target_version_id,relation_type FROM plugin_relations WHERE source_plugin_id=? AND status=1 AND deleted_at IS NULL ORDER BY relation_id`, id)
 	if err != nil {
