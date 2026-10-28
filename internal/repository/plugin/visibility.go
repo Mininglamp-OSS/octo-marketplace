@@ -58,10 +58,6 @@ func (r *Repo) ChangeVisibility(ctx context.Context, scope Scope, p VisibilityPa
 		return nil, ErrConflict
 	}
 	out := &VisibilityResult{Plugin: current, PublishedVersionID: published.String}
-	// Same-scope retries are harmless, including a response lost after commit.
-	if current.Visibility == p.Visibility {
-		return out, tx.Commit()
-	}
 	if p.Visibility != model.PluginVisibilityPrivate && p.Visibility != model.PluginVisibilitySpace {
 		return nil, ErrConflict
 	}
@@ -82,6 +78,11 @@ func (r *Repo) ChangeVisibility(ctx context.Context, scope Scope, p VisibilityPa
 			return out, tx.Commit()
 		}
 		return nil, ErrReviewPending
+	}
+	// A same-scope retry is a no-op only when no review is pending. It must
+	// neither hide an open review nor implicitly cancel it.
+	if current.Visibility == p.Visibility {
+		return out, tx.Commit()
 	}
 	if p.Visibility == model.PluginVisibilityPrivate {
 		if err = r.rejectPublishedIncomingRelations(ctx, tx, current.ID); err != nil {

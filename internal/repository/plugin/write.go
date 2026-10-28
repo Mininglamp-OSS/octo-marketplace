@@ -827,7 +827,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	relationsChanged := len(sync.Created) > 0 || len(sync.Updated) > 0 || len(sync.Deleted) > 0
 	sidecarUnchanged := sameAttachmentKeys(p.AttachmentKeys, before.AttachmentKeys)
 	changelogChanged := false
-	if m.Changelog != nil {
+	if m.SnapshotVersion || m.Changelog != nil {
 		var previous sql.NullString
 		if before.CurrentVersionID != nil {
 			// The editing read exposes no draft note for a formal release.
@@ -835,7 +835,13 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 				return nil, err
 			}
 		}
-		changelogChanged = previous.String != *m.Changelog
+		if m.Changelog != nil {
+			changelogChanged = previous.String != *m.Changelog
+		} else if previous.Valid {
+			// Omission preserves an editable draft note; explicit empty clears.
+			// The query above deliberately excludes formal release notes.
+			m.Changelog = &previous.String
+		}
 	}
 	if m.SnapshotVersion && (!contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || changelogChanged) {
 		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID, r.references); err != nil {
