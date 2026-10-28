@@ -7,6 +7,8 @@ latest review's retry-policy questions against the existing requirements.
 Refs #141 and #131. Baseline: PR #142 at `feac1b888753f3b07f42e9f47d008e6d499d9f42`.
 The PR #147 follow-up addresses the migration replay and mixed-reference rollback
 reviews of `c9ab6f8` without changing the installation protocol or pinned policy.
+The next review round covers nullable legacy publication/member pointers,
+repository approval-index consistency, and the legacy-public retry claim.
 
 ## Load-bearing behavior
 - Both installation adapters must check every independent Expert/Skill target
@@ -24,6 +26,19 @@ reviews of `c9ab6f8` without changing the installation protocol or pinned policy
 - Frozen-plan schema upgrades must converge after lost migration receipts or
   partially applied DDL, preserving plans, results, uncertainty, leases and
   deadlines. Existing fields and constraints are never dropped or overwritten.
+- Deletion must not skip active legacy publication evidence merely because its
+  formal release pointer or a Team member pin is NULL. Use known applicable
+  publication graphs; if legacy history cannot identify one uniquely, refuse
+  only when that uncertainty is relevant to the target being deleted. Ordinary
+  unrelated drafts and unused history must not become permanent deletion locks.
+  Missing or malformed selected snapshot evidence remains an integrity failure;
+  absence of a readable graph cannot prove the absence of incoming references.
+- Every repository snapshot writer honors its reference-index flag. Production
+  still rejects references enabled without version management; repository-only
+  defensive tests do not establish deployment reachability for that combination.
+- Legacy `public` remains normalized to `system` during first install and retry.
+  Keep root eligibility and per-edge audience checks; a false self-audience
+  finding must not cause those checks to be removed.
 - Frozen retry uses the authenticated original released graph and content, not
   later editable relations. Normal saves, pin changes and publications must not
   rebuild or invalidate that plan merely because the draft/current release has
@@ -62,6 +77,18 @@ production operations; closing or modifying PR #142.
 7. Replaying the frozen-plan migration restores missing fields/constraint and the
    migration receipt without changing existing evidence. Repeated Up is a no-op,
    invalid states remain rejected and Down continues to refuse data loss.
+8. Nullable legacy publication/member evidence protects current or uncertain
+   relevant references in both reference modes, without changing history. A
+   later known publication without the edge releases obsolete protection;
+   merely delisting that unchanged latest approval must not revive older edges.
+   Same-label/hash relation-only drafts do not prove publication. Cross-Space
+   access and deletion of referenced resources remain refused.
+9. Both installation adapters replay public/system aliases with the original
+   request/key after success or an unknown result. Root delisting and narrower
+   dependency audiences still refuse without altering attempt evidence.
+10. Direct repository legacy approval writes complete reverse-index evidence
+    when requested, including empty graphs; normal deployment feature gates
+    remain unchanged.
 
 ## COMPREHENSION
 The latest review's proposed private-chain example cannot be admitted by the
@@ -82,3 +109,10 @@ Space publication freezes that live mixture. Root legacy validation and exact
 pinned-subtree validation therefore remain separate. MySQL DDL can also commit
 before sql-migrate records completion, so each new field and CHECK must tolerate
 replay independently; restoring a receipt must not reset installation evidence.
+The public-root retry claim is contradicted by the existing normalization and
+dynamic replay tests: the first dispatch and retry both validate the root. The
+approval flag omission is an internal consistency issue, while its reported
+feature combination is blocked by Config and Service. Nullable publication
+evidence is a distinct lifecycle concern: a later saved draft does not prove
+what was last published, and an unpinned member selects a compatibility graph,
+not an arbitrary historical release.

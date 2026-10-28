@@ -352,6 +352,11 @@ func (r *Repo) rejectPublishedIncomingRelations(ctx context.Context, tx *sql.Tx,
 	if !r.references {
 		return rejectSnapshotIncomingRelations(ctx, tx, target)
 	}
+	// Enabling the reverse index does not erase publication evidence predating
+	// formal release pointers. Check those legacy graphs before indexed releases.
+	if err := rejectLegacySnapshotIncomingRelations(ctx, tx, target); err != nil {
+		return err
+	}
 	var incomplete bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
  SELECT 1 FROM (

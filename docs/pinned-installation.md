@@ -21,6 +21,10 @@ eligibility fails; rejection is not proof that an earlier call did not commit.
 Private reads require owner and Space even when the caller is an administrator.
 A private target also requires a private source with the same owner and Space;
 source audiences are rechecked through each member's frozen references.
+Preserved legacy `public` rows are normalized to `system` for both sides of the
+audience predicate, including the root in a frozen plan's node list. First
+dispatch and same-key replay use the same root/node checks; public visibility
+does not exempt a delisted root or an ineligible dependency.
 Independent-reference writes and publication enforce the source audience for
 Space targets too, including Admin and legacy `public` sources: a system/public
 source cannot reference a Space target, and Space targets require the same Space.

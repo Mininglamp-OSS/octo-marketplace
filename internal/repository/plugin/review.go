@@ -748,7 +748,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		s := changelog.String
 		changelogPtr = &s
 	}
-	if _, err := snapshotVersion(ctx, tx, r.id, now, snapshotPlugin, frozen, changelogPtr, p.ReviewerUID); err != nil {
+	if _, err := snapshotVersion(ctx, tx, r.id, now, snapshotPlugin, frozen, changelogPtr, p.ReviewerUID, r.references); err != nil {
 		return nil, err
 	}
 
