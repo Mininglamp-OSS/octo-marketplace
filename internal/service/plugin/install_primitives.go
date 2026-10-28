@@ -23,6 +23,7 @@ const SkillInstallAdapterVersion = "mk1"
 type PinnedSkillFiles struct {
 	PluginID    string
 	VersionID   string
+	Version     *string
 	Name        string
 	Description string
 	Files       map[string]string
@@ -74,7 +75,11 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 		if !exists || strings.TrimSpace(content) == "" {
 			return nil, installationInvalid("definition.skills.content", "required")
 		}
-		skill := fleet.CapabilitySkill{Name: name, Description: input.Description, Config: map[string]any{}}
+		version, err := capabilitySkillVersion(input.Version)
+		if err != nil {
+			return nil, err
+		}
+		skill := fleet.CapabilitySkill{Name: name, Description: input.Description, Config: map[string]any{}, Version: version, MarketSkillID: input.PluginID}
 		if err := b.boundedText("definition.skills.description", input.Description, 512); err != nil {
 			return nil, err
 		}

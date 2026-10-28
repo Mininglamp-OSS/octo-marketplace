@@ -158,7 +158,7 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 					if err != nil {
 						return nil, err
 					}
-					r.skills[key] = PinnedSkillFiles{PluginID: key.PluginID, VersionID: key.VersionID, Name: skill.Plugin.Name, Description: manifestDescription(skill.Plugin.Manifest), Files: files}
+					r.skills[key] = PinnedSkillFiles{PluginID: key.PluginID, VersionID: key.VersionID, Version: skill.Plugin.CurrentVersion, Name: skill.Plugin.Name, Description: manifestDescription(skill.Plugin.Manifest), Files: files}
 				}
 			case "expert_connector":
 				if rel.TargetVersionID != nil {
@@ -345,6 +345,7 @@ func (r *pinnedInstallResolver) detail(ctx context.Context, key pluginrepo.Insta
 	cp.Package = v.Package
 	cp.AttachmentKeys = v.AttachmentKeys
 	cp.CurrentVersionID = &v.ID
+	cp.CurrentVersion = v.DeclaredVersion
 	var manifest struct {
 		PluginName string `json:"plugin_name"`
 	}

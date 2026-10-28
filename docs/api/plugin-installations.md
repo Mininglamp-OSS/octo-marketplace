@@ -38,6 +38,32 @@ require integration verification in the target environment before switching clie
 
 ## Request
 
+### Skill source metadata sent to Fleet
+
+Recruitment callers use this capability endpoint to persist Skill installation
+versions. Deploy Fleet's workspace Skill-version contract (7f032c3 and nullable
+version follow-up 506268b, migration 225) before enabling the new callers. The
+older ordinary `/api/skills` create path does not accept this metadata.
+
+Marketplace sends `definition.skills[].version` from each installed Skill's own
+source version and `market_skill_id` from that Skill's plugin ID. A missing version
+is sent as explicit JSON null. Non-null versions are opaque, non-empty text
+without leading/trailing whitespace or NUL; invalid values fail before Fleet.
+An expert/team's version and an internal snapshot UUID never replace a Skill's
+declared version. For pinned installation, metadata comes from the selected frozen
+release, including when the live row contains a newer unpublished draft.
+
+Fleet uses Workspace + installed name + non-null version for reuse, and does not
+overwrite an existing reused Skill's current content. A null version creates a
+separate Skill on each new operation; same-key retries remain idempotent. This
+source label is not a guarantee of immutable installed content. Existing pinned
+runtime names and bindings are preserved. Within one request, same-name Skills
+with different source metadata are rejected rather than losing source identity.
+If pinned installation is already active, reconcile outstanding pre-upgrade
+operations before this adapter upgrade: their stored request fingerprint lacks
+the new source metadata, so an old key fails closed with `CONFLICT` instead of
+silently submitting a changed request or generating a replacement key.
+
 ```http
 POST /market/api/v1/plugins/{plugin_id}/installations
 Authorization: Bearer <end-user-token>

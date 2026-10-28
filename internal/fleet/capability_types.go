@@ -2,7 +2,8 @@ package fleet
 
 import "encoding/json"
 
-// CapabilityInstallRequest matches Fleet test commit 49a8266 (2026-09-24).
+// CapabilityInstallRequest includes Skill source metadata from Fleet 7f032c3
+// and its nullable-version follow-up 506268b (2026-10-26/27).
 type CapabilityInstallRequest struct {
 	Definition CapabilityDefinition `json:"definition"`
 	Bindings   CapabilityBindings   `json:"bindings"`
@@ -17,11 +18,13 @@ type CapabilityDefinition struct {
 }
 
 type CapabilitySkill struct {
-	Name        string                `json:"name"`
-	Description string                `json:"description"`
-	Content     string                `json:"content"`
-	Config      map[string]any        `json:"config"`
-	Files       []CapabilitySkillFile `json:"files,omitempty"`
+	Name          string                `json:"name"`
+	Description   string                `json:"description"`
+	Content       string                `json:"content"`
+	Config        map[string]any        `json:"config"`
+	Files         []CapabilitySkillFile `json:"files,omitempty"`
+	Version       *string               `json:"version"`
+	MarketSkillID string                `json:"market_skill_id"`
 }
 
 type CapabilitySkillFile struct {

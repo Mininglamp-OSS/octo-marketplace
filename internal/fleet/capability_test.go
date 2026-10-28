@@ -51,6 +51,36 @@ func capabilityRequest() CapabilityInstallRequest {
 const expertResultJSON = `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[]}],"skills":[]}`
 const expertEnvelopeJSON = `{"data":` + expertResultJSON + `}`
 
+func TestCapabilityInstallTransmitsSkillSourceMetadata(t *testing.T) {
+	version := "release-v2"
+	for _, sourceVersion := range []*string{nil, &version} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Definition struct {
+					Skills []map[string]json.RawMessage `json:"skills"`
+				} `json:"definition"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Definition.Skills) != 1 {
+				t.Errorf("invalid request: %+v, %v", body, err)
+			} else {
+				want, _ := json.Marshal(sourceVersion)
+				if string(body.Definition.Skills[0]["version"]) != string(want) || string(body.Definition.Skills[0]["market_skill_id"]) != `"market-skill-1"` {
+					t.Errorf("incorrect source metadata: %+v", body.Definition.Skills)
+				}
+			}
+			io.WriteString(w, `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":["skill-1"]}],"skills":[{"skill_id":"skill-1","name":"deploy","created":true}]}}`)
+		}))
+		in := capabilityRequest()
+		in.Definition.Skills = []CapabilitySkill{{Name: "deploy", Version: sourceVersion, MarketSkillID: "market-skill-1"}}
+		in.Definition.Experts[0].SkillNames = []string{"deploy"}
+		_, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "key", in)
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestCapabilityInstallForwardsIdentityAndReplay(t *testing.T) {
 	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

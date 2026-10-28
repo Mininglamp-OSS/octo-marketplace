@@ -221,7 +221,11 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string) (string, error
 	if !ok || content == "" {
 		return "", installationInvalid("definition.skills.content", "required")
 	}
-	skill := fleet.CapabilitySkill{Name: name, Description: manifestDescription(p.Manifest), Content: content, Config: map[string]any{}}
+	version, err := capabilitySkillVersion(p.CurrentVersion)
+	if err != nil {
+		return "", err
+	}
+	skill := fleet.CapabilitySkill{Name: name, Description: manifestDescription(p.Manifest), Content: content, Config: map[string]any{}, Version: version, MarketSkillID: p.ID}
 	if err := b.boundedText("definition.skills.description", skill.Description, 512); err != nil {
 		return "", err
 	}
@@ -243,6 +247,19 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string) (string, error
 	}
 	b.skillsByID[id] = name
 	return name, nil
+}
+
+// Fleet treats a non-null source version as opaque text, not SemVer. Missing
+// metadata must stay null; silently normalizing an invalid value changes reuse.
+func capabilitySkillVersion(version *string) (*string, error) {
+	if version == nil {
+		return nil, nil
+	}
+	value := *version
+	if value == "" || strings.TrimSpace(value) != value || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
+		return nil, installationInvalid("definition.skills.version", "invalid")
+	}
+	return &value, nil
 }
 
 func (b *capabilityBuilder) boundedText(field, value string, maxRunes int) error {
