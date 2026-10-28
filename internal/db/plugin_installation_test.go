@@ -119,7 +119,7 @@ func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.
 	ctx := context.Background()
 	repo := pluginrepo.New(database)
 	remote := &dbCapabilityInstall{}
-	svc := pluginsvc.New(repo).WithVersionManagement(true).WithPinnedInstallation(true).WithCapabilityInstaller(remote)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(remote)
 	owner := managedOwner()
 	d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "first released", model.PluginVisibilityPrivate))
 	if err != nil {
@@ -145,8 +145,19 @@ func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.
 	if err != nil || !out.Replayed || remote.calls != 2 {
 		t.Fatalf("retry %+v %v calls%d", out, err, remote.calls)
 	}
+	if remote.in.Definition.Experts[0].Instructions != "first released" {
+		t.Fatal("same-key retry replaced frozen content")
+	}
+	fresh := p
+	fresh.IdempotencyKey = "fresh-installation-operation"
+	if _, err = svc.CreateInstallation(ctx, owner, d.Plugin.ID, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if remote.in.Definition.Experts[0].Instructions != "second released" {
+		t.Fatal("new key did not select new root release")
+	}
 	var persisted string
-	if err = database.QueryRow(`SELECT CONCAT_WS('|',space_id,caller_uid,workspace_id,key_digest,plugin_id,root_version_id,adapter_version,input_fingerprint,request_fingerprint,agent_id,team_id) FROM plugin_install_attempts`).Scan(&persisted); err != nil {
+	if err = database.QueryRow(`SELECT CONCAT_WS('|',space_id,caller_uid,workspace_id,key_digest,plugin_id,root_version_id,adapter_version,input_fingerprint,request_fingerprint,agent_id,team_id) FROM plugin_install_attempts LIMIT 1`).Scan(&persisted); err != nil {
 		t.Fatal(err)
 	}
 	for _, secret := range []string{"fixture-secret", "fixture-token", "fixture-operation", "first released"} {

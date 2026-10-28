@@ -90,6 +90,13 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
 Marketplace resolves the root expert/team and every dependency under the
 authenticated caller's visibility. An embedded member cannot be installed as a
 standalone root. Hidden dependencies reject the entire operation before Fleet.
+For pinned installation, the root and every dependency must currently be
+published, active, undeleted and authorized, on both first dispatch and frozen-plan
+retry. A retained release/pin does not exempt a delisted dependency. Blocked
+retries retain the original plan, deadline and any earlier unknown outcome;
+reconcile that outcome before starting a new operation. Conversion preserves
+listing state and is an explicit operator action, never an installation fallback.
+See [the rollout procedure](../marketplace-v2-release.md#3-下架历史与按需转换).
 
 For a single expert, `definition.experts` contains one item and `expert_team` is
 absent; referenced Skills still appear under `definition.skills`. A team contains
@@ -165,22 +172,38 @@ and `details` keys remain stable. This is a route-specific exception to the
 default API convention of English messages. Authentication failures on this
 route also use Chinese; existing routes keep their original text.
 
-HTTP **409 preserves Fleet's `error.message` verbatim**, including its language.
-Only a missing, invalid, or whitespace-only message uses the Chinese fallback.
+Recognized Fleet `DUPLICATE`, legacy `IDEMPOTENCY_KEY_REUSED`, and `CONFLICT`
+identifying a Skill/Expert/Team resource collision return HTTP **409 with fixed
+Chinese safety messages**. Arbitrary Fleet `error.message` text is discarded,
+including on conflicts; it is neither retained in the typed error nor returned
+or logged. Structured, whitelisted metadata alone selects the message:
+
+| Conflict | Fixed `message` |
+| --- | --- |
+| Idempotency key reuse | 幂等键已用于其他安装参数，请核对原安装记录。 |
+| Skill resource | 安装发生技能资源冲突，请核对工作区已有资源。 |
+| Expert resource | 安装发生专家资源冲突，请核对工作区已有资源。 |
+| Expert team resource | 安装发生专家团资源冲突，请核对工作区已有资源。 |
+| Other recognized conflict | 安装发生冲突，请检查已有资源或安装参数。 |
+
 Fleet's `DUPLICATE` is retained. For `details.resource = "idempotency_key"`,
 Marketplace adds `details.conflict_reason = "idempotency_key_reused"` without
 forwarding the raw name/key or arbitrary upstream details. The earlier draft's
 `IDEMPOTENCY_KEY_REUSED` mapping remains supported as `CONFLICT`.
-Other upstream status codes do not expose Fleet's message or raw response body.
-Conflict messages are display text, not trusted HTML, and must not be logged
-with submitted content or credentials. The client should render them as text.
+This applies to both installation URLs and both content modes. The approved
+safety policy supersedes the earlier verbatim-conflict-text requirement.
 
 Preparation failures such as unreadable/corrupt artifacts or catalog failures
 return `500 INTERNAL_ERROR` with `details.phase = "preparation"`. Unknown errors
 after invoking the Fleet adapter return `503 UPSTREAM_UNAVAILABLE` with
 `details.phase = "fleet"`: the installation may have committed. Known Fleet
 errors keep the status-specific mapping (400/401/403/404/409/413/415/429), and
-other Fleet statuses map to 503. Valid numeric `Retry-After` is forwarded on 429.
+other Fleet statuses map to 503. Unrecognized/generic/in-progress 409 responses
+remain uncertain; a display message alone never proves rejection. Valid numeric
+`Retry-After` is forwarded on 429. A definite rate limit can retry the original
+key and request within the original receipt window; it does not extend that window.
+For pinned attempts, an earlier uncertain send remains unknown even if a later
+send returns a definite 409 or 429.
 Safe phase/reason/status and request identity are logged, never upstream message,
 request body, tokens, environment values, or raw internal error text.
 
@@ -222,3 +245,21 @@ Before switching Client, verify single expert and multi-member team installs,
 custom naming, MCP, provider environment, complete Skill files, cross-Space and
 runtime denials, same-key replay, changed-input conflict, and uncertain-response
 recovery against Fleet. Keep the legacy route available throughout migration.
+
+## Expired receipt recovery
+
+The original resend deadline applies to completed and uncertain attempts alike:
+after Fleet's receipt window, another mutation is not licensed by the old key.
+`409 CONFLICT` with `reason = "installation_attempt_expired"` and
+`can_retry_same_key = false` does not mean the original installation failed.
+A successful local receipt and its IDs remain stored; earlier uncertainty is
+retained. The response asks the caller to inspect the original workspace record,
+use the existing resource if completed, or stop and reconcile with an operator
+if unclear. It does **not** instruct automatic replacement of the key.
+
+Do not bypass current Workspace access by returning stored IDs locally, or
+resend after the remote window merely because a local success exists. Follow
+[receipt reconciliation](../pinned-installation.md#expired-receipt-reconciliation).
+A new key is a distinct, explicitly authorized operation only after reconciliation
+proves it appropriate; expiry alone is not such proof. Both installation URLs
+retain the same expiry response and recovery boundary.

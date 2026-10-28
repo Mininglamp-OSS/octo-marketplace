@@ -626,3 +626,27 @@ func TestWriteServiceErrorMapsArtifactConditions(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyInstallOptionalKeyAndUnknownOutcome(t *testing.T) {
+	for _, key := range []string{"", "existing-client-operation"} {
+		f := &fakeService{installOutcome: &pluginsvc.InstallOutcome{SquadID: "team-created"}}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/install", strings.NewReader(`{"plugin_id":"p1","workspace_id":"ws-1","runtime_id":"rt-1"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if key != "" {
+			req.Header.Set("Idempotency-Key", key)
+		}
+		rec := httptest.NewRecorder()
+		testEngine(f).ServeHTTP(rec, req)
+		if rec.Code != 200 || f.installParams.IdempotencyKey != key || !strings.Contains(rec.Body.String(), `"squad_id":"team-created"`) {
+			t.Fatalf("legacy contract changed: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	f := &fakeService{err: &pluginsvc.InstallationAttemptError{Err: errors.New("timeout"), Unknown: true}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/install", strings.NewReader(`{"plugin_id":"p1","workspace_id":"ws-1","runtime_id":"rt-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, req)
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), `"can_retry_same_key":false`) {
+		t.Fatalf("keyless timeout suggests unsafe replay: %d %s", rec.Code, rec.Body.String())
+	}
+}

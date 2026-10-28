@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
-	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
@@ -692,14 +692,9 @@ func TestManagedLegacyPublicationNeedsVerifiedBaseline(t *testing.T) {
 // installStubProvisioner records successful provision calls without Loop/Fleet.
 type installStubProvisioner struct{ agents int }
 
-func (p *installStubProvisioner) ProvisionAgentFromSpec(context.Context, expertsvc.InstallInput, expertsvc.ProvisionAgentSpec) (string, error) {
+func (p *installStubProvisioner) InstallCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
 	p.agents++
-	return "agent-1", nil
-}
-
-func (p *installStubProvisioner) ProvisionSquadFromSpec(context.Context, expertsvc.InstallInput, *model.Squad) (expertsvc.InstallSquadResult, error) {
-	p.agents++
-	return expertsvc.InstallSquadResult{SquadID: "squad-1"}, nil
+	return &fleet.CapabilityInstallResult{ExpertID: "agent-1"}, nil
 }
 
 func managedSkillWrite(label, name string, visibility model.PluginVisibility) pluginsvc.WriteRequest {
@@ -726,7 +721,7 @@ func TestManagedInstallUsesReleasedRelations(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	provisioner := &installStubProvisioner{}
-	svc := pluginsvc.New(repo).WithVersionManagement(true).WithProvisioner(provisioner)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithCapabilityInstaller(provisioner)
 	ctx := context.Background()
 	owner := managedOwner()
 	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
@@ -822,7 +817,7 @@ func TestManagedFirstApprovalKeepsLaterDraftRelations(t *testing.T) {
 func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
-	svc := pluginsvc.New(repo).WithVersionManagement(true).WithProvisioner(&installStubProvisioner{})
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithCapabilityInstaller(&installStubProvisioner{})
 	ctx := context.Background()
 	owner := managedOwner()
 	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
@@ -835,13 +830,17 @@ func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
 	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: hidden.Plugin.ID}); err != nil {
 		t.Fatal(err)
 	}
-	req := managedWrite("1.0.0", "expert", model.PluginVisibilitySpace)
+	req := managedWrite("1.0.0", "expert", model.PluginVisibilityPrivate)
 	req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: hidden.Plugin.ID, Type: "expert_skill"}}
 	expert, err := svc.Create(ctx, owner, req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	publishManaged(t, svc, owner, expert.Plugin.ID)
+	// Model a pre-validation historical graph; current writes reject this audience.
+	if _, err = database.Exec(`UPDATE plugins SET visibility='space' WHERE plugin_id=?`, expert.Plugin.ID); err != nil {
+		t.Fatal(err)
+	}
 	teammate := pluginsvc.Caller{UID: "teammate", SpaceID: "space-a"}
 	if _, err = svc.Install(ctx, teammate, expert.Plugin.ID, pluginsvc.InstallParams{WorkspaceID: "ws", RuntimeID: "rt"}); !errors.Is(err, pluginsvc.ErrDependencyHidden) {
 		t.Fatalf("hidden released dependency install err=%v", err)

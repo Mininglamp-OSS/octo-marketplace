@@ -81,6 +81,9 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 			if err != nil {
 				return nil, err
 			}
+			if !detail.Plugin.IsEmbedded && !installAudience(root.Plugin, detail.Plugin) {
+				return nil, ErrDependencyHidden
+			}
 			expert, err := b.expert(ctx, detail, strings.TrimSpace(detail.Plugin.Name), manifestDescription(detail.Plugin.Manifest))
 			if err != nil {
 				return nil, err
@@ -184,7 +187,7 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	}
 	names := map[string]bool{}
 	for _, rel := range relations {
-		name, err := b.skill(ctx, rel.TargetPluginID)
+		name, err := b.skill(ctx, rel.TargetPluginID, detail.Plugin)
 		if err != nil {
 			return nil, err
 		}
@@ -197,18 +200,24 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	return out, nil
 }
 
-func (b *capabilityBuilder) skill(ctx context.Context, id string) (string, error) {
+func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.Plugin) (string, error) {
+	detail, err := b.service.Detail(ctx, b.caller, id, false)
+	if err != nil {
+		return "", err
+	}
+	p := detail.Plugin
+	// Embedded legacy copies belong to their container. Every independent asset
+	// must permit the source audience, even when the caller can read both.
+	// Check before reusing the per-request cache.
+	if !p.IsEmbedded && !installAudience(source, p) {
+		return "", ErrDependencyHidden
+	}
 	if name, ok := b.skillsByID[id]; ok {
 		return name, nil
 	}
 	if len(b.skillsByID) >= 600 {
 		return "", ErrTooLarge
 	}
-	detail, err := b.service.Detail(ctx, b.caller, id, false)
-	if err != nil {
-		return "", err
-	}
-	p := detail.Plugin
 	name := strings.TrimSpace(p.Name)
 	if p.Type != model.PluginTypeSkill || !installationName(name, 128) {
 		return "", installationInvalid("definition.skills", "invalid_dependency")

@@ -11,9 +11,12 @@ Refs #119 and #120. Builds on version management and versioned references. Featu
 - Missing pins/releases/artifacts fail closed, with no fallback to latest or inline expert MCP.
 - Both entrypoints reject inline root/member capability snapshots before remote
   mutation; missing/hidden roots keep the existing 404 contract.
-- Batched per-request reads, exact expert-to-skill bindings, stable skill aliases, bounded payloads.
-- Delisted dependencies remain usable through existing released pins; roots must remain listed.
-- No token, environment value or complete request persists in retry records.
+- Batched per-request reads, exact expert-to-skill bindings, original skill names and bytes, bounded payloads.
+- Retain historical pins/releases, but both roots and dependencies must currently
+  be published and authorized before first dispatch or same-key retry. No
+  delisting exemption, request-time conversion or automatic re-listing.
+- Persist a secret-free frozen definition and HMAC fingerprints for retry; never
+  store tokens or custom runtime environment values.
 - Activation requires completed M1/M3 evidence and the read-only released-graph
   check; expired-key reconciliation preserves durable key tombstones.
 
@@ -25,13 +28,20 @@ Exact version and permission tests; same-name skills keep distinct identities an
 
 ## COMPREHENSION
 The release table proves publication; an arbitrary snapshot or a current pointer
-cannot. Installation reads intentionally differ from market discovery because
-existing pins may survive delisting. Fleet is still the workspace authorization
-and idempotency authority, so even a completed local attempt forwards identical
-retries rather than bypassing Fleet. Legacy cleanup must track newly created
-skill IDs separately from all skill IDs bound to each member.
+cannot. The scoped SQL reader may return retained delisted rows/evidence, but
+that is not distribution permission: the service checks current listing/status,
+caller access and each source audience before dispatch. A delisted node blocks
+an otherwise frozen plan without erasing its history or earlier uncertainty.
+Fleet remains the workspace authorization and idempotency authority, so eligible
+completed attempts still forward identical requests. Both URLs share one
+capability executor; there is no legacy create/bind/compensation executor.
 
-## Local verification (2026-10-24)
+## Historical verification (2026-10-24; not the current contract)
+
+This dated record describes the earlier implementation. Its delisted-pin
+acceptance was superseded by PR142's scope and the current release runbook;
+it must not be used to restore an installation exemption. Current verification
+is recorded in the PR142 description.
 - Focused plugin/expert/repository/config/handler package tests passed.
 - `TEST_MYSQL_DSN=<isolated synthetic MySQL> go test ./...` passed, including
   real SQL batch access, released delisted pins, concurrent scoped attempt

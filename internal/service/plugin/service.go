@@ -20,6 +20,7 @@ import (
 )
 
 var (
+	ErrAttemptExpired = errors.New("installation retry window expired")
 	ErrNotFound       = errors.New("plugin not found")
 	ErrConflict       = errors.New("plugin conflict")
 	ErrRelationInUse  = errors.New("plugin is referenced by another live plugin")
@@ -123,12 +124,13 @@ type Store interface {
 var _ Store = (*pluginrepo.Repo)(nil)
 
 type Service struct {
+	installHMACKeyID    string
+	installHMACKeys     map[string][]byte
 	versionManagement   bool
 	pinnedInstallation  bool
 	references          bool
 	repo                Store
 	storage             storage.Storage
-	provisioner         Provisioner
 	capabilityInstaller CapabilityInstaller
 	metrics             InstallTracker
 	parseTasks          ParseTaskStore

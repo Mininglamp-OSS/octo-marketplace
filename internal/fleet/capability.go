@@ -16,14 +16,14 @@ import (
 // changing the shared legacy client's 30-second timeout.
 const CapabilityInstallTimeout = 2 * time.Minute
 
-// CapabilityAPIError retains Fleet's conflict message for direct display only.
-// Error deliberately excludes it because messages may contain submitted values.
+// CapabilityAPIError retains only status and structured conflict metadata.
+// Upstream display text is never retained: it may contain diagnostics or secrets.
 type CapabilityAPIError struct {
 	Status               int
 	Code                 string
-	Message              string // Only a nonblank error.message from an HTTP 409 response.
 	RetryAfter           string
 	IdempotencyKeyReused bool
+	ConflictResource     string // Only a recognized conflicting Skill/Expert/Team resource kind.
 }
 
 func (e *CapabilityAPIError) Error() string { return "Fleet capability installation failed" }
@@ -80,19 +80,19 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 		if resp.StatusCode == http.StatusConflict {
 			var conflict struct {
 				Error struct {
-					Message string          `json:"message"`
 					Details json.RawMessage `json:"details"`
 				} `json:"error"`
 			}
 			if json.Unmarshal(raw, &conflict) == nil {
-				if strings.TrimSpace(conflict.Error.Message) != "" {
-					apiErr.Message = conflict.Error.Message
+				var details struct {
+					Resource string `json:"resource"`
 				}
-				if apiErr.Code == "DUPLICATE" {
-					var details struct {
-						Resource string `json:"resource"`
+				if json.Unmarshal(conflict.Error.Details, &details) == nil {
+					apiErr.IdempotencyKeyReused = apiErr.Code == "DUPLICATE" && details.Resource == "idempotency_key"
+					switch details.Resource {
+					case "skill", "expert", "expert_team":
+						apiErr.ConflictResource = details.Resource
 					}
-					apiErr.IdempotencyKeyReused = json.Unmarshal(conflict.Error.Details, &details) == nil && details.Resource == "idempotency_key"
 				}
 			}
 		}

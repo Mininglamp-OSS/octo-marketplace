@@ -527,6 +527,7 @@ func TestDecideReviewFromCardReplaysStoredResponse(t *testing.T) {
 	store, svc := reviewFixture(t)
 	store.review.receipt = &model.CardActionReceipt{
 		EventID:        "42",
+		Decision:       "approve",
 		ReviewID:       "review-1",
 		StoredResponse: `{"disposition":"applied","state":"approved","requester_uid":"user-1"}`,
 	}
@@ -598,8 +599,8 @@ func TestDecideReviewFromCardRefusesNonAdminOperator(t *testing.T) {
 			if store.review.approveParams.ReviewID != "" {
 				t.Error("unverified operator mutated the review")
 			}
-			if len(store.review.receiptInserts) != 0 {
-				t.Error("refusal wrote a receipt; a later legitimate retry would be swallowed")
+			if len(store.review.receiptInserts) != 1 {
+				t.Error("terminal refusal must persist exactly one receipt")
 			}
 		})
 	}
@@ -690,8 +691,8 @@ func TestDecideReviewFromCardReportsMissingReview(t *testing.T) {
 	if out.Disposition != "not_found" || out.State != "cancelled" {
 		t.Fatalf("result = %+v, want not_found/cancelled", out)
 	}
-	if len(store.review.receiptInserts) != 0 {
-		t.Error("missing review wrote a receipt")
+	if len(store.review.receiptInserts) != 1 {
+		t.Error("missing review must persist a terminal receipt")
 	}
 }
 
@@ -766,8 +767,8 @@ func TestDecideReviewFromCardLoserSeesCommittedOutcome(t *testing.T) {
 	if out.Requester != "user-1" {
 		t.Errorf("requester_uid = %q", out.Requester)
 	}
-	if len(store.review.receiptInserts) != 0 {
-		t.Error("the loser wrote a receipt for a decision it did not make")
+	if len(store.review.receiptInserts) != 1 {
+		t.Error("conflict must persist its handled response")
 	}
 }
 
@@ -1109,11 +1110,10 @@ func TestDecideReviewFromCardVersionRegressedIsATerminalRefusal(t *testing.T) {
 	if out.Display["title"] != "Demo" {
 		t.Errorf("display.title = %q", out.Display["title"])
 	}
-	// No receipt is written for a refused click — cancel+resubmit generates a
-	// fresh review_id/card, and writing a receipt here would permanently
-	// swallow any retry against a corrected version.
-	if len(store.review.receiptInserts) != 0 {
-		t.Error("refusal wrote a receipt, so a later retry against a corrected version would replay as this refusal")
+	// The same event must keep this refusal even after state changes. A deliberate
+	// fresh action uses a new event ID.
+	if len(store.review.receiptInserts) != 1 {
+		t.Error("version refusal must persist a terminal receipt")
 	}
 }
 
@@ -1245,8 +1245,8 @@ func TestDecideReviewFromCardLabelTakenIsATerminalRefusal(t *testing.T) {
 	if out.Requester != "user-1" {
 		t.Errorf("requester_uid = %q, want the applicant", out.Requester)
 	}
-	if len(store.review.receiptInserts) != 0 {
-		t.Error("refusal wrote a receipt, so a retry after the applicant resubmits would replay this refusal")
+	if len(store.review.receiptInserts) != 1 {
+		t.Error("label refusal must persist a terminal receipt")
 	}
 }
 
@@ -1279,8 +1279,8 @@ func TestDecideReviewFromCardApplyTimeNotFoundIsTerminal(t *testing.T) {
 	if out.Requester != "user-1" {
 		t.Errorf("requester_uid = %q, want the applicant that was already loaded", out.Requester)
 	}
-	if len(store.review.receiptInserts) != 0 {
-		t.Error("a terminal not_found wrote a receipt")
+	if len(store.review.receiptInserts) != 1 {
+		t.Error("terminal not_found must persist a receipt")
 	}
 }
 
@@ -1308,5 +1308,49 @@ func TestCardConflictNotFoundOnReReadIsTerminal(t *testing.T) {
 	}
 	if out.Requester != "user-1" {
 		t.Errorf("requester_uid = %q, want the applicant from the request already in hand", out.Requester)
+	}
+}
+
+func TestDecideReviewFromCardTerminalRefusalsStayStable(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		applyErr, errorRead error
+		member              bool
+	}{
+		{name: "role restored", member: true},
+		{name: "version corrected", applyErr: pluginrepo.ErrVersionRegressed},
+		{name: "label freed", applyErr: pluginrepo.ErrLabelTaken},
+		{name: "missing review restored", errorRead: pluginrepo.ErrNotFound},
+		{name: "apply target restored", applyErr: pluginrepo.ErrNotFound},
+		{name: "decision conflict", applyErr: pluginrepo.ErrConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, svc := reviewFixture(t)
+			store.review.anySpaceReq = &model.PluginReviewRequest{ID: "review-1", PluginID: "plugin-1", SpaceID: "space-a", Status: model.ReviewStatusPending, ApplicantUID: "user-1", PluginName: "Demo"}
+			store.review.anySpaceErr = tc.errorRead
+			store.review.approveErr = tc.applyErr
+			role := SpaceRoleOwner
+			if tc.member {
+				role = SpaceRoleMember
+			}
+			svc = svc.WithNotify(&fakeNotifier{enabled: true, role: roleOf(role)}, nil)
+			first, err := svc.DecideReviewFromCard(context.Background(), "99", "admin-1", "approve", "review-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, _ := json.Marshal(first)
+			store.review.anySpaceErr = nil
+			store.review.approveErr = nil
+			store.review.anySpaceReq.Status = model.ReviewStatusApproved
+			svc = svc.WithNotify(&fakeNotifier{enabled: true, role: roleOf(SpaceRoleOwner)}, nil)
+			second, err := svc.DecideReviewFromCard(context.Background(), "99", "admin-1", "approve", "review-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			replay, _ := json.Marshal(second)
+			if string(original) != string(replay) || len(store.review.receiptInserts) != 1 {
+				t.Fatalf("terminal result changed: %s -> %s", original, replay)
+			}
+		})
 	}
 }

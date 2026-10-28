@@ -30,14 +30,45 @@ shared targets. With the gate disabled, existing legacy container handling remai
 The same transaction rechecks target ownership, audience, release identity and
 listing state during saves, review submissions, approval and publication. An
 unchanged existing pin may remain in a draft after target delisting; new pins and
-new publication require listed targets. Existing released pins remain available
-to the installation resolver. Releasing a source never follows a target's latest
+new publication require listed targets. Existing pins and release evidence are
+retained as history, but installation preparation and frozen-plan retries require
+both the root and all dependencies to be currently published and authorized.
+A retained pin does not allow a new Fleet dispatch after target delisting. Releasing a source never follows a target's latest
 editable version. Saved snapshots and their reverse index are written together.
 
-Published or previously published/delisted resources cannot be deleted or change
-visibility through ordinary writes. Drafts with no publication evidence remain
-deletable; deleting a source never deletes an independent target. Impact queries
-are diagnostic and do not grant permission to delete published resources.
+Previously published/delisted Skills and Experts may be soft-deleted only when
+no protected live, current published or Team-pinned indirect incoming reference
+survives. Historical releases remain; delisting alone does not release incoming
+references. This does not change the existing visibility-narrowing policy.
+Deleting a source never deletes an independent target. Impact queries remain
+diagnostic, not deletion authorization. See [the current lifecycle and rollout
+contract](marketplace-v2-release.md).
+
+## Published graph identity
+
+`GET /plugins/detail_graph` traverses each released target by
+`(plugin_id, target_version_id)`, rather than collapsing every release of one
+plugin into a single node. `related_plugins` may repeat `plugin_id` for distinct
+released versions. Match a pinned relation to the node with that `plugin_id` and
+`current_version_id == target_version_id`; the existing `current_version_id`
+field describes the selected immutable snapshot, not a later editable version.
+Names, manifests and hashes all come from that same selected release. No new
+wire field is added, and full packages/storage attachment keys remain omitted.
+
+The same release shared by multiple edges is projected/expanded once; all its
+incoming edges remain. The 630-related-node limit counts distinct resolved
+snapshots (the root is separate), so an unpinned edge and a pin selecting the
+same release share one node allowance, in either traversal order. Raw selections,
+including unavailable versions and aliases, remain bounded by the separate
+2000-edge/traversal limit; unavailable versions do not consume returned-node
+allowance. A 631st distinct related snapshot or a 2001st edge is still rejected.
+Legacy unpinned edges select the current published
+release, while Connector edges retain their existing current-resource behavior.
+If a selected release is unavailable after root admission, omit only that
+version's incoming edges, preserving other readable releases of the same plugin.
+Current caller/Space access, root diagnostics and graph-size limits still apply;
+this is not an exemption for hidden/deleted dependencies. Installation resolution
+and its authenticated frozen plans are unchanged by the graph projection fix.
 
 ## Diagnostic reads
 

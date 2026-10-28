@@ -121,7 +121,7 @@ func ValidateReferenceMetadata(source model.PluginType, rels []model.PluginRelat
 
 func (r *Repo) lockReferences(ctx context.Context, tx *sql.Tx, scope Scope, source model.Plugin, rels []model.PluginRelation, inGraph map[string]struct{}) error {
 	if !r.references {
-		return lockRelationTargets(ctx, tx, scope, source.Type, rels, inGraph)
+		return lockRelationTargets(ctx, tx, scope, source, rels, inGraph)
 	}
 	if source.IsEmbedded {
 		return ErrInvalidRelation
@@ -161,18 +161,9 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 	copy(resolved, rels)
 	targets := make([]model.Plugin, len(rels))
 	for i, edge := range rels {
-		var target model.Plugin
-		var sid sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT plugin_id,plugin_type,is_embedded,owner_uid,space_id,visibility,listing_state FROM plugins WHERE plugin_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`, edge.TargetPluginID).Scan(&target.ID, &target.Type, &target.IsEmbedded, &target.OwnerUID, &sid, &target.Visibility, &target.ListingState)
-		if err == sql.ErrNoRows {
-			return ErrNotFound
-		}
+		target, err := lockIndependentReferenceTarget(ctx, tx, root, source, edge.TargetPluginID)
 		if err != nil {
 			return err
-		}
-		target.SpaceID = nullString(sid)
-		if target.IsEmbedded || !referenceAudience(source, target) || !referenceAudience(root, target) {
-			return ErrNotFound
 		}
 		if listed && target.ListingState != model.PluginListingStatePublished {
 			pin := ""
@@ -191,34 +182,57 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 		return err
 	}
 	for i, edge := range resolved {
-		if edge.TargetVersionID == nil {
-			continue
-		}
-		key := edge.TargetPluginID + "\x00" + *edge.TargetVersionID
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if len(seen) > maxGraphNodes {
-			return ErrGraphTooLarge
-		}
-		var raw []byte
-		err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=? FOR UPDATE`, edge.TargetPluginID, *edge.TargetVersionID).Scan(&raw)
-		if err == sql.ErrNoRows {
-			return referenceFieldError(i, depth, "target_version_id", "released_version_required")
-		}
-		if err != nil {
-			return err
-		}
-		children, err := model.DecodeSnapshotRelations(raw)
-		if err != nil {
-			return ErrInvalidRelation
-		}
-		if err = validateReferenceTree(ctx, tx, root, targets[i], children, false, seen, depth+1); err != nil {
+		if err := validateReleasedReference(ctx, tx, root, targets[i], edge, seen, i, depth); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func lockIndependentReferenceTarget(ctx context.Context, tx *sql.Tx, root, source model.Plugin, targetID string) (model.Plugin, error) {
+	var target model.Plugin
+	var sid sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT plugin_id,plugin_type,is_embedded,owner_uid,space_id,visibility,listing_state FROM plugins WHERE plugin_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`, targetID).Scan(&target.ID, &target.Type, &target.IsEmbedded, &target.OwnerUID, &sid, &target.Visibility, &target.ListingState)
+	if err == sql.ErrNoRows {
+		return target, ErrNotFound
+	}
+	if err != nil {
+		return target, err
+	}
+	target.SpaceID = nullString(sid)
+	if target.IsEmbedded || !referenceAudience(source, target) || !referenceAudience(root, target) {
+		return target, ErrNotFound
+	}
+	return target, nil
+}
+
+// Both strict reference graphs and retained pins in legacy roots traverse the
+// exact released snapshot under the same locks, audience checks and graph bounds.
+func validateReleasedReference(ctx context.Context, tx *sql.Tx, root, target model.Plugin, edge model.PluginRelation, seen map[string]bool, index, depth int) error {
+	if edge.TargetVersionID == nil {
+		return nil
+	}
+	key := edge.TargetPluginID + "\x00" + *edge.TargetVersionID
+	if seen[key] {
+		return nil
+	}
+	seen[key] = true
+	if len(seen) > maxGraphNodes {
+		return ErrGraphTooLarge
+	}
+	var raw []byte
+	err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=? FOR UPDATE`, edge.TargetPluginID, *edge.TargetVersionID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return referenceFieldError(index, depth, "target_version_id", "released_version_required")
+	}
+	if err != nil {
+		return err
+	}
+	children, err := model.DecodeSnapshotRelations(raw)
+	if err != nil {
+		return ErrInvalidRelation
+	}
+	return validateReferenceTree(ctx, tx, root, target, children, false, seen, depth+1)
 }
 
 func writeReferenceIndex(ctx context.Context, tx *sql.Tx, source, version string, rels []model.PluginRelation) error {
@@ -237,9 +251,6 @@ func writeReferenceIndex(ctx context.Context, tx *sql.Tx, source, version string
 }
 
 func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p model.Plugin, versionID string) error {
-	if !r.references {
-		return nil
-	}
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, versionID).Scan(&raw); err != nil {
 		return err
@@ -247,6 +258,46 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 	rels, err := model.DecodeSnapshotRelations(raw)
 	if err != nil {
 		return ErrInvalidRelation
+	}
+	if !r.references {
+		if len(rels) == 0 {
+			return nil
+		}
+		owned, err := liveRelationTargetSet(ctx, tx, p.ID)
+		if err != nil {
+			return err
+		}
+		sc := Scope{CallerUID: p.OwnerUID, Admin: p.SpaceID == nil}
+		if p.SpaceID != nil {
+			sc.SpaceID = *p.SpaceID
+		}
+		// A rollback can leave a mixed root: retained pins alongside new unpinned
+		// edges. Preserve legacy validation for the complete root, including owned
+		// embedded children and unlisted targets. A filtered pinned subset is not
+		// a complete Team and cannot be checked for a leader on its own.
+		if err := lockRelationTargets(ctx, tx, sc, p, rels, owned); err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for i, edge := range rels {
+			if edge.TargetVersionID == nil {
+				continue
+			}
+			if len(rels) > maxGraphEdges {
+				return ErrInvalidRelation
+			}
+			target, err := lockIndependentReferenceTarget(ctx, tx, p, p, edge.TargetPluginID)
+			if err != nil {
+				return err
+			}
+			if target.ListingState != model.PluginListingStatePublished {
+				return referenceFieldError(i, 0, "target_plugin_id", "target_not_published")
+			}
+			if err := validateReleasedReference(ctx, tx, p, target, edge, seen, i, 0); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return validateReferenceTree(ctx, tx, p, p, rels, true, map[string]bool{}, 0)
 }
@@ -290,4 +341,58 @@ func (r *Repo) ensureReferenceIndexComplete(ctx context.Context, scope Scope) er
 		return ErrReferenceIndexIncomplete
 	}
 	return nil
+}
+
+// rejectPublishedIncomingRelations protects only each surviving source's current
+// published graph. Historical releases remain audit data, not permanent delete
+// locks. Team→Expert→Skill expansion follows each Team's pinned member version,
+// even after the member has published a newer graph without that Skill.
+// The target row is already locked, serializing concurrent reference writers.
+func (r *Repo) rejectPublishedIncomingRelations(ctx context.Context, tx *sql.Tx, target string) error {
+	if !r.references {
+		return rejectSnapshotIncomingRelations(ctx, tx, target)
+	}
+	// Enabling the reverse index does not erase publication evidence predating
+	// formal release pointers. Check those legacy graphs before indexed releases.
+	if err := rejectLegacySnapshotIncomingRelations(ctx, tx, target); err != nil {
+		return err
+	}
+	var incomplete bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM (
+  SELECT p.plugin_id,p.published_version_id AS version_id FROM plugins p
+   WHERE p.status=1 AND p.deleted_at IS NULL AND p.published_version_id IS NOT NULL
+  UNION
+  SELECT member.target_plugin_id,member.target_version_id
+   FROM plugins team JOIN plugin_version_relation_refs member
+    ON member.source_plugin_id=team.plugin_id AND member.source_version_id=team.published_version_id
+   WHERE team.status=1 AND team.deleted_at IS NULL AND member.relation_type='expert_team_expert'
+ ) selected
+ LEFT JOIN plugin_versions v ON v.plugin_id=selected.plugin_id AND v.version_id=selected.version_id
+ LEFT JOIN plugin_version_reference_index_state idx ON idx.source_plugin_id=v.plugin_id AND idx.source_version_id=v.version_id
+ WHERE v.version_id IS NULL OR idx.source_version_id IS NULL
+ OR idx.snapshot_digest<>SHA2(CAST(v.relations_json AS CHAR CHARACTER SET utf8mb4),256)
+ OR idx.relation_count<>(SELECT COUNT(*) FROM plugin_version_relation_refs edge WHERE edge.source_plugin_id=v.plugin_id AND edge.source_version_id=v.version_id))`).Scan(&incomplete); err != nil {
+		return err
+	}
+	if incomplete {
+		return ErrReferenceIndexIncomplete
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT edge.relation_id FROM plugin_version_relation_refs edge
+ JOIN plugins source ON source.plugin_id=edge.source_plugin_id
+ WHERE edge.target_plugin_id=? AND source.status=1 AND source.deleted_at IS NULL
+ AND (source.published_version_id=edge.source_version_id OR EXISTS (
+  SELECT 1 FROM plugins team JOIN plugin_version_relation_refs member
+   ON member.source_plugin_id=team.plugin_id AND member.source_version_id=team.published_version_id
+  WHERE team.status=1 AND team.deleted_at IS NULL AND member.relation_type='expert_team_expert'
+   AND member.target_plugin_id=edge.source_plugin_id AND member.target_version_id=edge.source_version_id))
+ ORDER BY edge.source_plugin_id,edge.relation_id FOR UPDATE`, target)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return ErrRelationInUse
+	}
+	return rows.Err()
 }

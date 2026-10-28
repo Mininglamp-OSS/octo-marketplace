@@ -38,7 +38,7 @@ func TestPinnedInvisibleRootReturns404ThroughRealService(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM plugin_install_attempts").WillReturnRows(sqlmock.NewRows([]string{"plugin_id"}))
 	mock.ExpectQuery("SELECT .* FROM plugins p WHERE p.plugin_id IN").WillReturnRows(sqlmock.NewRows([]string{"plugin_id"}))
 	remote := &noRootInstaller{}
-	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithPinnedInstallation(true).WithCapabilityInstaller(remote)
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(remote)
 	rec := httptest.NewRecorder()
 	testEngine(svc).ServeHTTP(rec, installationRequest(installationBody))
 	if rec.Code != http.StatusNotFound || remote.calls != 0 {
@@ -75,7 +75,7 @@ func installationRequest(body string) *http.Request {
 	return r
 }
 
-func TestInstallationAndLegacyRoutesRemainIndependent(t *testing.T) {
+func TestInstallationAndLegacyAdaptersKeepTheirWireContracts(t *testing.T) {
 	f := &fakeInstallationService{fakeService: &fakeService{installOutcome: &pluginsvc.InstallOutcome{AgentID: "legacy-agent"}}, out: &pluginsvc.InstallationOutcome{SquadID: "new-squad", Replayed: true}}
 	r := testEngine(f)
 	rec := httptest.NewRecorder()
@@ -254,26 +254,34 @@ func TestInstallationErrorMappingAndSafeRetry(t *testing.T) {
 	}
 }
 
-func TestInstallationConflictUsesUpstreamMessage(t *testing.T) {
-	for _, message := range []string{"技能名称已被不同内容占用", "Conflict from Fleet", "", "  "} {
-		f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: &fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", IdempotencyKeyReused: true, Message: message}}
+func TestInstallationConflictUsesSafeMessage(t *testing.T) {
+	for _, tc := range []struct {
+		err     fleet.CapabilityAPIError
+		message string
+	}{
+		{fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", IdempotencyKeyReused: true}, "幂等键已用于其他安装参数，请核对原安装记录。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "CONFLICT", ConflictResource: "skill"}, "安装发生技能资源冲突，请核对工作区已有资源。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", ConflictResource: "expert"}, "安装发生专家资源冲突，请核对工作区已有资源。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "CONFLICT", ConflictResource: "expert_team"}, "安装发生专家团资源冲突，请核对工作区已有资源。"},
+		{fleet.CapabilityAPIError{Status: 409, Code: "DUPLICATE", ConflictResource: "untrusted-secret"}, "安装发生冲突，请检查已有资源或安装参数。"},
+	} {
+		f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: &tc.err}
 		rec := httptest.NewRecorder()
 		testEngine(f).ServeHTTP(rec, installationRequest(installationBody))
 		var out struct {
 			Error struct {
 				Code, Message string
 				Details       map[string]any
-			} `json:"error"`
+			}
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)
 		}
-		want := message
-		if strings.TrimSpace(message) == "" {
-			want = "安装发生冲突，请检查已有资源或安装参数。"
+		if rec.Code != 409 || out.Error.Message != tc.message || strings.Contains(rec.Body.String(), "untrusted-secret") {
+			t.Fatalf("unsafe conflict response: %s", rec.Body.String())
 		}
-		if rec.Code != 409 || out.Error.Code != "DUPLICATE" || out.Error.Message != want || out.Error.Details["conflict_reason"] != "idempotency_key_reused" {
-			t.Fatalf("unexpected conflict response: %s", rec.Body.String())
+		if tc.err.IdempotencyKeyReused && out.Error.Details["conflict_reason"] != "idempotency_key_reused" {
+			t.Fatal("safe conflict reason lost")
 		}
 	}
 }
@@ -282,7 +290,7 @@ func TestInstallationFailureLogsOnlySafeClassification(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	restore := logging.Replace(zap.New(core))
 	defer restore()
-	for _, err := range []error{errors.New("private-submitted-content"), &pluginsvc.InstallationAttemptError{Err: errors.New("private-submitted-content")}, &fleet.CapabilityAPIError{Status: 500, Message: "private-submitted-content"}} {
+	for _, err := range []error{errors.New("private-submitted-content"), &pluginsvc.InstallationAttemptError{Err: errors.New("private-submitted-content")}, &fleet.CapabilityAPIError{Status: 500}} {
 		f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: err}
 		testEngine(f).ServeHTTP(httptest.NewRecorder(), installationRequest(installationBody))
 	}
@@ -310,5 +318,47 @@ func TestInstallationUnavailableWithoutNewService(t *testing.T) {
 	testEngine(&fakeService{}).ServeHTTP(rec, installationRequest(installationBody))
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), `"reason":"not_configured"`) || !strings.Contains(rec.Body.String(), "安装服务尚未配置") {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInstallationWrappedFleetRejections(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   string
+	}{
+		{400, "VALIDATION_ERROR"}, {401, "AUTH_REQUIRED"}, {403, "FORBIDDEN"},
+		{404, "NOT_FOUND"}, {409, "DUPLICATE"}, {429, "RATE_LIMITED"},
+	} {
+		for _, unknown := range []bool{false, true} {
+			upstream := &fleet.CapabilityAPIError{Status: tc.status, Code: "DUPLICATE", RetryAfter: "3"}
+			wrapped := &pluginsvc.InstallationAttemptError{Err: upstream, Unknown: unknown}
+			rec := httptest.NewRecorder()
+			testEngine(&fakeInstallationService{fakeService: &fakeService{}, installationErr: wrapped}).ServeHTTP(rec, installationRequest(installationBody))
+			var out struct {
+				Error struct {
+					Code    string
+					Details map[string]any
+				}
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			wantStatus, wantCode := tc.status, tc.code
+			if unknown {
+				wantStatus, wantCode = 503, "UPSTREAM_UNAVAILABLE"
+			}
+			if rec.Code != wantStatus || out.Error.Code != wantCode {
+				t.Fatalf("upstream=%d unknown=%t status=%d body=%s", tc.status, unknown, rec.Code, rec.Body.String())
+			}
+			if unknown && out.Error.Details["reason"] != "installation_result_unknown" {
+				t.Fatal("earlier uncertainty lost")
+			}
+			if !unknown && tc.status == 429 && rec.Header().Get("Retry-After") != "3" {
+				t.Fatal("wrapped rate-limit header lost")
+			}
+			if unknown && rec.Header().Get("Retry-After") != "" {
+				t.Fatal("unknown outcome mislabeled as safe rate-limit retry")
+			}
+		}
 	}
 }
