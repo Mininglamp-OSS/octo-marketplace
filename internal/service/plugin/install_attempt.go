@@ -29,6 +29,9 @@ type InstallationAttemptStore interface {
 
 func digestInstall(v any) string {
 	raw, _ := json.Marshal(v)
+	return digestInstallBytes(raw)
+}
+func digestInstallBytes(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
@@ -46,11 +49,13 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 	if attempt != nil {
 		keyID = attempt.HMACKeyID
 	}
-	intent := digestInstall(struct{ Root, Space, Workspace, Runtime, Name string }{id, caller.SpaceID, p.WorkspaceID, p.RuntimeID, p.ResourceName})
-	if attempt != nil {
-		if attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion {
-			return nil, ErrConflict
-		}
+	// Omitting false keeps default-mode intent HMACs compatible with existing attempts.
+	intent := digestInstall(struct {
+		Root, Space, Workspace, Runtime, Name string
+		WorkspaceConnectors                   bool `json:"workspace_connectors,omitempty"`
+	}{id, caller.SpaceID, p.WorkspaceID, p.RuntimeID, p.ResourceName, p.WorkspaceConnectors})
+	if attempt != nil && (attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion) {
+		return nil, ErrConflict
 	}
 	input, err := s.installationHMAC(keyID, "input", struct {
 		Intent string
@@ -60,28 +65,36 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		return nil, err
 	}
 	if attempt == nil {
-		plan, err := s.resolvePinnedInstallation(ctx, caller, id, "")
+		plan, err := s.resolvePinnedInstallation(ctx, caller, id, "", p.WorkspaceConnectors)
 		if err != nil {
+			return nil, err
+		}
+		if !validPinnedPlanNodeIDs(plan, id) {
+			return nil, ErrIntegrity
+		}
+		if err = validatePinnedInstallMode(plan, p); err != nil {
 			return nil, err
 		}
 		request, err := pinnedPlanRequest(plan, p)
 		if err != nil {
 			return nil, err
 		}
-		// Escaping and repeated environment bindings count toward the wire limit.
-		// Reject before persisting an attempt as well as before contacting Fleet.
-		body, err := json.Marshal(request)
+		body, err := fleet.MarshalCapabilityInstallRequest(*request)
 		if err != nil {
 			return nil, ErrIntegrity
 		}
 		if len(body) > maxCapabilityBytes {
 			return nil, ErrTooLarge
 		}
-		fingerprint, err := s.installationHMAC(keyID, "request", request)
+		fingerprint, err := s.installationHMAC(keyID, "request", json.RawMessage(body))
 		if err != nil {
 			return nil, err
 		}
-		candidate := pluginrepo.InstallAttempt{WorkspaceID: p.WorkspaceID, KeyDigest: key, PluginID: id, RootVersionID: plan.RootVersionID, AdapterVersion: SkillInstallAdapterVersion, InputFingerprint: input, RequestFingerprint: fingerprint, HMACKeyID: keyID, IntentDigest: intent}
+		candidate := pluginrepo.InstallAttempt{
+			WorkspaceID: p.WorkspaceID, KeyDigest: key, PluginID: id, RootVersionID: plan.RootVersionID,
+			AdapterVersion: SkillInstallAdapterVersion, InputFingerprint: input, RequestFingerprint: fingerprint,
+			HMACKeyID: keyID, IntentDigest: intent,
+		}
 		plan.EligibilityHMAC, err = s.installationEligibilityHMAC(caller, candidate, plan)
 		if err != nil {
 			return nil, err
@@ -98,22 +111,11 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 	if attempt == nil || attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion {
 		return nil, ErrConflict
 	}
-	// A concurrent contender may have won under the previous active HMAC key.
-	input, err = s.installationHMAC(attempt.HMACKeyID, "input", struct {
-		Intent string
-		Env    map[string]string
-	}{intent, p.CustomEnv})
-	if err != nil {
-		return nil, err
-	}
-	if !equalInstallationHMAC(attempt.InputFingerprint, input) {
-		return nil, ErrConflict
-	}
 	if len(attempt.FrozenPlan) == 0 {
 		return nil, ErrIntegrity
 	}
 	var plan pinnedInstallationPlan
-	if json.Unmarshal(attempt.FrozenPlan, &plan) != nil || plan.RootVersionID != attempt.RootVersionID || len(plan.NodeIDs) == 0 {
+	if json.Unmarshal(attempt.FrozenPlan, &plan) != nil || plan.RootVersionID != attempt.RootVersionID || !validPinnedPlanNodeIDs(&plan, id) {
 		return nil, ErrIntegrity
 	}
 	// Authenticate the persisted eligibility lists before using them as query
@@ -124,6 +126,20 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 	}
 	if !equalInstallationHMAC(plan.EligibilityHMAC, eligibility) {
 		return nil, ErrIntegrity
+	}
+	if err = validatePinnedInstallMode(&plan, p); err != nil {
+		return nil, err
+	}
+	// A concurrent contender may have won under the previous active HMAC key.
+	input, err = s.installationHMAC(attempt.HMACKeyID, "input", struct {
+		Intent string
+		Env    map[string]string
+	}{intent, p.CustomEnv})
+	if err != nil {
+		return nil, err
+	}
+	if !equalInstallationHMAC(attempt.InputFingerprint, input) {
+		return nil, ErrConflict
 	}
 	// Governance is current; content and selected versions remain frozen.
 	read, ok := s.repo.(InstallationReadStore)
@@ -139,8 +155,8 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		return nil, ErrNotFound
 	}
 	for _, node := range plan.NodeIDs {
-		p := current[node]
-		if p == nil || p.IsEmbedded || p.Status != 1 || p.DeletedAt != nil || p.ListingState != model.PluginListingStatePublished || !installAudience(root, p) {
+		plugin := current[node]
+		if plugin == nil || plugin.IsEmbedded || plugin.Status != 1 || plugin.DeletedAt != nil || plugin.ListingState != model.PluginListingStatePublished || !installAudience(root, plugin) {
 			return nil, ErrDependencyHidden
 		}
 	}
@@ -150,28 +166,55 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 			return nil, ErrDependencyHidden
 		}
 	}
+	nodes := make(map[string]bool, len(plan.NodeIDs))
+	for _, node := range plan.NodeIDs {
+		nodes[node] = true
+	}
+	for _, connector := range plan.Definition.Connectors {
+		if !nodes[connector.MarketMCPID] {
+			return nil, ErrIntegrity
+		}
+		source := current[connector.MarketMCPID]
+		if source == nil || source.Type != model.PluginTypeConnector {
+			return nil, ErrDependencyHidden
+		}
+	}
 	if plan.Definition.Name != "marketplace:"+id ||
-		(root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) ||
-		(root.Type == model.PluginTypeExpertTeam) != (plan.Definition.ExpertTeam != nil) {
+		(plan.ConnectorOnly && root.Type != model.PluginTypeConnector) ||
+		(!plan.ConnectorOnly && (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam)) ||
+		(!plan.ConnectorOnly && (root.Type == model.PluginTypeExpertTeam) != (plan.Definition.ExpertTeam != nil)) {
 		return nil, ErrIntegrity
 	}
 	request, err := pinnedPlanRequest(&plan, p)
 	if err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(request)
+	body, err := fleet.MarshalCapabilityInstallRequest(*request)
 	if err != nil {
 		return nil, ErrIntegrity
 	}
-	if len(body) > maxCapabilityBytes {
-		return nil, ErrTooLarge
-	}
-	fingerprint, err := s.installationHMAC(attempt.HMACKeyID, "request", request)
+	fingerprint, err := s.installationHMAC(attempt.HMACKeyID, "request", json.RawMessage(body))
 	if err != nil {
 		return nil, err
 	}
 	if !equalInstallationHMAC(attempt.RequestFingerprint, fingerprint) {
-		return nil, ErrIntegrity
+		if p.WorkspaceConnectors || plan.ConnectorOnly {
+			return nil, ErrConflict
+		}
+		// A legacy request is accepted only when the old wire bytes match the
+		// request fingerprint already authenticated by the frozen-plan HMAC.
+		request.LegacySkillWire = true
+		body, err = fleet.MarshalCapabilityInstallRequest(*request)
+		if err != nil {
+			return nil, ErrConflict
+		}
+		fingerprint, err = s.installationHMAC(attempt.HMACKeyID, "request", json.RawMessage(body))
+		if err != nil || !equalInstallationHMAC(attempt.RequestFingerprint, fingerprint) {
+			return nil, ErrConflict
+		}
+	}
+	if len(body) > maxCapabilityBytes {
+		return nil, ErrTooLarge
 	}
 	now := s.now()
 	if attempt.RetryUntil == nil && attempt.Completed {
@@ -242,7 +285,11 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if attempt.AgentID != result.ExpertID || attempt.TeamID != result.ExpertTeamID {
 			return nil, ErrIntegrity
 		}
-		return &InstallationOutcome{AgentID: attempt.AgentID, SquadID: attempt.TeamID, Replayed: true}, nil
+		outcome := &InstallationOutcome{AgentID: attempt.AgentID, SquadID: attempt.TeamID, Replayed: true}
+		if p.WorkspaceConnectors {
+			outcome.Connectors = result.Connectors
+		}
+		return outcome, nil
 	}
 	attempt.AgentID, attempt.TeamID = result.ExpertID, result.ExpertTeamID
 	recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -252,7 +299,11 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		return nil, &InstallationAttemptError{Err: errors.New("installation result persistence uncertain"), Unknown: true, AttemptID: digestInstall([]string{caller.SpaceID, caller.UID, p.WorkspaceID, key}), RetryUntil: attempt.RetryUntil}
 	}
 	s.trackInstall(recovery, id)
-	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
+	outcome := &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}
+	if p.WorkspaceConnectors {
+		outcome.Connectors = result.Connectors
+	}
+	return outcome, nil
 }
 func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) (*fleet.CapabilityInstallRequest, error) {
 	if plan == nil {
@@ -264,14 +315,36 @@ func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) (*fle
 		return nil, ErrIntegrity
 	}
 	var def fleet.CapabilityDefinition
-	if json.Unmarshal(raw, &def) != nil || !validPinnedDefinition(def) {
+	if json.Unmarshal(raw, &def) != nil {
+		return nil, ErrIntegrity
+	}
+	for i := range def.Experts {
+		if len(def.Experts[i].MCPConfig) == 0 {
+			continue
+		}
+		canonical, err := canonicalJSONObject(def.Experts[i].MCPConfig)
+		if err != nil {
+			return nil, ErrIntegrity
+		}
+		def.Experts[i].MCPConfig = canonical
+	}
+	for i := range def.Connectors {
+		canonical, err := canonicalJSONObject(def.Connectors[i].Config)
+		if err != nil {
+			return nil, ErrIntegrity
+		}
+		def.Connectors[i].Config = canonical
+	}
+	if !validPinnedDefinition(def, plan.ConnectorOnly) {
 		return nil, ErrIntegrity
 	}
 	if p.ResourceName != "" {
 		if def.ExpertTeam != nil {
 			def.ExpertTeam.Name = p.ResourceName
-		} else {
+		} else if len(def.Experts) > 0 {
 			def.Experts[0].Name = p.ResourceName
+		} else if len(def.Connectors) > 0 {
+			def.Connectors[0].Name = p.ResourceName
 		}
 	}
 	in := &fleet.CapabilityInstallRequest{Definition: def}
@@ -283,10 +356,56 @@ func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) (*fle
 	return in, nil
 }
 
-// Recovery must check structure before indexing or binding names. The request
-// HMAC still verifies the exact frozen content after runtime inputs are added.
-func validPinnedDefinition(def fleet.CapabilityDefinition) bool {
-	if def.SchemaVersion != "1.0" || len(def.Experts) == 0 || len(def.Experts) > 30 {
+func validatePinnedInstallMode(plan *pinnedInstallationPlan, p InstallationParams) error {
+	if plan == nil {
+		return ErrIntegrity
+	}
+	if plan.ConnectorOnly {
+		if !p.WorkspaceConnectors {
+			return ErrIntegrity
+		}
+		if len(p.CustomEnv) != 0 {
+			return installationInvalid("custom_env", "unsupported_for_connector")
+		}
+		return nil
+	}
+	if p.WorkspaceConnectors && p.RuntimeID == "" {
+		return installationInvalid("runtime_id", "invalid_uuid")
+	}
+	return nil
+}
+
+func validPinnedPlanNodeIDs(plan *pinnedInstallationPlan, rootID string) bool {
+	if plan == nil || len(plan.NodeIDs) == 0 {
+		return false
+	}
+	if !plan.ConnectorOnly {
+		return true
+	}
+	return rootID != "" && plan.RootVersionID == "" && len(plan.NodeIDs) == 1 && plan.NodeIDs[0] == rootID && len(plan.Edges) == 0
+}
+
+// Recovery checks structure before indexing or binding names. The request HMAC
+// still verifies frozen content after runtime inputs are added.
+func validPinnedDefinition(def fleet.CapabilityDefinition, connectorOnly bool) bool {
+	if def.SchemaVersion != "1.0" || len(def.Experts) > 30 {
+		return false
+	}
+	connectors := make(map[string]bool, len(def.Connectors))
+	for _, connector := range def.Connectors {
+		if !installationName(connector.Name, 128) || connectors[connector.Name] ||
+			!installationName(connector.MarketMCPID, 128) {
+			return false
+		}
+		if _, present, err := normalizeCapabilityConnectorMCP(string(connector.Config)); err != nil || !present {
+			return false
+		}
+		connectors[connector.Name] = true
+	}
+	if connectorOnly {
+		return len(def.Experts) == 0 && len(def.Skills) == 0 && def.ExpertTeam == nil && len(def.Connectors) == 1
+	}
+	if len(def.Experts) == 0 {
 		return false
 	}
 	skills := map[string]bool{}
@@ -296,18 +415,25 @@ func validPinnedDefinition(def fleet.CapabilityDefinition) bool {
 		}
 		skills[skill.Name] = true
 	}
-	experts := map[string]bool{}
+	experts := make(map[string]bool, len(def.Experts))
 	for _, expert := range def.Experts {
 		if !installationName(expert.Name, 128) || experts[expert.Name] || expert.Instructions == "" || len(expert.CustomEnv) != 0 {
 			return false
 		}
 		experts[expert.Name] = true
-		seen := map[string]bool{}
+		seenSkills := make(map[string]bool, len(expert.SkillNames))
 		for _, name := range expert.SkillNames {
-			if !skills[name] || seen[name] {
+			if !skills[name] || seenSkills[name] {
 				return false
 			}
-			seen[name] = true
+			seenSkills[name] = true
+		}
+		seenConnectors := make(map[string]bool, len(expert.ConnectorNames))
+		for _, name := range expert.ConnectorNames {
+			if !connectors[name] || seenConnectors[name] {
+				return false
+			}
+			seenConnectors[name] = true
 		}
 	}
 	if def.ExpertTeam == nil {
@@ -317,7 +443,7 @@ func validPinnedDefinition(def fleet.CapabilityDefinition) bool {
 	if !installationName(team.Name, 128) || len(team.Members) != len(def.Experts) {
 		return false
 	}
-	seen := map[string]bool{}
+	seen := make(map[string]bool, len(team.Members))
 	leaders := 0
 	for _, member := range team.Members {
 		if !experts[member.ExpertName] || seen[member.ExpertName] || (!member.IsLeader && member.Role == "leader") {

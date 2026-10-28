@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	marketmiddleware "github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	"github.com/gin-gonic/gin"
@@ -19,11 +20,12 @@ type installRequest struct {
 	CustomEnv   map[string]string `json:"custom_env,omitempty"`
 }
 
-// installResponse carries exactly one created Loop resource id, matching the
-// Plugin's type: agent_id for expert, squad_id for expert_team.
+// installResponse carries created Loop resource ids for expert/team installs;
+// connector-only Workspace imports return connector metadata without an expert id.
 type installResponse struct {
-	AgentID string `json:"agent_id,omitempty"`
-	SquadID string `json:"squad_id,omitempty"`
+	AgentID    string                            `json:"agent_id,omitempty"`
+	SquadID    string                            `json:"squad_id,omitempty"`
+	Connectors []fleet.CapabilityConnectorResult `json:"connectors,omitempty"`
 }
 
 // Install godoc
