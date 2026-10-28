@@ -122,6 +122,12 @@ the immutable released-reference contract. A legal private chain must meet the
 same-owner/same-Space rule at every edge; a broader source cannot hide a private
 dependency behind a member Expert.
 
+Disabling new independent-reference writes does not relax publication checks for
+a draft that already contains released pins. Publishing that draft still checks
+and locks its exact released dependency tree; a historical member cannot bring
+back a deleted or otherwise ineligible Skill. Unpinned legacy drafts keep their
+existing validation path.
+
 Identical eligible retries still reach Fleet, including completed attempts, so
 current workspace authorization and the remote receipt remain authoritative.
 Records outside the original retry deadline (bounded by Fleet's 24-hour receipt

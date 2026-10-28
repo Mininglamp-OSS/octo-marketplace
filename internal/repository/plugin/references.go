@@ -249,6 +249,14 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 		if len(rels) == 0 {
 			return nil
 		}
+		// Disabling new reference writes does not turn a retained pinned draft
+		// into a legacy graph. Its exact released descendants must still be
+		// checked and locked before publication, including historical members.
+		for _, rel := range rels {
+			if rel.TargetVersionID != nil {
+				return validateReferenceTree(ctx, tx, p, p, rels, true, map[string]bool{}, 0)
+			}
+		}
 		owned, err := liveRelationTargetSet(ctx, tx, p.ID)
 		if err != nil {
 			return err

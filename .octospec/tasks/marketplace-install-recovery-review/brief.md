@@ -13,6 +13,10 @@ Refs #141 and #131. Baseline: PR #142 at `feac1b888753f3b07f42e9f47d008e6d499d9f
   permission to distribute a dependency. Check before reusing cached Skills.
 - Preserve the existing embedded-child exception, private owner/Space isolation,
   current listing/status/deletion checks, and Fleet workspace authorization.
+- Disabling new independent-reference writes must not skip recursive publication
+  checks for already-prepared pinned drafts. Reuse the exact released-tree
+  validator/locks so a Team cannot publish a historical member whose Skill has
+  since become unavailable; legacy unpinned snapshots retain their existing path.
 - Frozen retry uses the authenticated original released graph and content, not
   later editable relations. Normal saves, pin changes and publications must not
   rebuild or invalidate that plan merely because the draft/current release has
@@ -40,6 +44,10 @@ production operations; closing or modifying PR #142.
    attempts. Delisting and a foreign Space block retry without changing evidence.
 4. Existing private, embedded, frozen-plan integrity, expiry and callback tests
    remain green. Full Go/MySQL/race, build, vet and OpenAPI checks pass.
+5. After reference writes are disabled, a retained pinned Team draft publishes
+   only when its historical member's dependencies remain eligible. A removed
+   Skill refuses publication without changing the draft/release/audit evidence;
+   a healthy graph still publishes and protects its indirect Skill from deletion.
 
 ## COMPREHENSION
 The latest review's proposed private-chain example cannot be admitted by the
@@ -50,3 +58,7 @@ and tested, rather than relaxed to satisfy the example. The confirmed defect
 is the default builder's private-only audience gate: it allowed retained global
 sources to distribute Space targets. This change applies the already-established
 predicate to all independent targets; no new authorization rule is introduced.
+An additional ordinary lifecycle reproduction confirmed that flag rollback
+previously checked only the immediate Expert when publishing an existing pinned
+Team draft. The recursive validator must remain active for that immutable graph
+even while the flag prevents creating new pinned references.
