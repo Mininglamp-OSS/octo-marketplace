@@ -985,11 +985,84 @@ func TestManagedDraftChangelogRoundTripAndClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("") // A new editing session cannot copy the prior release explanation.
+	// Explicitly reusing the release note is a new editable note, not a no-op.
+	if _, err = svc.Update(ctx, owner, id, req); err != nil {
+		t.Fatal(err)
+	}
+	check(note)
 	if _, err = svc.CurrentDetail(ctx, pluginsvc.Caller{UID: "other", SpaceID: owner.SpaceID}, id); !errors.Is(err, pluginsvc.ErrNotFound) {
 		t.Fatalf("non-owner=%v", err)
 	}
 	if _, err = svc.CurrentDetail(ctx, pluginsvc.Caller{UID: owner.UID, SpaceID: "other-space"}, id); !errors.Is(err, pluginsvc.ErrNotFound) {
 		t.Fatalf("cross-space=%v", err)
+	}
+}
+
+func TestLegacyReleaseRepairsNameScope(t *testing.T) {
+	for _, adopt := range []bool{false, true} {
+		t.Run(fmt.Sprint(adopt), func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			svc := pluginsvc.New(repo).WithVersionManagement(true)
+			ctx := context.Background()
+			for _, space := range []string{"space-a", "space-b"} {
+				owner := managedOwner()
+				owner.SpaceID = space
+				d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "legacy content", model.PluginVisibilityPrivate))
+				if err != nil {
+					t.Fatal(err)
+				}
+				listing := "draft"
+				if adopt {
+					listing = "published"
+				}
+				// Reconstruct exactly the name-column defaults left by the schema
+				// upgrade, without the optional backfill or a modern name writer.
+				if _, err = database.Exec(`UPDATE plugins SET name_key=NULL,published_name_key=NULL,name_scope='',published_version_id=NULL,listing_state=? WHERE plugin_id=?`, listing, d.Plugin.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+					t.Fatalf("space=%s adopt=%v: %v", space, adopt, err)
+				}
+				var gotScope, key string
+				if err = database.QueryRow(`SELECT name_scope,published_name_key FROM plugins WHERE plugin_id=?`, d.Plugin.ID).Scan(&gotScope, &key); err != nil || gotScope != space || key != "versioned expert" {
+					t.Fatalf("scope=%q key=%q err=%v", gotScope, key, err)
+				}
+				if _, err = svc.Create(ctx, owner, managedWrite("1.0.0", "duplicate", model.PluginVisibilityPrivate)); !errors.Is(err, pluginsvc.ErrNameTaken) {
+					t.Fatalf("same-space duplicate: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestAdminDraftRevisionAndNotesRoundTrip(t *testing.T) {
+	database := reviewDB(t)
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true)
+	ctx, owner := context.Background(), managedOwner()
+	req := managedWrite("1.0.0", "draft content", model.PluginVisibilityPrivate)
+	d, err := svc.Create(ctx, owner, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := svc.CurrentDetail(ctx, owner, d.Plugin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.PluginDraftRevision(draft.Plugin)
+	note := "admin draft note"
+	req.Changelog, req.ExpectedDraftRevision = &note, &revision
+	admin := pluginsvc.Caller{UID: "admin", IsSystemAdmin: true}
+	if _, err = svc.AdminUpdate(ctx, admin, d.Plugin.ID, req); err != nil {
+		t.Fatal(err)
+	}
+	draft, err = svc.CurrentDetail(ctx, owner, d.Plugin.ID)
+	if err != nil || draft.DraftChangelog == nil || *draft.DraftChangelog != note {
+		t.Fatalf("note round trip: %+v %v", draft, err)
+	}
+	note = "stale admin write"
+	if _, err = svc.AdminUpdate(ctx, admin, d.Plugin.ID, req); !errors.Is(err, pluginsvc.ErrConflict) {
+		t.Fatalf("stale admin token: %v", err)
 	}
 }
 

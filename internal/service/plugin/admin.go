@@ -340,6 +340,8 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	// already-listed row without EnforceListingGate, so leaving it unrestated is
 	// what let a label raced past by an approval still land.
 	m.EnforceForwardOnlyVersion = true
+	m.ExpectedDraftRevision = req.ExpectedDraftRevision
+	m.Changelog = req.Changelog
 	sync, err := s.repo.Update(ctx, adminScope(caller), m)
 	if err != nil {
 		return nil, mapStoreError(err)

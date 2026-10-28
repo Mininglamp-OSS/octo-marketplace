@@ -830,7 +830,8 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if m.Changelog != nil {
 		var previous sql.NullString
 		if before.CurrentVersionID != nil {
-			if err := tx.QueryRowContext(ctx, `SELECT changelog FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, *before.CurrentVersionID).Scan(&previous); err != nil {
+			// The editing read exposes no draft note for a formal release.
+			if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN EXISTS (SELECT 1 FROM plugin_version_releases r WHERE r.plugin_id=v.plugin_id AND r.version_id=v.version_id) THEN NULL ELSE v.changelog END FROM plugin_versions v WHERE v.plugin_id=? AND v.version_id=?`, p.ID, *before.CurrentVersionID).Scan(&previous); err != nil {
 				return nil, err
 			}
 		}

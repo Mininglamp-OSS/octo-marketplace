@@ -976,7 +976,7 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	if !validName(name) || !validPluginType(req.Type) || !validVisibility(req.Visibility, c.IsSystemAdmin) {
 		return nil, nil, ErrInvalidRequest
 	}
-	if req.Type == model.PluginTypeExpert || req.Type == model.PluginTypeSkill {
+	if req.Type == model.PluginTypeExpert || req.Type == model.PluginTypeSkill || req.Type == model.PluginTypeExpertTeam {
 		if _, err := model.NormalizePluginName(name); err != nil {
 			return nil, nil, ErrInvalidRequest
 		}
@@ -1136,7 +1136,7 @@ func mapStoreError(err error) error {
 		return ErrConflict
 	case errors.Is(err, pluginrepo.ErrNameTaken):
 		return ErrNameTaken
-	case errors.Is(err, pluginrepo.ErrInvalidName):
+	case errors.Is(err, pluginrepo.ErrInvalidName), errors.Is(err, model.ErrPluginNameEmpty), errors.Is(err, model.ErrPluginNameTooLong):
 		return ErrInvalidRequest
 	case errors.Is(err, pluginrepo.ErrRelationInUse):
 		return ErrRelationInUse

@@ -70,6 +70,20 @@ type fakeStore struct {
 	reviewPolicySet *bool
 }
 
+func TestTeamNameNormalizationExpansionValidation(t *testing.T) {
+	f := &fakeStore{plugins: map[string]*model.Plugin{}}
+	req := WriteRequest{Type: model.PluginTypeExpertTeam, Name: strings.Repeat("\uFDFA", 10), Visibility: model.PluginVisibilityPrivate}
+	_, _, err := fixedService(f).buildWrite(context.Background(), Caller{UID: "owner", SpaceID: "space-a"}, "team-1", req, time.Now(), false)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expanded name error=%v", err)
+	}
+	for _, nameErr := range []error{model.ErrPluginNameEmpty, model.ErrPluginNameTooLong} {
+		if !errors.Is(mapStoreError(nameErr), ErrInvalidRequest) {
+			t.Fatalf("normalization error was not mapped: %v", nameErr)
+		}
+	}
+}
+
 func (f *fakeStore) GetReviewPolicy(_ context.Context, _ pluginrepo.Scope) (model.PluginReviewPolicy, error) {
 	if f.reviewPolicyErr != nil {
 		return model.PluginReviewPolicy{}, f.reviewPolicyErr
