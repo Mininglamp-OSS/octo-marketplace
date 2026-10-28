@@ -21,7 +21,8 @@ eligibility fails; rejection is not proof that an earlier call did not commit.
 Private reads require owner and Space even when the caller is an administrator.
 A private target also requires a private source with the same owner and Space;
 source audiences are rechecked through each member's frozen references.
-Independent-reference writes and publication enforce the source audience for
+Independent-reference writes, publication, and both installation URLs in both
+content modes enforce the source audience for
 Space targets too, including Admin and legacy `public` sources: a system/public
 source cannot reference a Space target, and Space targets require the same Space.
 Only embedded children created/rebuilt within the current graph transaction keep

@@ -9,7 +9,7 @@
 | --- | --- |
 | 曾发布、已下架但无引用 | 可以软删除；版本、正式发布证据和审计记录保留。 |
 | 有存活来源的编辑引用、当前发布引用，或 Team→旧 Expert 版本→Skill 引用 | 拒绝删除；下架不会自动解除引用。只有不再使用的纯历史版本不形成永久删除锁。 |
-| private Expert→private Skill、private Team→private Expert | 同 owner、同 Space 时合法；space/system 来源、不同 owner 或跨 Space 均不可引用。独立引用开关开启或关闭时，创建、更新和发布均检查此规则；旧数据格式安装也沿用这一来源受众检查。已有容器内嵌副本保留原有归属校验。 |
+| private Expert→private Skill、private Team→private Expert | 同 owner、同 Space 时合法；space/system 来源、不同 owner 或跨 Space 均不可引用。独立引用开关开启或关闭时，创建、更新和发布均检查此规则；新旧入口的旧内容/固定版本模式均沿用来源受众检查；Space 目标同样要求同 Space，system/public 来源不得分发 Space 内容。已有容器内嵌副本保留原有归属校验。 |
 | 旧 `POST /api/v1/plugins/install` | 保留 `plugin_id/workspace_id/runtime_id/custom_env` 请求体及 `agent_id/squad_id` 响应。旧式非 UUID runtime 仍由 Fleet 校验；不新增必填头。可选 `Idempotency-Key`；沿用旧身份接入，最终工作区/runtime 权限由 Fleet 校验。 |
 | 新 `POST /api/v1/plugins/{plugin_id}/installations` | 保留必填 `X-Workspace-ID`、`Idempotency-Key` 及 runtime UUID；支持可选资源名称。 |
 
@@ -58,6 +58,9 @@
    开启最后一个开关前，实际要安装的资源必须具有独立引用、正式版本/pin及完整文件。
    没有完成转换的旧内嵌图会拒绝安装，不能仅打开开关后声称所有存量资源均已可安装。
    独立引用开关关闭时，删除直接检查存活来源的正式发布快照（含 Team 固定的旧成员版本），
+   仍在架且无正式发布指针的旧资源检查 `current_version_id` 快照；有正式指针时以
+   正式指针为准，不能回退掩盖损坏。缺指针、快照缺失或无法解析均拒绝删除。
+   草稿及无正式指针的下架历史保持不转换。
    不要求回填新索引。开启独立引用后，删除保护要求现有引用索引完整；
    用 `cmd/marketplace-reference-index` 逐版本预览、
    核对 digest 后回填，不能关闭引用检查来绕过阻断。索引回填只读取历史关系，

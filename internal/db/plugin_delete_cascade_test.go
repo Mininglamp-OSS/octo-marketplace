@@ -32,6 +32,18 @@ func reviewRow(t *testing.T, database *sql.DB, reviewID string) (status, reviewe
 	return status, rv.String, rs.String, reviewedAt.Valid
 }
 
+// Published deletion fixtures must carry their legacy current snapshot. A
+// published flag with no snapshot is incomplete evidence, not an unused release.
+func seedPublishedDeleteFixture(t *testing.T, database *sql.DB, p seedPlugin) {
+	t.Helper()
+	seed(t, database, p)
+	versionID := p.id + "-legacy-v1"
+	seedVersionRow(t, database, versionID, p.id, "1.0.0")
+	if _, err := database.Exec(`UPDATE plugins SET current_version_id=? WHERE plugin_id=?`, versionID, p.id); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDeleteCancelsThePendingReviewRequest pins the cascade that keeps a review
 // request from outliving its plugin in a state nobody can leave.
 //
@@ -56,10 +68,10 @@ func TestDeleteCancelsThePendingReviewRequest(t *testing.T) {
 	ctx := context.Background()
 	owner := tenantScope()
 
-	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
+	seedPublishedDeleteFixture(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
 	// A second plugin with its own open request, to prove the cascade is scoped to
 	// the deleted plugin rather than sweeping the applicant's whole queue.
-	seed(t, database, seedPlugin{id: "plugin-2", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
+	seedPublishedDeleteFixture(t, database, seedPlugin{id: "plugin-2", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
 
 	doomed := newRequest("plugin-1", "2.0.0")
 	if err := repo.InsertReviewRequest(ctx, owner, doomed, snapshotWithKeys(`{"SKILL.md":"`+frozenKey+`"}`)); err != nil {
@@ -278,9 +290,9 @@ func TestDeleteGraphDraftsListedExpertTeamAndDescendants(t *testing.T) {
 	ctx := context.Background()
 	owner := tenantScope()
 
-	seed(t, database, seedPlugin{id: "team-1", typ: "expert_team", visibility: "space", listingState: "published"})
-	seed(t, database, seedPlugin{id: "expert-1", typ: "expert", visibility: "space", listingState: "published", embedded: true})
-	seed(t, database, seedPlugin{id: "skill-1", typ: "skill", visibility: "space", listingState: "published", embedded: true})
+	seedPublishedDeleteFixture(t, database, seedPlugin{id: "team-1", typ: "expert_team", visibility: "space", listingState: "published"})
+	seedPublishedDeleteFixture(t, database, seedPlugin{id: "expert-1", typ: "expert", visibility: "space", listingState: "published", embedded: true})
+	seedPublishedDeleteFixture(t, database, seedPlugin{id: "skill-1", typ: "skill", visibility: "space", listingState: "published", embedded: true})
 	seedRelation(t, database, "rel-team-expert", "team-1", "expert-1", "expert_team_expert")
 	seedRelation(t, database, "rel-expert-skill", "expert-1", "skill-1", "expert_skill")
 
@@ -307,7 +319,7 @@ func TestAdminDeleteSingleRowCancelsReviewAndDraftsListing(t *testing.T) {
 	ctx := context.Background()
 	owner := tenantScope()
 
-	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
+	seedPublishedDeleteFixture(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "published", currentVersion: "1.0.0"})
 	req := newRequest("plugin-1", "2.0.0")
 	if err := repo.InsertReviewRequest(ctx, owner, req, snapshotOf(`{"plugin_name":"V2"}`, `{"attachments":[]}`, nil)); err != nil {
 		t.Fatal(err)

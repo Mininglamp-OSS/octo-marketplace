@@ -77,6 +77,13 @@ func TestDeleteProtectsSkillInTeamsOlderPinnedMember(t *testing.T) {
 				t.Fatal(err)
 			}
 			markReferenceIndexFixtures(t, database)
+			if !references {
+				// A still-published legacy Team selects its current snapshot;
+				// the exact older member pin must still protect the Skill.
+				if _, err := database.Exec(`UPDATE plugins SET published_version_id=NULL,current_version_id='t1' WHERE plugin_id='team'`); err != nil {
+					t.Fatal(err)
+				}
+			}
 			repo := pluginrepo.New(database).WithReferences(references)
 			if err := repo.Delete(ctx, tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrRelationInUse) {
 				t.Fatalf("pinned Team did not protect Skill: %v", err)
@@ -232,6 +239,91 @@ func TestDeleteRejectsUnpinnedLegacyTeamWithoutGuessingMemberVersion(t *testing.
 				}
 				if err := repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil); err != nil {
 					t.Fatalf("resolved current graph still blocked: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// Pre-version-management published rows use their current snapshot. Neither a
+// removed live edge nor missing release evidence may turn that into no references.
+func TestDeleteChecksLegacyPublishedCurrentSnapshot(t *testing.T) {
+	for _, graph := range []bool{false, true} {
+		for _, mode := range []string{"referenced", "missing_pointer", "missing_snapshot", "malformed_snapshot", "formal_malformed", "formal_precedence", "draft", "delisted"} {
+			t.Run(fmt.Sprintf("graph=%t/%s", graph, mode), func(t *testing.T) {
+				database := reviewDB(t)
+				// Connectors have no versioned outgoing relation snapshots.
+				seed(t, database, seedPlugin{id: "connector", typ: "connector", visibility: "private", listingState: "published"})
+				targetKind, sourceKind, relation := "skill", "expert", "expert_skill"
+				if graph {
+					targetKind, sourceKind, relation = "expert", "expert_team", "expert_team_expert"
+				}
+				seed(t, database, seedPlugin{id: "target", typ: targetKind, visibility: "private", listingState: "published"})
+				seed(t, database, seedPlugin{id: "source", typ: sourceKind, visibility: "private", listingState: "published"})
+				releasePinnedVersion(t, database, "target", "target-v1", "1.0.0", nil)
+				releasePinnedVersion(t, database, "source", "source-v1", "1.0.0", []model.PluginRelation{pinnedTestEdge("source", "target", relation, "target-v1")})
+				if _, err := database.Exec(`UPDATE plugins SET published_version_id=NULL,current_version_id='source-v1' WHERE plugin_id='source'`); err != nil {
+					t.Fatal(err)
+				}
+				expected := pluginrepo.ErrRelationInUse
+				switch mode {
+				case "missing_pointer":
+					_, err := database.Exec(`UPDATE plugins SET current_version_id=NULL WHERE plugin_id='source'`)
+					if err != nil {
+						t.Fatal(err)
+					}
+					expected = pluginrepo.ErrReferenceIndexIncomplete
+				case "missing_snapshot":
+					_, err := database.Exec(`UPDATE plugins SET current_version_id='absent' WHERE plugin_id='source'`)
+					if err != nil {
+						t.Fatal(err)
+					}
+					expected = pluginrepo.ErrReferenceIndexIncomplete
+				case "malformed_snapshot":
+					_, err := database.Exec(`UPDATE plugin_versions SET relations_json=JSON_ARRAY(NULL) WHERE version_id='source-v1'`)
+					if err != nil {
+						t.Fatal(err)
+					}
+					expected = pluginrepo.ErrReferenceIndexIncomplete
+				case "formal_malformed":
+					releasePinnedVersion(t, database, "source", "source-v2", "2.0.0", nil)
+					if _, err := database.Exec(`UPDATE plugin_versions SET relations_json=JSON_ARRAY(NULL) WHERE version_id='source-v2'`); err != nil {
+						t.Fatal(err)
+					}
+					expected = pluginrepo.ErrReferenceIndexIncomplete
+				case "formal_precedence":
+					releasePinnedVersion(t, database, "source", "source-v2", "2.0.0", nil)
+					expected = nil
+				case "draft", "delisted":
+					_, err := database.Exec(`UPDATE plugins SET listing_state=? WHERE plugin_id='source'`, mode)
+					if err != nil {
+						t.Fatal(err)
+					}
+					expected = nil
+				}
+				var before, after string
+				if err := database.QueryRow(`SELECT relations_json FROM plugin_versions WHERE version_id='source-v1'`).Scan(&before); err != nil {
+					t.Fatal(err)
+				}
+				repo := pluginrepo.New(database).WithReferences(false)
+				var err error
+				if graph {
+					err = repo.DeleteGraph(context.Background(), tenantScope(), "target", "user-1", "", "", nil)
+				} else {
+					err = repo.Delete(context.Background(), tenantScope(), "target", "user-1", "", "", nil)
+				}
+				if !errors.Is(err, expected) {
+					t.Fatalf("delete err=%v want=%v", err, expected)
+				}
+				var active int
+				if err := database.QueryRow(`SELECT COUNT(*) FROM plugins WHERE plugin_id='target' AND deleted_at IS NULL`).Scan(&active); err != nil {
+					t.Fatal(err)
+				}
+				if (expected != nil && active != 1) || (expected == nil && active != 0) {
+					t.Fatalf("unexpected target mutation: active=%d", active)
+				}
+				if err := database.QueryRow(`SELECT relations_json FROM plugin_versions WHERE version_id='source-v1'`).Scan(&after); err != nil || before != after {
+					t.Fatal("legacy snapshot rewritten", err)
 				}
 			})
 		}

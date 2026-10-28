@@ -210,3 +210,53 @@ func TestCachedPrivateSkillDoesNotBypassSecondExpertAudience(t *testing.T) {
 		t.Fatal("invalid private graph dispatched")
 	}
 }
+
+// Caller readability cannot substitute for the reference source's audience.
+func TestBothAdaptersCheckLegacySpaceAudience(t *testing.T) {
+	for _, kind := range []string{"skill", "expert"} {
+		for _, visibility := range []model.PluginVisibility{"private", "space", "system", "public"} {
+			for _, legacy := range []bool{false, true} {
+				svc, store, remote := capabilityFixture()
+				root, target := "expert-1", "skill-1"
+				if kind == "expert" {
+					root, target = "team-1", "expert-1"
+					store.plugins["skill-1"].Visibility = model.PluginVisibilitySpace
+				}
+				store.plugins[root].Visibility = visibility
+				store.plugins[target].Visibility = model.PluginVisibilitySpace
+				p := installationParams()
+				var err error
+				if legacy {
+					_, err = svc.Install(context.Background(), testCaller, root, InstallParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID})
+				} else {
+					_, err = svc.CreateInstallation(context.Background(), testCaller, root, p)
+				}
+				if visibility == "system" || visibility == "public" {
+					if !errors.Is(err, ErrDependencyHidden) || remote.calls != 0 {
+						t.Fatalf("%s/%s/legacy=%t exposed Space content: err=%v calls=%d", kind, visibility, legacy, err, remote.calls)
+					}
+				} else if err != nil || remote.calls != 1 {
+					t.Fatalf("legal same-Space source blocked: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func TestCachedSpaceSkillDoesNotBypassGlobalExpertAudience(t *testing.T) {
+	svc, store, remote := capabilityFixture()
+	store.plugins["team-1"].Visibility = model.PluginVisibilityPrivate
+	store.plugins["expert-1"].Visibility = model.PluginVisibilitySpace
+	store.plugins["skill-1"].Visibility = model.PluginVisibilitySpace
+	second := *store.plugins["expert-1"]
+	second.ID, second.Name, second.Visibility = "expert-2", "Second", model.PluginVisibilitySystem
+	store.plugins[second.ID] = &second
+	store.relations[second.ID] = store.relations["expert-1"]
+	store.relations["team-1"] = append(store.relations["team-1"], model.PluginRelation{Type: "expert_team_expert", TargetPluginID: second.ID, Status: 1, SortOrder: 1, Data: json.RawMessage(`{"role":"reviewer"}`)})
+	if _, err := svc.CreateInstallation(context.Background(), testCaller, "team-1", installationParams()); !errors.Is(err, ErrDependencyHidden) {
+		t.Fatal("cached Space skill reached global expert", err)
+	}
+	if remote.calls != 0 {
+		t.Fatal("invalid graph dispatched")
+	}
+}

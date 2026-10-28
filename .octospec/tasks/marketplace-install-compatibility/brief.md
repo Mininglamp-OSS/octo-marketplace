@@ -33,6 +33,9 @@ Delisted legacy data remains historical until a specific republish/install need.
   edges. Count resolved distinct snapshots toward the 630-related-node cap;
   aliases/unavailable selections remain bounded separately by the 2000-edge
   traversal budget. Preserve authorization, diagnostics and traversal bounds.
+- Compatibility deletion includes still-published legacy current snapshots without
+  formal release pointers; missing/malformed evidence fails closed. Formal pointers
+  take precedence, and unconverted delisted history/drafts are not promoted.
 - The existing owner/Space/audience rule applies to both reference types,
   including legacy writes/publication and installation expansion before cache reuse.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.
