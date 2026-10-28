@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,11 @@ var ErrRead = errors.New("stock migration evidence read failed")
 var ErrConflict = errors.New("stock migration evidence changed or batch conflicts")
 var ErrExceptions = errors.New("stock migration has unresolved exceptions; apply blocked")
 var ErrWrite = errors.New("stock migration write failed")
+
+// ErrNameConflict means an extracted Expert/Skill would collide with an active
+// marketplace display name in the same Space. The operator must rename or
+// explicitly reuse the existing asset; migration never auto-suffixes a name.
+var ErrNameConflict = errors.New("migration target name conflicts with an active marketplace plugin")
 var ErrG4 = errors.New("stock migration requires explicit confirmed G4 exception policy")
 
 // Read is operator-only, bounded, and never starts application migrations.
@@ -38,7 +44,7 @@ func read(ctx context.Context, tx *sql.Tx, limit int, lock bool) (Dataset, error
 		suffix += " FOR UPDATE"
 	}
 	d := Dataset{Resources: []Resource{}, Versions: []model.PluginVersion{}, Releases: []model.PluginVersionRelease{}}
-	rows, e := tx.QueryContext(ctx, `SELECT plugin_id,plugin_name,plugin_type,is_embedded,tags_json,owner_uid,space_id,visibility,listing_state,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version_id,published_version_id,current_version,status,deleted_at,EXISTS(SELECT 1 FROM plugin_review_requests rr WHERE rr.plugin_id=plugins.plugin_id AND rr.status='pending' AND rr.deleted_at IS NULL) FROM plugins ORDER BY plugin_id`+suffix, limit+1)
+	rows, e := tx.QueryContext(ctx, `SELECT p.plugin_id,p.plugin_name,p.plugin_type,p.is_embedded,p.tags_json,p.owner_uid,p.space_id,p.visibility,p.listing_state,p.manifest_json,p.plugin_json,p.attachment_keys_json,p.manifest_hash,p.plugin_hash,p.current_version_id,p.published_version_id,p.current_version,p.status,p.deleted_at,EXISTS(SELECT 1 FROM plugin_review_requests rr WHERE rr.plugin_id=p.plugin_id AND rr.status='pending' AND rr.deleted_at IS NULL),COALESCE(JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name')),'') FROM plugins p LEFT JOIN plugin_versions pv ON pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id ORDER BY p.plugin_id`+suffix, limit+1)
 	if e != nil {
 		return d, ErrRead
 	}
@@ -48,7 +54,7 @@ func read(ctx context.Context, tx *sql.Tx, limit int, lock bool) (Dataset, error
 		var deleted sql.NullTime
 		var tags, manifest, pkg, keys []byte
 		p := &r.Plugin
-		if rows.Scan(&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &tags, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &manifest, &pkg, &keys, &p.ManifestHash, &p.PluginHash, &current, &pub, &label, &p.Status, &deleted, &r.PendingReview) != nil {
+		if rows.Scan(&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &tags, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &manifest, &pkg, &keys, &p.ManifestHash, &p.PluginHash, &current, &pub, &label, &p.Status, &deleted, &r.PendingReview, &r.PublishedName) != nil {
 			rows.Close()
 			return Dataset{}, ErrRead
 		}
@@ -184,6 +190,64 @@ func read(ctx context.Context, tx *sql.Tx, limit int, lock bool) (Dataset, error
 	return d, nil
 }
 
+// checkPlannedNames blocks any clone that would introduce a duplicate active
+// Expert/Skill display name. The check uses the caller's full bounded inventory,
+// not just the rows that happened to be cloned, so a name occupied by an
+// unrelated active plugin is caught too. Soft-deleted rows are ignored; delisted
+// rows still reserve the name.
+func checkPlannedNames(unit *Unit, resources []Resource) error {
+	type key struct{ scope, typ, name string }
+	occupied := map[key]string{}
+	planned := map[key]string{}
+	for _, r := range resources {
+		if r.Plugin.DeletedAt != nil || r.Plugin.IsEmbedded {
+			continue
+		}
+		if !reservesDisplayName(r.Plugin.Type) {
+			continue
+		}
+		keys, err := model.PluginNameReservationKeys(r.Plugin.Name, r.PublishedName)
+		if err != nil {
+			return fmt.Errorf("%w: invalid historical display name for %s", ErrNameConflict, r.Plugin.ID)
+		}
+		scope := ""
+		if r.Plugin.SpaceID != nil {
+			scope = *r.Plugin.SpaceID
+		}
+		for _, name := range keys {
+			k := key{scope, string(r.Plugin.Type), name}
+			if existing := occupied[k]; existing != "" && existing != r.Plugin.ID {
+				return fmt.Errorf("%w: %s %q is already reserved by %s", ErrNameConflict, r.Plugin.Type, name, existing)
+			}
+			occupied[k] = r.Plugin.ID
+		}
+	}
+	for _, n := range unit.Nodes {
+		if !n.Clone || !reservesDisplayName(n.Type) {
+			continue
+		}
+		keys, err := model.PluginNameReservationKeys(n.Plugin.Name, "")
+		if err != nil {
+			return ErrWrite
+		}
+		scope := ""
+		if n.Plugin.SpaceID != nil {
+			scope = *n.Plugin.SpaceID
+		}
+		for _, name := range keys {
+			k := key{scope, string(n.Type), name}
+			if existing := occupied[k]; existing != "" && existing != n.TargetID {
+				return fmt.Errorf("%w: %s %q already belongs to %s", ErrNameConflict, n.Type, n.Plugin.Name, existing)
+			}
+			if previous := planned[k]; previous != "" && previous != n.TargetID {
+				return fmt.Errorf("%w: %s %q appears twice in this migration unit", ErrNameConflict, n.Type, n.Plugin.Name)
+			}
+			planned[k] = n.TargetID
+		}
+	}
+	return nil
+}
+
 // ApplyRoot is one atomic migration unit. A completed mapping wins on repeat,
 // while another root can be previewed and applied after interruption. All rows
 // and publication evidence are locked before comparing the preview digest.
@@ -265,6 +329,9 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 	if unit == nil {
 		return 0, ErrConflict
 	}
+	if err := checkPlannedNames(unit, d.Resources); err != nil {
+		return 0, err
+	}
 	localVersions := map[string]bool{}
 	for _, n := range unit.Nodes {
 		if n.Release {
@@ -311,8 +378,56 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 func validID(v string) bool {
 	return v != "" && len(v) <= 64 && strings.TrimSpace(v) == v && !strings.ContainsAny(v, "\x00\r\n")
 }
+
+// rollbackNameColumns reconstructs the three derived name-index fields from the
+// saved pre-migration resource. The triggers then rebuild the reservation set in
+// the same rollback transaction; without this, rollback restores content/pointer
+// state while leaving the new reservation state in place.
+func rollbackNameColumns(r Resource) (draftKey, publishedKey any, scope string, err error) {
+	p := r.Plugin
+	if p.SpaceID != nil {
+		scope = *p.SpaceID
+	}
+	if !reservesDisplayName(p.Type) {
+		return nil, nil, scope, nil
+	}
+	draft, e := model.NormalizePluginName(p.Name)
+	if e != nil {
+		return nil, nil, "", e
+	}
+	draftKey = draft
+	publishedName := r.PublishedName
+	if publishedName == "" && r.PublishedVersionID != nil {
+		publishedName = p.Name
+	}
+	if publishedName != "" {
+		published, e := model.NormalizePluginName(publishedName)
+		if e != nil {
+			return nil, nil, "", e
+		}
+		publishedKey = published
+	}
+	return draftKey, publishedKey, scope, nil
+}
+
+func reservesDisplayName(typ model.PluginType) bool {
+	return typ == model.PluginTypeExpert || typ == model.PluginTypeSkill || typ == model.PluginTypeExpertTeam
+}
+
 func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Time) error {
 	p := n.Plugin
+	var nameKey any
+	nameScope := ""
+	if p.SpaceID != nil {
+		nameScope = *p.SpaceID
+	}
+	if reservesDisplayName(p.Type) {
+		key, err := model.NormalizePluginName(p.Name)
+		if err != nil {
+			return ErrWrite
+		}
+		nameKey = key
+	}
 	if n.Clone {
 		source := n.SourceID
 		if n.Type == model.PluginTypeConnector {
@@ -320,7 +435,9 @@ func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Ti
 		}
 		// Copy provenance and placement metadata; authoritative ownership/audience is
 		// explicitly inherited from the container, rather than from caller identity.
-		result, e := tx.ExecContext(ctx, `INSERT INTO plugins(plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,status,created_at,updated_at) SELECT ?,?,?,0,NULL,?,publisher,?,?,?,?,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,0,?,?,NULL,?,?,1,?,? FROM plugins WHERE plugin_id=?`, p.ID, p.Name, p.Type, string(p.Tags), p.OwnerUID, p.SpaceID, p.Visibility, p.ListingState, string(p.Manifest), string(p.Package), p.ManifestHash, p.PluginHash, now, now, source)
+		// name_key/name_scope are computed by the same normalizer as the API write
+		// path so migration-created Skills/Experts/Teams cannot bypass the active-name index.
+		result, e := tx.ExecContext(ctx, `INSERT INTO plugins(plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,status,created_at,updated_at,name_key,name_scope) SELECT ?,?,?,0,NULL,?,publisher,?,?,?,?,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,0,?,?,NULL,?,?,1,?,?,?,? FROM plugins WHERE plugin_id=?`, p.ID, p.Name, p.Type, string(p.Tags), p.OwnerUID, p.SpaceID, p.Visibility, p.ListingState, string(p.Manifest), string(p.Package), p.ManifestHash, p.PluginHash, now, now, nameKey, nameScope, source)
 		if e != nil {
 			return ErrWrite
 		}
@@ -328,7 +445,7 @@ func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Ti
 			return ErrWrite
 		}
 	} else {
-		if _, e := tx.ExecContext(ctx, `UPDATE plugins SET manifest_json=?,plugin_json=?,attachment_keys_json=NULL,manifest_hash=?,plugin_hash=?,visibility=? WHERE plugin_id=?`, string(p.Manifest), string(p.Package), p.ManifestHash, p.PluginHash, p.Visibility, p.ID); e != nil {
+		if _, e := tx.ExecContext(ctx, `UPDATE plugins SET manifest_json=?,plugin_json=?,attachment_keys_json=NULL,manifest_hash=?,plugin_hash=?,visibility=?,name_key=?,name_scope=? WHERE plugin_id=?`, string(p.Manifest), string(p.Package), p.ManifestHash, p.PluginHash, p.Visibility, nameKey, nameScope, p.ID); e != nil {
 			return ErrWrite
 		}
 	}
@@ -376,7 +493,19 @@ func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Ti
 			return ErrWrite
 		}
 	}
-	if _, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=?,updated_at=? WHERE plugin_id=?`, n.VersionID, n.Label, published(n), now, p.ID); e != nil {
+	if n.Release {
+		publishedKey := any(nil)
+		if reservesDisplayName(p.Type) {
+			key, err := model.NormalizePluginName(p.Name)
+			if err != nil {
+				return ErrWrite
+			}
+			publishedKey = key
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=?,published_name_key=?,updated_at=? WHERE plugin_id=?`, n.VersionID, n.Label, published(n), publishedKey, now, p.ID); e != nil {
+			return ErrWrite
+		}
+	} else if _, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=?,updated_at=? WHERE plugin_id=?`, n.VersionID, n.Label, published(n), now, p.ID); e != nil {
 		return ErrWrite
 	}
 	return nil
@@ -453,7 +582,11 @@ func Rollback(ctx context.Context, db *sql.DB, batch string) error {
 		if pub.String != expectedPub || status != 1 || deleted.Valid || visibility != string(item.after.Plugin.Visibility) || listing != string(item.after.Plugin.ListingState) || item.after.Plugin.CurrentVersionID == nil || current.String != *item.after.Plugin.CurrentVersionID || mh != item.after.Plugin.ManifestHash || ph != item.after.Plugin.PluginHash {
 			return ErrConflict
 		}
-		if _, e = tx.ExecContext(ctx, `UPDATE plugins SET manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,current_version_id=?,published_version_id=?,current_version=?,visibility=?,listing_state=?,updated_at=? WHERE plugin_id=?`, string(p.Manifest), string(p.Package), nullableJSON(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, item.before.PublishedVersionID, p.CurrentVersion, p.Visibility, p.ListingState, time.Now().UTC(), p.ID); e != nil {
+		nameKey, publishedKey, nameScope, nameErr := rollbackNameColumns(item.before)
+		if nameErr != nil {
+			return ErrWrite
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE plugins SET manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,current_version_id=?,published_version_id=?,current_version=?,visibility=?,listing_state=?,name_key=?,published_name_key=?,name_scope=?,updated_at=? WHERE plugin_id=?`, string(p.Manifest), string(p.Package), nullableJSON(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, item.before.PublishedVersionID, p.CurrentVersion, p.Visibility, p.ListingState, nameKey, publishedKey, nameScope, time.Now().UTC(), p.ID); e != nil {
 			return ErrWrite
 		}
 		if _, e = tx.ExecContext(ctx, `UPDATE plugin_relations SET deleted_at=NOW(3) WHERE source_plugin_id=? AND deleted_at IS NULL`, p.ID); e != nil {

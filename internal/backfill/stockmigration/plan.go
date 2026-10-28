@@ -20,6 +20,7 @@ import (
 type Resource struct {
 	PendingReview      bool                   `json:"pending_review"`
 	PublishedVersionID *string                `json:"published_version_id,omitempty"`
+	PublishedName      string                 `json:"published_name,omitempty"`
 	Plugin             model.Plugin           `json:"plugin"`
 	Relations          []model.PluginRelation `json:"relations"`
 }

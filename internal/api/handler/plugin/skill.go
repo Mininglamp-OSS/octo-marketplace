@@ -45,7 +45,7 @@ type skillMarkdownResponse struct {
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 409 {object} apiresponse.Error "DUPLICATE: change display name; or CONFLICT"
 // @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /plugins/import [post]

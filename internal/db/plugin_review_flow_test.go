@@ -88,9 +88,9 @@ func seed(t *testing.T, database *sql.DB, p seedPlugin) {
 		(plugin_id, plugin_name, plugin_type, is_embedded, tags_json, owner_uid, space_id, visibility, listing_state,
 		 manifest_json, plugin_json, manifest_hash, plugin_hash, current_version_id, current_version,
 		 created_at, updated_at)
-		VALUES (?, 'Fixture', ?, ?, JSON_ARRAY(), ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON),
+		VALUES (?, ?, ?, ?, JSON_ARRAY(), ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON),
 		        REPEAT('a',71), REPEAT('b',71), ?, ?, NOW(3), NOW(3))`,
-		p.id, p.typ, p.embedded, p.owner, p.space, p.visibility, p.listingState, p.manifest, p.pkg, versionID, current); err != nil {
+		p.id, p.id, p.typ, p.embedded, p.owner, p.space, p.visibility, p.listingState, p.manifest, p.pkg, versionID, current); err != nil {
 		t.Fatalf("seed %s: %v", p.id, err)
 	}
 	// Every create attaches a visible default placement; the review gate never
@@ -203,7 +203,7 @@ func TestInsertReviewRequestDerivesKindFromVisibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := newRequest(tt.pluginID, tt.version)
-			if err := repo.InsertReviewRequest(context.Background(), tenantScope(), req, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+			if err := repo.InsertReviewRequest(context.Background(), tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 				t.Fatalf("InsertReviewRequest: %v", err)
 			}
 			if req.Kind != tt.want {
@@ -228,7 +228,7 @@ func TestSubmitAcceptsTheDraftLabelOnAFirstListing(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "draft", currentVersionID: "ver-1", currentVersion: "1.0.0"})
-	if err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "1.0.0"), snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "1.0.0"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatalf("first listing at the draft label was refused: %v", err)
 	}
 }
@@ -243,10 +243,10 @@ func TestSubmitEnforcesSinglePendingPerPlugin(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "draft"})
-	if err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "1.0.0"), snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "1.0.0"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
-	err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "1.0.1"), snapshotOf(`{"a":1}`, `{"b":2}`, nil))
+	err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "1.0.1"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil))
 	if !errors.Is(err, pluginrepo.ErrReviewPending) {
 		t.Fatalf("second pending submit = %v, want ErrReviewPending", err)
 	}
@@ -267,7 +267,7 @@ func TestSubmitVersionLabelReuseRules(t *testing.T) {
 
 	// Submit 1.0.0 and reject it.
 	first := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), first, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), first, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := repo.RejectReview(ctx, reviewerScope(), pluginrepo.RejectReviewParams{
@@ -278,7 +278,7 @@ func TestSubmitVersionLabelReuseRules(t *testing.T) {
 	// The SAME label must be reusable after a rejection — the applicant fixed the
 	// content, the version they announced did not change.
 	second := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), second, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), second, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatalf("a rejected label was not reusable: %v", err)
 	}
 	// Cancel it and reuse again.
@@ -286,7 +286,7 @@ func TestSubmitVersionLabelReuseRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	third := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), third, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), third, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatalf("a canceled label was not reusable: %v", err)
 	}
 	// Approve it. Now the label is published.
@@ -295,11 +295,11 @@ func TestSubmitVersionLabelReuseRules(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "1.0.0"), snapshotOf(`{"a":1}`, `{"b":2}`, nil)); !errors.Is(err, pluginrepo.ErrLabelTaken) {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "1.0.0"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); !errors.Is(err, pluginrepo.ErrLabelTaken) {
 		t.Fatalf("republishing an approved label = %v, want ErrLabelTaken", err)
 	}
 	// A different label is fine.
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "1.1.0"), snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "1.1.0"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatalf("a fresh label was refused: %v", err)
 	}
 }
@@ -311,7 +311,7 @@ func TestSubmitRefusesTheLiveLabelOfAnAlreadyListedPlugin(t *testing.T) {
 	database := reviewDB(t)
 	repo := pluginrepo.New(database)
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", currentVersionID: "ver-1", currentVersion: "2.4.0"})
-	if err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "2.4.0"), snapshotOf(`{"a":1}`, `{"b":2}`, nil)); !errors.Is(err, pluginrepo.ErrLabelTaken) {
+	if err := repo.InsertReviewRequest(context.Background(), tenantScope(), newRequest("plugin-1", "2.4.0"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); !errors.Is(err, pluginrepo.ErrLabelTaken) {
 		t.Fatalf("resubmitting the live label = %v, want ErrLabelTaken", err)
 	}
 }
@@ -341,7 +341,7 @@ func TestSubmitReRunsForwardOnlyRuleAgainstLockedCurrentVersion(t *testing.T) {
 	// This stands in for the concurrent decision that lands during T2's freeze
 	// window; T2 already passed its unlocked check against the stale 1.5.0.
 	winner := newRequest("plugin-1", "2.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), winner, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), winner, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{
@@ -353,13 +353,13 @@ func TestSubmitReRunsForwardOnlyRuleAgainstLockedCurrentVersion(t *testing.T) {
 	// T2's delayed locked insert. 1.6.0 is forward of the stale 1.5.0 T2 saw, but
 	// backward of the locked 2.0.0 — it must now be refused rather than queued for
 	// an approval that would regress the public label.
-	err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "1.6.0"), snapshotOf(`{"a":1}`, `{"b":2}`, nil))
+	err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "1.6.0"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil))
 	if !errors.Is(err, pluginrepo.ErrVersionRegressed) {
 		t.Fatalf("submit racing an approve = %v, want ErrVersionRegressed", err)
 	}
 
 	// A label forward of the locked current is still accepted.
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "2.1.0"), snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), newRequest("plugin-1", "2.1.0"), snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatalf("a label forward of the locked current was refused: %v", err)
 	}
 }
@@ -380,7 +380,7 @@ func TestApproveReRunsForwardOnlyRuleAgainstLockedCurrentVersion(t *testing.T) {
 	// The owner submits 1.6.0. It passes the locked insert check against 1.5.0 and
 	// sits pending.
 	req := newRequest("plugin-1", "1.6.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -902,7 +902,7 @@ func TestCancelIsApplicantOnlyAndConflictsWhenDecided(t *testing.T) {
 	ctx := context.Background()
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "draft"})
 	req := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	// Someone else cannot cancel it, and gets no hint that it exists.
@@ -930,7 +930,7 @@ func TestDecisionsAreSpaceScoped(t *testing.T) {
 	ctx := context.Background()
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "draft"})
 	req := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	foreign := pluginrepo.Scope{CallerUID: "admin-2", SpaceID: "space-b"}
@@ -962,7 +962,7 @@ func TestConcurrentDecisionsProduceOneWinner(t *testing.T) {
 	ctx := context.Background()
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "draft"})
 	req := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1023,7 +1023,7 @@ func TestDecidingASettledRequestConflictsAndAMissingOneIsNotFound(t *testing.T) 
 	ctx := context.Background()
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "draft"})
 	req := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{ReviewID: req.ID, ReviewerUID: "admin-1", ReviewerName: "Adam"}); err != nil {
@@ -1053,13 +1053,13 @@ func TestReviewReadsAreScoped(t *testing.T) {
 	seed(t, database, seedPlugin{id: "plugin-2", visibility: "space", listingState: "draft", owner: "user-2"})
 
 	mine := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), mine, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), mine, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	theirs := newRequest("plugin-2", "1.0.0")
 	theirs.ApplicantUID = "user-2"
 	theirs.ApplicantName = "Bob"
-	if err := repo.InsertReviewRequest(ctx, pluginrepo.Scope{CallerUID: "user-2", SpaceID: "space-a"}, theirs, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, pluginrepo.Scope{CallerUID: "user-2", SpaceID: "space-a"}, theirs, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1126,7 +1126,7 @@ func TestCardActionReceiptRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	seed(t, database, seedPlugin{id: "plugin-1", visibility: "space", listingState: "draft"})
 	req := newRequest("plugin-1", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"a":1}`, `{"b":2}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture","a":1}`, `{"b":2}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.GetReviewRequestAnySpace(ctx, req.ID); err != nil {
@@ -1391,7 +1391,7 @@ func TestApproveSelfHealsTheDefaultPlacement(t *testing.T) {
 	approve := func(t *testing.T, pluginID string) {
 		t.Helper()
 		req := newRequest(pluginID, "1.0.0")
-		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Frozen"}`, `{"attachments":[]}`, nil)); err != nil {
+		if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Frozen `+pluginID+`"}`, `{"attachments":[]}`, nil)); err != nil {
 			t.Fatalf("InsertReviewRequest: %v", err)
 		}
 		out, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{

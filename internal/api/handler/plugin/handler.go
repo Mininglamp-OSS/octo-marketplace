@@ -94,6 +94,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	plugins.POST("/delist", h.Delist)
 	plugins.GET("/versions", h.ListVersions)
 	plugins.GET("/:plugin_id/draft", h.GetDraft)
+	plugins.PATCH("/:plugin_id/visibility", h.ChangeVisibility)
 	plugins.GET("/:plugin_id/versions/:version_id", h.GetVersion)
 	plugins.GET("/:plugin_id/versions/:version_id/file", h.DownloadVersionFile)
 	plugins.POST("/install", h.Install)
@@ -143,6 +144,7 @@ type pluginWriteRequest struct {
 }
 
 type upsertRequest struct {
+	Changelog *string            `json:"changelog,omitempty"`
 	Plugin    pluginWriteRequest `json:"plugin"`
 	Relations []relationRequest  `json:"relations"`
 }
@@ -152,7 +154,7 @@ func (r upsertRequest) serviceRequest() pluginsvc.WriteRequest {
 	for i, x := range r.Relations {
 		relations[i] = pluginsvc.RelationRequest{ID: x.RelationID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, Type: x.RelationType, SortOrder: x.SortOrder, Data: x.Data}
 	}
-	return pluginsvc.WriteRequest{Name: r.Plugin.PluginName, Type: r.Plugin.PluginType, CategoryID: r.Plugin.CategoryID, Tags: rawJSON(r.Plugin.Tags), Publisher: r.Plugin.Publisher, Icon: r.Plugin.Icon, Visibility: r.Plugin.Visibility, Version: r.Plugin.Version, Manifest: r.Plugin.ManifestJSON, Package: r.Plugin.PluginJSON, Relations: relations}
+	return pluginsvc.WriteRequest{Changelog: r.Changelog, Name: r.Plugin.PluginName, Type: r.Plugin.PluginType, CategoryID: r.Plugin.CategoryID, Tags: rawJSON(r.Plugin.Tags), Publisher: r.Plugin.Publisher, Icon: r.Plugin.Icon, Visibility: r.Plugin.Visibility, Version: r.Plugin.Version, Manifest: r.Plugin.ManifestJSON, Package: r.Plugin.PluginJSON, Relations: relations}
 }
 
 type deleteRequest struct {
@@ -260,6 +262,7 @@ type relationResponse struct {
 }
 
 type detailResponse struct {
+	DraftChangelog   *string                 `json:"draft_changelog,omitempty"`
 	Plugin           pluginResponse          `json:"plugin"`
 	Relations        []relationResponse      `json:"relations"`
 	DependencyIssues []model.DependencyIssue `json:"dependency_issues,omitempty"`
@@ -462,7 +465,7 @@ func (h *Handler) GetGraph(c *gin.Context) {
 
 // Upsert godoc
 // @Summary Upsert plugin
-// @Description Create or replace a Plugin from {plugin,relations}; owner and Space remain server-derived.
+// @Description Create or replace a Plugin from {plugin,relations}; owner and Space remain server-derived. New Skill, Expert and Expert Team uploads reject normalized display names already reserved in this Space or the global market with DUPLICATE; change plugin_name or update an existing plugin by ID.
 // @Tags plugin
 // @ID plugin.upsert
 // @Accept json
@@ -474,7 +477,7 @@ func (h *Handler) GetGraph(c *gin.Context) {
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 409 {object} apiresponse.Error "DUPLICATE or CONFLICT"
 // @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /plugins/upsert [post]
@@ -841,6 +844,8 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "historical reference indexes require verification", map[string]any{"reason": "reference_index_incomplete", "conflict_reason": "reference_index_incomplete"}, "Run the verified historical reference index backfill before querying impact.")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "version history migration is required", map[string]any{"reason": "version_migration_required"}, "Establish a verified publication baseline before enabling managed edits for this legacy resource.")
+	case errors.Is(err, pluginsvc.ErrNameTaken):
+		apiresponse.Fail(c, http.StatusConflict, errcode.Duplicate, "a plugin with this display name already exists in this market or Space", map[string]any{"field": "plugin_name", "conflict_reason": "name_taken"}, "Change the display name before uploading, or update the existing plugin by its ID.")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "plugin state conflicts with an existing resource", map[string]any{"conflict_reason": "state"}, "Refresh the resource and try again.")
 	// Transient InnoDB lock contention (a deadlock victim, or a lock-wait timeout)
@@ -916,7 +921,7 @@ func detailDTO(d *pluginsvc.Detail) detailResponse {
 		}
 		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
 	}
-	out := detailResponse{Plugin: pluginDTO(d.Plugin), Relations: rels, DependencyIssues: d.DependencyIssues}
+	out := detailResponse{DraftChangelog: d.DraftChangelog, Plugin: pluginDTO(d.Plugin), Relations: rels, DependencyIssues: d.DependencyIssues}
 	if d.RelationResult != nil {
 		out.RelationResult = &relationResultResponse{Created: d.RelationResult.Created, Updated: d.RelationResult.Updated, Deleted: d.RelationResult.Deleted}
 	}

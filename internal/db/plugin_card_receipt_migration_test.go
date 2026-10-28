@@ -37,13 +37,25 @@ func TestCardReceiptMigrationPreservesTerminalEvidence(t *testing.T) {
 	if target == nil {
 		t.Fatal("terminal-receipt migration missing")
 	}
+	// Migration statements must run on one connection because PREPARE is session-local.
+	conn, err := f.db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if len(target.Up) != 4 {
+		t.Fatalf("expected four driver-compatible statements, got %d", len(target.Up))
+	}
 	// Re-execute the actual DDL to cover a crash after DDL but before migration receipt.
 	for i := 0; i < 2; i++ {
 		for _, statement := range target.Up {
-			if _, err := f.db.Exec(statement); err != nil {
+			if _, err := conn.ExecContext(context.Background(), statement); err != nil {
 				t.Fatalf("DDL replay %d: %v", i, err)
 			}
 		}
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
 	}
 	missing := &model.CardActionReceipt{EventID: "6401", ReviewID: "missing-parent", Decision: "deny", StoredResponse: `{"disposition":"not_found","state":"cancelled"}`, CreatedAt: time.Now()}
 	if err := repo.InsertCardActionReceipt(context.Background(), missing); err != nil {

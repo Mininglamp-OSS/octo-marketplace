@@ -486,3 +486,30 @@ func modeSourceMarker(mode string) string {
 	}
 	return "skill/ref.json"
 }
+
+func TestStockMigratedTeamReservesDraftAndPublishedNames(t *testing.T) {
+	database := reviewDB(t)
+	ctx := context.Background()
+	const id = "reserved-team"
+	seedStockRoot(t, database, id, "private", "published")
+	evidence, err := stockmigration.Read(ctx, database, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := stockmigration.Build(evidence)
+	if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "team-names", id, plan.Digest, true); err != nil {
+		t.Fatal(err)
+	}
+	var draft, published string
+	if err = database.QueryRow(`SELECT name_key,published_name_key FROM plugins WHERE plugin_id=?`, id).Scan(&draft, &published); err != nil || draft != id || published != id {
+		t.Fatalf("keys: %q %q %v", draft, published, err)
+	}
+	var count int
+	if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_name_reservations WHERE plugin_id=? AND name_key=?`, id, id).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("reservation: %d %v", count, err)
+	}
+	duplicate := uploadNameMutation("duplicate-team", " ＲＥＳＥＲＶＥＤ－ＴＥＡＭ ", "expert_team", "space-a")
+	if _, err = pluginrepo.New(database).Create(ctx, pluginrepo.Scope{CallerUID: "owner", SpaceID: "space-a"}, duplicate); !errors.Is(err, pluginrepo.ErrNameTaken) {
+		t.Fatalf("normalized duplicate: %v", err)
+	}
+}

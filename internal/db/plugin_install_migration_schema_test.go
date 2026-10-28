@@ -76,6 +76,16 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	// Apply the new schema before exercising the stock-migration writer. This
+	// also exercises the actual upgrade path from the older fixture schema.
+	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	all, err := source.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != len(all)-len(prior.Migrations) {
+		t.Fatalf("pre-stock schema upgrade: n=%d err=%v", n, err)
+	}
 	seedStockRoot(t, database, "index-upgrade", "private", "published")
 	evidence, err := stockmigration.Read(ctx, database, 1000)
 	if err != nil {
@@ -95,12 +105,7 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 	if _, err = database.ExecContext(ctx, `INSERT INTO plugin_install_attempts(space_id,caller_uid,workspace_id,key_digest,plugin_id,root_version_id,adapter_version,input_fingerprint,request_fingerprint,created_at) VALUES (?,?,?,?,?,?,?,?,?,NOW(3))`, tenantScope().SpaceID, tenantScope().CallerUID, attempt.WorkspaceID, attempt.KeyDigest, attempt.PluginID, attempt.RootVersionID, attempt.AdapterVersion, attempt.InputFingerprint, attempt.RequestFingerprint); err != nil {
 		t.Fatal(err)
 	}
-	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
-	all, err := source.FindMigrations()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != len(all)-len(prior.Migrations) {
+	if n, err := migrate.Exec(database, "mysql", source, migrate.Up); err != nil || n != 0 {
 		t.Fatalf("index upgrade: n=%d err=%v", n, err)
 	}
 	for _, tc := range []struct{ table, index, columns string }{

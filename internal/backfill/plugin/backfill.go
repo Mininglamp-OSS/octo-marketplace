@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	libplugin "github.com/Mininglamp-OSS/octo-plugin-lib/plugin"
 )
 
@@ -979,6 +980,34 @@ func (p plan) hash() string {
 	}
 	return digestLines(l)
 }
+
+// legacyNameColumns computes the derived name-index values for the historical
+// plugin backfill. The old catalog only exposes one display name; when it has a
+// version pointer, that same name is the published reservation.
+func legacyNameColumns(x plugRow) (draftKey, publishedKey any, scope string, err error) {
+	scope = x.space
+	if x.typ != string(model.PluginTypeExpert) && x.typ != string(model.PluginTypeSkill) {
+		return nil, nil, scope, nil
+	}
+	draft, e := model.NormalizePluginName(x.name)
+	if e != nil {
+		return nil, nil, "", e
+	}
+	draftKey = draft
+	// A current_version_id is a saved version, not a formal published pointer or
+	// release. Do not invent a published reservation from it; publication is
+	// derived from authoritative release state elsewhere.
+	return draftKey, nil, scope, nil
+}
+
+func nullStringMatches(got sql.NullString, want any) bool {
+	if want == nil {
+		return !got.Valid
+	}
+	text, ok := want.(string)
+	return ok && got.Valid && got.String == text
+}
+
 func applyRow(ctx context.Context, tx *sql.Tx, rep *Report, table, keyColumn string, key any, exactQuery, insertQuery string, exactArgs, insertArgs []any) error {
 	var exact int
 	if err := tx.QueryRowContext(ctx, exactQuery, exactArgs...).Scan(&exact); err != nil {
@@ -1024,8 +1053,12 @@ func (r *Runner) apply(ctx context.Context, p plan, rep *Report) error {
 		// backfill as 'published' — the same grandfathering the schema migration
 		// applies. Written explicitly rather than left to the column DEFAULT, which
 		// is the fail-closed 'draft'.
-		a := []any{x.id, x.name, x.typ, x.embedded, nstr(x.cat), x.tags, x.publisher, x.owner, nstr(x.space), x.visibility, "published", x.creator, x.by, nstr(x.botUID), nstr(x.botName), x.manifest, x.pkg, x.mhash, x.phash, x.versionID, nstr(versionNames[x.versionID]), x.status, x.created, x.updated, ntime(x.deleted)}
-		e = applyRow(ctx, tx, rep, "plugins", "plugin_id", x.id, `SELECT COUNT(*) FROM plugins WHERE plugin_id=? AND plugin_name<=>? AND plugin_type<=>? AND is_embedded<=>? AND category_id<=>? AND tags_json<=>CAST(? AS JSON) AND publisher<=>? AND owner_uid<=>? AND space_id<=>? AND visibility<=>? AND listing_state<=>? AND creator_name<=>? AND created_by_type<=>? AND created_by_bot_uid<=>? AND created_by_bot_name<=>? AND manifest_json<=>CAST(? AS JSON) AND plugin_json<=>CAST(? AS JSON) AND manifest_hash<=>? AND plugin_hash<=>? AND current_version_id<=>? AND current_version<=>? AND status<=>? AND created_at<=>? AND updated_at<=>? AND deleted_at<=>?`, `INSERT INTO plugins(plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,manifest_json,plugin_json,manifest_hash,plugin_hash,current_version_id,current_version,status,created_at,updated_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a, a)
+		nameKey, publishedKey, nameScope, nameErr := legacyNameColumns(x)
+		if nameErr != nil {
+			return nameErr
+		}
+		a := []any{x.id, x.name, x.typ, x.embedded, nstr(x.cat), x.tags, x.publisher, x.owner, nstr(x.space), x.visibility, "published", x.creator, x.by, nstr(x.botUID), nstr(x.botName), x.manifest, x.pkg, x.mhash, x.phash, x.versionID, nstr(versionNames[x.versionID]), x.status, x.created, x.updated, ntime(x.deleted), nameKey, publishedKey, nameScope}
+		e = applyRow(ctx, tx, rep, "plugins", "plugin_id", x.id, `SELECT COUNT(*) FROM plugins WHERE plugin_id=? AND plugin_name<=>? AND plugin_type<=>? AND is_embedded<=>? AND category_id<=>? AND tags_json<=>CAST(? AS JSON) AND publisher<=>? AND owner_uid<=>? AND space_id<=>? AND visibility<=>? AND listing_state<=>? AND creator_name<=>? AND created_by_type<=>? AND created_by_bot_uid<=>? AND created_by_bot_name<=>? AND manifest_json<=>CAST(? AS JSON) AND plugin_json<=>CAST(? AS JSON) AND manifest_hash<=>? AND plugin_hash<=>? AND current_version_id<=>? AND current_version<=>? AND status<=>? AND created_at<=>? AND updated_at<=>? AND deleted_at<=>? AND name_key<=>? AND published_name_key<=>? AND name_scope<=>?`, `INSERT INTO plugins(plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,manifest_json,plugin_json,manifest_hash,plugin_hash,current_version_id,current_version,status,created_at,updated_at,deleted_at,name_key,published_name_key,name_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a, a)
 		if e != nil {
 			return e
 		}
@@ -1085,7 +1118,9 @@ func (r *Runner) verify(ctx context.Context, p plan, issues []Issue) (Counts, st
 	for _, x := range p.plugins {
 		var typ, h string
 		var embedded int
-		e := r.db.QueryRowContext(ctx, `SELECT plugin_type,is_embedded,plugin_hash FROM plugins WHERE plugin_id=?`, x.id).Scan(&typ, &embedded, &h)
+		var nameKey, publishedKey sql.NullString
+		var nameScope string
+		e := r.db.QueryRowContext(ctx, `SELECT plugin_type,is_embedded,plugin_hash,name_key,published_name_key,name_scope FROM plugins WHERE plugin_id=?`, x.id).Scan(&typ, &embedded, &h, &nameKey, &publishedKey, &nameScope)
 		if errors.Is(e, sql.ErrNoRows) {
 			c.Missing += 2
 			continue
@@ -1093,9 +1128,15 @@ func (r *Runner) verify(ctx context.Context, p plan, issues []Issue) (Counts, st
 		if e != nil {
 			return c, "", issues, e
 		}
-		if typ != x.typ || embedded != x.embedded || h != x.phash {
+		expectedDraft, expectedPublished, expectedScope, nameErr := legacyNameColumns(x)
+		if nameErr != nil {
+			return c, "", issues, nameErr
+		}
+		draftOK := nullStringMatches(nameKey, expectedDraft)
+		publishedOK := nullStringMatches(publishedKey, expectedPublished)
+		if typ != x.typ || embedded != x.embedded || h != x.phash || nameScope != expectedScope || !draftOK || !publishedOK {
 			c.Conflicts++
-			issues = append(issues, Issue{"error", "plugin_conflict", "plugins", x.id, "type, embedded flag, or hash differs"})
+			issues = append(issues, Issue{"error", "plugin_conflict", "plugins", x.id, "type, embedded flag, hash, or name-index fields differ"})
 		}
 		c.Plugins++
 		l = append(l, "p:"+x.id+":"+h)

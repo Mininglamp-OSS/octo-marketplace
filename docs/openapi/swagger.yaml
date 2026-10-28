@@ -233,6 +233,11 @@ components:
         data:
           $ref: '#/components/schemas/internal_api_handler_plugin.skillMarkdownResponse'
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_visibilityResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.visibilityResponse'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_skill_SkillMDResponse:
       properties:
         data:
@@ -956,10 +961,12 @@ components:
       enum:
       - first
       - upgrade
+      - visibility
       type: string
       x-enum-varnames:
       - ReviewKindFirst
       - ReviewKindUpgrade
+      - ReviewKindVisibility
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.ReviewStatus:
       enum:
       - pending
@@ -1782,6 +1789,8 @@ components:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue'
           type: array
           uniqueItems: false
+        draft_changelog:
+          type: string
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginResponse'
         relation_result:
@@ -2464,6 +2473,8 @@ components:
       type: object
     internal_api_handler_plugin.upsertRequest:
       properties:
+        changelog:
+          type: string
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginWriteRequest'
         relations:
@@ -2513,6 +2524,32 @@ components:
           type: string
         version_id:
           type: string
+      type: object
+    internal_api_handler_plugin.visibilityRequest:
+      properties:
+        expected_published_version_id:
+          type: string
+        visibility:
+          enum:
+          - private
+          - space
+          type: string
+      required:
+      - expected_published_version_id
+      - visibility
+      type: object
+    internal_api_handler_plugin.visibilityResponse:
+      properties:
+        display_status:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
+        plugin_id:
+          type: string
+        published_version_id:
+          type: string
+        review_id:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
       type: object
     internal_api_handler_skill.CreateRequest:
       properties:
@@ -4377,7 +4414,8 @@ paths:
       description: Admin-only upload. With independent references enabled, schema
         2 carries released skill/expert IDs and ID-only connectors; inline child packages
         are rejected. With the rollout disabled, legacy container behavior remains
-        unchanged.
+        unchanged. Duplicate root display names return DUPLICATE and require renaming
+        before uploading.
       operationId: admin_plugin.import
       requestBody:
         content:
@@ -4434,7 +4472,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
+          description: DUPLICATE or CONFLICT
         '413':
           content:
             application/json:
@@ -4506,7 +4544,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
+          description: DUPLICATE or CONFLICT
         '500':
           content:
             application/json:
@@ -7299,6 +7337,81 @@ paths:
       summary: Download an original historical file
       tags:
       - plugin
+  /plugins/{plugin_id}/visibility:
+    patch:
+      description: Owner-only for published tenant Skills, Experts and Expert Teams.
+        Keeps immutable content, version labels, release count and editable drafts
+        unchanged. Widening to Space follows its review policy and keeps the previous
+        effective audience until approval. Narrowing validates published references.
+        Concurrent content/review changes are checked under a resource lock. Non-owners
+        and other Spaces receive an opaque 404.
+      operationId: plugin.visibility.update
+      parameters:
+      - description: Plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.visibilityRequest'
+                description: Target audience and the published version the owner viewed
+                summary: body
+        description: Target audience and the published version the owner viewed
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_visibilityResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Change a published plugin audience without a content release
+      tags:
+      - plugin
   /plugins/delete:
     post:
       description: Soft-delete a caller-owned Plugin; live incoming relations from
@@ -7688,7 +7801,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
+          description: 'DUPLICATE: change display name; or CONFLICT'
         '413':
           content:
             application/json:
@@ -8383,7 +8496,9 @@ paths:
   /plugins/upsert:
     post:
       description: Create or replace a Plugin from {plugin,relations}; owner and Space
-        remain server-derived.
+        remain server-derived. New Skill, Expert and Expert Team uploads reject normalized
+        display names already reserved in this Space or the global market with DUPLICATE;
+        change plugin_name or update an existing plugin by ID.
       operationId: plugin.upsert
       requestBody:
         content:
@@ -8432,7 +8547,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: CONFLICT
+          description: DUPLICATE or CONFLICT
         '413':
           content:
             application/json:

@@ -19,12 +19,13 @@ const (
 	ReviewStatusCanceled ReviewStatus = "canceled"
 )
 
-// ReviewKind distinguishes the initial Space listing from a version upgrade.
+// ReviewKind distinguishes first listing, content upgrade and same-version audience review.
 type ReviewKind string
 
 const (
-	ReviewKindFirst   ReviewKind = "first"
-	ReviewKindUpgrade ReviewKind = "upgrade"
+	ReviewKindFirst      ReviewKind = "first"
+	ReviewKindUpgrade    ReviewKind = "upgrade"
+	ReviewKindVisibility ReviewKind = "visibility"
 )
 
 // ReviewDecisionSource records where a decision originated.

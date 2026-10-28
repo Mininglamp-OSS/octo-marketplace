@@ -86,7 +86,15 @@ go run ./cmd/marketplace-stock-migration --all-spaces --rollback \
 恢复草稿；批次标记 rolled_back，不能再次 apply。没有删表、删历史或文件 GC。
 回滚前应停止新引用写入；此工具只退休本批次，不会更改服务 feature flag。
 
-## 4. 当前明确隔离的情况
+## 4. ## 显示名唯一性
+
+抽取出来的独立 Expert/Skill 必须满足市场展示名唯一规则：同一 Space、同一类型、
+归一化名称不能与另一个 active 独立资源冲突。内嵌旧资源本身不占市场展示名；
+它们的独立替代行参与唯一索引。冲突时 apply 停止并报告已有 plugin_id，不会自动
+改名或加安装后缀。先把 schema migration 和
+[名称唯一说明](plugin-name-uniqueness.md)中的 backfill 做完，再执行迁移。
+
+当前明确隔离的情况
 
 - 所有权/Space 不明确、跨根共享内嵌资源、来源快照缺失或与当前内容摘要不一致。
 - 当前草稿与活动发布版本分离、仍有待审申请、引用没有确定版本或审计映射。

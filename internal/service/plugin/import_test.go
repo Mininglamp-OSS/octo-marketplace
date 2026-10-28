@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	skillrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/skill"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
@@ -670,5 +671,21 @@ func TestReimportOfAListedPluginIsRefused(t *testing.T) {
 	// The parse task is released so the author can retry through the review flow.
 	if len(tasks.released) != 1 {
 		t.Fatalf("released = %#v; a refused reupload must not consume the upload", tasks.released)
+	}
+}
+
+func TestImportDuplicateNameCanBeRenamedAndRetried(t *testing.T) {
+	store, _, tasks, svc := importFixtures(t)
+	store.err = pluginrepo.ErrNameTaken
+	if _, err := svc.Import(context.Background(), testCaller, ImportParams{ParseTaskID: "task-1"}); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("duplicate error: %v", err)
+	}
+	if len(tasks.released) != 1 || tasks.released[0] != "task-1" {
+		t.Fatalf("upload is not retryable: %#v", tasks.released)
+	}
+	store.err = nil
+	d, err := svc.Import(context.Background(), testCaller, ImportParams{ParseTaskID: "task-1", PluginName: "Renamed Skill"})
+	if err != nil || d.Plugin.Name != "Renamed Skill" {
+		t.Fatalf("retry with new name: %+v %v", d, err)
 	}
 }

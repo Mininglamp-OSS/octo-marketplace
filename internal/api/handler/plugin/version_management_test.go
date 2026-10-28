@@ -156,3 +156,22 @@ func TestAdminHistoricalContractAndRemovedOperations(t *testing.T) {
 		}
 	}
 }
+
+func TestDraftNoteIsAnExplicitEditingField(t *testing.T) {
+	note := "saved current draft note"
+	f := &versionServiceFake{fakeService: &fakeService{detail: &pluginsvc.Detail{Plugin: &model.Plugin{ID: "p1"}, DraftChangelog: &note}}}
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plugins/p1/draft", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"draft_changelog":"saved current draft note"`) {
+		t.Fatalf("draft note missing: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpsertAcceptsExplicitEmptyDraftChangelog(t *testing.T) {
+	f := &fakeService{detail: &pluginsvc.Detail{Plugin: &model.Plugin{ID: "p1"}}}
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/plugins/upsert", strings.NewReader(`{"plugin":{"plugin_id":"p1"},"relations":[],"changelog":""}`)))
+	if rec.Code != http.StatusOK || f.write.Changelog == nil || *f.write.Changelog != "" {
+		t.Fatalf("clear note lost: %d %s", rec.Code, rec.Body.String())
+	}
+}
