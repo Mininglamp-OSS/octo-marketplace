@@ -44,7 +44,7 @@ func TestPublishedGraphHTTPMixedPinnedVersions(t *testing.T) {
 		first, second *string
 		versions      int
 	}{
-		{"mixed", &v1, &v2, 2}, {"mixed_reverse", &v2, &v1, 2}, {"shared_version", &v1, &v1, 1},
+		{"mixed", &v1, &v2, 2}, {"mixed_reverse", &v2, &v1, 2}, {"shared_version", &v1, &v1, 1}, {"legacy_then_pin", nil, &v1, 1}, {"pin_then_legacy", &v1, nil, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for i, source := range []string{"expert", "expert2"} {
@@ -98,7 +98,11 @@ func TestPublishedGraphHTTPMixedPinnedVersions(t *testing.T) {
 			}
 			count := 0
 			for _, rel := range rels {
-				if !all[rel.Target+"/"+rel.Version] {
+				selected := rel.Version
+				if rel.Target == "skill" && selected == "" {
+					selected = v1
+				}
+				if !all[rel.Target+"/"+selected] {
 					t.Fatalf("edge has no version-addressable node: %+v", rel)
 				}
 				if rel.Target == "skill" {

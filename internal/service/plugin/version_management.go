@@ -475,8 +475,10 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 				continue
 			}
 			seen[key] = true
-			// The repository cap counts related nodes; the root is tracked too.
-			if len(seen) > pluginrepo.MaxGraphNodes()+1 {
+			// Bound raw selection work separately: aliases and unavailable
+			// pins still cost a read, but do not each produce a graph node.
+			// The root is already tracked and is not a related selection.
+			if len(seen) > pluginrepo.MaxGraphEdges()+1 {
 				return nil, ErrGraphTooLarge
 			}
 			next, err := s.publishedGraphDetail(ctx, caller, r.TargetPluginID, r.TargetVersionID)
@@ -495,6 +497,10 @@ func (s *Service) publishedGraph(ctx context.Context, caller Caller, id string) 
 			selected := publishedGraphVersionKey(next.Plugin.ID, next.Plugin.CurrentVersionID)
 			if projected[selected] {
 				continue
+			}
+			// Charge only a newly resolved snapshot to the related-node cap.
+			if len(out.Related) >= pluginrepo.MaxGraphNodes() {
+				return nil, ErrGraphTooLarge
 			}
 			projected[selected] = true
 			light := *next.Plugin

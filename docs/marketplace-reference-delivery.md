@@ -56,7 +56,13 @@ Names, manifests and hashes all come from that same selected release. No new
 wire field is added, and full packages/storage attachment keys remain omitted.
 
 The same release shared by multiple edges is projected/expanded once; all its
-incoming edges remain. Legacy unpinned edges select the current published
+incoming edges remain. The 630-related-node limit counts distinct resolved
+snapshots (the root is separate), so an unpinned edge and a pin selecting the
+same release share one node allowance, in either traversal order. Raw selections,
+including unavailable versions and aliases, remain bounded by the separate
+2000-edge/traversal limit; unavailable versions do not consume returned-node
+allowance. A 631st distinct related snapshot or a 2001st edge is still rejected.
+Legacy unpinned edges select the current published
 release, while Connector edges retain their existing current-resource behavior.
 If a selected release is unavailable after root admission, omit only that
 version's incoming edges, preserving other readable releases of the same plugin.

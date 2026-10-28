@@ -22,7 +22,9 @@ Delisted legacy data remains historical until a specific republish/install need.
 - Published graph traversal/omission identity includes the selected version.
   Distinct pins for one Skill remain independently addressable via existing
   plugin_id/current_version_id fields; shared releases dedupe without dropping
-  edges. Preserve authorization, diagnostics and traversal bounds.
+  edges. Count resolved distinct snapshots toward the 630-related-node cap;
+  aliases/unavailable selections remain bounded separately by the 2000-edge
+  traversal budget. Preserve authorization, diagnostics and traversal bounds.
 - The existing owner/Space/audience rule applies to both reference types,
   including legacy writes/publication and installation expansion before cache reuse.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.

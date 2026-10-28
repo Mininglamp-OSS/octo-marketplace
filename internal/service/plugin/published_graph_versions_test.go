@@ -176,7 +176,8 @@ func TestPublishedGraphBoundsVersionedTraversal(t *testing.T) {
 	}
 }
 
-func TestPublishedGraphMaximumLegalVersionedTeam(t *testing.T) {
+func maximumPublishedGraphFixture(t *testing.T) (*Service, *publishedGraphVersionStore) {
+	t.Helper()
 	s, f := publishedGraphVersionsFixture(t, pin("skill-v1"), pin("skill-v2"))
 	templateExpert := *f.plugins["expert-a"]
 	templateSkill := *f.plugins["skill-a"]
@@ -191,11 +192,12 @@ func TestPublishedGraphMaximumLegalVersionedTeam(t *testing.T) {
 		f.plugins[id] = &node
 		var skills []model.PluginRelation
 		for skill := 0; skill < containerMaxSkills; skill++ {
-			target := fmt.Sprintf("cap-skill-%d", skill)
+			target := fmt.Sprintf("cap-skill-%d-%d", member, skill)
 			version := fmt.Sprintf("%s-member-%d", target, member)
 			p := templateSkill
 			p.ID = target
 			f.plugins[target] = &p
+			f.published[target] = version
 			v := skillVersion
 			v.PluginID = target
 			v.ID = version
@@ -223,6 +225,11 @@ func TestPublishedGraphMaximumLegalVersionedTeam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return s, f
+}
+
+func TestPublishedGraphMaximumLegalVersionedTeam(t *testing.T) {
+	s, _ := maximumPublishedGraphFixture(t)
 	out, err := s.DetailGraph(context.Background(), testCaller, "team")
 	if err != nil {
 		t.Fatal(err)
@@ -230,5 +237,106 @@ func TestPublishedGraphMaximumLegalVersionedTeam(t *testing.T) {
 	expected := containerMaxMembers * (1 + containerMaxSkills)
 	if len(out.Related) != expected || len(out.Relations) != expected {
 		t.Fatalf("nodes=%d edges=%d want=%d", len(out.Related), len(out.Relations), expected)
+	}
+}
+
+// Both relation spellings select one release and must share one node budget.
+func TestPublishedGraphAliasesAtNodeLimit(t *testing.T) {
+	for _, unpinnedFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unpinned_first_%t", unpinnedFirst), func(t *testing.T) {
+			s, f := maximumPublishedGraphFixture(t)
+			target := "cap-skill-0-0"
+			version := f.published[target]
+			if unpinnedFirst {
+				first := f.versions[pluginrepo.InstallVersionKey{PluginID: "cap-expert-0", VersionID: "cap-expert-0-v1"}]
+				rels, err := model.DecodeSnapshotRelations(first.Relations)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rels[0].TargetVersionID = nil
+				first.Relations, err = model.EncodeSnapshotRelations(rels)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			second := f.versions[pluginrepo.InstallVersionKey{PluginID: "cap-expert-1", VersionID: "cap-expert-1-v1"}]
+			rels, err := model.DecodeSnapshotRelations(second.Relations)
+			if err != nil {
+				t.Fatal(err)
+			}
+			alias := model.PluginRelation{ID: "alias", SourcePluginID: "cap-expert-1", TargetPluginID: target, TargetPluginType: model.PluginTypeSkill, Type: "expert_skill", Status: 1}
+			if unpinnedFirst {
+				alias.TargetVersionID = pin(version)
+			}
+			rels = append(rels, alias)
+			second.Relations, err = model.EncodeSnapshotRelations(rels)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := s.DetailGraph(context.Background(), testCaller, "team")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.Related) != pluginrepo.MaxGraphNodes() || len(out.Relations) != pluginrepo.MaxGraphNodes()+1 {
+				t.Fatalf("nodes=%d edges=%d", len(out.Related), len(out.Relations))
+			}
+			matches := 0
+			for _, node := range out.Related {
+				if node.ID == target && node.CurrentVersionID != nil && *node.CurrentVersionID == version {
+					matches++
+				}
+			}
+			if matches != 1 {
+				t.Fatalf("alias projected %d times", matches)
+			}
+		})
+	}
+}
+
+// Unavailable selections consume traversal work, never the returned-node budget.
+func TestPublishedGraphBoundsUnavailableSelections(t *testing.T) {
+	for _, count := range []int{pluginrepo.MaxGraphEdges() - 2, pluginrepo.MaxGraphEdges() - 1} {
+		t.Run(fmt.Sprintf("selections_%d", count), func(t *testing.T) {
+			s, f := publishedGraphVersionsFixture(t, pin("skill-v1"), pin("skill-v2"))
+			root := f.versions[pluginrepo.InstallVersionKey{PluginID: "team", VersionID: "root-v1"}]
+			rels, err := model.DecodeSnapshotRelations(root.Relations)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Keep the two member edges; each unavailable pin is attempted only once.
+			rels = rels[:2]
+			for i := 0; i < count; i++ {
+				rels = append(rels, model.PluginRelation{ID: fmt.Sprintf("missing-%d", i), SourcePluginID: "team", TargetPluginID: "skill-a", TargetVersionID: pin(fmt.Sprintf("missing-%d", i)), Type: "expert_skill", Status: 1})
+			}
+			root.Relations, err = model.EncodeSnapshotRelations(rels)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// No outgoing edges beyond the requested root selection budget.
+			for _, id := range []string{"expert-a", "expert-b"} {
+				f.versions[pluginrepo.InstallVersionKey{PluginID: id, VersionID: "expert-v1"}].Relations = json.RawMessage(`[]`)
+			}
+			out, err := s.DetailGraph(context.Background(), testCaller, "team")
+			if count+2 > pluginrepo.MaxGraphEdges() {
+				if !errors.Is(err, ErrGraphTooLarge) {
+					t.Fatalf("over-limit error=%v", err)
+				}
+				if len(f.reads) != 1 {
+					t.Fatalf("over-limit graph read %d snapshots", len(f.reads))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.Related) != 2 || len(out.Relations) != 2 {
+				t.Fatalf("nodes=%d edges=%d", len(out.Related), len(out.Relations))
+			}
+			for key, reads := range f.reads {
+				if reads != 1 {
+					t.Fatalf("%+v read %d times", key, reads)
+				}
+			}
+		})
 	}
 }
