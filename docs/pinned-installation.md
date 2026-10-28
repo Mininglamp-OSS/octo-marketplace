@@ -110,7 +110,15 @@ runtime environment values are not persisted; retries supply the same input.
 Normal root/dependency publications and Connector edits do not rebuild an
 existing plan; changed explicit input conflicts. Before every resend, current
 caller, graph (including listing state) and Fleet workspace permissions remain
-mandatory. A delisted/deleted/inaccessible node blocks dispatch without deleting
+mandatory. Here graph eligibility means current resource eligibility and current
+source/target audience for each authenticated frozen edge; it does not mean
+matching the mutable `plugin_relations` table or the latest published graph.
+Removing a draft relation, disabling a live relation row, or publishing a new
+source version with different relations/pins does not revoke an existing
+installation plan. Live relation status is not a historical-install revocation
+API. After the old operation is reconciled, a new key selects the current source
+release; an unpublished draft edit never replaces that release.
+A delisted/deleted/inaccessible node blocks dispatch without deleting
 the original plan, extending its deadline or clearing earlier uncertainty.
 
 Identical eligible retries still reach Fleet, including completed attempts, so

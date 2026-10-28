@@ -126,6 +126,10 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		return nil, ErrIntegrity
 	}
 	// Governance is current; content and selected versions remain frozen.
+	// Frozen edges belong to the selected release, not the mutable live relation
+	// table. Draft removal/disable or a newer publication does not revoke this
+	// plan. Recheck current node eligibility and each frozen edge's audience;
+	// never compare its pins to the latest graph or rebuild on retry.
 	read, ok := s.repo.(InstallationReadStore)
 	if !ok {
 		return nil, ErrVersionBaselineUnavailable

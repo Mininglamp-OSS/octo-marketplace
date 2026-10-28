@@ -32,6 +32,9 @@ Delisted legacy data remains historical until a specific republish/install need.
 - Both adapters use the same capability executor. Existing feature flags select
   a common legacy-content builder or released-pin builder, never a URL-specific
   executor. No fallback to create/bind/compensate provisioning exists.
+- Frozen edges are release content, not mutable live relation authorization.
+  Draft/live relation removal or disable and normal new publication do not
+  revoke the old plan; node eligibility and each frozen edge's audience are current.
 - The versioned installation path freezes the first plan and protects same-key
   retry, current authorization, immutable bytes and secret-free persistence.
   Both content modes classify timeout/5xx/empty outcomes as unknown; keyless old
