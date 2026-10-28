@@ -34,7 +34,7 @@ type createInstallationRequest struct {
 
 // CreateInstallation godoc
 // @Summary Install a plugin through Fleet capability installation
-// @Description Resolves and installs the visible expert or expert_team graph atomically in Fleet; retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; 409 preserves Fleet's conflict message.
+// @Description Resolves and installs the visible expert or expert_team graph atomically in Fleet; retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
 // @Tags plugin
 // @ID plugin.installation.create
 // @Accept json

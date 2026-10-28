@@ -113,6 +113,15 @@ caller, graph (including listing state) and Fleet workspace permissions remain
 mandatory. A delisted/deleted/inaccessible node blocks dispatch without deleting
 the original plan, extending its deadline or clearing earlier uncertainty.
 
+Here, current graph authorization means current resource eligibility and the
+source/root audience of the authenticated frozen edges. It does not mean that
+those edges must still appear in editable `plugin_relations` or the latest
+release. Removing a draft relation, publishing a different graph or selecting
+a different pin for a new release does not replace the first plan. This matches
+the immutable released-reference contract. A legal private chain must meet the
+same-owner/same-Space rule at every edge; a broader source cannot hide a private
+dependency behind a member Expert.
+
 Identical eligible retries still reach Fleet, including completed attempts, so
 current workspace authorization and the remote receipt remain authoritative.
 Records outside the original retry deadline (bounded by Fleet's 24-hour receipt
