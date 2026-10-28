@@ -11,6 +11,8 @@ review state, including approvals handled by the compatibility path.
 - Share snapshot-and-release persistence between managed and compatibility review
   approval; preserve the managed path's separate editable head.
 - A release failure rolls back snapshot, publication, review decision and audit.
+- Formal approval snapshots carry a complete reverse index before a reference
+  rollout; creating release evidence must not introduce missing-index blockers.
 - Exercise the actual public router, ZIP upload/parse/import, manual and automatic
   review, and exact released-version references with real isolated MySQL.
 - Preserve tenant isolation, frozen reviewed content, Connector behavior and

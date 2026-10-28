@@ -728,7 +728,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		}
 	}
 
-	// Mint the approved snapshot and its formal release together, even while
+	// Mint the approved snapshot and, for Skills, its formal release even while
 	// managed reads/edits are disabled. plugin_versions.version
 	// stays the auto-increment counter, and current_version takes the applicant's
 	// label. The snapshot carries the FROZEN attachment sidecar (zip-submitted
@@ -749,7 +749,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		s := changelog.String
 		changelogPtr = &s
 	}
-	if _, err := r.snapshotReviewRelease(ctx, tx, now, snapshotPlugin, frozen, changelogPtr, p.ReviewerUID); err != nil {
+	if _, err := r.snapshotReviewPublication(ctx, tx, now, snapshotPlugin, frozen, changelogPtr, p.ReviewerUID); err != nil {
 		return nil, err
 	}
 

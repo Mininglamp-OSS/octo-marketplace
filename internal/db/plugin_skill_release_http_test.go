@@ -155,16 +155,18 @@ func TestSkillReviewHTTPAlwaysCreatesReleasedSnapshot(t *testing.T) {
 				}
 				var state, approved string
 				var published, released sql.NullString
-				var frozenMatch sql.NullBool
+				var frozenMatch, indexed sql.NullBool
 				if err := database.QueryRow(`SELECT p.listing_state,p.published_version_id,r.version_id,rr.status,
-v.manifest_hash=rr.manifest_hash AND v.plugin_hash=rr.plugin_hash AND r.version_label=rr.version
+v.manifest_hash=rr.manifest_hash AND v.plugin_hash=rr.plugin_hash AND r.version_label=rr.version,
+idx.snapshot_digest=SHA2(CAST(v.relations_json AS CHAR CHARACTER SET utf8mb4),256) AND idx.relation_count=(SELECT COUNT(*) FROM plugin_version_relation_refs edge WHERE edge.source_plugin_id=v.plugin_id AND edge.source_version_id=v.version_id)
 FROM plugins p LEFT JOIN plugin_version_releases r ON r.plugin_id=p.plugin_id AND r.version_id=p.published_version_id
 LEFT JOIN plugin_versions v ON v.plugin_id=p.plugin_id AND v.version_id=r.version_id
-JOIN plugin_review_requests rr ON rr.plugin_id=p.plugin_id WHERE p.plugin_id=?`, id).Scan(&state, &published, &released, &approved, &frozenMatch); err != nil {
+LEFT JOIN plugin_version_reference_index_state idx ON idx.source_plugin_id=v.plugin_id AND idx.source_version_id=v.version_id
+JOIN plugin_review_requests rr ON rr.plugin_id=p.plugin_id WHERE p.plugin_id=?`, id).Scan(&state, &published, &released, &approved, &frozenMatch, &indexed); err != nil {
 					t.Fatal(err)
 				}
-				if state != "published" || approved != "approved" || !published.Valid || !released.Valid || published.String != released.String || !frozenMatch.Valid || !frozenMatch.Bool {
-					t.Fatalf("approval committed without matching release: state=%s review=%s published=%v release=%v frozen_match=%v", state, approved, published, released, frozenMatch)
+				if state != "published" || approved != "approved" || !published.Valid || !released.Valid || published.String != released.String || !frozenMatch.Valid || !frozenMatch.Bool || !indexed.Valid || !indexed.Bool {
+					t.Fatalf("approval committed without matching indexed release: state=%s review=%s published=%v release=%v frozen_match=%v indexed=%v", state, approved, published, released, frozenMatch, indexed)
 				}
 				// Readers/reference writers may be newer replicas or start after rollout.
 				modern := skillReleaseRouter(t, database, dir, true, "user-1", "space-a")

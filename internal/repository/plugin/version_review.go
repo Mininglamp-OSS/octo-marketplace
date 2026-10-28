@@ -8,16 +8,19 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
-// snapshotReviewRelease records publication evidence independently of the read /
-// edit rollout. Compatibility approvals are real publications too: switching a
-// reader or reference writer to managed mode must not reveal a published Skill
-// with no released version. The caller commits the snapshot, release, published
-// pointer and review decision together; any error rolls the whole decision back.
-// Connectors retain snapshotVersion/recordRelease's non-versioned behavior.
-func (r *Repo) snapshotReviewRelease(ctx context.Context, tx *sql.Tx, now time.Time, frozen model.Plugin, rels []model.PluginRelation, note *string, reviewer string) (string, error) {
-	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, reviewer, r.references)
+// snapshotReviewPublication records formal Skill publication independently of
+// the read/edit rollout. Skills have no outgoing relations, so their approval
+// snapshots can also carry a complete reverse index before indexed reads start.
+// Legacy Expert/Team graphs can contain unpinned relations and retain their
+// compatibility semantics until converted; managed publication is unchanged.
+// Snapshot, release, published pointer and decision commit together, or roll back.
+func (r *Repo) snapshotReviewPublication(ctx context.Context, tx *sql.Tx, now time.Time, frozen model.Plugin, rels []model.PluginRelation, note *string, reviewer string) (string, error) {
+	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, reviewer, r.references || frozen.Type == model.PluginTypeSkill)
 	if err != nil {
 		return "", err
+	}
+	if !r.versionManagement && frozen.Type != model.PluginTypeSkill {
+		return id, nil
 	}
 	if err = r.recordRelease(ctx, tx, &frozen, id, *frozen.CurrentVersion, reviewer, now); err != nil {
 		return "", err
@@ -60,7 +63,7 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if changelog.Valid {
 		note = &changelog.String
 	}
-	id, err := r.snapshotReviewRelease(ctx, tx, now, frozen, rels, note, p.ReviewerUID)
+	id, err := r.snapshotReviewPublication(ctx, tx, now, frozen, rels, note, p.ReviewerUID)
 	if err != nil {
 		return nil, err
 	}

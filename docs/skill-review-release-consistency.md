@@ -3,9 +3,13 @@
 Approving a Skill creates an immutable approval snapshot, a
 `plugin_version_releases` record and `plugins.published_version_id` in the same
 transaction as `listing_state=published`, the approved review and its audit row.
-Both compatibility and managed review paths now use the same snapshot/release
-helper. Release insertion failure rolls back the entire decision and permits a
-retry. Connector reviews keep their non-versioned behavior. Rollout flags still
+Both compatibility and managed review paths now use the same publication helper,
+which also writes the exact Skill snapshot's complete reverse index regardless
+of the read rollout flag. This keeps a subsequent reference rollout from blocking
+deletion on newly published Skill snapshots with missing index evidence. Release
+insertion failure rolls back the entire decision and permits a
+retry. Legacy unpinned Expert/Team graphs retain their compatibility semantics;
+Connector reviews keep their non-versioned behavior. Rollout flags still
 control editing, history projections and independent-reference enforcement.
 
 The released snapshot is the reviewed content, not an arbitrary latest save.
@@ -47,6 +51,12 @@ read or referenced in managed mode, or that a release persistence failure could
 never commit a successful listing. The new regression matrix checks those
 database invariants and real HTTP transitions explicitly. It does not replace
 checking the deployed revision, effective configuration and request path.
+
+The nullable-legacy deletion regression previously used current compatibility
+approval to generate historical rows with no formal publication pointer. That
+was a fixture for deletion protection, not an assertion that publication was
+complete. It now explicitly reconstructs the historical missing-release state so
+that protection stays covered while new approvals create releases and indexes.
 
 ## Existing inconsistent resources
 

@@ -49,6 +49,19 @@ func TestLegacyNullablePublicationProtectsDeletionAcrossDrafts(t *testing.T) {
 				t.Fatal(err)
 			}
 			publishManaged(t, legacy, owner, team.Plugin.ID)
+			var containerReleases int
+			if err := database.QueryRow(`SELECT COUNT(*) FROM plugin_version_releases WHERE plugin_id IN (?,?)`, expert.Plugin.ID, team.Plugin.ID).Scan(&containerReleases); err != nil || containerReleases != 0 {
+				t.Fatalf("legacy unpinned container graphs acquired formal releases: %d %v", containerReleases, err)
+			}
+			// Reconstruct historical pre-release rows explicitly. New compatibility
+			// Skill approvals now record releases; they must no longer manufacture
+			// the missing-publication-pointer fixture this deletion regression needs.
+			if _, err := database.Exec(`UPDATE plugins SET published_version_id=NULL WHERE plugin_id IN (?,?,?)`, skill.Plugin.ID, expert.Plugin.ID, team.Plugin.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id IN (?,?,?)`, skill.Plugin.ID, expert.Plugin.ID, team.Plugin.ID); err != nil {
+				t.Fatal(err)
+			}
 			var pointers int
 			if err := database.QueryRow(`SELECT COUNT(*) FROM plugins WHERE published_version_id IS NOT NULL`).Scan(&pointers); err != nil || pointers != 0 {
 				t.Fatalf("fixture accidentally has formal publication pointers: %d %v", pointers, err)
