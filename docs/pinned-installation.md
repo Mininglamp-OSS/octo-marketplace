@@ -125,8 +125,13 @@ dependency behind a member Expert.
 Disabling new independent-reference writes does not relax publication checks for
 a draft that already contains released pins. Publishing that draft still checks
 and locks its exact released dependency tree; a historical member cannot bring
-back a deleted or otherwise ineligible Skill. Unpinned legacy drafts keep their
-existing validation path.
+back a deleted or otherwise ineligible Skill. Legacy edits can preserve existing
+live pins while adding unpinned edges; Space publication freezes that mixed graph.
+The complete root keeps legacy target validation, and only its pinned branches
+enter exact released-tree validation. Unpinned targets keep their existing
+listing/embedded behavior, including when the Team leader is an unpinned member;
+they are not automatically pinned or published. This publication compatibility
+does not relax the pinned installer's current dependency eligibility checks.
 
 Identical eligible retries still reach Fleet, including completed attempts, so
 current workspace authorization and the remote receipt remain authoritative.

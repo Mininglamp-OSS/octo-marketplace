@@ -161,18 +161,9 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 	copy(resolved, rels)
 	targets := make([]model.Plugin, len(rels))
 	for i, edge := range rels {
-		var target model.Plugin
-		var sid sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT plugin_id,plugin_type,is_embedded,owner_uid,space_id,visibility,listing_state FROM plugins WHERE plugin_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`, edge.TargetPluginID).Scan(&target.ID, &target.Type, &target.IsEmbedded, &target.OwnerUID, &sid, &target.Visibility, &target.ListingState)
-		if err == sql.ErrNoRows {
-			return ErrNotFound
-		}
+		target, err := lockIndependentReferenceTarget(ctx, tx, root, source, edge.TargetPluginID)
 		if err != nil {
 			return err
-		}
-		target.SpaceID = nullString(sid)
-		if target.IsEmbedded || !referenceAudience(source, target) || !referenceAudience(root, target) {
-			return ErrNotFound
 		}
 		if listed && target.ListingState != model.PluginListingStatePublished {
 			pin := ""
@@ -191,34 +182,57 @@ func validateReferenceTree(ctx context.Context, tx *sql.Tx, root, source model.P
 		return err
 	}
 	for i, edge := range resolved {
-		if edge.TargetVersionID == nil {
-			continue
-		}
-		key := edge.TargetPluginID + "\x00" + *edge.TargetVersionID
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if len(seen) > maxGraphNodes {
-			return ErrGraphTooLarge
-		}
-		var raw []byte
-		err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=? FOR UPDATE`, edge.TargetPluginID, *edge.TargetVersionID).Scan(&raw)
-		if err == sql.ErrNoRows {
-			return referenceFieldError(i, depth, "target_version_id", "released_version_required")
-		}
-		if err != nil {
-			return err
-		}
-		children, err := model.DecodeSnapshotRelations(raw)
-		if err != nil {
-			return ErrInvalidRelation
-		}
-		if err = validateReferenceTree(ctx, tx, root, targets[i], children, false, seen, depth+1); err != nil {
+		if err := validateReleasedReference(ctx, tx, root, targets[i], edge, seen, i, depth); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func lockIndependentReferenceTarget(ctx context.Context, tx *sql.Tx, root, source model.Plugin, targetID string) (model.Plugin, error) {
+	var target model.Plugin
+	var sid sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT plugin_id,plugin_type,is_embedded,owner_uid,space_id,visibility,listing_state FROM plugins WHERE plugin_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`, targetID).Scan(&target.ID, &target.Type, &target.IsEmbedded, &target.OwnerUID, &sid, &target.Visibility, &target.ListingState)
+	if err == sql.ErrNoRows {
+		return target, ErrNotFound
+	}
+	if err != nil {
+		return target, err
+	}
+	target.SpaceID = nullString(sid)
+	if target.IsEmbedded || !referenceAudience(source, target) || !referenceAudience(root, target) {
+		return target, ErrNotFound
+	}
+	return target, nil
+}
+
+// Both strict reference graphs and retained pins in legacy roots traverse the
+// exact released snapshot under the same locks, audience checks and graph bounds.
+func validateReleasedReference(ctx context.Context, tx *sql.Tx, root, target model.Plugin, edge model.PluginRelation, seen map[string]bool, index, depth int) error {
+	if edge.TargetVersionID == nil {
+		return nil
+	}
+	key := edge.TargetPluginID + "\x00" + *edge.TargetVersionID
+	if seen[key] {
+		return nil
+	}
+	seen[key] = true
+	if len(seen) > maxGraphNodes {
+		return ErrGraphTooLarge
+	}
+	var raw []byte
+	err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=? FOR UPDATE`, edge.TargetPluginID, *edge.TargetVersionID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return referenceFieldError(index, depth, "target_version_id", "released_version_required")
+	}
+	if err != nil {
+		return err
+	}
+	children, err := model.DecodeSnapshotRelations(raw)
+	if err != nil {
+		return ErrInvalidRelation
+	}
+	return validateReferenceTree(ctx, tx, root, target, children, false, seen, depth+1)
 }
 
 func writeReferenceIndex(ctx context.Context, tx *sql.Tx, source, version string, rels []model.PluginRelation) error {
@@ -249,14 +263,6 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 		if len(rels) == 0 {
 			return nil
 		}
-		// Disabling new reference writes does not turn a retained pinned draft
-		// into a legacy graph. Its exact released descendants must still be
-		// checked and locked before publication, including historical members.
-		for _, rel := range rels {
-			if rel.TargetVersionID != nil {
-				return validateReferenceTree(ctx, tx, p, p, rels, true, map[string]bool{}, 0)
-			}
-		}
 		owned, err := liveRelationTargetSet(ctx, tx, p.ID)
 		if err != nil {
 			return err
@@ -265,7 +271,33 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 		if p.SpaceID != nil {
 			sc.SpaceID = *p.SpaceID
 		}
-		return lockRelationTargets(ctx, tx, sc, p, rels, owned)
+		// A rollback can leave a mixed root: retained pins alongside new unpinned
+		// edges. Preserve legacy validation for the complete root, including owned
+		// embedded children and unlisted targets. A filtered pinned subset is not
+		// a complete Team and cannot be checked for a leader on its own.
+		if err := lockRelationTargets(ctx, tx, sc, p, rels, owned); err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for i, edge := range rels {
+			if edge.TargetVersionID == nil {
+				continue
+			}
+			if len(rels) > maxGraphEdges {
+				return ErrInvalidRelation
+			}
+			target, err := lockIndependentReferenceTarget(ctx, tx, p, p, edge.TargetPluginID)
+			if err != nil {
+				return err
+			}
+			if target.ListingState != model.PluginListingStatePublished {
+				return referenceFieldError(i, 0, "target_plugin_id", "target_not_published")
+			}
+			if err := validateReleasedReference(ctx, tx, p, target, edge, seen, i, 0); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return validateReferenceTree(ctx, tx, p, p, rels, true, map[string]bool{}, 0)
 }
