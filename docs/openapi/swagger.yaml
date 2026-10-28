@@ -381,6 +381,23 @@ components:
         total:
           type: integer
       type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_fleet.CapabilityConnectorResult:
+      properties:
+        connector_id:
+          type: string
+        created:
+          type: boolean
+        market_mcp_id:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
+        version:
+          type:
+          - string
+          - 'null'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.CategoryFilter:
       properties:
         count:
@@ -1723,10 +1740,19 @@ components:
         runtime_id:
           format: uuid
           type: string
-      required:
-      - runtime_id
+        workspace_connectors:
+          type: boolean
       type: object
       additionalProperties: false
+      if:
+        properties:
+          workspace_connectors:
+            const: true
+        required:
+        - workspace_connectors
+      else:
+        required:
+        - runtime_id
     internal_api_handler_plugin.deleteRequest:
       properties:
         plugin_id:
@@ -1846,6 +1872,11 @@ components:
       properties:
         agent_id:
           type: string
+        connectors:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_fleet.CapabilityConnectorResult'
+          type: array
+          uniqueItems: false
         squad_id:
           type: string
       type: object
@@ -6942,11 +6973,14 @@ paths:
       - plugin
   /plugins/{plugin_id}/installations:
     post:
-      description: Resolves and installs the visible expert or expert_team graph atomically
-        in Fleet; retry uncertain outcomes with the same Idempotency-Key and input
-        within Fleet's 24-hour retention window. Uses the configured Fleet service;
-        the legacy /plugins/install remains available. Generated error text is Chinese;
-        recognized 409 conflicts use fixed safe messages.
+      description: Resolves and installs the requested visible expert, expert_team,
+        or connector graph atomically in Fleet. Set workspace_connectors to true to
+        store MCP dependencies as Workspace connectors; expert and team installs still
+        require a Runtime, while connector-only installs may omit it. Omitting or
+        setting false keeps legacy MCP configuration behavior. Retry uncertain outcomes
+        with the same Idempotency-Key and input within Fleet's 24-hour retention window.
+        Uses the configured Fleet service; the legacy /plugins/install remains available.
+        Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
       operationId: plugin.installation.create
       parameters:
       - description: Marketplace plugin ID
@@ -6972,7 +7006,8 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/internal_api_handler_plugin.createInstallationRequest'
-        description: Resource name, local runtime, and environment bindings
+        description: Resource name, optional workspace connector mode, runtime, and
+          environment bindings
         required: true
       responses:
         '200':

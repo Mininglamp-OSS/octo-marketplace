@@ -506,7 +506,7 @@ func TestPinnedRetryRejectsMalformedDefinition(t *testing.T) {
 
 func TestPinnedPlanRequestRejectsCloneFailure(t *testing.T) {
 	s, _, _ := fixturePinned()
-	plan, err := s.resolvePinnedInstallation(context.Background(), testCaller, "team", "")
+	plan, err := s.resolvePinnedInstallation(context.Background(), testCaller, "team", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

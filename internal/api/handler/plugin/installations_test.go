@@ -101,6 +101,86 @@ func TestInstallationAndLegacyAdaptersKeepTheirWireContracts(t *testing.T) {
 	}
 }
 
+func TestLegacyInstallationOmitsWorkspaceConnectorResponseFields(t *testing.T) {
+	version := "1.8.0"
+	marketID := "market-calendar"
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "parameter_omitted", body: installationBody},
+		{name: "parameter_false", body: strings.TrimSuffix(installationBody, "}") + `,"workspace_connectors":false}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeInstallationService{
+				fakeService: &fakeService{},
+				out: &pluginsvc.InstallationOutcome{
+					AgentID: "expert-1",
+					Connectors: []fleet.CapabilityConnectorResult{{
+						ConnectorID: "connector-calendar",
+						Name:        "Calendar",
+						Version:     &version,
+						MarketMCPID: &marketID,
+						Created:     true,
+					}},
+				},
+			}
+			rec := httptest.NewRecorder()
+			testEngine(f).ServeHTTP(rec, installationRequest(tc.body))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("code=%d calls=%d", rec.Code, f.calls)
+			}
+			data := decodeData(t, rec.Body.Bytes())
+			if data["agent_id"] != "expert-1" {
+				t.Fatal("legacy installation response lost its expert id")
+			}
+			if _, exists := data["connectors"]; exists {
+				t.Fatal("legacy installation response gained connector fields")
+			}
+		})
+	}
+}
+
+func TestWorkspaceConnectorInstallationAllowsMissingRuntime(t *testing.T) {
+	marketID := "market-browser"
+	f := &fakeInstallationService{
+		fakeService: &fakeService{},
+		out: &pluginsvc.InstallationOutcome{Connectors: []fleet.CapabilityConnectorResult{
+			{ConnectorID: "connector-browser", Name: "Browser", MarketMCPID: &marketID, Created: true},
+		}},
+	}
+	req := installationRequest(`{"resource_name":"Browser copy","workspace_connectors":true}`)
+	req.URL.Path = "/api/v1/plugins/market-browser/installations"
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || f.calls != 1 || !f.params.WorkspaceConnectors || f.params.RuntimeID != "" {
+		t.Fatalf("missing runtime connector install was not forwarded: code=%d calls=%d params=%+v", rec.Code, f.calls, f.params)
+	}
+	if connectors, ok := decodeData(t, rec.Body.Bytes())["connectors"].([]any); !ok || len(connectors) != 1 {
+		t.Fatal("connector installation response did not include connector results")
+	}
+}
+
+func TestWorkspaceConnectorInstallationRejectsInvalidProvidedRuntime(t *testing.T) {
+	f := &fakeInstallationService{fakeService: &fakeService{}}
+	req := installationRequest(`{"resource_name":"Browser","runtime_id":"not-a-uuid","workspace_connectors":true}`)
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || f.calls != 0 {
+		t.Fatalf("invalid optional runtime was not rejected before installation: code=%d calls=%d", rec.Code, f.calls)
+	}
+}
+
+func TestLegacyInstallationStillRequiresRuntime(t *testing.T) {
+	f := &fakeInstallationService{fakeService: &fakeService{}}
+	req := installationRequest(`{"resource_name":"My reviewer"}`)
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || f.calls != 0 {
+		t.Fatalf("legacy installation accepted a missing runtime: code=%d calls=%d", rec.Code, f.calls)
+	}
+}
+
 func TestInstallationRejectsInvalidRequestsBeforeService(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -115,6 +195,7 @@ func TestInstallationRejectsInvalidRequestsBeforeService(t *testing.T) {
 		{name: "duplicate_key", mutate: func(r *http.Request) { r.Header.Add("Idempotency-Key", "other") }, status: 400},
 		{name: "invalid_key", mutate: func(r *http.Request) { r.Header.Set("Idempotency-Key", strings.Repeat("x", 201)) }, status: 400},
 		{name: "invalid_runtime", body: `{"runtime_id":"rt"}`, status: 400},
+		{name: "invalid_runtime_with_workspace_connectors", body: `{"runtime_id":"rt","workspace_connectors":true}`, status: 400},
 		{name: "forged_identity", body: strings.TrimSuffix(installationBody, "}") + `,"uid":"other"}`, status: 400},
 		{name: "body_workspace", body: strings.TrimSuffix(installationBody, "}") + `,"workspace_id":"other"}`, status: 400},
 		{name: "forged_space", body: strings.TrimSuffix(installationBody, "}") + `,"space_id":"other"}`, status: 400},
@@ -149,6 +230,42 @@ func TestInstallationRejectsInvalidRequestsBeforeService(t *testing.T) {
 			}
 			if strings.IndexFunc(rec.Body.String(), func(r rune) bool { return unicode.Is(unicode.Han, r) }) < 0 {
 				t.Fatal("validation response must contain Chinese display text")
+			}
+		})
+	}
+}
+
+func TestInstallationCountsCaseInsensitiveWorkspaceHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*http.Request)
+		status int
+		calls  int
+	}{
+		{
+			name: "single_noncanonical_header",
+			mutate: func(r *http.Request) {
+				r.Header.Del("X-Workspace-ID")
+				r.Header["x-workspace-id"] = []string{"workspace-case"}
+			},
+			status: http.StatusOK, calls: 1,
+		},
+		{
+			name: "case_variant_duplicate",
+			mutate: func(r *http.Request) {
+				r.Header["x-workspace-id"] = []string{"workspace-other"}
+			},
+			status: http.StatusBadRequest,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeInstallationService{fakeService: &fakeService{}, out: &pluginsvc.InstallationOutcome{AgentID: "case-expert"}}
+			req := installationRequest(installationBody)
+			tc.mutate(req)
+			rec := httptest.NewRecorder()
+			testEngine(f).ServeHTTP(rec, req)
+			if rec.Code != tc.status || f.calls != tc.calls {
+				t.Fatalf("code=%d calls=%d body=%s", rec.Code, f.calls, rec.Body.String())
 			}
 		})
 	}

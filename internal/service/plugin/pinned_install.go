@@ -43,11 +43,12 @@ type pinnedInstallationPlan struct {
 	Definition      fleet.CapabilityDefinition
 	NodeIDs         []string
 	Edges           []planEligibilityEdge
+	ConnectorOnly   bool
 }
 
 type planEligibilityEdge struct{ Source, Target string }
 
-func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, id, rootVersion string) (*pinnedInstallationPlan, error) {
+func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, id, rootVersion string, workspaceConnectors bool) (*pinnedInstallationPlan, error) {
 	if !s.versionManagement {
 		return nil, ErrVersionBaselineUnavailable
 	}
@@ -55,7 +56,12 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	if !ok {
 		return nil, ErrInvalidRequest
 	}
-	r := pinnedInstallResolver{s: s, caller: caller, store: store, plugins: map[string]*model.Plugin{}, versions: map[pluginrepo.InstallVersionKey]*model.PluginVersion{}, loaded: map[pluginrepo.InstallVersionKey]*Detail{}, skills: map[pluginrepo.InstallVersionKey]PinnedSkillFiles{}, assets: capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes)}}
+	assets := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes)}
+	if workspaceConnectors {
+		assets.connectorsByID = map[string]fleet.CapabilityConnector{}
+		assets.connectorOwnerByName = map[string]string{}
+	}
+	r := pinnedInstallResolver{s: s, caller: caller, store: store, plugins: map[string]*model.Plugin{}, versions: map[pluginrepo.InstallVersionKey]*model.PluginVersion{}, loaded: map[pluginrepo.InstallVersionKey]*Detail{}, skills: map[pluginrepo.InstallVersionKey]PinnedSkillFiles{}, assets: assets}
 	if err := r.load(ctx, []string{id}, nil); err != nil {
 		if errors.Is(err, ErrDependencyHidden) {
 			return nil, ErrNotFound
@@ -65,6 +71,20 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	root := r.plugins[id]
 	if root == nil || root.ListingState != model.PluginListingStatePublished {
 		return nil, ErrNotFound
+	}
+	if root.Type == model.PluginTypeConnector {
+		if !workspaceConnectors {
+			return nil, installationInvalid("plugin_id", "expert_or_expert_team_required")
+		}
+		if rootVersion != "" {
+			return nil, ErrConflict
+		}
+		connector, err := r.assets.marketConnector(ctx, &Detail{Plugin: root}, strings.TrimSpace(root.Name))
+		if err != nil {
+			return nil, err
+		}
+		def := fleet.CapabilityDefinition{SchemaVersion: "1.0", Name: "marketplace:" + id, Connectors: []fleet.CapabilityConnector{connector}}
+		return &pinnedInstallationPlan{Definition: def, NodeIDs: []string{id}, ConnectorOnly: true}, nil
 	}
 	if root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam {
 		return nil, ErrInvalidRequest
@@ -163,7 +183,7 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 					if err != nil {
 						return nil, err
 					}
-					r.skills[key] = PinnedSkillFiles{PluginID: key.PluginID, VersionID: key.VersionID, Name: skill.Plugin.Name, Description: manifestDescription(skill.Plugin.Manifest), Files: files}
+					r.skills[key] = PinnedSkillFiles{PluginID: key.PluginID, VersionID: key.VersionID, DeclaredVersion: r.versions[key].DeclaredVersion, Name: skill.Plugin.Name, Description: manifestDescription(skill.Plugin.Manifest), Files: files}
 				}
 			case "expert_connector":
 				if rel.TargetVersionID != nil {
@@ -173,22 +193,43 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 				if connector == nil || connector.Type != model.PluginTypeConnector || rel.SourcePluginID != expert.Plugin.ID || !installAudience(expert.Plugin, connector) {
 					return nil, ErrDependencyHidden
 				}
-				config, ok := rawAttachmentContent(connector.Package, "mcp.json")
-				if !ok {
-					return nil, installationInvalid("definition.experts.mcp_config", "required")
+				if workspaceConnectors {
+					identity := "market:" + connector.ID
+					if existing, exists := r.assets.connectorsByID[identity]; exists {
+						appendCapabilityConnectorName(&out, existing.Name)
+						continue
+					}
+					marketConnector, err := r.assets.marketConnector(ctx, &Detail{Plugin: connector}, strings.TrimSpace(connector.Name))
+					if err != nil {
+						return nil, err
+					}
+					connectorName, err := r.assets.addConnector(identity, marketConnector)
+					if err != nil {
+						return nil, err
+					}
+					appendCapabilityConnectorName(&out, connectorName)
+				} else {
+					config, ok := rawAttachmentContent(connector.Package, "mcp.json")
+					if !ok {
+						return nil, installationInvalid("definition.experts.mcp_config", "required")
+					}
+					connectors = append(connectors, CurrentConnectorMCP{ConnectorID: connector.ID, Config: config})
 				}
-				connectors = append(connectors, CurrentConnectorMCP{ConnectorID: connector.ID, Config: config})
 			default:
 				return nil, ErrIntegrity
 			}
 		}
-		config, err := MergeCurrentConnectorMCP(connectors)
-		if err != nil {
-			return nil, err
-		}
-		out.MCPConfig = config
-		if err = r.assets.text(string(config)); err != nil {
-			return nil, err
+		if workspaceConnectors {
+			sort.Strings(out.ConnectorNames)
+		} else {
+			config, err := MergeCurrentConnectorMCP(connectors)
+			if err != nil {
+				return nil, err
+			}
+			out.MCPConfig = config
+			if err = r.assets.text(string(config)); err != nil {
+				return nil, err
+			}
 		}
 		for _, key := range skillKeys {
 			name, err := pinnedSkillName(r.skills[key])
@@ -211,6 +252,12 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	}
 	for _, skill := range prepared {
 		def.Skills = append(def.Skills, skill.Skill)
+	}
+	if workspaceConnectors {
+		for _, connector := range r.assets.connectorsByID {
+			def.Connectors = append(def.Connectors, connector)
+		}
+		sort.Slice(def.Connectors, func(i, j int) bool { return def.Connectors[i].Name < def.Connectors[j].Name })
 	}
 	if root.Type == model.PluginTypeExpertTeam {
 		instructions, ok := rawAttachmentContent(d.Plugin.Package, "AGENTS.md")

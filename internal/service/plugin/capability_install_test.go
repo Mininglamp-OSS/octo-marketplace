@@ -41,8 +41,23 @@ func installationParams() InstallationParams {
 	return InstallationParams{WorkspaceID: "workspace-1", RuntimeID: "7f63db70-6b66-4c2d-a52f-fb6de1d78ad9", ResourceName: "Custom name", CustomEnv: map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-current"}, IdempotencyKey: "operation-key", Token: "user-token"}
 }
 
+func TestLegacyInstallPreservesOpaqueRuntimeID(t *testing.T) {
+	svc, _, installer := capabilityFixture()
+	const runtimeID = "runtime:opaque-id"
+	_, err := svc.Install(context.Background(), testCaller, "expert-1", InstallParams{
+		WorkspaceID: "workspace-1", RuntimeID: runtimeID,
+	})
+	if err != nil {
+		t.Fatalf("legacy opaque runtime was rejected: %v", err)
+	}
+	if installer.calls != 1 || len(installer.in.Bindings.Experts) != 1 || installer.in.Bindings.Experts[0].RuntimeID != runtimeID {
+		t.Fatalf("legacy runtime binding changed: calls=%d bindings=%+v", installer.calls, installer.in.Bindings.Experts)
+	}
+}
+
 func capabilityFixture() (*Service, *fakeStore, *fakeCapabilityInstaller) {
 	store := installFixture()
+	store.plugins["skill-1"].CurrentVersion = stringPtr("1.0.0")
 	store.plugins["skill-1"].Package = packageWith(rawAtt("SKILL.md", "# Deploy"), rawAtt("references/checklist.md", "check before deploy"))
 	installer := &fakeCapabilityInstaller{}
 	return fixedService(store).WithCapabilityInstaller(installer), store, installer

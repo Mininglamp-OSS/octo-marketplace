@@ -13,14 +13,39 @@ import (
 
 const maxCapabilityBytes = 16 << 20
 
+type capabilityConnectorAudience struct {
+	ownerUID   string
+	spaceID    *string
+	visibility model.PluginVisibility
+	embedded   bool
+}
+
+func capabilityConnectorAudienceFor(plugin *model.Plugin) capabilityConnectorAudience {
+	return capabilityConnectorAudience{
+		ownerUID: plugin.OwnerUID, spaceID: plugin.SpaceID,
+		visibility: plugin.Visibility, embedded: plugin.IsEmbedded,
+	}
+}
+
+func (a capabilityConnectorAudience) permits(source *model.Plugin) bool {
+	if a.embedded {
+		return true
+	}
+	target := model.Plugin{OwnerUID: a.ownerUID, SpaceID: a.spaceID, Visibility: a.visibility}
+	return installAudience(source, &target)
+}
+
 type capabilityBuilder struct {
-	service      *Service
-	caller       Caller
-	remaining    int64
-	skillsByID   map[string]string
-	skillsByName map[string]fleet.CapabilitySkill
-	expertNames  map[string]bool
-	totalFiles   int
+	service               *Service
+	caller                Caller
+	remaining             int64
+	skillsByID            map[string]string
+	skillsByName          map[string]fleet.CapabilitySkill
+	expertNames           map[string]bool
+	connectorsByID        map[string]fleet.CapabilityConnector
+	connectorAudienceByID map[string]capabilityConnectorAudience
+	connectorOwnerByName  map[string]string
+	totalFiles            int
 }
 
 func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, pluginID string, p InstallationParams) (*fleet.CapabilityInstallRequest, error) {
@@ -32,6 +57,11 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 		return nil, ErrNotFound
 	}
 	b := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes), skillsByID: map[string]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
+	if p.WorkspaceConnectors {
+		b.connectorsByID = map[string]fleet.CapabilityConnector{}
+		b.connectorOwnerByName = map[string]string{}
+		b.connectorAudienceByID = map[string]capabilityConnectorAudience{}
+	}
 	def := fleet.CapabilityDefinition{SchemaVersion: "1.0", Name: "marketplace:" + root.Plugin.ID}
 	if !installationName(def.Name, maxInstallationNameRunes) {
 		return nil, installationInvalid("definition.name", "invalid")
@@ -46,12 +76,18 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 	summary := manifestDescription(root.Plugin.Manifest)
 	switch root.Plugin.Type {
 	case model.PluginTypeExpert:
-		expert, err := b.expert(ctx, root, name, summary)
+		if p.WorkspaceConnectors && p.RuntimeID == "" {
+			return nil, installationInvalid("runtime_id", "invalid_uuid")
+		}
+		expert, err := b.expert(ctx, root, name, summary, p.WorkspaceConnectors)
 		if err != nil {
 			return nil, err
 		}
 		def.Experts = []fleet.CapabilityExpert{*expert}
 	case model.PluginTypeExpertTeam:
+		if p.WorkspaceConnectors && p.RuntimeID == "" {
+			return nil, installationInvalid("runtime_id", "invalid_uuid")
+		}
 		relations := relationsOfType(root.Relations, "expert_team_expert")
 		// A tied display order must not select a different fallback leader on
 		// retry when the store returns the same graph in a different order.
@@ -84,7 +120,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 			if !detail.Plugin.IsEmbedded && !installAudience(root.Plugin, detail.Plugin) {
 				return nil, ErrDependencyHidden
 			}
-			expert, err := b.expert(ctx, detail, strings.TrimSpace(detail.Plugin.Name), manifestDescription(detail.Plugin.Manifest))
+			expert, err := b.expert(ctx, detail, strings.TrimSpace(detail.Plugin.Name), manifestDescription(detail.Plugin.Manifest), p.WorkspaceConnectors)
 			if err != nil {
 				return nil, err
 			}
@@ -129,11 +165,32 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 		}
 		sort.Slice(team.Members, func(i, j int) bool { return team.Members[i].ExpertName < team.Members[j].ExpertName })
 		def.ExpertTeam = team
+	case model.PluginTypeConnector:
+		if !p.WorkspaceConnectors {
+			return nil, installationInvalid("plugin_id", "expert_or_expert_team_required")
+		}
+		if len(p.CustomEnv) > 0 {
+			return nil, installationInvalid("custom_env", "unsupported_for_connector")
+		}
+		connector, err := b.marketConnector(ctx, root, name)
+		if err != nil {
+			return nil, err
+		}
+		identity := "market:" + root.Plugin.ID
+		if _, err := b.addConnector(identity, connector); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, installationInvalid("plugin_id", "expert_or_expert_team_required")
 	}
 	for _, skill := range b.skillsByName {
 		def.Skills = append(def.Skills, skill)
+	}
+	if p.WorkspaceConnectors {
+		for _, connector := range b.connectorsByID {
+			def.Connectors = append(def.Connectors, connector)
+		}
+		sort.Slice(def.Connectors, func(i, j int) bool { return def.Connectors[i].Name < def.Connectors[j].Name })
 	}
 	sort.Slice(def.Skills, func(i, j int) bool { return def.Skills[i].Name < def.Skills[j].Name })
 	sort.Slice(def.Experts, func(i, j int) bool { return def.Experts[i].Name < def.Experts[j].Name })
@@ -146,7 +203,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 	return in, nil
 }
 
-func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, summary string) (*fleet.CapabilityExpert, error) {
+func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, summary string, workspaceConnectors bool) (*fleet.CapabilityExpert, error) {
 	if detail.Plugin.Type != model.PluginTypeExpert {
 		return nil, installationInvalid("definition.experts", "wrong_dependency_type")
 	}
@@ -165,21 +222,65 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 		return nil, err
 	}
 	out := &fleet.CapabilityExpert{Name: name, Description: summary, Instructions: instructions}
-	for _, attachment := range decodePackageAttachments(detail.Plugin.Package) {
-		if attachment.Path != "mcp.json" {
-			continue
-		}
-		if attachment.ContentType != "raw" {
-			return nil, installationInvalid("definition.experts.mcp_config", "unsupported_source")
-		}
-		config, err := normalizeCapabilityMCP(attachment.RawContent)
+	if workspaceConnectors {
+		config, present, err := b.connectorConfig(ctx, detail.Plugin)
 		if err != nil {
 			return nil, err
 		}
-		if err := b.text(string(config)); err != nil {
-			return nil, err
+		if present {
+			connectorName, err := b.addConnector("embedded:"+detail.Plugin.ID, fleet.CapabilityConnector{Name: name, Config: config})
+			if err != nil {
+				return nil, err
+			}
+			appendCapabilityConnectorName(out, connectorName)
 		}
-		out.MCPConfig = config
+		for _, rel := range relationsOfType(detail.Relations, "expert_connector") {
+			identity := "market:" + rel.TargetPluginID
+			if connector, exists := b.connectorsByID[identity]; exists {
+				target, known := b.connectorAudienceByID[identity]
+				if !known || !target.permits(detail.Plugin) {
+					return nil, ErrDependencyHidden
+				}
+				appendCapabilityConnectorName(out, connector.Name)
+				continue
+			}
+			connectorDetail, err := b.service.resolveInstallDetail(ctx, b.caller, rel.TargetPluginID)
+			if err != nil {
+				return nil, err
+			}
+			targetAudience := capabilityConnectorAudienceFor(connectorDetail.Plugin)
+			if !targetAudience.permits(detail.Plugin) {
+				return nil, ErrDependencyHidden
+			}
+			connector, err := b.marketConnector(ctx, connectorDetail, strings.TrimSpace(connectorDetail.Plugin.Name))
+			if err != nil {
+				return nil, err
+			}
+			connectorName, err := b.addConnector(identity, connector)
+			if err != nil {
+				return nil, err
+			}
+			b.connectorAudienceByID[identity] = targetAudience
+			appendCapabilityConnectorName(out, connectorName)
+		}
+		sort.Strings(out.ConnectorNames)
+	} else {
+		for _, attachment := range decodePackageAttachments(detail.Plugin.Package) {
+			if attachment.Path != "mcp.json" {
+				continue
+			}
+			if attachment.ContentType != "raw" {
+				return nil, installationInvalid("definition.experts.mcp_config", "unsupported_source")
+			}
+			config, err := normalizeCapabilityMCP(attachment.RawContent)
+			if err != nil {
+				return nil, err
+			}
+			if err := b.text(string(config)); err != nil {
+				return nil, err
+			}
+			out.MCPConfig = config
+		}
 	}
 	relations := relationsOfType(detail.Relations, "expert_skill")
 	if len(relations) > 20 {
@@ -222,6 +323,9 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.
 	if p.Type != model.PluginTypeSkill || !installationName(name, 128) {
 		return "", installationInvalid("definition.skills", "invalid_dependency")
 	}
+	if p.CurrentVersion != nil && (*p.CurrentVersion == "" || strings.TrimSpace(*p.CurrentVersion) != *p.CurrentVersion) {
+		return "", installationInvalid("definition.skills.version", "invalid_provided_version")
+	}
 	files, err := b.skillFiles(ctx, p)
 	if err != nil {
 		return "", err
@@ -230,7 +334,7 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.
 	if !ok || content == "" {
 		return "", installationInvalid("definition.skills.content", "required")
 	}
-	skill := fleet.CapabilitySkill{Name: name, Description: manifestDescription(p.Manifest), Content: content, Config: map[string]any{}}
+	skill := fleet.CapabilitySkill{Name: name, Version: p.CurrentVersion, MarketSkillID: p.ID, Description: manifestDescription(p.Manifest), Content: content, Config: map[string]any{}}
 	if err := b.boundedText("definition.skills.description", skill.Description, 512); err != nil {
 		return "", err
 	}
@@ -242,6 +346,8 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.
 	}
 	sort.Slice(skill.Files, func(i, j int) bool { return skill.Files[i].Path < skill.Files[j].Path })
 	if previous, exists := b.skillsByName[name]; exists {
+		// The first source ID identifies equivalent definitions in this request.
+		previous.MarketSkillID = skill.MarketSkillID
 		before, _ := json.Marshal(previous)
 		after, _ := json.Marshal(skill)
 		if string(before) != string(after) {
