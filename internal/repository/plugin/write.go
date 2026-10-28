@@ -235,6 +235,17 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.N
 	return nil
 }
 
+// editableDraftChangelog reads the editing baseline after the caller locks the
+// current plugin. A formal release's note is never a new draft's note.
+func editableDraftChangelog(ctx context.Context, tx *sql.Tx, p *model.Plugin) (sql.NullString, error) {
+	var note sql.NullString
+	if p.CurrentVersionID == nil {
+		return note, nil
+	}
+	err := tx.QueryRowContext(ctx, `SELECT CASE WHEN EXISTS (SELECT 1 FROM plugin_version_releases r WHERE r.plugin_id=v.plugin_id AND r.version_id=v.version_id) THEN NULL ELSE v.changelog END FROM plugin_versions v WHERE v.plugin_id=? AND v.version_id=?`, p.ID, *p.CurrentVersionID).Scan(&note)
+	return note, err
+}
+
 // snapshotVersion appends one immutable plugin_versions row capturing p's current
 // content plus the given relation set, then points the plugin's current_version_id
 // at that new snapshot and sets current_version to the caller-declared label
@@ -570,6 +581,15 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	// Snapshot the rebuilt top as a new history version (its content was just
 	// swapped) and advance current_version_id/current_version onto it.
 	if top.SnapshotVersion {
+		if top.Changelog == nil {
+			previous, err := editableDraftChangelog(ctx, tx, before)
+			if err != nil {
+				return nil, err
+			}
+			if previous.Valid {
+				top.Changelog = &previous.String
+			}
+		}
 		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, topPlugin, top.Relations, top.Changelog, top.OperatorID, r.references); err != nil {
 			return nil, err
 		}
@@ -828,12 +848,9 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	sidecarUnchanged := sameAttachmentKeys(p.AttachmentKeys, before.AttachmentKeys)
 	changelogChanged := false
 	if m.SnapshotVersion || m.Changelog != nil {
-		var previous sql.NullString
-		if before.CurrentVersionID != nil {
-			// The editing read exposes no draft note for a formal release.
-			if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN EXISTS (SELECT 1 FROM plugin_version_releases r WHERE r.plugin_id=v.plugin_id AND r.version_id=v.version_id) THEN NULL ELSE v.changelog END FROM plugin_versions v WHERE v.plugin_id=? AND v.version_id=?`, p.ID, *before.CurrentVersionID).Scan(&previous); err != nil {
-				return nil, err
-			}
+		previous, err := editableDraftChangelog(ctx, tx, before)
+		if err != nil {
+			return nil, err
 		}
 		if m.Changelog != nil {
 			changelogChanged = previous.String != *m.Changelog

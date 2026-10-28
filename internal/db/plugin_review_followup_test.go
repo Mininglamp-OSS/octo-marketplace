@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -13,8 +14,98 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 	"github.com/gin-gonic/gin"
 )
+
+func TestLegacyContainerReuploadPreservesOnlyEditableNote(t *testing.T) {
+	for _, kind := range []model.PluginType{model.PluginTypeExpert, model.PluginTypeExpertTeam} {
+		for _, released := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/released=%v", kind, released), func(t *testing.T) {
+				database := reviewDB(t)
+				repo := pluginrepo.New(database)
+				svc := pluginsvc.New(repo, storage.NewLocal(t.TempDir(), "http://localhost")).WithVersionManagement(true)
+				ctx, owner := context.Background(), managedOwner()
+				note := "saved container draft note"
+				req := managedWrite("1.0.0", "original", model.PluginVisibilityPrivate)
+				if released {
+					if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), true, owner.UID, owner.Name); err != nil {
+						t.Fatal(err)
+					}
+				}
+				req.Type, req.Changelog = kind, &note
+				var manifest map[string]any
+				if err := json.Unmarshal(req.Manifest, &manifest); err != nil {
+					t.Fatal(err)
+				}
+				manifest["plugin_type"] = kind
+				req.Manifest, _ = json.Marshal(manifest)
+				d, err := svc.Create(ctx, owner, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if released {
+					if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID, Changelog: note}); err != nil {
+						t.Fatal(err)
+					}
+					// Private publication releases the current snapshot. Widen
+					// that same release before organization moderation, without
+					// a content review that would preserve a separate draft.
+					if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: d.Plugin.ID, ExpectedPublishedVersionID: *d.Plugin.CurrentVersionID, Visibility: model.PluginVisibilitySpace}); err != nil {
+						t.Fatal(err)
+					}
+					d, err = svc.CurrentDetail(ctx, owner, d.Plugin.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if d.DraftChangelog == nil || *d.DraftChangelog != "" {
+						t.Fatal("fixture must start from a formal-release note, not a retained editable draft")
+					}
+				}
+				oldVersion := *d.Plugin.CurrentVersionID
+				files := map[string][]byte{"expert.json": []byte(`{"name":"Reuploaded expert","summary":"fixture","instruction":"replacement instructions"}`)}
+				if kind == model.PluginTypeExpertTeam {
+					files = map[string][]byte{"squad.json": []byte(`{"name":"Reuploaded team","summary":"fixture","leader":"Lead","members":[{"member_key":"lead","name":"Lead","role":"leader","is_leader":true,"instruction":"replacement instructions"}]}`)}
+				}
+				admin := owner
+				admin.IsSystemAdmin = true
+				if released {
+					// Published legacy containers retain their existing rebuild
+					// prohibition. Delisting permits the supported release-baseline case.
+					if _, err = svc.ReuploadContainer(ctx, admin, d.Plugin.ID, pluginsvc.ContainerImportParams{Archive: promotionArchive(t, files)}); !errors.Is(err, pluginsvc.ErrConflict) {
+						t.Fatalf("published rebuild must remain blocked: %v", err)
+					}
+					moderator := owner
+					moderator.SpaceRole = pluginsvc.SpaceRoleAdmin
+					if _, err = svc.Delist(ctx, moderator, pluginsvc.DelistParams{PluginID: d.Plugin.ID}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err = svc.ReuploadContainer(ctx, admin, d.Plugin.ID, pluginsvc.ContainerImportParams{Archive: promotionArchive(t, files)}); err != nil {
+					t.Fatal(err)
+				}
+				draft, err := svc.CurrentDetail(ctx, owner, d.Plugin.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := note
+				if released {
+					want = ""
+				}
+				if draft.DraftChangelog == nil || *draft.DraftChangelog != want {
+					t.Fatalf("note=%v want=%q", draft.DraftChangelog, want)
+				}
+				if draft.Plugin.CurrentVersionID == nil || *draft.Plugin.CurrentVersionID == oldVersion {
+					t.Fatal("reupload did not advance draft")
+				}
+				var historical string
+				if err = database.QueryRow(`SELECT changelog FROM plugin_versions WHERE version_id=?`, oldVersion).Scan(&historical); err != nil || historical != note {
+					t.Fatalf("historical note=%q err=%v", historical, err)
+				}
+			})
+		}
+	}
+}
 
 func TestOmittedDraftNotePreservedOnlyFromUnreleasedSnapshot(t *testing.T) {
 	for _, admin := range []bool{false, true} {
