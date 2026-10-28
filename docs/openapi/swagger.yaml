@@ -1791,6 +1791,8 @@ components:
           uniqueItems: false
         draft_changelog:
           type: string
+        draft_revision:
+          type: string
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginResponse'
         relation_result:
@@ -2474,6 +2476,8 @@ components:
     internal_api_handler_plugin.upsertRequest:
       properties:
         changelog:
+          type: string
+        expected_draft_revision:
           type: string
         plugin:
           $ref: '#/components/schemas/internal_api_handler_plugin.pluginWriteRequest'
@@ -6920,8 +6924,9 @@ paths:
       - plugin
   /plugins/{plugin_id}/draft:
     get:
-      description: Requires enabled version management. Draft access is owner-only;
-        admin routes require the marketplace admin gate.
+      description: Returns an opaque draft_revision for conditional full-replace updates.
+        Requires enabled version management. Draft access is owner-only; admin routes
+        require the marketplace admin gate.
       operationId: plugin.draft.get
       parameters:
       - description: Plugin ID
@@ -8498,7 +8503,9 @@ paths:
       description: Create or replace a Plugin from {plugin,relations}; owner and Space
         remain server-derived. New Skill, Expert and Expert Team uploads reject normalized
         display names already reserved in this Space or the global market with DUPLICATE;
-        change plugin_name or update an existing plugin by ID.
+        change plugin_name or update an existing plugin by ID. For read-modify-write
+        edits, send the draft response draft_revision as expected_draft_revision;
+        a stale token returns CONFLICT without modifying the resource.
       operationId: plugin.upsert
       requestBody:
         content:

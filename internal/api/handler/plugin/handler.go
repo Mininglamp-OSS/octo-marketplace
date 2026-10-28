@@ -4,6 +4,7 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -144,9 +145,10 @@ type pluginWriteRequest struct {
 }
 
 type upsertRequest struct {
-	Changelog *string            `json:"changelog,omitempty"`
-	Plugin    pluginWriteRequest `json:"plugin"`
-	Relations []relationRequest  `json:"relations"`
+	ExpectedDraftRevision *string            `json:"expected_draft_revision,omitempty"`
+	Changelog             *string            `json:"changelog,omitempty"`
+	Plugin                pluginWriteRequest `json:"plugin"`
+	Relations             []relationRequest  `json:"relations"`
 }
 
 func (r upsertRequest) serviceRequest() pluginsvc.WriteRequest {
@@ -154,7 +156,7 @@ func (r upsertRequest) serviceRequest() pluginsvc.WriteRequest {
 	for i, x := range r.Relations {
 		relations[i] = pluginsvc.RelationRequest{ID: x.RelationID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, Type: x.RelationType, SortOrder: x.SortOrder, Data: x.Data}
 	}
-	return pluginsvc.WriteRequest{Changelog: r.Changelog, Name: r.Plugin.PluginName, Type: r.Plugin.PluginType, CategoryID: r.Plugin.CategoryID, Tags: rawJSON(r.Plugin.Tags), Publisher: r.Plugin.Publisher, Icon: r.Plugin.Icon, Visibility: r.Plugin.Visibility, Version: r.Plugin.Version, Manifest: r.Plugin.ManifestJSON, Package: r.Plugin.PluginJSON, Relations: relations}
+	return pluginsvc.WriteRequest{ExpectedDraftRevision: r.ExpectedDraftRevision, Changelog: r.Changelog, Name: r.Plugin.PluginName, Type: r.Plugin.PluginType, CategoryID: r.Plugin.CategoryID, Tags: rawJSON(r.Plugin.Tags), Publisher: r.Plugin.Publisher, Icon: r.Plugin.Icon, Visibility: r.Plugin.Visibility, Version: r.Plugin.Version, Manifest: r.Plugin.ManifestJSON, Package: r.Plugin.PluginJSON, Relations: relations}
 }
 
 type deleteRequest struct {
@@ -262,6 +264,7 @@ type relationResponse struct {
 }
 
 type detailResponse struct {
+	DraftRevision    string                  `json:"draft_revision,omitempty"`
 	DraftChangelog   *string                 `json:"draft_changelog,omitempty"`
 	Plugin           pluginResponse          `json:"plugin"`
 	Relations        []relationResponse      `json:"relations"`
@@ -465,7 +468,7 @@ func (h *Handler) GetGraph(c *gin.Context) {
 
 // Upsert godoc
 // @Summary Upsert plugin
-// @Description Create or replace a Plugin from {plugin,relations}; owner and Space remain server-derived. New Skill, Expert and Expert Team uploads reject normalized display names already reserved in this Space or the global market with DUPLICATE; change plugin_name or update an existing plugin by ID.
+// @Description Create or replace a Plugin from {plugin,relations}; owner and Space remain server-derived. New Skill, Expert and Expert Team uploads reject normalized display names already reserved in this Space or the global market with DUPLICATE; change plugin_name or update an existing plugin by ID. For read-modify-write edits, send the draft response draft_revision as expected_draft_revision; a stale token returns CONFLICT without modifying the resource.
 // @Tags plugin
 // @ID plugin.upsert
 // @Accept json
@@ -491,11 +494,22 @@ func (h *Handler) Upsert(c *gin.Context) {
 	if !decode(c, &req) {
 		return
 	}
+	if req.ExpectedDraftRevision != nil {
+		decoded, err := hex.DecodeString(*req.ExpectedDraftRevision)
+		if err != nil || len(decoded) != 32 {
+			validation(c, "expected_draft_revision")
+			return
+		}
+	}
 	var (
 		v   *pluginsvc.Detail
 		err error
 	)
 	if strings.TrimSpace(req.Plugin.PluginID) == "" {
+		if req.ExpectedDraftRevision != nil {
+			validation(c, "expected_draft_revision")
+			return
+		}
 		v, err = h.svc.Create(c.Request.Context(), caller, req.serviceRequest())
 	} else {
 		v, err = h.svc.Update(c.Request.Context(), caller, req.Plugin.PluginID, req.serviceRequest())
@@ -921,7 +935,7 @@ func detailDTO(d *pluginsvc.Detail) detailResponse {
 		}
 		rels[i] = relationResponse{RelationID: x.ID, SourcePluginID: x.SourcePluginID, TargetPluginID: x.TargetPluginID, TargetVersionID: x.TargetVersionID, RelationType: x.Type, SortOrder: x.SortOrder, Data: normalizedObjectRaw(x.Data)}
 	}
-	out := detailResponse{DraftChangelog: d.DraftChangelog, Plugin: pluginDTO(d.Plugin), Relations: rels, DependencyIssues: d.DependencyIssues}
+	out := detailResponse{DraftRevision: d.DraftRevision, DraftChangelog: d.DraftChangelog, Plugin: pluginDTO(d.Plugin), Relations: rels, DependencyIssues: d.DependencyIssues}
 	if d.RelationResult != nil {
 		out.RelationResult = &relationResultResponse{Created: d.RelationResult.Created, Updated: d.RelationResult.Updated, Deleted: d.RelationResult.Deleted}
 	}

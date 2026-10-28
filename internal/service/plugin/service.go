@@ -236,6 +236,7 @@ type ListParams struct {
 }
 
 type Detail struct {
+	DraftRevision string
 	// DraftChangelog is populated only by the explicit owner editing read.
 	DraftChangelog   *string
 	Plugin           *model.Plugin
@@ -266,6 +267,7 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
+	ExpectedDraftRevision    *string
 	expectedCurrentVersionID string
 	// grandfatheredVersion is the plugin's STORED version label, set only by
 	// Service.update. A label minted before the format was tightened (v999,
@@ -722,6 +724,11 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if old.IsEmbedded {
 		return nil, ErrNotFound
 	}
+	// Report a stale edit before validating its now-obsolete version or audience.
+	// Repo.Update repeats this check under the write lock to close the read race.
+	if req.ExpectedDraftRevision != nil && *req.ExpectedDraftRevision != model.PluginDraftRevision(old) {
+		return nil, ErrConflict
+	}
 	if req.Type != old.Type {
 		return nil, ErrInvalidRequest
 	}
@@ -823,6 +830,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
 	m.ExpectedCurrentVersionID = req.expectedCurrentVersionID
+	m.ExpectedDraftRevision = req.ExpectedDraftRevision
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
 	// restate it against the row it locks, for the same reason the two listing
 	// decisions below are re-derived: an approval that publishes a frozen label can

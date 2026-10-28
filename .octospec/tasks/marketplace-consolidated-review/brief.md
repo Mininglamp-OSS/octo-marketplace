@@ -20,3 +20,6 @@ Focused packages and real MySQL regressions, full MySQL-backed Go suite, vet/bui
 - Former 6082faf: retain only name/publication additions and necessary SQL/test integration changes; lifecycle/installation code is supplied by PR147.
 - Former b7f709b: retain Expert Team stock-migration name reservation repair.
 - Former 857c1a9: retain extra current-eligibility regression scenarios; drop the redundant root-audience predicate removal because PR147 already verifies the confirmed retry behavior with its full checks.
+
+## Web metadata concurrency review
+Expose an owner draft revision covering its saved content/version and mutable metadata/audience. Full-replace clients opt into expected_draft_revision; compare under the existing plugin row lock before writes, snapshots or audits. Existing clients remain wire-compatible. Web Skill/Expert metadata clients require a returned token and submit it with the replacement; stale reads return409 without silent retries. Tests must cover same-label edits, metadata without new snapshots, competing writers, foreign Space, and preserved newer state.

@@ -15,6 +15,7 @@ import (
 
 // Mutation contains current state, replacement relations, and append-only audit metadata.
 type Mutation struct {
+	ExpectedDraftRevision *string
 	// ExpectedCurrentVersionID opts internal callers into a saved-head CAS.
 	// Empty preserves existing write semantics; it is not a public DTO field.
 	ExpectedCurrentVersionID string
@@ -636,6 +637,9 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	before, err := getOwnedForUpdate(ctx, tx, scope, m.Plugin.ID)
 	if err != nil {
 		return nil, err
+	}
+	if m.ExpectedDraftRevision != nil && *m.ExpectedDraftRevision != model.PluginDraftRevision(before) {
+		return nil, ErrConflict
 	}
 	// Compare only after acquiring the same row lock used for the mutation.
 	// A stale writer must not alter content, relations, snapshots or audit.

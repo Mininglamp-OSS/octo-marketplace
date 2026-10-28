@@ -73,6 +73,7 @@ func (s *Service) CurrentDetail(ctx context.Context, caller Caller, pluginID str
 		}
 	}
 	d.DraftChangelog = &note
+	d.DraftRevision = model.PluginDraftRevision(d.Plugin)
 	return d, nil
 }
 
