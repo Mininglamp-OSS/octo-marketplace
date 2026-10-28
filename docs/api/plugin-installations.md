@@ -36,6 +36,20 @@ Fleet route responds with `{ "data": ... }`, not the internal handler's bare
 result. Runtime access, deployment configuration, atomicity and replay still
 require integration verification in the target environment before switching clients.
 
+## OpenAPI compatibility
+
+Schema-diff reports for these installation changes have the following wire
+disposition:
+
+| Schema change | Consumer impact |
+| --- | --- |
+| Legacy `/plugins/install` body: overlapping `oneOf` removed and body typed as the actual request object | Generator correction. Both branches previously matched valid request objects, making `oneOf` reject them. The HTTP body fields and opaque legacy IDs are unchanged. |
+| New `/plugins/{plugin_id}/installations` body: `if` / `else` Runtime requirement | Additive connector mode. Default-mode requests still require Runtime; connector-mode requests may omit it at the schema boundary. Expert/team targets still require it during graph validation. |
+
+Existing legacy callers keep their current request bodies. Clients opting into
+connector-only installation omit `runtime_id` when no Runtime is selected;
+an explicitly supplied value must be a UUID string.
+
 ## Request
 
 ```http
@@ -92,10 +106,11 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
   Marketplace route is **ID-only** and rejects `X-Workspace-Slug`, including when
   an ID is present. A future Client migration must stop sending the legacy slug
   selector on this route. No Workspace identifier is accepted in the body.
-- `runtime_id` is a required UUID for the legacy path and for expert/team
-  installations when `workspace_connectors` is true. It may be omitted only
-  for an independent connector installation in the new mode; supplied runtime
-  IDs are still validated as UUIDs.
+- `runtime_id` is a required UUID on this route when Workspace connector mode is
+  disabled, and for expert/team installations when `workspace_connectors` is true.
+  It may be omitted only for an independent connector installation in the new
+  mode. If supplied, it must be a UUID string: empty, whitespace-only, `null`,
+  and non-string values return `400 VALIDATION_ERROR` before installation.
 - `resource_name` is optional, trimmed, and limited to 128 characters without
   control characters. It defaults to the catalog name. For a single expert it
   sets that expert's name; for a team it sets only the team name; for an

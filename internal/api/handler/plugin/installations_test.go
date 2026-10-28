@@ -162,12 +162,36 @@ func TestWorkspaceConnectorInstallationAllowsMissingRuntime(t *testing.T) {
 }
 
 func TestWorkspaceConnectorInstallationRejectsInvalidProvidedRuntime(t *testing.T) {
-	f := &fakeInstallationService{fakeService: &fakeService{}}
-	req := installationRequest(`{"resource_name":"Browser","runtime_id":"not-a-uuid","workspace_connectors":true}`)
-	rec := httptest.NewRecorder()
-	testEngine(f).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest || f.calls != 0 {
-		t.Fatalf("invalid optional runtime was not rejected before installation: code=%d calls=%d", rec.Code, f.calls)
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "invalid_uuid", raw: `"not-a-uuid"`},
+		{name: "empty", raw: `""`},
+		{name: "whitespace", raw: `"   "`},
+		{name: "null", raw: `null`},
+		{name: "number", raw: `42`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeInstallationService{fakeService: &fakeService{}}
+			req := installationRequest(`{"resource_name":"Browser","runtime_id":` + tc.raw + `,"workspace_connectors":true}`)
+			rec := httptest.NewRecorder()
+			testEngine(f).ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || f.calls != 0 {
+				t.Fatalf("invalid optional runtime was not rejected before installation: code=%d calls=%d body=%s", rec.Code, f.calls, rec.Body.String())
+			}
+			var result struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Error.Code != "VALIDATION_ERROR" {
+				t.Fatalf("error code = %q, want VALIDATION_ERROR", result.Error.Code)
+			}
+		})
 	}
 }
 

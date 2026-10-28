@@ -49,6 +49,10 @@ func TestInstallationConsumerContract(t *testing.T) {
 
 	t.Run("runtime id uses UUID format", func(t *testing.T) {
 		assertInvalidJSON(t, newRequest, `{"workspace_connectors":false,"runtime_id":"runtime-one"}`)
+		assertInvalidJSON(t, newRequest, `{"workspace_connectors":true,"runtime_id":""}`)
+		assertInvalidJSON(t, newRequest, `{"workspace_connectors":true,"runtime_id":"   "}`)
+		assertInvalidJSON(t, newRequest, `{"workspace_connectors":true,"runtime_id":null}`)
+		assertInvalidJSON(t, newRequest, `{"workspace_connectors":true,"runtime_id":42}`)
 	})
 
 	t.Run("custom environment values are strings", func(t *testing.T) {

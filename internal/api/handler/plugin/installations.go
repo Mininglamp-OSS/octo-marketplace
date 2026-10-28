@@ -28,9 +28,24 @@ type capabilityInstallationService interface {
 
 type createInstallationRequest struct {
 	ResourceName        string                          `json:"resource_name,omitempty" maxLength:"128"`
-	RuntimeID           string                          `json:"runtime_id" format:"uuid"`
+	RuntimeID           installationRuntimeID           `json:"runtime_id" swaggertype:"string" format:"uuid"`
 	CustomEnv           map[string]installationEnvValue `json:"custom_env,omitempty" swaggertype:"object,string"`
 	WorkspaceConnectors bool                            `json:"workspace_connectors,omitempty"`
+}
+
+type installationRuntimeID string
+
+// UnmarshalJSON runs only for a supplied field; reserve the zero value for omission.
+func (id *installationRuntimeID) UnmarshalJSON(raw []byte) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	if strings.TrimSpace(value) == "" {
+		return errors.New("runtime_id must be a non-empty string")
+	}
+	*id = installationRuntimeID(value)
+	return nil
 }
 
 // CreateInstallation godoc
@@ -101,7 +116,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 		}
 	}
 	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{
-		WorkspaceID: workspaceID, RuntimeID: req.RuntimeID, ResourceName: req.ResourceName,
+		WorkspaceID: workspaceID, RuntimeID: string(req.RuntimeID), ResourceName: req.ResourceName,
 		CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c),
 		WorkspaceConnectors: req.WorkspaceConnectors,
 	})
