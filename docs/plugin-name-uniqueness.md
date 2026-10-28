@@ -55,6 +55,14 @@ Duplicate creation/update returns HTTP 409 `DUPLICATE` with
 Apply schema migration `20261027-00-plugin-name-uniqueness.sql` first. Historical
 rows stay outside the index (`name_key=NULL`) until explicitly backfilled.
 
+Before that backfill completes, standalone creation, rename/update and container
+reupload also compare normalized draft and published names against historical
+rows under a locking read in the write transaction. An existing NULL-key row
+therefore still reserves its names. The edited row is excluded from the check;
+foreign-Space private resources and unreleased global draft names remain private.
+A collision rolls back the entire update or rebuild, including new children and
+version/audit records, and returns the same `DUPLICATE` rename guidance.
+
 Run the read-only report first:
 
 ```bash

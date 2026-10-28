@@ -220,7 +220,7 @@ func insertPlugin(ctx context.Context, tx *sql.Tx, now interface{}, p model.Plug
 		return err
 	}
 	if nameKey != nil && !p.IsEmbedded {
-		if err := rejectCreateNameCollision(ctx, tx, p, nameKey.(string), nameScope); err != nil {
+		if err := rejectPluginNameCollision(ctx, tx, p, nameKey.(string), nameScope); err != nil {
 			return err
 		}
 	}
@@ -533,6 +533,13 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	if nameErr != nil {
 		return nil, nameErr
 	}
+	// Historical rows with NULL keys are absent from both uniqueness indexes.
+	// Check their draft/released names under the same transaction as the write.
+	if nameKey != nil && !before.IsEmbedded {
+		if err = rejectPluginNameCollision(ctx, tx, topPlugin, nameKey.(string), nameScope); err != nil {
+			return nil, err
+		}
+	}
 	updArgs := append([]any{topPlugin.Name, topPlugin.Type, topPlugin.CategoryID, string(topPlugin.Tags), topPlugin.Publisher, topPlugin.Visibility, topPlugin.Icon, topPlugin.ToolCount, string(topPlugin.Manifest), string(topPlugin.Package), jsonColumn(topPlugin.AttachmentKeys), topPlugin.ManifestHash, topPlugin.PluginHash, topPlugin.Status, now, nameKey, nameScope}, updTail...)
 	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?,name_key=?,name_scope=?
 `+updWhere, updArgs...); err != nil {
@@ -770,6 +777,13 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	nameKey, nameScope, nameErr := pluginNameColumns(p.Name, p.Type, p.SpaceID)
 	if nameErr != nil {
 		return nil, nameErr
+	}
+	// Historical rows with NULL keys are absent from both uniqueness indexes.
+	// Check their draft/released names under the same transaction as the write.
+	if nameKey != nil && !before.IsEmbedded {
+		if err = rejectPluginNameCollision(ctx, tx, p, nameKey.(string), nameScope); err != nil {
+			return nil, err
+		}
 	}
 	updArgs := append([]any{p.Name, p.Type, p.CategoryID, string(p.Tags), p.Publisher, p.Visibility, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.Status, now, nameKey, nameScope}, updTail...)
 	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?,name_key=?,name_scope=?

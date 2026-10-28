@@ -7,13 +7,13 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
-// rejectCreateNameCollision covers legacy rows whose normalized keys have not
+// rejectPluginNameCollision covers legacy rows whose normalized keys have not
 // been backfilled, and global listings outside a tenant's unique-index scope.
 // Tenant rows in other Spaces never participate. Locking reads serialize
 // against concurrent catalog changes; reservation indexes remain the final
-// guard for concurrent same-Space creates. All import/create paths use this
-// inside their write transaction before inserting any root resource.
-func rejectCreateNameCollision(ctx context.Context, tx *sql.Tx, p model.Plugin, wanted, scope string) error {
+// guard for concurrent same-Space writes. Create, update and graph rebuilds
+// use this inside their write transaction before writing a standalone name.
+func rejectPluginNameCollision(ctx context.Context, tx *sql.Tx, p model.Plugin, wanted, scope string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT p.plugin_name,
  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(v.manifest_json,'$.plugin_name')),''),p.name_key,p.published_name_key,p.space_id
  FROM plugins p LEFT JOIN plugin_versions v ON v.plugin_id=p.plugin_id AND v.version_id=p.published_version_id

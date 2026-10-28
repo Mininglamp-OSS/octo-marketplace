@@ -23,3 +23,6 @@ Focused packages and real MySQL regressions, full MySQL-backed Go suite, vet/bui
 
 ## Web metadata concurrency review
 Expose an owner draft revision covering its saved content/version and mutable metadata/audience. Full-replace clients opt into expected_draft_revision; compare under the existing plugin row lock before writes, snapshots or audits. Existing clients remain wire-compatible. Web Skill/Expert metadata clients require a returned token and submit it with the replacement; stale reads return409 without silent retries. Tests must cover same-label edits, metadata without new snapshots, competing writers, foreign Space, and preserved newer state.
+
+## Legacy-name review follow-up
+The supported pre-backfill window leaves historical draft and published name keys NULL. Apply the same transactional, locked collision guard to standalone name-bearing updates and container rebuilds as to creation. Exclude the row itself and embedded children; preserve foreign-Space privacy and global unreleased draft-name privacy. Tests must cover Skill/Expert/Team draft and released names, Unicode-equivalent renames, service error mapping, legal self saves, and complete rollback of rebuild children, relations, snapshots, placements and audit evidence.
