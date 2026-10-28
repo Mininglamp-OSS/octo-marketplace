@@ -7758,11 +7758,7 @@ paths:
         content:
           application/json:
             schema:
-              oneOf:
-              - type: object
-              - $ref: '#/components/schemas/internal_api_handler_plugin.installRequest'
-                description: Plugin ID and target workspace + runtime
-                summary: body
+              $ref: '#/components/schemas/internal_api_handler_plugin.installRequest'
         description: Plugin ID and target workspace + runtime
         required: true
       responses:

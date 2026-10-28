@@ -122,6 +122,11 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
 Marketplace resolves the root expert/team and every dependency under the
 authenticated caller's visibility. An embedded member cannot be installed as a
 standalone root. Hidden dependencies reject the entire operation before Fleet.
+Connector relations must belong to the source Expert and resolve to their exact
+target ID and actual connector type. Each source's publication audience is
+checked before materializing the dependency and again on shared-cache reuse;
+the caller's ability to read a private connector alone does not authorize its
+distribution through a broader-audience Expert.
 For pinned installation, the root and every dependency must currently be
 published, active, undeleted and authorized, on both first dispatch and frozen-plan
 retry. A retained release/pin does not exempt a delisted dependency. Blocked

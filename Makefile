@@ -1,4 +1,4 @@
-.PHONY: build test fmt vet lint run-api docker-build
+.PHONY: build test fmt vet lint run-api docker-build openapi-contract
 
 build:
 	go build ./...
@@ -26,6 +26,10 @@ OPENAPI_SCAN_DIRS := internal/api/handler/mcp.go internal/api/handler/plugin/han
 OPENAPI_SCAN_DIRS += internal/api/handler/plugin/version_management.go
 OPENAPI_SCAN_DIRS += internal/api/handler/plugin/installations.go
 OPENAPI_SCAN_DIRS += internal/api/handler/plugin/scene_admin.go
+
+# Consumer JSON Schema contract, included in the aggregated OpenAPI check.
+openapi-contract:
+	go test -count=1 ./internal/model -run '^TestInstallationConsumerContract$$'
 
 # OpenAPI toolchain (installed by octo-openapi-dev-skill main)
 include tools/octo-api/assets/openapi.mk

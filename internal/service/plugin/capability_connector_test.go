@@ -55,7 +55,7 @@ func TestWorkspaceConnectorModeImportsVisibleMarketplaceConnectorRelations(t *te
 	addConnectorRegressionPlugin(store, marketID, "Market Repository", rawConfig, &version)
 	store.relations["expert-1"] = append(store.relations["expert-1"], model.PluginRelation{
 		ID: "r-market", SourcePluginID: "expert-1", TargetPluginID: marketID,
-		TargetPluginType: model.PluginTypeConnector, Type: "expert_connector", Status: 1,
+		Type: "expert_connector", Status: 1,
 	})
 
 	p := installationParams()
@@ -174,6 +174,68 @@ func TestWorkspaceConnectorCacheChecksEachSourceAudience(t *testing.T) {
 	}
 }
 
+func TestWorkspaceConnectorModeRejectsMismatchedRelationSourceIDBeforeFleet(t *testing.T) {
+	svc, store, installer := connectorRegressionFixture()
+	const marketID = "market-wrong-source"
+	addConnectorRegressionPlugin(store, marketID, "Source Mismatch Connector", `{"mcpServers":{"server":{"command":"run"}}}`, nil)
+	store.relations["expert-1"] = append(store.relations["expert-1"], model.PluginRelation{
+		ID: "r-wrong-source", SourcePluginID: "expert-other", TargetPluginID: marketID,
+		Type: "expert_connector", Status: 1,
+	})
+
+	p := installationParams()
+	p.WorkspaceConnectors = true
+	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", p)
+	if err == nil || installer.calls != 0 {
+		t.Fatalf("mismatched connector relation source reached Fleet: err=%v calls=%d", err, installer.calls)
+	}
+	for _, id := range store.getIDs {
+		if id == marketID {
+			t.Fatalf("mismatched relation source resolved connector %q before rejection", marketID)
+		}
+	}
+}
+
+func TestWorkspaceConnectorCacheRejectsMismatchedRelationSourceID(t *testing.T) {
+	svc, store, installer := connectorRegressionFixture()
+	const marketID = "market-cache-source-spoof"
+	addConnectorRegressionPlugin(store, marketID, "Shared Connector", `{"mcpServers":{"server":{"command":"run"}}}`, nil)
+
+	bob := *store.plugins["expert-1"]
+	bob.ID, bob.Name = "expert-2", "Bob"
+	bob.Package = packageWith(rawAtt("AGENTS.md", "Bob instructions"))
+	store.plugins[bob.ID] = &bob
+	store.relations[bob.ID] = []model.PluginRelation{{
+		ID: "r-bob-spoofed-source", SourcePluginID: "expert-1", TargetPluginID: marketID,
+		Type: "expert_connector", Status: 1,
+	}}
+	store.relations["expert-1"] = append(store.relations["expert-1"], model.PluginRelation{
+		ID: "r-alice-cache-source", SourcePluginID: "expert-1", TargetPluginID: marketID,
+		Type: "expert_connector", Status: 1,
+	})
+	store.relations["team-1"] = append(store.relations["team-1"], model.PluginRelation{
+		ID: "r-team-bob-cache-source", SourcePluginID: "team-1", TargetPluginID: bob.ID,
+		TargetPluginType: model.PluginTypeExpert, Type: "expert_team_expert", Status: 1,
+		SortOrder: 1, Data: json.RawMessage(`{"role":"member"}`),
+	})
+
+	p := installationParams()
+	p.WorkspaceConnectors = true
+	_, err := svc.CreateInstallation(context.Background(), testCaller, "team-1", p)
+	if err == nil || installer.calls != 0 {
+		t.Fatalf("cached connector accepted a relation spoofed from another expert: err=%v calls=%d", err, installer.calls)
+	}
+	marketReads := 0
+	for _, id := range store.getIDs {
+		if id == marketID {
+			marketReads++
+		}
+	}
+	if marketReads != 1 {
+		t.Fatalf("cached connector source was resolved %d times, want one source snapshot", marketReads)
+	}
+}
+
 func TestWorkspaceConnectorModeRejectsAmbiguousMarketNamesBeforeFleet(t *testing.T) {
 	svc, store, installer := connectorRegressionFixture()
 	for _, id := range []string{"market-a", "market-b"} {
@@ -205,6 +267,72 @@ func TestWorkspaceConnectorModeRejectsHiddenMarketDependencyBeforeFleet(t *testi
 	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", p)
 	if !errors.Is(err, ErrDependencyHidden) || installer.calls != 0 {
 		t.Fatalf("hidden market dependency was not refused before Fleet: err=%v calls=%d", err, installer.calls)
+	}
+}
+
+func TestWorkspaceConnectorModeRejectsRelationTargetIDMismatchBeforeFleet(t *testing.T) {
+	svc, store, installer := connectorRegressionFixture()
+	const relationTargetID = "market-target-identity"
+	addConnectorRegressionPlugin(store, relationTargetID, "Mismatched Target Connector", `{"mcpServers":{"server":{"command":"run"}}}`, nil)
+	store.plugins[relationTargetID].ID = "market-different-plugin"
+	store.relations["expert-1"] = append(store.relations["expert-1"], model.PluginRelation{
+		ID: "r-target-id-mismatch", SourcePluginID: "expert-1", TargetPluginID: relationTargetID,
+		Type: "expert_connector", Status: 1,
+	})
+
+	p := installationParams()
+	p.WorkspaceConnectors = true
+	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", p)
+	if err == nil || installer.calls != 0 {
+		t.Fatalf("connector relation accepted a target whose actual ID did not match: err=%v calls=%d", err, installer.calls)
+	}
+}
+
+func TestWorkspaceConnectorModeChecksActualTargetTypeInsteadOfRelationHint(t *testing.T) {
+	svc, store, installer := connectorRegressionFixture()
+	target := *store.plugins["expert-1"]
+	target.ID, target.Name = "expert-not-a-connector", "Not a Connector"
+	target.Package = packageWith(rawAtt("AGENTS.md", "Expert instructions"))
+	store.plugins[target.ID] = &target
+	store.relations["expert-1"] = append(store.relations["expert-1"], model.PluginRelation{
+		ID: "r-wrong-target-type", SourcePluginID: "expert-1", TargetPluginID: target.ID,
+		TargetPluginType: model.PluginTypeConnector, Type: "expert_connector", Status: 1,
+	})
+
+	p := installationParams()
+	p.WorkspaceConnectors = true
+	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", p)
+	var invalid *InstallationValidationError
+	if !errors.As(err, &invalid) || invalid.Field != "definition.connectors" || invalid.Reason != "wrong_dependency_type" || installer.calls != 0 {
+		t.Fatalf("expert target was accepted from its connector type hint: err=%v calls=%d", err, installer.calls)
+	}
+}
+
+func TestWorkspaceConnectorModeRejectsPublicExpertPrivateConnectorBeforeFleet(t *testing.T) {
+	svc, store, installer := connectorRegressionFixture()
+	store.plugins["expert-1"].Visibility = model.PluginVisibilityPublic
+	const marketID = "market-private-owned"
+	addConnectorRegressionPlugin(store, marketID, "Owner's Private Connector", `{"mcpServers":{"server":[]}}`, nil)
+	store.plugins[marketID].Visibility = model.PluginVisibilityPrivate
+	store.relations["expert-1"] = append(store.relations["expert-1"], model.PluginRelation{
+		ID: "r-public-to-private", SourcePluginID: "expert-1", TargetPluginID: marketID,
+		TargetPluginType: model.PluginTypeConnector, Type: "expert_connector", Status: 1,
+	})
+
+	p := installationParams()
+	p.WorkspaceConnectors = true
+	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", p)
+	if !errors.Is(err, ErrDependencyHidden) || installer.calls != 0 {
+		t.Fatalf("public expert imported its owner's private connector: err=%v calls=%d", err, installer.calls)
+	}
+	marketReads := 0
+	for _, id := range store.getIDs {
+		if id == marketID {
+			marketReads++
+		}
+	}
+	if marketReads != 1 {
+		t.Fatalf("caller-owned private connector was resolved %d times, want one readable source", marketReads)
 	}
 }
 

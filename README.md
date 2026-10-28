@@ -177,6 +177,12 @@ and examples are documented in [`docs/api/mcp-v1.md`](docs/api/mcp-v1.md).
 Legacy singular Skill routes remain available during migration, but new clients
 should use the canonical plural routes above.
 
+`make openapi-check` includes executable installation consumer contracts in
+addition to generation, drift, coverage and lint checks. The contract gate
+validates public request/result schemas, conditional Runtime requirements,
+environment value types, Unicode name limits, nullable connector metadata and
+the legacy installation body.
+
 Expert recruitment through the Fleet capability-install endpoint forwards each
 Skill's source version as `definition.skills[].version` and its catalog ID as
 `market_skill_id`. Ordinary installations use the stored `current_version`;

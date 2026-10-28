@@ -223,6 +223,12 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	}
 	out := &fleet.CapabilityExpert{Name: name, Description: summary, Instructions: instructions}
 	if workspaceConnectors {
+		relations := relationsOfType(detail.Relations, "expert_connector")
+		for _, rel := range relations {
+			if rel.SourcePluginID != detail.Plugin.ID || rel.TargetPluginID == "" {
+				return nil, ErrDependencyHidden
+			}
+		}
 		config, present, err := b.connectorConfig(ctx, detail.Plugin)
 		if err != nil {
 			return nil, err
@@ -234,7 +240,7 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 			}
 			appendCapabilityConnectorName(out, connectorName)
 		}
-		for _, rel := range relationsOfType(detail.Relations, "expert_connector") {
+		for _, rel := range relations {
 			identity := "market:" + rel.TargetPluginID
 			if connector, exists := b.connectorsByID[identity]; exists {
 				target, known := b.connectorAudienceByID[identity]
@@ -247,6 +253,9 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 			connectorDetail, err := b.service.resolveInstallDetail(ctx, b.caller, rel.TargetPluginID)
 			if err != nil {
 				return nil, err
+			}
+			if connectorDetail.Plugin.ID != rel.TargetPluginID {
+				return nil, ErrDependencyHidden
 			}
 			targetAudience := capabilityConnectorAudienceFor(connectorDetail.Plugin)
 			if !targetAudience.permits(detail.Plugin) {

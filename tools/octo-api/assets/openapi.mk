@@ -3,10 +3,12 @@
 # Included by the project root Makefile via:
 #     include tools/octo-api/assets/openapi.mk
 #
-# All targets are self-contained — they reference scripts, configs, and
+# Toolchain targets are self-contained — they reference scripts, configs, and
 # fixtures in the skill package layout (tools/octo-api/{scripts,assets}).
-# To consume in a different repo, copy tools/octo-api/ as-is and add the
-# include line in the new repo's Makefile.
+# The root Makefile supplies the project-specific openapi-contract target,
+# which openapi-check aggregates with the toolchain gates.
+# To consume in a different repo, copy tools/octo-api/ as-is, add the include
+# line in the new repo's Makefile, and define its own openapi-contract target.
 #
 # Override-able variables:
 #   SWAG_VERSION       swag CLI version pin (default v2.0.0-rc5)
@@ -30,7 +32,8 @@ OPENAPI_SCAN_DIRS ?= modules
 # ----------------------------------------------------------------------
 openapi-help:
 	@echo "OpenAPI toolchain — available targets:"
-	@echo "  make openapi-check     一键 4 道闸（coverage → verify → lint）"
+	@echo "  make openapi-check     一键 5 道闸（coverage → gen → verify → lint → consumer contract）"
+	@echo "  make openapi-contract  运行安装接口 consumer JSON Schema 契约测试"
 	@echo "  make openapi-gen       重生 $(OPENAPI_OUT_DIR)/swagger.yaml（OPENAPI_OUT_TYPES 可加 json/go）"
 	@echo "  make openapi-lint      单独跑 spectral 校验"
 	@echo "  make openapi-verify    gen + drift 检测"
@@ -112,25 +115,26 @@ openapi-lint:
 	npx -y @stoplight/spectral-cli@latest lint $(OPENAPI_OUT_DIR)/swagger.yaml --ruleset $(OCTO_API_DIR)/assets/spectral.yaml --fail-severity error
 
 # ----------------------------------------------------------------------
-# Four-gate check (run before pushing).
+# Five-gate check (run before pushing).
 # Runs ALL gates and aggregates instead of using make prerequisites —
 # prerequisites stop at the first failure, which on staged-migration
 # repos (coverage red for months) would mask every verify/lint finding
 # behind it.
-# ----------------------------------------------------------------------
 openapi-check:
-	@C=PASS; V=PASS; L=PASS; FAILED=0; \
+	@C=PASS; V=PASS; L=PASS; S=PASS; FAILED=0; \
 	$(MAKE) --no-print-directory openapi-coverage || { C=FAIL; FAILED=1; }; \
 	$(MAKE) --no-print-directory openapi-verify   || { V=FAIL; FAILED=1; }; \
 	$(MAKE) --no-print-directory openapi-lint     || { L=FAIL; FAILED=1; }; \
+	$(MAKE) --no-print-directory openapi-contract || { S=FAIL; FAILED=1; }; \
 	echo ""; \
 	echo "═══ openapi-check gate summary ═══"; \
 	[ $$C = PASS ] && echo "  ✅ coverage" || echo "  ❌ coverage"; \
 	[ $$V = PASS ] && echo "  ✅ verify (gen + drift)" || echo "  ❌ verify (gen + drift)"; \
 	[ $$L = PASS ] && echo "  ✅ lint" || echo "  ❌ lint"; \
+	[ $$S = PASS ] && echo "  ✅ consumer contract" || echo "  ❌ consumer contract"; \
 	echo ""; \
 	if [ $$FAILED -eq 1 ]; then echo "❌ openapi-check failed — fix the ❌ gates above"; exit 1; fi; \
-	echo "✅ OpenAPI four-gate check passed (coverage → gen → verify → lint)"
+	echo "✅ OpenAPI five-gate check passed (coverage → gen → verify → lint → consumer contract)"
 
 # ----------------------------------------------------------------------
 # Install oasdiff CLI if missing (semantic OpenAPI diff, breaking detection)
