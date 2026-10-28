@@ -139,12 +139,13 @@ type reviewRequestResponse struct {
 // are intentionally omitted — shipping them would mislead by showing the live
 // value rather than the one under review.
 type reviewRelationResponse struct {
-	RelationID     string           `json:"relation_id"`
-	TargetPluginID string           `json:"target_plugin_id"`
-	TargetType     model.PluginType `json:"target_plugin_type,omitempty"`
-	RelationType   string           `json:"relation_type"`
-	SortOrder      int              `json:"sort_order"`
-	Data           json.RawMessage  `json:"data,omitempty" swaggertype:"object"`
+	RelationID      string           `json:"relation_id"`
+	TargetPluginID  string           `json:"target_plugin_id"`
+	TargetVersionID *string          `json:"target_version_id,omitempty"`
+	TargetType      model.PluginType `json:"target_plugin_type,omitempty"`
+	RelationType    string           `json:"relation_type"`
+	SortOrder       int              `json:"sort_order"`
+	Data            json.RawMessage  `json:"data,omitempty" swaggertype:"object"`
 }
 
 func decodeFrozenRelations(reviewID, pluginID string, raw json.RawMessage) []reviewRelationResponse {
@@ -178,12 +179,13 @@ func decodeFrozenRelations(reviewID, pluginID string, raw json.RawMessage) []rev
 			}
 		}
 		out = append(out, reviewRelationResponse{
-			RelationID:     e.ID,
-			TargetPluginID: e.TargetPluginID,
-			TargetType:     e.TargetPluginType,
-			RelationType:   e.Type,
-			SortOrder:      e.SortOrder,
-			Data:           data,
+			RelationID:      e.ID,
+			TargetPluginID:  e.TargetPluginID,
+			TargetVersionID: e.TargetVersionID,
+			TargetType:      e.TargetPluginType,
+			RelationType:    e.Type,
+			SortOrder:       e.SortOrder,
+			Data:            data,
 		})
 	}
 	// Always return a non-nil slice here: either the populated edges, or a 0-len
@@ -346,12 +348,13 @@ func (h *Handler) SubmitReview(c *gin.Context) {
 		rels := make([]pluginsvc.RelationRequest, 0, len(*body.Relations))
 		for _, r := range *body.Relations {
 			rels = append(rels, pluginsvc.RelationRequest{
-				ID:             r.RelationID,
-				SourcePluginID: r.SourcePluginID,
-				TargetPluginID: r.TargetPluginID,
-				Type:           r.RelationType,
-				SortOrder:      r.SortOrder,
-				Data:           r.Data,
+				ID:              r.RelationID,
+				SourcePluginID:  r.SourcePluginID,
+				TargetPluginID:  r.TargetPluginID,
+				TargetVersionID: r.TargetVersionID,
+				Type:            r.RelationType,
+				SortOrder:       r.SortOrder,
+				Data:            r.Data,
 			})
 		}
 		params.Relations = &rels

@@ -303,7 +303,7 @@ func TestSubmitReviewForwardsContentAndRelations(t *testing.T) {
 	body := `{"plugin_id":"plugin-1","version":"2.0.0","changelog":"notes",` +
 		`"manifest_json":{"plugin_name":"Demo"},` +
 		`"plugin_json":{"attachments":[]},` +
-		`"relations":[{"relation_id":"rel-1","target_plugin_id":"skill-1","relation_type":"expert_skill","sort_order":3,"data":{"k":"v"}}]}`
+		`"relations":[{"relation_id":"rel-1","target_plugin_id":"skill-1","target_version_id":"released-skill-v1","relation_type":"expert_skill","sort_order":3,"data":{"k":"v"}}]}`
 	rec := doReview(t, f, http.MethodPost, "/api/v1/plugins/review_requests", body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
@@ -324,6 +324,9 @@ func TestSubmitReviewForwardsContentAndRelations(t *testing.T) {
 	}
 	if rels[0].ID != "rel-1" || rels[0].TargetPluginID != "skill-1" || rels[0].Type != "expert_skill" || rels[0].SortOrder != 3 {
 		t.Fatalf("relation = %+v", rels[0])
+	}
+	if rels[0].TargetVersionID == nil || *rels[0].TargetVersionID != "released-skill-v1" {
+		t.Fatalf("released version pin was dropped: %+v", rels[0])
 	}
 	if string(rels[0].Data) != `{"k":"v"}` {
 		t.Errorf("relation data = %s", rels[0].Data)
@@ -456,7 +459,7 @@ func TestReviewDetailCarriesFrozenRelationsListOmitsThem(t *testing.T) {
 	// field names by default (no json tags on PluginRelation), so relation_id /
 	// target_plugin_id are uppercase keys in storage.
 	base.RelationsJSON = json.RawMessage(`[` +
-		`{"ID":"rel-1","SourcePluginID":"plugin-1","TargetPluginID":"skill-1","Type":"expert_skill","SortOrder":0,"Data":{"is_leader":false},"Status":1},` +
+		`{"ID":"rel-1","SourcePluginID":"plugin-1","TargetPluginID":"skill-1","TargetVersionID":"release-1","Type":"expert_skill","SortOrder":0,"Data":{"is_leader":false},"Status":1},` +
 		`{"ID":"rel-2","SourcePluginID":"plugin-1","TargetPluginID":"skill-2","Type":"expert_skill","SortOrder":1,"Data":null,"Status":1}` +
 		`]`)
 	f.review.request = base
@@ -469,11 +472,12 @@ func TestReviewDetailCarriesFrozenRelationsListOmitsThem(t *testing.T) {
 		var envelope struct {
 			Data struct {
 				Relations []struct {
-					RelationID     string          `json:"relation_id"`
-					TargetPluginID string          `json:"target_plugin_id"`
-					RelationType   string          `json:"relation_type"`
-					SortOrder      int             `json:"sort_order"`
-					Data           json.RawMessage `json:"data"`
+					RelationID      string          `json:"relation_id"`
+					TargetPluginID  string          `json:"target_plugin_id"`
+					TargetVersionID *string         `json:"target_version_id"`
+					RelationType    string          `json:"relation_type"`
+					SortOrder       int             `json:"sort_order"`
+					Data            json.RawMessage `json:"data"`
 				} `json:"frozen_relations"`
 			} `json:"data"`
 		}
@@ -486,6 +490,9 @@ func TestReviewDetailCarriesFrozenRelationsListOmitsThem(t *testing.T) {
 		first := envelope.Data.Relations[0]
 		if first.RelationID != "rel-1" || first.TargetPluginID != "skill-1" || first.RelationType != "expert_skill" || first.SortOrder != 0 {
 			t.Fatalf("first edge = %+v", first)
+		}
+		if first.TargetVersionID == nil || *first.TargetVersionID != "release-1" {
+			t.Fatalf("frozen pin omitted: %+v", first)
 		}
 		// data=null on the second edge must collapse to omitted, not the literal
 		// four bytes "null" (relation_json schema rejects the literal null).
