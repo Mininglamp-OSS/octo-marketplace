@@ -101,7 +101,7 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	var envelope struct {
 		Data *CapabilityInstallResult `json:"data"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil || !validCapabilityResult(in.Definition, *envelope.Data) {
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil || !validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire) {
 		return nil, errors.New("invalid capability installation result; retry with the same idempotency key")
 	}
 	out := envelope.Data
@@ -118,7 +118,7 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	return out, nil
 }
 
-func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult) bool {
+func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult, legacySkillWire bool) bool {
 	connectorIDs, ok := validCapabilityConnectorResults(def.Connectors, out.Connectors)
 	if !ok {
 		return false
@@ -153,17 +153,23 @@ func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult
 			return false
 		}
 	}
-	skills := make(map[string]string, len(out.Skills))
+	skills := make(map[string]*CapabilitySkillResult, len(out.Skills))
 	skillIDs := make(map[string]bool, len(out.Skills))
-	for _, skill := range out.Skills {
-		if skill.SkillID == "" || skills[skill.Name] != "" || skillIDs[skill.SkillID] {
+	for i := range out.Skills {
+		skill := &out.Skills[i]
+		if skill.SkillID == "" || skills[skill.Name] != nil || skillIDs[skill.SkillID] {
 			return false
 		}
-		skills[skill.Name] = skill.SkillID
+		skills[skill.Name] = skill
 		skillIDs[skill.SkillID] = true
 	}
 	for _, skill := range def.Skills {
-		if skills[skill.Name] == "" {
+		actual := skills[skill.Name]
+		if actual == nil {
+			return false
+		}
+		if !legacySkillWire && (!sameCapabilityNullableString(actual.Version, skill.Version) ||
+			actual.MarketSkillID != skill.MarketSkillID) {
 			return false
 		}
 	}
@@ -175,10 +181,10 @@ func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult
 		}
 		skillRefs := make(map[string]bool, len(expert.SkillNames))
 		for _, name := range expert.SkillNames {
-			if skills[name] == "" {
+			if skills[name] == nil {
 				return false
 			}
-			skillRefs[skills[name]] = true
+			skillRefs[skills[name].SkillID] = true
 		}
 		expectedSkills[expert.Name] = skillRefs
 

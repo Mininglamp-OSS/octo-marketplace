@@ -37,7 +37,7 @@ func TestCapabilityResultValidatesTeamAndSkillBindings(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&out)
 			}
-			if got := validCapabilityResult(in.Definition, out); got != tc.want {
+			if got := validCapabilityResult(in.Definition, out, false); got != tc.want {
 				t.Fatalf("valid=%v want=%v", got, tc.want)
 			}
 		})
@@ -50,6 +50,64 @@ func capabilityRequest() CapabilityInstallRequest {
 
 const expertResultJSON = `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[]}],"skills":[]}`
 const expertEnvelopeJSON = `{"data":` + expertResultJSON + `}`
+
+func TestCapabilityInstallValidatesSkillMetadata(t *testing.T) {
+	version := "1.2.3"
+	for _, tc := range []struct {
+		name          string
+		version       *string
+		marketSkillID string
+		metadata      string
+		legacy        bool
+		badBinding    bool
+		wantSuccess   bool
+	}{
+		{name: "matching_version_and_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review"`, wantSuccess: true},
+		{name: "different_version", version: &version, marketSkillID: "market-review", metadata: `"version":"2.0.0","market_skill_id":"market-review"`},
+		{name: "missing_version", version: &version, marketSkillID: "market-review", metadata: `"market_skill_id":"market-review"`},
+		{name: "null_version", marketSkillID: "market-review", metadata: `"version":null,"market_skill_id":"market-review"`, wantSuccess: true},
+		{name: "unexpected_version", marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review"`},
+		{name: "empty_is_not_null", metadata: `"version":"","created":true`},
+		{name: "different_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-other"`},
+		{name: "missing_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","created":true`},
+		{name: "unexpected_source", metadata: `"version":null,"market_skill_id":"market-other"`},
+		{name: "no_version_or_source", metadata: `"version":null,"created":true`, wantSuccess: true},
+		{name: "historical_wire_without_metadata", version: &version, marketSkillID: "market-review", metadata: `"created":false`, legacy: true, wantSuccess: true},
+		{name: "historical_wire_still_validates_bindings", version: &version, marketSkillID: "market-review", metadata: `"created":false`, legacy: true, badBinding: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := capabilityRequest()
+			request.Definition.Skills = []CapabilitySkill{{Name: "review", Version: tc.version, MarketSkillID: tc.marketSkillID}}
+			request.Definition.Experts[0].SkillNames = []string{"review"}
+			request.LegacySkillWire = tc.legacy
+			fixture := `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":["skill-1"]}],"skills":[{"skill_id":"skill-1","name":"review",` + tc.metadata + `}]}}`
+			if tc.badBinding {
+				fixture = strings.Replace(fixture, `"skill_ids":["skill-1"]`, `"skill_ids":["other"]`, 1)
+			}
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				io.WriteString(w, fixture)
+			}))
+			defer server.Close()
+
+			out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "skill-key", request)
+			if tc.wantSuccess {
+				if err != nil {
+					t.Fatalf("valid Skill installation rejected: %v", err)
+				}
+				if out.Skills[0].SkillID != "skill-1" || out.Experts[0].SkillIDs[0] != "skill-1" {
+					t.Fatalf("unexpected installed Skill binding: %#v", out)
+				}
+			} else if err == nil || out != nil {
+				t.Fatal("invalid Skill metadata or binding was accepted")
+			}
+			if calls != 1 {
+				t.Fatalf("Fleet mutations=%d, want exactly one", calls)
+			}
+		})
+	}
+}
 
 func capabilityConnectorFixture(name, marketMCPID string, version *string) CapabilityConnector {
 	lowerName := strings.ToLower(name)

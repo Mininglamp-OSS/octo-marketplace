@@ -231,10 +231,15 @@ Legacy mode omits `connectors`, even if Fleet returns connector metadata.
 Fleet test currently returns no `Idempotency-Replayed` header. Marketplace only
 forwards `true` when Fleet explicitly supplies it; its absence is not proof of a
 new installation. Fleet response names/IDs, resource type, leader, Skill
-references, connector metadata, and each expert's connector bindings are checked
-before success. Missing, duplicate, unknown, or mismatched connector results
-leave the Fleet outcome uncertain; retry only with the same key and input. Errors
-use the standard `{ "error": { "code", "message", "details", "hint" } }`
+references, nullable Skill versions and Marketplace source IDs, connector
+metadata, and each expert's connector bindings are checked before success.
+Skill versions and `market_skill_id` must exactly match the requested definition;
+`null` is distinct from any string value. Historical
+pinned receipts replayed with the original Skill wire format omit those metadata
+fields, so only their Skill metadata comparison is skipped; identity and binding
+checks still apply. Missing, duplicate, unknown, or mismatched Skill or connector
+results leave the Fleet outcome uncertain; retry only with the same key and
+input. Errors use the standard `{ "error": { "code", "message", "details", "hint" } }`
 envelope. By explicit product requirement, Marketplace-generated `message` and
 `hint` are Chinese and may be displayed directly by the client; machine codes
 and `details` keys remain stable. This is a route-specific exception to the
