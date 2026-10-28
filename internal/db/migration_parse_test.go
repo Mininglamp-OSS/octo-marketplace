@@ -114,3 +114,25 @@ func TestMigrationOrderAndCount(t *testing.T) {
 		}
 	}
 }
+
+// PREPARE and user variables require one connection, not a multi-statement packet.
+func TestCardTerminalReceiptMigrationUsesSeparateStatements(t *testing.T) {
+	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}
+	all, err := source.FindMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range all {
+		if m.Id != "20261027-01-card-terminal-receipts.sql" {
+			continue
+		}
+		if m.DisableTransactionUp {
+			t.Fatal("session variables require the migration transaction connection")
+		}
+		if len(m.Up) != 4 {
+			t.Fatalf("got %d execution units, want four separate SQL statements", len(m.Up))
+		}
+		return
+	}
+	t.Fatal("terminal receipt migration missing")
+}

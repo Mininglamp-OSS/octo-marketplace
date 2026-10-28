@@ -14,6 +14,8 @@ var ErrImmutableObject = errors.New("immutable artifact cannot be modified")
 // immutableSpaceSegment mirrors service/plugin.safeObjectSegment. Keeping the
 // shape check here as well makes this storage primitive safe on its own: every
 // caller, including future ones, gets the same canonical namespace definition.
+var immutablePlatformDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
 var immutableSpaceSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // IsImmutableArtifactKey identifies the host-reserved version namespace:
@@ -26,6 +28,14 @@ var immutableSpaceSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127
 // reserved namespace; only the canonical prefix is.
 func IsImmutableArtifactKey(key string) bool {
 	key = strings.TrimLeft(path.Clean(key), "/")
+	if rest, ok := strings.CutPrefix(key, "platform/plugins/"); ok {
+		resource, tail, ok := strings.Cut(rest, "/")
+		if !ok || !immutableSpaceSegment.MatchString(resource) {
+			return false
+		}
+		digest, ok := strings.CutPrefix(tail, "attachments/versions/")
+		return ok && immutablePlatformDigest.MatchString(digest)
+	}
 	rest, ok := strings.CutPrefix(key, "plugins/")
 	if !ok {
 		return false

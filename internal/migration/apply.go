@@ -1,0 +1,504 @@
+package migration
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+)
+
+// ApplyReport describes database conversion only; it never certifies installation.
+type ApplyReport struct {
+	RunID                 string `json:"run_id"`
+	Complete              bool   `json:"complete"`
+	Applied, Verified     int
+	Issues                []Issue  `json:"issues,omitempty"`
+	InstallVerified       bool     `json:"install_verified"`
+	HistoricalIdentityIDs []string `json:"historical_identity_ids,omitempty"`
+}
+
+var errApply = errors.New("migration persistence verification failed")
+
+type applyQuery interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func guardApply(ctx context.Context, db *sql.DB) error {
+	var name string
+	if db == nil {
+		return errApply
+	}
+	if e := db.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&name); e != nil {
+		return errApply
+	}
+	if !strings.HasPrefix(name, "octo_marketplace_rehearsal_") || len(name) == len("octo_marketplace_rehearsal_") || strings.Contains(strings.ToLower(name), "prod") {
+		return errors.New("migration target is not an isolated rehearsal database")
+	}
+	return nil
+}
+func applyIdentity(p Plan) string {
+	b, _ := json.Marshal(struct {
+		Plan  Plan
+		Nodes []any
+	}{p, func() []any {
+		a := []any{}
+		for _, n := range p.Nodes {
+			a = append(a, []any{n.Source, n.Plugin, n.Relations, n.Artifacts, n.Files})
+		}
+		return a
+	}()})
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+func setupApply(ctx context.Context, db *sql.DB, p Plan) error {
+	for _, q := range []string{`CREATE TABLE IF NOT EXISTS marketplace_conversion_run (slot TINYINT PRIMARY KEY,run_id VARCHAR(64) NOT NULL,identity_hash CHAR(64) NOT NULL,schema_hash CHAR(64) NOT NULL) ENGINE=InnoDB`, `CREATE TABLE IF NOT EXISTS marketplace_conversion_receipt (run_id VARCHAR(64) NOT NULL,target_id VARCHAR(64) NOT NULL,node_hash CHAR(64) NOT NULL,state_hash CHAR(64) NOT NULL,PRIMARY KEY(run_id,target_id)) ENGINE=InnoDB`, `CREATE TABLE IF NOT EXISTS marketplace_conversion_mapping (run_id VARCHAR(64) NOT NULL,source_id VARCHAR(64) NOT NULL,target_id VARCHAR(64) NOT NULL,version_id VARCHAR(64) NOT NULL,disposition VARCHAR(64) NOT NULL,PRIMARY KEY(run_id,source_id,target_id)) ENGINE=InnoDB`} {
+		if _, e := db.ExecContext(ctx, q); e != nil {
+			return errApply
+		}
+	}
+	schema, e := applySchemaHash(ctx, db)
+	if e != nil {
+		return errApply
+	}
+	if _, e := db.ExecContext(ctx, `INSERT IGNORE INTO marketplace_conversion_run VALUES (1,?,?,?)`, p.ID, applyIdentity(p), schema); e != nil {
+		return errApply
+	}
+	if e := checkRun(ctx, db, p); e != nil {
+		return e
+	}
+	for _, m := range p.Mappings {
+		if m.TargetID != "" {
+			continue
+		}
+		if _, e := db.ExecContext(ctx, `INSERT IGNORE INTO marketplace_conversion_mapping VALUES (?,?,?,?,?)`, p.ID, m.SourceID, m.TargetID, m.VersionID, m.Disposition); e != nil {
+			return errApply
+		}
+	}
+	return nil
+}
+func checkRun(ctx context.Context, q applyQuery, p Plan) error {
+	var id, h, schema string
+	actual, e := applySchemaHash(ctx, q)
+	if e != nil {
+		return errApply
+	}
+	if e := q.QueryRowContext(ctx, `SELECT run_id,identity_hash,schema_hash FROM marketplace_conversion_run WHERE slot=1`).Scan(&id, &h, &schema); e != nil || id != p.ID || h != applyIdentity(p) || schema != actual {
+		return errors.New("migration run identity conflict")
+	}
+	return nil
+}
+func Apply(ctx context.Context, db *sql.DB, p Plan) (ApplyReport, error) {
+	p.Issues = append(p.Issues, validateMigrationReleases(p)...)
+	r := ApplyReport{RunID: p.ID, Issues: p.Issues}
+	if len(p.Issues) > 0 {
+		return r, ErrIssues
+	}
+	if p.ID == "" || p.SnapshotID == "" {
+		return r, errApply
+	}
+	if e := guardApply(ctx, db); e != nil {
+		return r, e
+	}
+	if e := setupApply(ctx, db, p); e != nil {
+		return r, e
+	}
+	for _, n := range p.Nodes {
+		if e := applyNode(ctx, db, p, n); e != nil {
+			r.Issues = append(r.Issues, Issue{ResourceID: n.Plugin.ID, Code: "persistence_conflict"})
+			return r, errApply
+		}
+		r.Applied++
+	}
+	verified, err := Verify(ctx, db, p)
+	verified.Applied = r.Applied
+	return verified, err
+}
+func Verify(ctx context.Context, db *sql.DB, p Plan) (ApplyReport, error) {
+	p.Issues = append(p.Issues, validateMigrationReleases(p)...)
+	r := ApplyReport{RunID: p.ID, Issues: p.Issues}
+	if len(p.Issues) > 0 {
+		return r, ErrIssues
+	}
+	if e := guardApply(ctx, db); e != nil {
+		return r, e
+	}
+	if e := checkRun(ctx, db, p); e != nil {
+		return r, e
+	}
+	for _, n := range p.Nodes {
+		if e := verifyMigrationRelease(ctx, db, n); e != nil {
+			r.Issues = append(r.Issues, Issue{ResourceID: n.Plugin.ID, Code: "release_contract_mismatch"})
+			return r, errApply
+		}
+		if e := verifyReceipt(ctx, db, p, n); e != nil {
+			r.Issues = append(r.Issues, Issue{ResourceID: n.Plugin.ID, Code: "persisted_state_changed"})
+			return r, errApply
+		}
+		r.Verified++
+	}
+
+	rows, e := db.QueryContext(ctx, `SELECT source_id,target_id,version_id,disposition FROM marketplace_conversion_mapping WHERE run_id=? ORDER BY source_id,target_id`, p.ID)
+	if e != nil {
+		return r, errApply
+	}
+	actual := []Mapping{}
+	for rows.Next() {
+		var m Mapping
+		if e = rows.Scan(&m.SourceID, &m.TargetID, &m.VersionID, &m.Disposition); e != nil {
+			rows.Close()
+			return r, errApply
+		}
+		actual = append(actual, m)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return r, errApply
+	}
+	expected := append([]Mapping{}, p.Mappings...)
+	less := func(a, b Mapping) bool {
+		if a.SourceID != b.SourceID {
+			return a.SourceID < b.SourceID
+		}
+		return a.TargetID < b.TargetID
+	}
+	sort.Slice(actual, func(i, j int) bool { return less(actual[i], actual[j]) })
+	sort.Slice(expected, func(i, j int) bool { return less(expected[i], expected[j]) })
+	aa, _ := json.Marshal(actual)
+	bb, _ := json.Marshal(expected)
+	if string(aa) != string(bb) {
+		return r, errApply
+	}
+	for _, m := range p.Mappings {
+		if m.TargetID != "" && m.SourceID != m.TargetID && !plannedTarget(p, m.SourceID) {
+			r.HistoricalIdentityIDs = append(r.HistoricalIdentityIDs, m.SourceID)
+		}
+	}
+	sort.Strings(r.HistoricalIdentityIDs)
+	r.Complete = true
+	return r, nil
+}
+func nodeHash(n Node) string {
+	b, _ := json.Marshal([]any{n.SourceID, n.Source, n.Plugin, n.Relations, n.VersionID, n.VersionLabel, n.Artifacts, n.Release, n.Clone, n.Files})
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+func verifyReceipt(ctx context.Context, q applyQuery, p Plan, n Node) error {
+	var nh, sh string
+	if e := q.QueryRowContext(ctx, `SELECT node_hash,state_hash FROM marketplace_conversion_receipt WHERE run_id=? AND target_id=?`, p.ID, n.Plugin.ID).Scan(&nh, &sh); e != nil {
+		return errApply
+	}
+	if nh != nodeHash(n) {
+		return errApply
+	}
+	actual, e := stateHash(ctx, q, p, n)
+	if e != nil || nh != nodeHash(n) || sh != actual {
+		return errApply
+	}
+	return nil
+}
+
+// Hash every column of owned rows, including immutable history, metadata, live
+// edges and provenance. This catches edits that retain a stale plugin_hash.
+func stateHash(ctx context.Context, q applyQuery, p Plan, n Node) (string, error) {
+	h := sha256.New()
+	queries := []struct {
+		q string
+		a []any
+	}{
+		{`SELECT * FROM plugins WHERE plugin_id=? ORDER BY plugin_id`, []any{n.Plugin.ID}},
+		{`SELECT * FROM plugin_relations WHERE source_plugin_id=? ORDER BY relation_id`, []any{n.Plugin.ID}},
+		{`SELECT * FROM plugin_versions WHERE plugin_id=? ORDER BY version_id`, []any{n.Plugin.ID}},
+		{`SELECT * FROM plugin_version_releases WHERE plugin_id=? ORDER BY version_id`, []any{n.Plugin.ID}},
+		{`SELECT * FROM plugin_version_relation_refs WHERE source_plugin_id=? ORDER BY source_version_id,relation_id`, []any{n.Plugin.ID}},
+		{`SELECT * FROM plugin_version_reference_index_state WHERE source_plugin_id=? ORDER BY source_version_id`, []any{n.Plugin.ID}},
+		{`SELECT * FROM plugin_audit_logs WHERE plugin_id=? ORDER BY audit_log_id`, []any{n.Plugin.ID}},
+		{`SELECT * FROM plugin_placements WHERE plugin_id=? ORDER BY placement_id`, []any{n.Plugin.ID}},
+		{`SELECT c.* FROM plugin_category_placements c WHERE c.plugin_type=? AND EXISTS (SELECT 1 FROM plugin_placements p WHERE p.plugin_id=? AND p.placement_code=c.placement_code AND p.category_id=c.category_id) ORDER BY c.placement_id`, []any{n.Plugin.Type, n.Plugin.ID}},
+		{`SELECT * FROM marketplace_conversion_mapping WHERE run_id=? AND target_id=? ORDER BY source_id,target_id`, []any{p.ID, n.Plugin.ID}},
+	}
+	for _, m := range p.Mappings {
+		if m.TargetID == n.Plugin.ID && m.SourceID != m.TargetID && !plannedTarget(p, m.SourceID) {
+			queries = append(queries, struct {
+				q string
+				a []any
+			}{`SELECT * FROM plugins WHERE plugin_id=? ORDER BY plugin_id`, []any{m.SourceID}}, struct {
+				q string
+				a []any
+			}{`SELECT * FROM plugin_placements WHERE plugin_id=? ORDER BY placement_id`, []any{m.SourceID}})
+		}
+	}
+	for _, x := range queries {
+		rows, e := q.QueryContext(ctx, x.q, x.a...)
+		if e != nil {
+			return "", e
+		}
+		cols, e := rows.Columns()
+		if e != nil {
+			rows.Close()
+			return "", e
+		}
+		fmt.Fprintf(h, "%s", x.q)
+		for rows.Next() {
+			v := make([]sql.RawBytes, len(cols))
+			a := make([]any, len(cols))
+			for i := range v {
+				a[i] = &v[i]
+			}
+			if e = rows.Scan(a...); e != nil {
+				rows.Close()
+				return "", e
+			}
+			for i, b := range v {
+				fmt.Fprintf(h, "%s:%t:%d:", cols[i], b == nil, len(b))
+				h.Write(b)
+			}
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return "", e
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+func jvalue(b json.RawMessage) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return string(b)
+}
+func applyNode(ctx context.Context, db *sql.DB, p Plan, n Node) (err error) {
+	tx, e := db.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	// Lock dependencies in a stable order; FK checks alone cannot freeze edits.
+	deps := []string{}
+	for _, edge := range n.Relations {
+		deps = append(deps, edge.TargetPluginID)
+	}
+	sort.Strings(deps)
+	for _, id := range deps {
+		var locked string
+		if e = tx.QueryRowContext(ctx, `SELECT plugin_id FROM plugins WHERE plugin_id=? FOR UPDATE`, id).Scan(&locked); e != nil {
+			return e
+		}
+	}
+	var saved string
+	e = tx.QueryRowContext(ctx, `SELECT node_hash FROM marketplace_conversion_receipt WHERE run_id=? AND target_id=? FOR UPDATE`, p.ID, n.Plugin.ID).Scan(&saved)
+	if e == nil {
+		if e = verifyReceipt(ctx, tx, p, n); e != nil {
+			return e
+		}
+		return tx.Commit()
+	}
+	if e != sql.ErrNoRows {
+		return e
+	}
+	// The source row is locked before comparison and remains frozen until commit.
+	var mh, ph, owner, vis, listing string
+	var status int
+	var space sql.NullString
+	var deleted sql.NullTime
+	e = tx.QueryRowContext(ctx, `SELECT manifest_hash,plugin_hash,owner_uid,space_id,visibility,listing_state,status,deleted_at FROM plugins WHERE plugin_id=? FOR UPDATE`, n.SourceID).Scan(&mh, &ph, &owner, &space, &vis, &listing, &status, &deleted)
+	s := n.Source
+	if e != nil || mh != s.ManifestHash || ph != s.PluginHash || owner != s.OwnerUID || vis != string(s.Visibility) || listing != string(s.ListingState) || status != s.Status || deleted.Valid != (s.DeletedAt != nil) || space.Valid != (s.SpaceID != nil) || (space.Valid && space.String != *s.SpaceID) {
+		return errApply
+	}
+
+	var rawManifest, rawPackage []byte
+	var sourceName string
+	var embedded bool
+	var current sql.NullString
+	var updated time.Time
+	if e = tx.QueryRowContext(ctx, `SELECT manifest_json,plugin_json,plugin_name,is_embedded,current_version_id,updated_at FROM plugins WHERE plugin_id=?`, n.SourceID).Scan(&rawManifest, &rawPackage, &sourceName, &embedded, &current, &updated); e != nil {
+		return e
+	}
+	if !applyJSONEqual(rawManifest, s.Manifest) || !applyJSONEqual(rawPackage, s.Package) || sourceName != s.Name || embedded != s.IsEmbedded || current.Valid != (s.CurrentVersionID != nil) || (current.Valid && current.String != *s.CurrentVersionID) || !updated.Equal(s.UpdatedAt) {
+		return errApply
+	}
+	if n.Plugin.ID != n.SourceID {
+		if e = cloneRow(ctx, tx, n); e != nil {
+			return e
+		}
+	}
+	a := n.Plugin
+	_, e = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,owner_uid=?,space_id=?,visibility=?,listing_state=?,status=?,is_embedded=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,updated_at=? WHERE plugin_id=?`, a.Name, a.Type, a.OwnerUID, a.SpaceID, a.Visibility, a.ListingState, a.Status, a.IsEmbedded, string(a.Manifest), string(a.Package), jvalue(a.AttachmentKeys), a.ManifestHash, a.PluginHash, a.UpdatedAt, a.ID)
+	if e != nil {
+		return e
+	}
+	// Old live relations become historical rows; immutable snapshots are untouched.
+	if _, e = tx.ExecContext(ctx, `UPDATE plugin_relations SET status=0,deleted_at=UTC_TIMESTAMP(3) WHERE source_plugin_id=? AND deleted_at IS NULL`, a.ID); e != nil {
+		return e
+	}
+	for _, r := range n.Relations {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_relations (relation_id,source_plugin_id,target_plugin_id,target_version_id,relation_type,sort_order,relation_json,status,created_by,created_at,updated_at,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, a.ID, r.TargetPluginID, r.TargetVersionID, r.Type, r.SortOrder, jvalue(r.Data), r.Status, r.CreatedBy, r.CreatedAt, r.UpdatedAt, r.DeletedAt); e != nil {
+			return e
+		}
+	}
+	if a.Type != model.PluginTypeConnector {
+		if e = writeMigrationVersion(ctx, tx, n); e != nil {
+			return e
+		}
+	}
+	audit := applyStableID(p.ID + ":audit:" + a.ID)
+	if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_audit_logs (audit_log_id,plugin_id,action,operator_id,operator_name,request_id,before_hash,after_hash,manifest_snapshot_json,plugin_snapshot_json,remark,created_at) VALUES (?,?,'migration','migration','migration',?,?,?,?,?,'snapshot conversion',UTC_TIMESTAMP(3))`, audit, a.ID, p.ID, s.PluginHash, a.PluginHash, string(a.Manifest), string(a.Package)); e != nil {
+		return e
+	}
+	if e = transferMigrationPlacements(ctx, tx, p, n); e != nil {
+		return e
+	}
+	for _, m := range p.Mappings {
+		if m.TargetID != a.ID {
+			continue
+		}
+		if _, e = tx.ExecContext(ctx, `INSERT INTO marketplace_conversion_mapping VALUES (?,?,?,?,?)`, p.ID, m.SourceID, m.TargetID, m.VersionID, m.Disposition); e != nil {
+			return e
+		}
+		if m.SourceID != m.TargetID && !plannedTarget(p, m.SourceID) { // retire only explicitly mapped noncanonical catalog rows
+			if e = retireMigrationCatalog(ctx, tx, m.SourceID); e != nil {
+				return e
+			}
+		}
+	}
+	sh, e := stateHash(ctx, tx, p, n)
+	if e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO marketplace_conversion_receipt VALUES (?,?,?,?)`, p.ID, a.ID, nodeHash(n), sh); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+func applyStableID(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%x-%x-%x-%x-%x", h[:4], h[4:6], h[6:8], h[8:10], h[10:16])
+}
+func cloneRow(ctx context.Context, tx *sql.Tx, n Node) error {
+	rows, e := tx.QueryContext(ctx, `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='plugins' AND EXTRA NOT LIKE '%GENERATED%' ORDER BY ORDINAL_POSITION`)
+	if e != nil {
+		return e
+	}
+	cols := []string{}
+	for rows.Next() {
+		var c string
+		if e = rows.Scan(&c); e != nil {
+			rows.Close()
+			return e
+		}
+		cols = append(cols, c)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	selects := make([]string, len(cols))
+	for i, c := range cols {
+		cols[i] = "`" + c + "`"
+		selects[i] = cols[i]
+		if c == "plugin_id" {
+			selects[i] = "?"
+		}
+		if c == "current_version_id" || c == "published_version_id" {
+			selects[i] = "NULL"
+		}
+	}
+	r, e := tx.ExecContext(ctx, `INSERT INTO plugins (`+strings.Join(cols, ",")+`) SELECT `+strings.Join(selects, ",")+` FROM plugins WHERE plugin_id=?`, n.Plugin.ID, n.SourceID)
+	if e != nil {
+		return e
+	}
+	count, e := r.RowsAffected()
+	if count != 1 {
+		return errApply
+	}
+	return e
+}
+func writeMigrationVersion(ctx context.Context, tx *sql.Tx, n Node) error {
+	a := n.Plugin
+	// version is the internal save sequence; declared_version and the formal
+	// release below carry the x.y.z business label, just like repository writes.
+	var seq int
+	if e := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(CAST(version AS UNSIGNED)),0)+1 FROM plugin_versions WHERE plugin_id=?`, a.ID).Scan(&seq); e != nil {
+		return e
+	}
+	rels, e := model.EncodeSnapshotRelations(n.Relations)
+	if e != nil {
+		return e
+	}
+	art := n.Artifacts
+	if len(art) == 0 {
+		art = json.RawMessage("[]")
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_versions (version_id,plugin_id,version,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,relations_json,created_by,created_at,declared_version,snapshot_schema_version,artifacts_json) VALUES (?,?,?,?,?,?,?,?,?,'migration',?,?,?,?)`, n.VersionID, a.ID, fmt.Sprint(seq), string(a.Manifest), string(a.Package), jvalue(a.AttachmentKeys), a.ManifestHash, a.PluginHash, string(rels), a.UpdatedAt, n.VersionLabel, model.PluginSnapshotSchemaVersion, string(art)); e != nil {
+		return e
+	}
+	if n.Release {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_version_releases VALUES (?,?,?,'migration',?)`, a.ID, n.VersionID, n.VersionLabel, a.UpdatedAt); e != nil {
+			return e
+		}
+	}
+	for _, r := range n.Relations {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_version_relation_refs VALUES (?,?,?,?,?,?)`, a.ID, n.VersionID, r.ID, r.Type, r.TargetPluginID, r.TargetVersionID); e != nil {
+			return e
+		}
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_version_reference_index_state SELECT plugin_id,version_id,?,SHA2(CAST(relations_json AS CHAR CHARACTER SET utf8mb4),256),UTC_TIMESTAMP(3) FROM plugin_versions WHERE version_id=?`, len(n.Relations), n.VersionID); e != nil {
+		return e
+	}
+	var pub any
+	if n.Release {
+		pub = n.VersionID
+	}
+	_, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=? WHERE plugin_id=?`, n.VersionID, n.VersionLabel, pub, a.ID)
+	return e
+}
+
+func plannedTarget(p Plan, id string) bool {
+	for _, n := range p.Nodes {
+		if n.Plugin.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func applyJSONEqual(a, b []byte) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	aa, _ := json.Marshal(x)
+	bb, _ := json.Marshal(y)
+	return string(aa) == string(bb)
+}
+
+// Schema shape joins immutable plan content in the resume identity.
+func applySchemaHash(ctx context.Context, q applyQuery) (string, error) {
+	rows, e := q.QueryContext(ctx, `SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COALESCE(COLUMN_DEFAULT,''),EXTRA,COALESCE(GENERATION_EXPRESSION,'') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION`)
+	if e != nil {
+		return "", e
+	}
+	defer rows.Close()
+	h := sha256.New()
+	for rows.Next() {
+		v := make([]string, 7)
+		if e = rows.Scan(&v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]); e != nil {
+			return "", e
+		}
+		b, _ := json.Marshal(v)
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil)), rows.Err()
+}

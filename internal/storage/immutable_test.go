@@ -229,3 +229,17 @@ func TestLocalImmutableStagesOutsideVersionNamespace(t *testing.T) {
 		})
 	}
 }
+
+func TestPlatformImmutableArtifactKeyStrictNamespace(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, key := range []string{"platform/plugins/skill-id/attachments/versions/" + digest, "/platform/plugins/skill-id/attachments/versions/" + digest} {
+		if !IsImmutableArtifactKey(key) {
+			t.Fatalf("platform version unprotected: %s", key)
+		}
+	}
+	for _, key := range []string{"platform/plugins/skill-id/attachments/versions/hash", "platform/plugins/skill-id/attachments/versions/" + digest + "/child", "platform/plugins//attachments/versions/" + digest, "platform/plugins/skill-id/attachments/migration/" + digest} {
+		if IsImmutableArtifactKey(key) {
+			t.Fatalf("invalid platform namespace: %s", key)
+		}
+	}
+}
