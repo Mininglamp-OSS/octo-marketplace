@@ -1,7 +1,7 @@
 # Marketplace lifecycle and installation compatibility
 
 ## Goal
-Implement the three confirmed requirements: delete previously published
+Narrow PR #142 to the user's three requirements: delete previously published
 Skills/Experts only when unreferenced, preserve private reference isolation, and
 keep both installation URLs usable with equivalent content for existing clients.
 Delisted legacy data remains historical until a specific republish/install need.
@@ -10,19 +10,10 @@ Delisted legacy data remains historical until a specific republish/install need.
 - Deletion checks live incoming relations, current published references and Team
   member-version indirect references under the existing mutation transaction.
   With the independent-reference flag off, read immutable release snapshots.
-  Published legacy Expert/Team current-only snapshots also protect references;
-  do not turn drafts or delisted current-only history into permanent locks.
 - All independent targets, including Space resources, obey source-audience checks
   in legacy/Admin writes and publication. Embedded intra-graph wiring retains its
   existing bounded exception. Frozen-plan recovery rejects malformed definitions
   before binding/dispatch without mutating the durable attempt.
-- Frozen-plan schema migration adds only missing columns/constraint on replay,
-  including DDL-success/receipt-missing recovery; attempt evidence is never reset.
-- Complete Connector MCP configurations are removed from the plaintext frozen
-  definition and protected with AES-GCM using a domain-separated key derived
-  from the deployment key ring. Restore only after current governance checks;
-  bind to original operation/request through authenticated eligibility metadata.
-  No latest-config substitution, plaintext fallback or signing/encryption-on-read.
 - Eligibility metadata (nodes, edges, root version) is authenticated in a separate
   HMAC domain bound to caller/Space/workspace/key/adapter/intent/key ID and the
   original input/request fingerprints. Verify before using metadata for reads;
@@ -35,16 +26,12 @@ Delisted legacy data remains historical until a specific republish/install need.
   aliases/unavailable selections remain bounded separately by the 2000-edge
   traversal budget. Preserve authorization, diagnostics and traversal bounds.
 - The existing owner/Space/audience rule applies to both reference types,
-  including legacy writes/publication and installation expansion before cache reuse,
-  for every independent target including Space targets.
+  including legacy writes/publication and installation expansion before cache reuse.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.
   A32 keeps its required headers and runtime UUID validation.
 - Both adapters use the same capability executor. Existing feature flags select
   a common legacy-content builder or released-pin builder, never a URL-specific
   executor. No fallback to create/bind/compensate provisioning exists.
-- Frozen edges are release content, not mutable live relation authorization.
-  Draft/live relation removal or disable and normal new publication do not
-  revoke the old plan; node eligibility and each frozen edge's audience are current.
 - The versioned installation path freezes the first plan and protects same-key
   retry, current authorization, immutable bytes and secret-free persistence.
   Both content modes classify timeout/5xx/empty outcomes as unknown; keyless old
@@ -69,3 +56,17 @@ Connector effective-revision storage; automatic conversion or re-listing.
    adapters; no-key uncertain calls instruct users to inspect the workspace.
 5. Local Go/MySQL/race/build/vet/OpenAPI checks pass before one remote update;
    an operator runbook explains deferred conversion and incident recovery.
+
+## Frozen MCP retry protection
+
+The frozen definition must not retain plaintext Connector credentials. Protect
+complete MCP configurations with AES-256-GCM using a domain-separated key derived
+from the deployment key ring; authenticate the original operation/request as AAD.
+Restore only after current governance checks and before exact request-HMAC
+verification. Connector edits and key rotation must not replace original bytes.
+Missing/tampered/legacy-unprotected payloads fail closed without resetting UNKNOWN,
+plan, key or deadline. Cover both HTTP adapters, real MySQL storage, retry/replay,
+key rotation, tampering and cross-operation ciphertext transplantation.
+
+The lifecycle, audience and replay-safe migration changes already on main remain
+authoritative; this follow-up adds only MCP protection and related regressions/docs.

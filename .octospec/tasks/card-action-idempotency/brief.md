@@ -1,7 +1,7 @@
 # Card terminal receipts and safe installation messages
 
 ## Goal
-Persist terminal card outcomes for safe replay and prevent arbitrary Fleet error text exposure.
+Resolve PR142's P1 terminal-card replay and P2 arbitrary Fleet conflict text.
 
 ## Load-bearing behavior
 - Every accepted handled callback persists one immutable event outcome before 200.

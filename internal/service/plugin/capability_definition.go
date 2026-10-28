@@ -206,9 +206,9 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.
 		return "", err
 	}
 	p := detail.Plugin
-	// Embedded legacy copies belong to their container. Every independent
-	// dependency must satisfy source audience, including Space targets. Check
-	// before materialization or reuse of the per-request cache.
+	// Embedded legacy copies belong to their container. Every independent asset
+	// must permit the source audience, even when the caller can read both.
+	// Check before reusing the per-request cache.
 	if !p.IsEmbedded && !installAudience(source, p) {
 		return "", ErrDependencyHidden
 	}

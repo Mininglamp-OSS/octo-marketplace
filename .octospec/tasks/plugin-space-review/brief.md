@@ -254,7 +254,7 @@ tenant `Authenticator`):
   in `space_id` via the resolver (cached by `auth.CachedResolver`),
   otherwise return `{"disposition":"forbidden","state":"pending"}`
   (HTTP 200, per protocol).
-- Current idempotency ordering (see
+- Current idempotency ordering (PR142 review hardening; see
   `docs/api/card-review-callback.md`):
   1. Verify the signed request and validate required fields and approve/deny.
      Malformed signed input is HTTP 400, not an acknowledged refusal.

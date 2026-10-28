@@ -553,7 +553,7 @@ func TestDeleteRejectsLiveIncomingRelationWithoutMutatingGraph(t *testing.T) {
 	mock.ExpectQuery(`SELECT .* FROM plugins p WHERE p.plugin_id=\? AND p.owner_uid=\? AND p.space_id=\?.*FOR UPDATE`).
 		WithArgs("target", scope.CallerUID, scope.SpaceID).
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("target", "Plugin", model.PluginTypeSkill, 0, nil, []byte(`[]`), "pub", scope.CallerUID, scope.SpaceID, model.PluginVisibilitySpace, model.PluginListingStatePublished, "Creator", "human", nil, nil, "", 0, nil, []byte(`{"manifest":true}`), []byte(`{"package":true}`), nil, "sha256:m", "sha256:p", nil, nil, 1, now, now, nil))
-	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
+	mock.ExpectQuery(`SELECT p.plugin_id,p.plugin_type,p.status,p.deleted_at,`).WithArgs("target").WillReturnRows(sqlmock.NewRows([]string{"plugin_id", "plugin_type", "status", "deleted_at", "published_version_id", "current_version_id", "current_snapshot", "certain", "selected_version", "relations_json", "approval_proven", "approval_relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*JOIN plugins source ON source.plugin_id=r.source_plugin_id.*r.target_plugin_id=\?.*r.deleted_at IS NULL.*source.deleted_at IS NULL AND source.status=1.*FOR UPDATE`).
 		WithArgs("target").
 		WillReturnRows(sqlmock.NewRows([]string{"relation_id"}).AddRow("incoming"))
@@ -581,7 +581,7 @@ func TestDeleteInvalidatesOnlyOutgoingRelationsAfterReferenceCheck(t *testing.T)
 	mock.ExpectQuery(`SELECT .* FROM plugins p WHERE p.plugin_id=\? AND p.owner_uid=\? AND p.space_id=\?.*FOR UPDATE`).
 		WithArgs("plugin-id", scope.CallerUID, scope.SpaceID).
 		WillReturnRows(ownedPluginRow("plugin-id", scope, now))
-	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
+	mock.ExpectQuery(`SELECT p.plugin_id,p.plugin_type,p.status,p.deleted_at,`).WithArgs("plugin-id").WillReturnRows(sqlmock.NewRows([]string{"plugin_id", "plugin_type", "status", "deleted_at", "published_version_id", "current_version_id", "current_snapshot", "certain", "selected_version", "relations_json", "approval_proven", "approval_relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("plugin-id").
 		WillReturnRows(sqlmock.NewRows([]string{"relation_id"}))
@@ -1208,7 +1208,7 @@ func TestDeleteGraphSoftDeletesTopAndEmbeddedChildren(t *testing.T) {
 		WithArgs("expert-9").
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("expert-9", "E", model.PluginTypeExpert, 0, nil, []byte(`[]`), "", "owner-1", "", model.PluginVisibilityPublic, model.PluginListingStatePublished, "Orig", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:ptop", nil, nil, 1, now, now, nil))
 	// No live incoming relation to the top.
-	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
+	mock.ExpectQuery(`SELECT p.plugin_id,p.plugin_type,p.status,p.deleted_at,`).WithArgs("expert-9").WillReturnRows(sqlmock.NewRows([]string{"plugin_id", "plugin_type", "status", "deleted_at", "published_version_id", "current_version_id", "current_snapshot", "certain", "selected_version", "relations_json", "approval_proven", "approval_relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("expert-9").WillReturnRows(sqlmock.NewRows([]string{"relation_id"}))
 	// In-tx child derivation: AFTER the top lock + incoming-relation guard, the
@@ -1256,7 +1256,7 @@ func TestDeleteGraphRejectsLiveIncomingRelationToTop(t *testing.T) {
 	mock.ExpectQuery(`SELECT .* FROM plugins p WHERE p.plugin_id=\? AND p.status=1 AND p.deleted_at IS NULL FOR UPDATE`).
 		WithArgs("expert-9").
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("expert-9", "E", model.PluginTypeExpert, 0, nil, []byte(`[]`), "", "owner-1", "", model.PluginVisibilityPublic, model.PluginListingStatePublished, "Orig", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:ptop", nil, nil, 1, now, now, nil))
-	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
+	mock.ExpectQuery(`SELECT p.plugin_id,p.plugin_type,p.status,p.deleted_at,`).WithArgs("expert-9").WillReturnRows(sqlmock.NewRows([]string{"plugin_id", "plugin_type", "status", "deleted_at", "published_version_id", "current_version_id", "current_snapshot", "certain", "selected_version", "relations_json", "approval_proven", "approval_relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("expert-9").WillReturnRows(sqlmock.NewRows([]string{"relation_id"}).AddRow("incoming"))
 	mock.ExpectRollback()
@@ -1356,7 +1356,7 @@ func TestDeleteGraphDerivesEmbeddedSquadChildrenUnderLock(t *testing.T) {
 		WithArgs("team-1").
 		WillReturnRows(sqlmock.NewRows(pluginTestColumns()).AddRow("team-1", "T", model.PluginTypeExpertTeam, 0, nil, []byte(`[]`), "", "owner-1", "", model.PluginVisibilityPublic, model.PluginListingStatePublished, "Orig", "human", nil, nil, "", 0, nil, []byte(`{}`), []byte(`{}`), nil, "sha256:m", "sha256:ptop", nil, nil, 1, now, now, nil))
 	// No live incoming relation to the top.
-	mock.ExpectQuery(`SELECT p.plugin_type,v.relations_json FROM plugins p`).WillReturnRows(sqlmock.NewRows([]string{"plugin_type", "relations_json"}))
+	mock.ExpectQuery(`SELECT p.plugin_id,p.plugin_type,p.status,p.deleted_at,`).WithArgs("team-1").WillReturnRows(sqlmock.NewRows([]string{"plugin_id", "plugin_type", "status", "deleted_at", "published_version_id", "current_version_id", "current_snapshot", "certain", "selected_version", "relations_json", "approval_proven", "approval_relations_json"}))
 	mock.ExpectQuery(`SELECT r.relation_id FROM plugin_relations r.*r.target_plugin_id=\?.*FOR UPDATE`).
 		WithArgs("team-1").WillReturnRows(sqlmock.NewRows([]string{"relation_id"}))
 	// In-tx derivation, level 1: the team's embedded member experts.

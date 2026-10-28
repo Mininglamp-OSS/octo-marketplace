@@ -21,6 +21,10 @@ eligibility fails; rejection is not proof that an earlier call did not commit.
 Private reads require owner and Space even when the caller is an administrator.
 A private target also requires a private source with the same owner and Space;
 source audiences are rechecked through each member's frozen references.
+Preserved legacy `public` rows are normalized to `system` for both sides of the
+audience predicate, including the root in a frozen plan's node list. First
+dispatch and same-key replay use the same root/node checks; public visibility
+does not exempt a delisted root or an ineligible dependency.
 Independent-reference writes and publication enforce the source audience for
 Space targets too, including Admin and legacy `public` sources: a system/public
 source cannot reference a Space target, and Space targets require the same Space.
@@ -130,16 +134,28 @@ runtime environment values are not persisted; retries supply the same input.
 Normal root/dependency publications and Connector edits do not rebuild an
 existing plan; changed explicit input conflicts. Before every resend, current
 caller, graph (including listing state) and Fleet workspace permissions remain
-mandatory. Here graph eligibility means current resource eligibility and current
-source/target audience for each authenticated frozen edge; it does not mean
-matching the mutable `plugin_relations` table or the latest published graph.
-Removing a draft relation, disabling a live relation row, or publishing a new
-source version with different relations/pins does not revoke an existing
-installation plan. Live relation status is not a historical-install revocation
-API. After the old operation is reconciled, a new key selects the current source
-release; an unpublished draft edit never replaces that release.
-A delisted/deleted/inaccessible node blocks dispatch without deleting
+mandatory. A delisted/deleted/inaccessible node blocks dispatch without deleting
 the original plan, extending its deadline or clearing earlier uncertainty.
+
+Here, current graph authorization means current resource eligibility and the
+source/root audience of the authenticated frozen edges. It does not mean that
+those edges must still appear in editable `plugin_relations` or the latest
+release. Removing a draft relation, publishing a different graph or selecting
+a different pin for a new release does not replace the first plan. This matches
+the immutable released-reference contract. A legal private chain must meet the
+same-owner/same-Space rule at every edge; a broader source cannot hide a private
+dependency behind a member Expert.
+
+Disabling new independent-reference writes does not relax publication checks for
+a draft that already contains released pins. Publishing that draft still checks
+and locks its exact released dependency tree; a historical member cannot bring
+back a deleted or otherwise ineligible Skill. Legacy edits can preserve existing
+live pins while adding unpinned edges; Space publication freezes that mixed graph.
+The complete root keeps legacy target validation, and only its pinned branches
+enter exact released-tree validation. Unpinned targets keep their existing
+listing/embedded behavior, including when the Team leader is an unpinned member;
+they are not automatically pinned or published. This publication compatibility
+does not relax the pinned installer's current dependency eligibility checks.
 
 Identical eligible retries still reach Fleet, including completed attempts, so
 current workspace authorization and the remote receipt remain authoritative.

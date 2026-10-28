@@ -39,9 +39,9 @@ capability executor; there is no legacy create/bind/compensation executor.
 ## Historical verification (2026-10-24; not the current contract)
 
 This dated record describes the earlier implementation. Its delisted-pin
-acceptance is excluded by the current release runbook;
-it must not be used to restore an installation exemption. See the committed
-regression tests and current pull request validation results.
+acceptance was superseded by PR142's scope and the current release runbook;
+it must not be used to restore an installation exemption. Current verification
+is recorded in the PR142 description.
 - Focused plugin/expert/repository/config/handler package tests passed.
 - `TEST_MYSQL_DSN=<isolated synthetic MySQL> go test ./...` passed, including
   real SQL batch access, released delisted pins, concurrent scoped attempt

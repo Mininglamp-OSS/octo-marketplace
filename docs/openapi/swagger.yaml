@@ -6946,7 +6946,7 @@ paths:
         in Fleet; retry uncertain outcomes with the same Idempotency-Key and input
         within Fleet's 24-hour retention window. Uses the configured Fleet service;
         the legacy /plugins/install remains available. Generated error text is Chinese;
-        409 preserves Fleet's conflict message.
+        recognized 409 conflicts use fixed safe messages.
       operationId: plugin.installation.create
       parameters:
       - description: Marketplace plugin ID
