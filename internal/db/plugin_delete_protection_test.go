@@ -189,3 +189,42 @@ func TestDeleteDoesNotRequireConvertingUnrelatedDelistedUnpinnedHistory(t *testi
 		t.Fatal("historical snapshot was converted", err)
 	}
 }
+
+func TestDeleteWithLegacyUnpinnedTeamMember(t *testing.T) {
+	for _, mode := range []string{"current_release_reference", "current_release_removed_reference", "legacy_live_reference"} {
+		t.Run(mode, func(t *testing.T) {
+			database := reviewDB(t)
+			for _, p := range []seedPlugin{{id: "skill", typ: "skill", visibility: "private", listingState: "published"}, {id: "expert", typ: "expert", visibility: "private", listingState: "published"}, {id: "team", typ: "expert_team", visibility: "private", listingState: "published"}} {
+				seed(t, database, p)
+			}
+			releasePinnedVersion(t, database, "skill", "s1", "1.0.0", nil)
+			releasePinnedVersion(t, database, "expert", "e1", "1.0.0", []model.PluginRelation{pinnedTestEdge("expert", "skill", "expert_skill", "s1")})
+			releasePinnedVersion(t, database, "team", "t1", "1.0.0", []model.PluginRelation{pinnedTestEdge("team", "expert", "expert_team_expert", "")})
+			if mode == "current_release_removed_reference" {
+				releasePinnedVersion(t, database, "expert", "e2", "2.0.0", nil)
+			}
+			if mode == "legacy_live_reference" {
+				if _, err := database.Exec(`UPDATE plugins SET published_version_id=NULL WHERE plugin_id='expert'`); err != nil {
+					t.Fatal(err)
+				}
+				seedRelation(t, database, "legacy-es", "expert", "skill", "expert_skill")
+			}
+			var before, after string
+			if err := database.QueryRow(`SELECT relations_json FROM plugin_versions WHERE version_id='t1'`).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			err := pluginrepo.New(database).WithReferences(false).Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil)
+			if mode == "current_release_removed_reference" {
+				// An unpinned member selects the current release, not unused old history.
+				if err != nil {
+					t.Fatalf("unused member history permanently blocked deletion: %v", err)
+				}
+			} else if !errors.Is(err, pluginrepo.ErrRelationInUse) {
+				t.Fatalf("current dependency bypassed delete protection: %v", err)
+			}
+			if err := database.QueryRow(`SELECT relations_json FROM plugin_versions WHERE version_id='t1'`).Scan(&after); err != nil || before != after {
+				t.Fatal("legacy snapshot rewritten", err)
+			}
+		})
+	}
+}

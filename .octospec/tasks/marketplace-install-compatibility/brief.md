@@ -14,6 +14,8 @@ Delisted legacy data remains historical until a specific republish/install need.
   in legacy/Admin writes and publication. Embedded intra-graph wiring retains its
   existing bounded exception. Frozen-plan recovery rejects malformed definitions
   before binding/dispatch without mutating the durable attempt.
+- Frozen-plan schema migration adds only missing columns/constraint on replay,
+  including DDL-success/receipt-missing recovery; attempt evidence is never reset.
 - Eligibility metadata (nodes, edges, root version) is authenticated in a separate
   HMAC domain bound to caller/Space/workspace/key/adapter/intent/key ID and the
   original input/request fingerprints. Verify before using metadata for reads;
