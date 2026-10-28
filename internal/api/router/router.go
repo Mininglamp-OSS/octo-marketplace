@@ -45,6 +45,8 @@ type Pinger interface {
 type StorageConfig struct {
 	PluginVersionManagementEnabled  bool
 	PluginPinnedInstallationEnabled bool
+	InstallationHMACKeyID           string
+	InstallationHMACKeys            map[string]string
 	Driver                          string // "local" or "oss"
 	LocalDir                        string
 	BaseURL                         string
@@ -177,7 +179,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 			panic("unsupported STORAGE_DRIVER: " + storageCfg.Driver)
 		}
 
-		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled).WithReferences(storageCfg.PluginReferencesEnabled).WithPinnedInstallation(storageCfg.PluginPinnedInstallationEnabled)
+		pluginSvc := pluginsvc.New(pluginRepo, store).WithVersionManagement(storageCfg.PluginVersionManagementEnabled).WithReferences(storageCfg.PluginReferencesEnabled).WithPinnedInstallation(storageCfg.PluginPinnedInstallationEnabled).WithInstallationHMACKeys(storageCfg.InstallationHMACKeyID, storageCfg.InstallationHMACKeys)
 		pluginSvc.SetArtifactLimits(int64(storageCfg.MaxMB) << 20)
 		// Space review IM integration. A disabled notifier keeps the review
 		// endpoints fully functional and simply sends no approval card. Partial
@@ -232,10 +234,10 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		if fleetClient != nil {
 			expertSvc = expertSvc.WithFleet(fleetClient)
 		}
-		// The unified plugin install reuses the expert provisioning flow, accrues
+		// Both plugin install URLs share Fleet capability installation, accrue
 		// counters under resource_type "plugin", and imports Skill uploads
 		// through the shared parse pipeline.
-		pluginSvc.WithProvisioner(expertSvc).WithMetrics(mSvc).WithParseTasks(skRepo)
+		pluginSvc.WithMetrics(mSvc).WithParseTasks(skRepo)
 		if installer, ok := fleetClient.(pluginsvc.CapabilityInstaller); ok {
 			pluginSvc.WithCapabilityInstaller(installer)
 		}

@@ -59,7 +59,7 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 	}
 	checkGate(true)
 	remote := &migratedGraphInstaller{}
-	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(true).WithPinnedInstallation(true).WithCapabilityInstaller(remote)
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(remote)
 	out, err := svc.CreateInstallation(ctx, managedOwner(), "migration-install", pluginsvc.InstallationParams{WorkspaceID: "fixture-workspace", RuntimeID: "7f63db70-6b66-4c2d-a52f-fb6de1d78ad9", IdempotencyKey: "migration-install-attempt", Token: "fixture-token"})
 	if err != nil || out.SquadID != "fixture-fleet-team" || remote.calls != 1 {
 		t.Fatalf("migrated installation: %+v %v calls=%d", out, err, remote.calls)
@@ -72,7 +72,7 @@ func TestMigratedGraphFeedsPinnedInstallationMySQL(t *testing.T) {
 		t.Fatal("migrated instruction bytes changed")
 	}
 	name := d.Skills[0].Name
-	if !strings.Contains(name, "-mk1-") || !strings.Contains(d.Skills[0].Content, "name: "+name) || len(d.Experts[0].SkillNames) != 1 || d.Experts[0].SkillNames[0] != name {
+	if name != "migration-install-skill" || !strings.Contains(d.Skills[0].Content, "name: skill") || len(d.Experts[0].SkillNames) != 1 || d.Experts[0].SkillNames[0] != name {
 		t.Fatal("migrated skill alias/content/binding mismatch")
 	}
 	if !strings.Contains(string(d.Experts[0].MCPConfig), `"search"`) {

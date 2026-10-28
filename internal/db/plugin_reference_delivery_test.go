@@ -45,8 +45,8 @@ func TestReferenceDeliveryOwnerPrivateSnapshotAndLifecycle(t *testing.T) {
 	if !errors.Is(err, pluginrepo.ErrInvalidRelation) {
 		t.Fatalf("publish stale dependency=%v", err)
 	}
-	if err = repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrConflict) {
-		t.Fatalf("delete everreleased=%v", err)
+	if err = repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrRelationInUse) {
+		t.Fatalf("delete referenced release=%v", err)
 	}
 }
 func TestReferenceDeliveryRejectsUnauthorizedAndWrongRelease(t *testing.T) {

@@ -185,21 +185,17 @@ func TestCapabilityInstallRejectsBadRepliesWithoutRetry(t *testing.T) {
 	}
 }
 
-func TestCapabilityInstallRetainsOnlyConflictMessage(t *testing.T) {
-	const conflictMessage = "  同名技能的内容不同，请确认后重试。\n"
+func TestCapabilityInstallDiscardsUpstreamDisplayText(t *testing.T) {
 	for _, tc := range []struct {
-		name, body, wantMessage string
-		status                  int
+		name, body string
+		status     int
 	}{
-		{"conflict_original", `{"error":{"code":"CONFLICT","message":"  同名技能的内容不同，请确认后重试。\n"}}`, conflictMessage, 409},
-		{"conflict_long", `{"error":{"code":"CONFLICT","message":"` + strings.Repeat("冲突", 300) + `"}}`, strings.Repeat("冲突", 300), 409},
-		{"conflict_missing", `{"error":{"code":"CONFLICT"}}`, "", 409},
-		{"conflict_blank", `{"error":{"code":"CONFLICT","message":" \t\n"}}`, "", 409},
-		{"conflict_null", `{"error":{"code":"CONFLICT","message":null}}`, "", 409},
-		{"conflict_wrong_type", `{"error":{"code":"CONFLICT","message":{"reason":"secret-value"}}}`, "", 409},
-		{"bad_request", `{"error":{"code":"VALIDATION_ERROR","message":"secret-value"}}`, "", 400},
-		{"rate_limited", `{"error":{"code":"RATE_LIMITED","message":"secret-value"}}`, "", 429},
-		{"upstream_failure", `{"error":{"code":"INTERNAL_ERROR","message":"secret-value"}}`, "", 500},
+		{"conflict-string", `{"error":{"code":"DUPLICATE","message":"private-display-secret","details":{"resource":"idempotency_key","name":"private-detail-secret"}}}`, 409},
+		{"conflict-object", `{"error":{"code":"DUPLICATE","message":{"diagnostic":"private-display-secret"},"details":{"resource":"skill"}}}`, 409},
+		{"conflict-missing", `{"error":{"code":"CONFLICT"}}`, 409},
+		{"bad-request", `{"error":{"code":"VALIDATION_ERROR","message":"private-display-secret"}}`, 400},
+		{"rate-limit", `{"error":{"code":"RATE_LIMITED","message":"private-display-secret"}}`, 429},
+		{"server-error", `{"error":{"code":"INTERNAL_ERROR","message":"private-display-secret"}}`, 500},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,14 +206,18 @@ func TestCapabilityInstallRetainsOnlyConflictMessage(t *testing.T) {
 			defer server.Close()
 			_, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
 			var apiErr *CapabilityAPIError
-			if !errors.As(err, &apiErr) {
-				t.Fatalf("expected CapabilityAPIError, got %v", err)
+			if !errors.As(err, &apiErr) || apiErr.Status != tc.status || apiErr.RetryAfter != "3" {
+				t.Fatalf("wrong safe metadata: %v", err)
 			}
-			if apiErr.Status != tc.status || apiErr.Code == "" || apiErr.RetryAfter != "3" || apiErr.Message != tc.wantMessage {
-				t.Fatal("upstream error fields were not preserved as expected")
+			raw, _ := json.Marshal(apiErr)
+			if strings.Contains(string(raw), "private-") || apiErr.Error() != "Fleet capability installation failed" {
+				t.Fatal("upstream text retained")
 			}
-			if apiErr.Error() != "Fleet capability installation failed" {
-				t.Fatal("error text must not include upstream message")
+			if tc.name == "conflict-string" && !apiErr.IdempotencyKeyReused {
+				t.Fatal("safe key conflict lost")
+			}
+			if tc.name == "conflict-object" && apiErr.ConflictResource != "skill" {
+				t.Fatal("display text type affected safe metadata")
 			}
 		})
 	}
@@ -249,9 +249,6 @@ func TestCapabilityInstallRecognizesIdempotencyConflictDetails(t *testing.T) {
 			var apiErr *CapabilityAPIError
 			if !errors.As(err, &apiErr) || apiErr.IdempotencyKeyReused != tc.want {
 				t.Fatalf("idempotency conflict classification mismatch: %v", err)
-			}
-			if tc.status == 409 && apiErr.Message != "Fleet conflict message" {
-				t.Fatal("conflict details must not affect the original display message")
 			}
 			if apiErr.Error() != "Fleet capability installation failed" {
 				t.Fatal("upstream details must not enter the error text")

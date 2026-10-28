@@ -24,6 +24,8 @@ type ReviewListFilter struct {
 
 // ApproveReviewParams carries reviewer metadata into the approve transaction.
 type ApproveReviewParams struct {
+	// CardReceipt is committed atomically with a successful IM decision.
+	CardReceipt    *model.CardActionReceipt
 	ReviewID       string
 	ReviewerUID    string
 	ReviewerName   string
@@ -34,6 +36,8 @@ type ApproveReviewParams struct {
 
 // RejectReviewParams carries reviewer metadata into the reject transaction.
 type RejectReviewParams struct {
+	// CardReceipt is committed atomically with a successful IM decision.
+	CardReceipt    *model.CardActionReceipt
 	ReviewID       string
 	ReviewerUID    string
 	ReviewerName   string
@@ -518,6 +522,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := claimCardActionReceipt(ctx, tx, p.CardReceipt, p.ReviewID, "approve", p.DecisionSource, r.now()); err != nil {
+		return nil, err
+	}
 
 	var (
 		pluginID, version, kind               string
@@ -644,7 +651,9 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 	// get here; `live` exempts targets this source already owns from the
 	// embedded-adoption guard, exactly as Update does.
 	ownerScope := Scope{CallerUID: current.OwnerUID, SpaceID: scope.SpaceID}
-	if err := lockRelationTargets(ctx, tx, ownerScope, current.Type, frozen, live); err != nil {
+	exposed := *current
+	exposed.Visibility = model.PluginVisibilitySpace
+	if err := lockRelationTargets(ctx, tx, ownerScope, exposed, frozen, live); err != nil {
 		return nil, err
 	}
 
@@ -1029,6 +1038,9 @@ func (r *Repo) RejectReview(ctx context.Context, scope Scope, p RejectReviewPara
 		return nil, nil, err
 	}
 	defer tx.Rollback()
+	if err := claimCardActionReceipt(ctx, tx, p.CardReceipt, p.ReviewID, "deny", p.DecisionSource, r.now()); err != nil {
+		return nil, nil, err
+	}
 	var pluginID string
 	var frozenKeys []byte
 	err = tx.QueryRowContext(ctx,
@@ -1242,22 +1254,46 @@ func (r *Repo) GetCardActionReceipt(ctx context.Context, eventID string) (*model
 	return &out, nil
 }
 
+// ErrCardActionReplayed means the event already has a committed winner; no
+// review mutation was attempted by this transaction.
+var ErrCardActionReplayed = errors.New("card action already has a receipt")
+
 func (r *Repo) InsertCardActionReceipt(ctx context.Context, rec *model.CardActionReceipt) error {
-	now := rec.CreatedAt
-	if now.IsZero() {
-		now = r.now()
+	return insertCardActionReceipt(ctx, r.db, rec, r.now())
+}
+
+type cardReceiptExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func claimCardActionReceipt(ctx context.Context, tx *sql.Tx, rec *model.CardActionReceipt, reviewID, decision string, source model.ReviewDecisionSource, now time.Time) error {
+	if rec == nil {
+		return nil
 	}
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO plugin_card_action_receipts (event_id,review_id,decision,stored_response,created_at) VALUES (?,?,?,?,?)`,
-		rec.EventID, rec.ReviewID, rec.Decision, rec.StoredResponse, now)
+	if source != model.ReviewDecisionSourceIM || rec.EventID == "" || rec.ReviewID != reviewID || rec.Decision != decision || !json.Valid([]byte(rec.StoredResponse)) {
+		return errors.New("invalid card action receipt binding")
+	}
+	// Insert before locking/mutating the request. Concurrent terminal refusals
+	// use the same unique key, so a losing decision cannot apply after a refusal.
+	err := insertCardActionReceipt(ctx, tx, rec, now)
+	if errors.Is(err, ErrConflict) {
+		return ErrCardActionReplayed
+	}
+	return err
+}
+
+func insertCardActionReceipt(ctx context.Context, db cardReceiptExecer, rec *model.CardActionReceipt, now time.Time) error {
+	if !rec.CreatedAt.IsZero() {
+		now = rec.CreatedAt
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO plugin_card_action_receipts (event_id,review_id,decision,stored_response,created_at) VALUES (?,?,?,?,?)`, rec.EventID, rec.ReviewID, rec.Decision, rec.StoredResponse, now)
 	if err != nil {
 		var me *mysql.MySQLError
 		if errors.As(err, &me) && me.Number == 1062 {
 			return ErrConflict
 		}
-		return err
 	}
-	return nil
+	return err
 }
 
 // --- scanning --------------------------------------------------------------

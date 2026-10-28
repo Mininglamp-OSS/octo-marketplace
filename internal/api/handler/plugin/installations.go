@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/api/errcode"
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
@@ -74,7 +75,15 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	}
 	// This route uses only the explicit Workspace ID. Reject the legacy slug
 	// selector rather than silently ignoring a conflicting second target.
-	if c.GetHeader("X-Workspace-Slug") != "" || len(c.Request.Header.Values("X-Workspace-ID")) != 1 || len(c.Request.Header.Values("Idempotency-Key")) != 1 {
+	// HTTP header names are case-insensitive. Count every occurrence, including
+	// unusual casing in an intermediary or a manually constructed request.
+	var workspaceHeaders []string
+	for key, values := range c.Request.Header {
+		if strings.EqualFold(key, "X-Workspace-ID") {
+			workspaceHeaders = append(workspaceHeaders, values...)
+		}
+	}
+	if c.GetHeader("X-Workspace-Slug") != "" || len(workspaceHeaders) != 1 || len(c.Request.Header.Values("Idempotency-Key")) != 1 {
 		installationValidation(c, "headers")
 		return
 	}
@@ -82,6 +91,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	if !decodeInstallation(c, &req) {
 		return
 	}
+	workspaceID := workspaceHeaders[0]
 	var customEnv map[string]string
 	if req.CustomEnv != nil {
 		customEnv = make(map[string]string, len(req.CustomEnv))
@@ -89,7 +99,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 			customEnv[key] = string(value)
 		}
 	}
-	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{WorkspaceID: c.GetHeader("X-Workspace-ID"), RuntimeID: req.RuntimeID, ResourceName: req.ResourceName, CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c)})
+	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{WorkspaceID: workspaceID, RuntimeID: req.RuntimeID, ResourceName: req.ResourceName, CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c)})
 	if err != nil {
 		writeInstallationError(c, err)
 		return
@@ -146,10 +156,28 @@ func writeInstallationError(c *gin.Context, err error) {
 	var upstream *fleet.CapabilityAPIError
 	var attempt *pluginsvc.InstallationAttemptError
 	switch {
+	case errors.As(err, &attempt) && attempt.Unknown:
+		// Legacy-content attempts rely on Fleet receipts and have no local deadline.
+		// The keyless adapter overrides this advice because its key was never returned.
+		details := map[string]any{"reason": "installation_result_unknown", "attempt_id": attempt.AttemptID, "can_retry_same_key": attempt.RetryUntil == nil || time.Now().Before(*attempt.RetryUntil)}
+		if attempt != nil && attempt.RetryUntil != nil {
+			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
+		}
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装结果未知，请使用原幂等键和原参数核对或重试。", details, installationRetryHint)
+	case errors.As(err, &field) && field.Reason == "same_install_identity_different_content":
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装名称或目标已存在但内容不同，不能覆盖。", map[string]any{"field": field.Field, "reason": field.Reason}, "请修改市场内容或使用不同的资源名称后重试。")
 	case errors.As(err, &field):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "安装参数不正确。", map[string]any{"field": field.Field, "reason": field.Reason}, "请检查工作区、运行环境、名称和环境变量后重试。")
 	case errors.Is(err, expertsvc.ErrFleetNotConfigured):
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装服务尚未配置，请联系管理员。", map[string]any{"upstream": "fleet", "reason": "not_configured"}, installationRetryHint)
+	case errors.Is(err, pluginsvc.ErrAttemptExpired):
+		details := map[string]any{"reason": "installation_attempt_expired", "can_retry_same_key": false}
+		if attempt != nil && attempt.RetryUntil != nil {
+			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)
+		}
+		// A completed receipt may still exist. Expiry must not encourage a new
+		// operation or expose stored IDs without current workspace verification.
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "原安装重试窗口已结束，请先在工作区核对原安装记录。", details, "如已完成，请使用已有资源；结果不明时停止重试并联系管理员核对。不要自动更换幂等键或重复安装。")
 	case errors.Is(err, pluginsvc.ErrConflict):
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装请求与首次提交的参数或依赖状态不一致，或原安装凭证已过期。", nil, "请先核对工作区已有资源和依赖状态，不要直接更换幂等键重复安装。")
 	case errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable):
@@ -188,6 +216,7 @@ func logInstallationFailure(c *gin.Context, phase, reason string, upstreamStatus
 
 func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError) {
 	status, code, message := err.Status, errcode.UpstreamUnavailable, "暂时无法确认安装结果。"
+	hint := installationRetryHint
 	details := map[string]any{"upstream": "fleet", "phase": "fleet"}
 	switch status {
 	case 400:
@@ -199,21 +228,30 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 	case 404:
 		code, message = errcode.NotFound, "所选工作区或运行环境不存在或不可访问。"
 	case 409:
+		hint = "请核对工作区已有资源和冲突原因；相同参数重试无法解决内容冲突，请勿直接更换幂等键重复安装。"
 		code, message = errcode.Conflict, "安装发生冲突，请检查已有资源或安装参数。"
-		if strings.TrimSpace(err.Message) != "" {
-			message = err.Message
-		}
 		if err.Code == "DUPLICATE" {
 			code = errcode.Duplicate
 		}
 		if err.IdempotencyKeyReused || err.Code == "IDEMPOTENCY_KEY_REUSED" {
 			details["conflict_reason"] = "idempotency_key_reused"
+			message = "幂等键已用于其他安装参数，请核对原安装记录。"
+		} else {
+			switch err.ConflictResource {
+			case "skill":
+				message = "安装发生技能资源冲突，请核对工作区已有资源。"
+			case "expert":
+				message = "安装发生专家资源冲突，请核对工作区已有资源。"
+			case "expert_team":
+				message = "安装发生专家团资源冲突，请核对工作区已有资源。"
+			}
 		}
 	case 413:
 		code, message = errcode.FileTooLarge, "安装内容超出服务允许的大小或数量限制。"
 	case 415:
 		code, message = "UNSUPPORTED_MEDIA_TYPE", "安装服务不支持当前请求格式。"
 	case 429:
+		hint = "请等待限流解除后，使用原幂等键和原参数重试；无幂等键的旧客户端请先核对工作区已有资源。"
 		code, message = errcode.RateLimited, "安装请求过于频繁，请稍后重试。"
 		if seconds, parseErr := strconv.Atoi(strings.TrimSpace(err.RetryAfter)); parseErr == nil && seconds >= 0 {
 			c.Header("Retry-After", strconv.Itoa(seconds))
@@ -222,5 +260,5 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 		status = http.StatusServiceUnavailable
 		logInstallationFailure(c, "fleet", "upstream_error", err.Status)
 	}
-	apiresponse.Fail(c, status, code, message, details, installationRetryHint)
+	apiresponse.Fail(c, status, code, message, details, hint)
 }

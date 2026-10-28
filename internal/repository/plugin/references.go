@@ -121,7 +121,7 @@ func ValidateReferenceMetadata(source model.PluginType, rels []model.PluginRelat
 
 func (r *Repo) lockReferences(ctx context.Context, tx *sql.Tx, scope Scope, source model.Plugin, rels []model.PluginRelation, inGraph map[string]struct{}) error {
 	if !r.references {
-		return lockRelationTargets(ctx, tx, scope, source.Type, rels, inGraph)
+		return lockRelationTargets(ctx, tx, scope, source, rels, inGraph)
 	}
 	if source.IsEmbedded {
 		return ErrInvalidRelation
@@ -237,9 +237,6 @@ func writeReferenceIndex(ctx context.Context, tx *sql.Tx, source, version string
 }
 
 func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p model.Plugin, versionID string) error {
-	if !r.references {
-		return nil
-	}
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, versionID).Scan(&raw); err != nil {
 		return err
@@ -247,6 +244,20 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 	rels, err := model.DecodeSnapshotRelations(raw)
 	if err != nil {
 		return ErrInvalidRelation
+	}
+	if !r.references {
+		if len(rels) == 0 {
+			return nil
+		}
+		owned, err := liveRelationTargetSet(ctx, tx, p.ID)
+		if err != nil {
+			return err
+		}
+		sc := Scope{CallerUID: p.OwnerUID, Admin: p.SpaceID == nil}
+		if p.SpaceID != nil {
+			sc.SpaceID = *p.SpaceID
+		}
+		return lockRelationTargets(ctx, tx, sc, p, rels, owned)
 	}
 	return validateReferenceTree(ctx, tx, p, p, rels, true, map[string]bool{}, 0)
 }
@@ -290,4 +301,53 @@ func (r *Repo) ensureReferenceIndexComplete(ctx context.Context, scope Scope) er
 		return ErrReferenceIndexIncomplete
 	}
 	return nil
+}
+
+// rejectPublishedIncomingRelations protects only each surviving source's current
+// published graph. Historical releases remain audit data, not permanent delete
+// locks. Team→Expert→Skill expansion follows each Team's pinned member version,
+// even after the member has published a newer graph without that Skill.
+// The target row is already locked, serializing concurrent reference writers.
+func (r *Repo) rejectPublishedIncomingRelations(ctx context.Context, tx *sql.Tx, target string) error {
+	if !r.references {
+		return rejectSnapshotIncomingRelations(ctx, tx, target)
+	}
+	var incomplete bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM (
+  SELECT p.plugin_id,p.published_version_id AS version_id FROM plugins p
+   WHERE p.status=1 AND p.deleted_at IS NULL AND p.published_version_id IS NOT NULL
+  UNION
+  SELECT member.target_plugin_id,member.target_version_id
+   FROM plugins team JOIN plugin_version_relation_refs member
+    ON member.source_plugin_id=team.plugin_id AND member.source_version_id=team.published_version_id
+   WHERE team.status=1 AND team.deleted_at IS NULL AND member.relation_type='expert_team_expert'
+ ) selected
+ LEFT JOIN plugin_versions v ON v.plugin_id=selected.plugin_id AND v.version_id=selected.version_id
+ LEFT JOIN plugin_version_reference_index_state idx ON idx.source_plugin_id=v.plugin_id AND idx.source_version_id=v.version_id
+ WHERE v.version_id IS NULL OR idx.source_version_id IS NULL
+ OR idx.snapshot_digest<>SHA2(CAST(v.relations_json AS CHAR CHARACTER SET utf8mb4),256)
+ OR idx.relation_count<>(SELECT COUNT(*) FROM plugin_version_relation_refs edge WHERE edge.source_plugin_id=v.plugin_id AND edge.source_version_id=v.version_id))`).Scan(&incomplete); err != nil {
+		return err
+	}
+	if incomplete {
+		return ErrReferenceIndexIncomplete
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT edge.relation_id FROM plugin_version_relation_refs edge
+ JOIN plugins source ON source.plugin_id=edge.source_plugin_id
+ WHERE edge.target_plugin_id=? AND source.status=1 AND source.deleted_at IS NULL
+ AND (source.published_version_id=edge.source_version_id OR EXISTS (
+  SELECT 1 FROM plugins team JOIN plugin_version_relation_refs member
+   ON member.source_plugin_id=team.plugin_id AND member.source_version_id=team.published_version_id
+  WHERE team.status=1 AND team.deleted_at IS NULL AND member.relation_type='expert_team_expert'
+   AND member.target_plugin_id=edge.source_plugin_id AND member.target_version_id=edge.source_version_id))
+ ORDER BY edge.source_plugin_id,edge.relation_id FOR UPDATE`, target)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return ErrRelationInUse
+	}
+	return rows.Err()
 }

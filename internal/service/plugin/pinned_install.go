@@ -10,12 +10,12 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
-	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 )
 
-// InstallationReadStore is intentionally independent of ordinary detail reads:
-// a released pin may read a delisted dependency, but never another user's private
-// content. Each wave is batched; no per-user permission result survives a request.
+// InstallationReadStore batches caller-scoped rows and released evidence without
+// granting installation eligibility. The resolver rejects delisted roots AND
+// dependencies; retained pins are history, not a distribution exemption. Private
+// reads require owner and Space. No permission result survives a request.
 type InstallationReadStore interface {
 	GetInstallPlugins(context.Context, pluginrepo.Scope, []string) (map[string]*model.Plugin, error)
 	GetInstallVersions(context.Context, pluginrepo.Scope, []pluginrepo.InstallVersionKey) (map[pluginrepo.InstallVersionKey]*model.PluginVersion, error)
@@ -38,9 +38,14 @@ type pinnedInstallResolver struct {
 }
 
 type pinnedInstallationPlan struct {
-	RootVersionID string
-	Definition    fleet.CapabilityDefinition
+	EligibilityHMAC string
+	RootVersionID   string
+	Definition      fleet.CapabilityDefinition
+	NodeIDs         []string
+	Edges           []planEligibilityEdge
 }
+
+type planEligibilityEdge struct{ Source, Target string }
 
 func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, id, rootVersion string) (*pinnedInstallationPlan, error) {
 	if !s.versionManagement {
@@ -255,7 +260,24 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 		}
 		def.ExpertTeam = team
 	}
-	return &pinnedInstallationPlan{RootVersionID: rootVersion, Definition: def}, nil
+	plan := &pinnedInstallationPlan{RootVersionID: rootVersion, Definition: def}
+	for id := range r.plugins {
+		plan.NodeIDs = append(plan.NodeIDs, id)
+	}
+	sort.Strings(plan.NodeIDs)
+	for _, d := range r.loaded {
+		for _, rel := range d.Relations {
+			plan.Edges = append(plan.Edges, planEligibilityEdge{d.Plugin.ID, rel.TargetPluginID})
+		}
+	}
+	sort.Slice(plan.Edges, func(i, j int) bool {
+		a, b := plan.Edges[i], plan.Edges[j]
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
+		return a.Target < b.Target
+	})
+	return plan, nil
 }
 
 func (r *pinnedInstallResolver) load(ctx context.Context, ids []string, keys []pluginrepo.InstallVersionKey) error {
@@ -273,7 +295,7 @@ func (r *pinnedInstallResolver) load(ctx context.Context, ids []string, keys []p
 			return mapStoreError(err)
 		}
 		for _, id := range missing {
-			if got[id] == nil || got[id].ID != id || got[id].IsEmbedded || got[id].Status != 1 || got[id].DeletedAt != nil || (got[id].ListingState != model.PluginListingStatePublished && got[id].ListingState != model.PluginListingStateDelisted) {
+			if got[id] == nil || got[id].ID != id || got[id].IsEmbedded || got[id].Status != 1 || got[id].DeletedAt != nil || got[id].ListingState != model.PluginListingStatePublished {
 				return ErrDependencyHidden
 			}
 			r.plugins[id] = got[id]
@@ -385,76 +407,4 @@ func uniqueStrings(in []string) []string {
 		}
 	}
 	return out
-}
-
-// The legacy provisioner consumes the SAME prepared bytes and exact per-expert
-// skill selection; it does not run a second live graph expansion.
-func (s *Service) installPinnedLegacy(ctx context.Context, caller Caller, id string, p InstallParams) (*InstallOutcome, error) {
-	normalized, err := NormalizeInstallationParams(InstallationParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv, IdempotencyKey: "legacy-preparation"})
-	if err != nil {
-		return nil, err
-	}
-	plan, err := s.resolvePinnedInstallation(ctx, caller, id, "")
-	if err != nil {
-		return nil, err
-	}
-	if body, err := json.Marshal(pinnedPlanRequest(plan, normalized)); err != nil || len(body) > maxCapabilityBytes {
-		return nil, ErrTooLarge
-	}
-	in := expertsvc.InstallInput{WorkspaceID: strings.TrimSpace(p.WorkspaceID), RuntimeID: strings.TrimSpace(p.RuntimeID), CustomEnv: p.CustomEnv, SpaceID: caller.SpaceID, Token: p.Token}
-	skills := map[string]model.SkillRef{}
-	for _, skill := range plan.Definition.Skills {
-		ref := model.SkillRef{Name: skill.Name, Markdown: skill.Content}
-		for _, file := range skill.Files {
-			ref.SupportingFiles = append(ref.SupportingFiles, model.SkillFile{Path: file.Path, Content: file.Source.Content})
-		}
-		skills[skill.Name] = ref
-	}
-	if team := plan.Definition.ExpertTeam; team != nil {
-		sq := &model.Squad{ID: id, Name: team.Name, Summary: team.Description, Instructions: team.Instructions}
-		byName := map[string]fleet.CapabilityExpert{}
-		for _, e := range plan.Definition.Experts {
-			byName[e.Name] = e
-		}
-		for _, m := range team.Members {
-			e, ok := byName[m.ExpertName]
-			if !ok {
-				return nil, ErrIntegrity
-			}
-			selected, err := pinnedLegacySkillRefs(skills, e.SkillNames)
-			if err != nil {
-				return nil, err
-			}
-			sq.Members = append(sq.Members, model.SquadMember{MemberKey: m.ExpertName, Name: e.Name, Role: m.Role, IsLeader: m.IsLeader, Instruction: e.Instructions, MCPConfig: string(e.MCPConfig), Skills: selected})
-		}
-		result, err := s.provisioner.ProvisionSquadFromSpec(ctx, in, sq)
-		if err != nil {
-			return nil, err
-		}
-		s.trackInstall(ctx, id)
-		return &InstallOutcome{SquadID: result.SquadID}, nil
-	}
-	e := plan.Definition.Experts[0]
-	selected, err := pinnedLegacySkillRefs(skills, e.SkillNames)
-	if err != nil {
-		return nil, err
-	}
-	agent, err := s.provisioner.ProvisionAgentFromSpec(ctx, in, expertsvc.ProvisionAgentSpec{Name: e.Name, Summary: e.Description, Instruction: e.Instructions, MCPConfig: string(e.MCPConfig), Skills: selected})
-	if err != nil {
-		return nil, err
-	}
-	s.trackInstall(ctx, id)
-	return &InstallOutcome{AgentID: agent}, nil
-}
-
-func pinnedLegacySkillRefs(skills map[string]model.SkillRef, names []string) ([]model.SkillRef, error) {
-	out := make([]model.SkillRef, 0, len(names))
-	for _, name := range names {
-		skill, ok := skills[name]
-		if !ok {
-			return nil, ErrIntegrity
-		}
-		out = append(out, skill)
-	}
-	return out, nil
 }

@@ -221,6 +221,8 @@ func main() {
 		Handler: router.Public(database, authenticator, adminAuth, router.StorageConfig{
 			PluginVersionManagementEnabled:  cfg.PluginVersionManagementEnabled,
 			PluginPinnedInstallationEnabled: cfg.PluginPinnedInstallationEnabled,
+			InstallationHMACKeyID:           cfg.InstallationHMACKeyID,
+			InstallationHMACKeys:            cfg.InstallationHMACKeys,
 			Driver:                          cfg.StorageDriver,
 			LocalDir:                        cfg.LocalStorageDir,
 			BaseURL:                         publicBaseURL(cfg),

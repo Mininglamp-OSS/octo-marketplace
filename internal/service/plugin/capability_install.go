@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -40,7 +41,12 @@ type InstallationOutcome struct {
 // InstallationAttemptError marks the boundary after the Fleet adapter was
 // invoked. Unknown errors here may follow a commit and require same-key retry.
 // Never log the wrapped error verbatim: an upstream may echo submitted secrets.
-type InstallationAttemptError struct{ Err error }
+type InstallationAttemptError struct {
+	Err        error
+	Unknown    bool
+	AttemptID  string
+	RetryUntil *time.Time
+}
 
 func (e *InstallationAttemptError) Error() string { return "capability installation attempt failed" }
 func (e *InstallationAttemptError) Unwrap() error { return e.Err }
@@ -60,13 +66,17 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 const maxInstallationNameRunes = 128
 
 func NormalizeInstallationParams(p InstallationParams) (InstallationParams, error) {
+	return normalizeInstallationParams(p, true)
+}
+
+func normalizeInstallationParams(p InstallationParams, strictRuntime bool) (InstallationParams, error) {
 	p.WorkspaceID = strings.TrimSpace(p.WorkspaceID)
 	p.RuntimeID = strings.TrimSpace(p.RuntimeID)
 	p.ResourceName = strings.TrimSpace(p.ResourceName)
 	if p.WorkspaceID == "" || len(p.WorkspaceID) > 200 || !printableHeader(p.WorkspaceID) {
 		return p, installationInvalid("X-Workspace-ID", "required")
 	}
-	if !runtimeUUID.MatchString(p.RuntimeID) {
+	if (strictRuntime && !runtimeUUID.MatchString(p.RuntimeID)) || (!strictRuntime && (p.RuntimeID == "" || len(p.RuntimeID) > 200 || !printableHeader(p.RuntimeID))) {
 		return p, installationInvalid("runtime_id", "invalid_uuid")
 	}
 	if len(p.IdempotencyKey) < 1 || len(p.IdempotencyKey) > 200 || !printableHeader(p.IdempotencyKey) {
@@ -112,18 +122,23 @@ func installationName(value string, max int) bool {
 	return true
 }
 
-// CreateInstallation leaves legacy Install untouched. All fallible expansion
+// CreateInstallation validates the new wire contract. All fallible expansion
 // completes before the one Fleet mutation; Fleet owns the resource transaction.
 func (s *Service) CreateInstallation(ctx context.Context, caller Caller, pluginID string, p InstallationParams) (*InstallationOutcome, error) {
-	if validateCaller(caller) != nil {
-		return nil, ErrInvalidRequest
-	}
 	if caller.BotUID != "" {
 		return nil, ErrDependencyHidden
 	}
-	var err error
-	if p, err = NormalizeInstallationParams(p); err != nil {
+	normalized, err := NormalizeInstallationParams(p)
+	if err != nil {
 		return nil, err
+	}
+	return s.createInstallation(ctx, caller, pluginID, normalized)
+}
+
+// Both adapters enter here; feature flags never select an executor per URL.
+func (s *Service) createInstallation(ctx context.Context, caller Caller, pluginID string, p InstallationParams) (*InstallationOutcome, error) {
+	if validateCaller(caller) != nil {
+		return nil, ErrInvalidRequest
 	}
 	if s.capabilityInstaller == nil {
 		return nil, expertsvc.ErrFleetNotConfigured
@@ -148,13 +163,32 @@ func (s *Service) CreateInstallation(ctx context.Context, caller Caller, pluginI
 	}
 	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey, *in)
 	if err != nil {
-		return nil, &InstallationAttemptError{Err: err}
+		return nil, &InstallationAttemptError{Err: err, Unknown: !definiteInstallationRejection(err)}
 	}
 	if result == nil {
-		return nil, &InstallationAttemptError{Err: errors.New("capability installation returned no result")}
+		return nil, &InstallationAttemptError{Err: errors.New("capability installation returned no result"), Unknown: true}
 	}
 	// Match legacy /plugins/install: count successful API invocations, including
 	// receipt replays. This is not a count of uniquely created Fleet resources.
 	s.trackInstall(ctx, pluginID)
 	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
+}
+
+// Only recognized rejections prove that this send did not install anything.
+// Generic/in-progress 409s, transport errors and 5xx remain uncertain; never use
+// an upstream display message to infer whether a mutation committed.
+func definiteInstallationRejection(err error) bool {
+	var upstream *fleet.CapabilityAPIError
+	if !errors.As(err, &upstream) {
+		return false
+	}
+	switch upstream.Status {
+	case 400, 401, 403, 404, 413, 415, 422, 429:
+		return true
+	case 409:
+		return upstream.Code == "DUPLICATE" || upstream.Code == "IDEMPOTENCY_KEY_REUSED" ||
+			(upstream.Code == "CONFLICT" && upstream.ConflictResource != "")
+	default:
+		return false
+	}
 }
