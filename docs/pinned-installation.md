@@ -101,6 +101,29 @@ final checks so the evidence remains current until the authorized cutover.
    monitor failed preparation. Recheck if publication changes after the checks.
    Startup validates flag dependencies; it does not execute this operator gate.
 
+## Secret-free frozen Connector configuration
+
+Pinned preparation rejects concrete MCP env/header values before creating an
+attempt. These maps permit only empty strings or whole `${NAME}` references;
+this conservative rule also rejects non-secret literal env/header values.
+URL userinfo and concrete credential-like URL query/fragment parameters or
+command flags (token, API key, password, secret, etc.) are rejected as well.
+Malformed/duplicate JSON is rejected before normalization. The safe error uses
+`credential_not_persistable` without echoing a server name, URL or value.
+This persistence guard applies to both installation adapters when pinned mode is
+active; transient non-pinned MCP behavior and runtime `custom_env` are separate.
+References are retained literally; this change does not resolve credentials,
+silently remove them, or introduce a new credential transport.
+
+The same guard runs on retry even for an otherwise correctly signed historical
+plan. An unsafe plan is not dispatched, re-signed, cleared, rebuilt from current
+Connector state or switched to another key. Its state/deadline/UNKNOWN evidence
+is retained for operator reconciliation. Previously stored values and backups
+are not automatically scrubbed by this fix; follow the incident runbook.
+For permitted MCP documents, restore the same normalized encoding after MySQL
+JSON field reordering before the original request-HMAC check. Scalar values,
+selected content, and the persisted plan remain unchanged.
+
 ## Retry and rollback
 
 The capability entrypoint records scoped key digests and HMAC fingerprints,

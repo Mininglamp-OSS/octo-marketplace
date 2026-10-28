@@ -271,6 +271,18 @@ func pinnedPlanRequest(plan *pinnedInstallationPlan, p InstallationParams) (*fle
 	if json.Unmarshal(raw, &def) != nil || !validPinnedDefinition(def) {
 		return nil, ErrIntegrity
 	}
+	// This runs before first persistence and on every recovery, including
+	// previously signed plans created before the secret-free MCP guard.
+	for i := range def.Experts {
+		config, err := frozenMCPConfig(def.Experts[i].MCPConfig)
+		if err != nil {
+			return nil, err
+		}
+		// MySQL JSON may reorder object fields. Restore the same MCP
+		// encoding used on first preparation before checking the request MAC;
+		// scalar values and selected content must remain unchanged.
+		def.Experts[i].MCPConfig = config
+	}
 	if p.ResourceName != "" {
 		if def.ExpertTeam != nil {
 			def.ExpertTeam.Name = p.ResourceName

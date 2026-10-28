@@ -40,6 +40,14 @@ Previously published/delisted Skills and Experts may be soft-deleted only when
 no protected live, current published or Team-pinned indirect incoming reference
 survives. Historical releases remain; delisting alone does not release incoming
 references. This does not change the existing visibility-narrowing policy.
+A current published legacy Team with an absent/empty member-version pin has
+incomplete historical evidence: compatibility deletion fails closed with
+`ErrReferenceIndexIncomplete` instead of skipping the member or guessing its
+latest release. This can block otherwise unused-resource deletion until the
+owning source is explicitly converted/re-published with verified pins (or a new
+published source removes the edge). Old snapshots are not rewritten; resolved,
+unreferenced history does not create a permanent delete ban. The indexed path
+already rejects missing coverage, and its schema prohibits NULL Skill/member pins.
 Deleting a source never deletes an independent target. Impact queries remain
 diagnostic, not deletion authorization. See [the current lifecycle and rollout
 contract](marketplace-v2-release.md).

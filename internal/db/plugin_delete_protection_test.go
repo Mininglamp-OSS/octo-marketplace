@@ -189,3 +189,51 @@ func TestDeleteDoesNotRequireConvertingUnrelatedDelistedUnpinnedHistory(t *testi
 		t.Fatal("historical snapshot was converted", err)
 	}
 }
+
+func TestDeleteRejectsUnpinnedLegacyTeamWithoutGuessingMemberVersion(t *testing.T) {
+	for _, references := range []bool{false, true} {
+		for _, emptyPin := range []bool{false, true} {
+			t.Run(fmt.Sprintf("references_%t/empty_%t", references, emptyPin), func(t *testing.T) {
+				database := reviewDB(t)
+				for _, p := range []seedPlugin{{id: "skill", typ: "skill", visibility: "private", listingState: "published"}, {id: "expert", typ: "expert", visibility: "private", listingState: "published"}, {id: "team", typ: "expert_team", visibility: "private", listingState: "published"}} {
+					seed(t, database, p)
+				}
+				releasePinnedVersion(t, database, "skill", "s1", "1.0.0", nil)
+				releasePinnedVersion(t, database, "expert", "e1", "1.0.0", []model.PluginRelation{pinnedTestEdge("expert", "skill", "expert_skill", "s1")})
+				releasePinnedVersion(t, database, "expert", "e2", "2.0.0", nil)
+				edge := pinnedTestEdge("team", "expert", "expert_team_expert", "")
+				if emptyPin {
+					blank := ""
+					edge.TargetVersionID = &blank
+				}
+				releasePinnedVersion(t, database, "team", "t1", "1.0.0", []model.PluginRelation{edge})
+				if _, err := database.Exec(`INSERT INTO plugin_version_relation_refs VALUES ('expert','e1','e-s','expert_skill','skill','s1')`); err != nil {
+					t.Fatal(err)
+				}
+				markReferenceIndexFixtures(t, database)
+				// Such a legacy snapshot cannot be indexed with a NULL member pin. Do not
+				// fabricate verified coverage for its unrepresentable dependency graph.
+				if _, err := database.Exec(`DELETE FROM plugin_version_reference_index_state WHERE source_plugin_id='team'`); err != nil {
+					t.Fatal(err)
+				}
+				repo := pluginrepo.New(database).WithReferences(references)
+				if err := repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrReferenceIndexIncomplete) {
+					t.Fatalf("unpinned legacy graph allowed delete: %v", err)
+				}
+				var active int
+				if err := database.QueryRow(`SELECT COUNT(*) FROM plugins WHERE plugin_id='skill' AND deleted_at IS NULL`).Scan(&active); err != nil || active != 1 {
+					t.Fatalf("target mutated: count=%d err=%v", active, err)
+				}
+				// Removing the Team edge through a new release resolves uncertainty; unused
+				// history must not become a permanent deletion ban.
+				releasePinnedVersion(t, database, "team", "t2", "2.0.0", nil)
+				if _, err := database.Exec(`INSERT INTO plugin_version_reference_index_state(source_plugin_id,source_version_id,relation_count,snapshot_digest,verified_at) SELECT plugin_id,version_id,0,SHA2(CAST(relations_json AS CHAR CHARACTER SET utf8mb4),256),NOW(3) FROM plugin_versions WHERE version_id='t2'`); err != nil {
+					t.Fatal(err)
+				}
+				if err := repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil); err != nil {
+					t.Fatalf("resolved current graph still blocked: %v", err)
+				}
+			})
+		}
+	}
+}

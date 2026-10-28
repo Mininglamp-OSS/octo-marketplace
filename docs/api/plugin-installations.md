@@ -79,8 +79,14 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
   and unpaired Unicode surrogate escapes are rejected instead of being silently
   converted. Empty strings and whitespace are preserved. Do not log credentials
   or environment values.
-- Definition may contain actual secrets in custom_env and MCP env/headers. It
-  exists only in this request's memory and must not enter logs, events or Git.
+- Runtime `custom_env` and non-pinned transient MCP values exist only in request
+  memory and must not enter logs, events or Git. Pinned installation rejects
+  concrete MCP env/header values before attempt persistence: only empty strings
+  or whole `${NAME}` references are durable. URL userinfo and concrete
+  credential-like query/fragment/argument values are rejected too, using existing
+  400 validation with `credential_not_persistable`. This applies on recovery of
+  old signed plans as well; it never silently strips values or rebuilds a plan.
+  See [the frozen configuration contract](../pinned-installation.md).
 - Keys contain 1–200 visible ASCII characters without spaces. Unknown JSON
   fields, compressed bodies, and non-JSON requests are rejected. The HTTP body
   limit is 3 MiB; the assembled Fleet request is limited to 16 MiB.

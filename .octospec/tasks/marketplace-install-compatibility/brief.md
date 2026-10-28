@@ -14,6 +14,14 @@ Delisted legacy data remains historical until a specific republish/install need.
   in legacy/Admin writes and publication. Embedded intra-graph wiring retains its
   existing bounded exception. Frozen-plan recovery rejects malformed definitions
   before binding/dispatch without mutating the durable attempt.
+- Frozen MCP uses the conservative empty/whole-placeholder env/header rule and
+  rejects concrete credentials in URL/flag carriers before first persistence and
+  on recovery of signed historical plans. Unsafe attempts retain state/evidence;
+  no sanitizing, signing-on-read or config rebuild. Restore canonical MCP encoding
+  after MySQL object reordering before verifying the unchanged request HMAC.
+- Legacy current Team releases without member pins fail deletion closed as
+  incomplete evidence; never substitute latest member content or skip the edge.
+  Indexed coverage and valid unreferenced-resource deletion remain protected.
 - Eligibility metadata (nodes, edges, root version) is authenticated in a separate
   HMAC domain bound to caller/Space/workspace/key/adapter/intent/key ID and the
   original input/request fingerprints. Verify before using metadata for reads;

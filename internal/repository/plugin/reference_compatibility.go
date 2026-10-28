@@ -22,7 +22,13 @@ func rejectSnapshotIncomingRelations(ctx context.Context, tx *sql.Tx, target str
 			if rel.TargetPluginID == target {
 				return ErrRelationInUse
 			}
-			if team && rel.Type == "expert_team_expert" && rel.TargetVersionID != nil && *rel.TargetVersionID != "" {
+			if team && rel.Type == "expert_team_expert" {
+				// A legacy unpinned edge does not identify the historical member
+				// graph. Never infer that it has no Skill references or substitute
+				// the current member release when authorizing a deletion.
+				if rel.TargetVersionID == nil || *rel.TargetVersionID == "" {
+					return ErrReferenceIndexIncomplete
+				}
 				members[InstallVersionKey{PluginID: rel.TargetPluginID, VersionID: *rel.TargetVersionID}] = struct{}{}
 			}
 		}
