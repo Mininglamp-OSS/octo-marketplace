@@ -81,7 +81,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 			if err != nil {
 				return nil, err
 			}
-			if !detail.Plugin.IsEmbedded && detail.Plugin.Visibility == model.PluginVisibilityPrivate && !installAudience(root.Plugin, detail.Plugin) {
+			if !detail.Plugin.IsEmbedded && !installAudience(root.Plugin, detail.Plugin) {
 				return nil, ErrDependencyHidden
 			}
 			expert, err := b.expert(ctx, detail, strings.TrimSpace(detail.Plugin.Name), manifestDescription(detail.Plugin.Manifest))
@@ -206,10 +206,10 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.
 		return "", err
 	}
 	p := detail.Plugin
-	// Embedded legacy copies belong to their container. An independent private
-	// asset may never be distributed through a broader source, even when the
-	// caller happens to own both. Check before reusing the per-request cache.
-	if !p.IsEmbedded && p.Visibility == model.PluginVisibilityPrivate && !installAudience(source, p) {
+	// Embedded legacy copies belong to their container. Every independent
+	// dependency must satisfy source audience, including Space targets. Check
+	// before materialization or reuse of the per-request cache.
+	if !p.IsEmbedded && !installAudience(source, p) {
 		return "", ErrDependencyHidden
 	}
 	if name, ok := b.skillsByID[id]; ok {

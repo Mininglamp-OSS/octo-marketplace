@@ -38,11 +38,12 @@ type pinnedInstallResolver struct {
 }
 
 type pinnedInstallationPlan struct {
-	EligibilityHMAC string
-	RootVersionID   string
-	Definition      fleet.CapabilityDefinition
-	NodeIDs         []string
-	Edges           []planEligibilityEdge
+	ProtectedMCPConfigs []byte `json:"ProtectedMCPConfigs,omitempty"`
+	EligibilityHMAC     string
+	RootVersionID       string
+	Definition          fleet.CapabilityDefinition
+	NodeIDs             []string
+	Edges               []planEligibilityEdge
 }
 
 type planEligibilityEdge struct{ Source, Target string }

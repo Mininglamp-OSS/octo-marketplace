@@ -11,7 +11,8 @@ import (
 
 // WithInstallationHMACKeys copies the deployment key ring. Rotation changes the
 // active ID for new attempts while old IDs remain available for frozen retries.
-// No key or environment value may appear in logs, errors, or stored plans.
+// Deployment keys and caller runtime environment never enter stored plans.
+// Connector retry material uses a separately derived encryption key, not a MAC.
 func (s *Service) WithInstallationHMACKeys(active string, keys map[string]string) *Service {
 	s.installHMACKeyID = active
 	s.installHMACKeys = make(map[string][]byte, len(keys))

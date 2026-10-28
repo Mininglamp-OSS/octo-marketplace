@@ -38,7 +38,27 @@ The existing request HMAC authenticates the reconstructed Fleet content/runtime
 bindings; the eligibility MAC binds that fingerprint to the governance graph.
 Verify eligibility authentication before using the persisted node/edge lists for
 current reads, then still verify current eligibility and exact request HMAC.
-Neither MAC grants distribution or Workspace access. Unsigned/mismatched plans
+Connector MCP configuration is removed from the plaintext frozen definition
+and stored as a versioned AES-256-GCM protected payload in the same plan JSON.
+This protects the complete configuration, including header, env, argument and URL
+values, without guessing which strings are credentials. The encryption key is
+derived in a separate domain from the configured installation key ring; no
+key is stored in MySQL. A fresh random nonce and the authenticated eligibility
+MAC bind the ciphertext to the original operation and exact request fingerprint.
+Only after eligibility integrity and current permissions pass is MCP restored in
+memory for the original request-HMAC check and Fleet call. Normal Connector edits
+never replace these frozen bytes. Runtime token/custom_env values remain supplied
+by the caller and are never included in this protected payload.
+
+Retain the original key ID across rotation for the retry horizon. Missing,
+malformed, transplanted or unprotected legacy MCP payloads fail closed without
+resending, re-encrypting on read, rebuilding the plan, clearing UNKNOWN or changing
+the key/deadline. Before rollout, inventory affected attempt IDs/states with
+read-only metadata queries (do not export configuration values); restrict access
+to historical plaintext evidence and reconcile the original Fleet operation.
+Any exceptional data repair requires a separately audited operator procedure,
+not an automatic application migration. New attempts use the protected format.
+Neither MAC nor encryption grants distribution or Workspace access. Unsigned/mismatched plans
 fail closed without dispatch, plan rebuild, signing-on-read or attempt mutation.
 Exact request HMAC checks and current governance/Workspace authorization
 remain mandatory; corruption never causes plan regeneration or a new key.

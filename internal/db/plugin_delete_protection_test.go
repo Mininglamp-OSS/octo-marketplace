@@ -228,3 +228,71 @@ func TestDeleteWithLegacyUnpinnedTeamMember(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteProtectsEffectiveLegacyCurrentOnlySources(t *testing.T) {
+	for _, mode := range []string{"published", "draft", "delisted", "current_removed_reference", "missing_snapshot", "legacy_team", "legacy_team_pinned_old_member"} {
+		t.Run(mode, func(t *testing.T) {
+			database := reviewDB(t)
+			seed(t, database, seedPlugin{id: "skill", typ: "skill", visibility: "private", listingState: "published"})
+			state := "published"
+			if mode == "draft" || mode == "delisted" {
+				state = mode
+			}
+			seed(t, database, seedPlugin{id: "expert", typ: "expert", visibility: "private", listingState: state})
+			releasePinnedVersion(t, database, "skill", "s1", "1.0.0", nil)
+			seedVersionRow(t, database, "e1", "expert", "1")
+			raw, _ := model.EncodeSnapshotRelations([]model.PluginRelation{pinnedTestEdge("expert", "skill", "expert_skill", "")})
+			if _, err := database.Exec(`UPDATE plugin_versions SET relations_json=? WHERE version_id='e1'`, string(raw)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Exec(`UPDATE plugins SET current_version_id='e1',published_version_id=NULL WHERE plugin_id='expert'`); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "current_removed_reference" || mode == "legacy_team_pinned_old_member" {
+				seedVersionRow(t, database, "e2", "expert", "2")
+				if _, err := database.Exec(`UPDATE plugins SET current_version_id='e2' WHERE plugin_id='expert'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "missing_snapshot" {
+				if _, err := database.Exec(`DELETE FROM plugin_versions WHERE version_id='e1'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "legacy_team" || mode == "legacy_team_pinned_old_member" {
+				seed(t, database, seedPlugin{id: "team", typ: "expert_team", visibility: "private", listingState: "published"})
+				seedVersionRow(t, database, "t1", "team", "1")
+				pin := ""
+				if mode == "legacy_team_pinned_old_member" {
+					pin = "e1"
+				}
+				members, _ := model.EncodeSnapshotRelations([]model.PluginRelation{pinnedTestEdge("team", "expert", "expert_team_expert", pin)})
+				if _, err := database.Exec(`UPDATE plugin_versions SET relations_json=? WHERE version_id='t1'`, string(members)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := database.Exec(`UPDATE plugins SET current_version_id='t1' WHERE plugin_id='team'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			repo := pluginrepo.New(database).WithReferences(false)
+			if err := repo.Delete(context.Background(), pluginrepo.Scope{CallerUID: "user-1", SpaceID: "foreign"}, "skill", "user-1", "", "", nil); !errors.Is(err, pluginrepo.ErrNotFound) {
+				t.Fatalf("cross-Space disclosure: %v", err)
+			}
+			err := repo.Delete(context.Background(), tenantScope(), "skill", "user-1", "", "", nil)
+			switch mode {
+			case "published", "legacy_team", "legacy_team_pinned_old_member":
+				if !errors.Is(err, pluginrepo.ErrRelationInUse) {
+					t.Fatalf("legacy current reference bypass: %v", err)
+				}
+			case "missing_snapshot":
+				if !errors.Is(err, pluginrepo.ErrReferenceIndexIncomplete) {
+					t.Fatalf("missing effective snapshot allowed deletion: %v", err)
+				}
+			default:
+				if err != nil {
+					t.Fatalf("draft/unused history blocked unrelated deletion: %v", err)
+				}
+			}
+		})
+	}
+}

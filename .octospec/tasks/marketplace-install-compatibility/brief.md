@@ -10,12 +10,19 @@ Delisted legacy data remains historical until a specific republish/install need.
 - Deletion checks live incoming relations, current published references and Team
   member-version indirect references under the existing mutation transaction.
   With the independent-reference flag off, read immutable release snapshots.
+  Published legacy Expert/Team current-only snapshots also protect references;
+  do not turn drafts or delisted current-only history into permanent locks.
 - All independent targets, including Space resources, obey source-audience checks
   in legacy/Admin writes and publication. Embedded intra-graph wiring retains its
   existing bounded exception. Frozen-plan recovery rejects malformed definitions
   before binding/dispatch without mutating the durable attempt.
 - Frozen-plan schema migration adds only missing columns/constraint on replay,
   including DDL-success/receipt-missing recovery; attempt evidence is never reset.
+- Complete Connector MCP configurations are removed from the plaintext frozen
+  definition and protected with AES-GCM using a domain-separated key derived
+  from the deployment key ring. Restore only after current governance checks;
+  bind to original operation/request through authenticated eligibility metadata.
+  No latest-config substitution, plaintext fallback or signing/encryption-on-read.
 - Eligibility metadata (nodes, edges, root version) is authenticated in a separate
   HMAC domain bound to caller/Space/workspace/key/adapter/intent/key ID and the
   original input/request fingerprints. Verify before using metadata for reads;
@@ -28,7 +35,8 @@ Delisted legacy data remains historical until a specific republish/install need.
   aliases/unavailable selections remain bounded separately by the 2000-edge
   traversal budget. Preserve authorization, diagnostics and traversal bounds.
 - The existing owner/Space/audience rule applies to both reference types,
-  including legacy writes/publication and installation expansion before cache reuse.
+  including legacy writes/publication and installation expansion before cache reuse,
+  for every independent target including Space targets.
 - A31 preserves its body, opaque workspace/runtime IDs and typed result IDs.
   A32 keeps its required headers and runtime UUID validation.
 - Both adapters use the same capability executor. Existing feature flags select

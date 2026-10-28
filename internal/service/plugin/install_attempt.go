@@ -86,6 +86,9 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if err != nil {
 			return nil, err
 		}
+		if err = s.protectFrozenMCP(keyID, plan); err != nil {
+			return nil, err
+		}
 		candidate.FrozenPlan, err = json.Marshal(plan)
 		if err != nil {
 			return nil, ErrIntegrity
@@ -158,6 +161,9 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		(root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) ||
 		(root.Type == model.PluginTypeExpertTeam) != (plan.Definition.ExpertTeam != nil) {
 		return nil, ErrIntegrity
+	}
+	if err = s.restoreFrozenMCP(attempt.HMACKeyID, &plan); err != nil {
+		return nil, err
 	}
 	request, err := pinnedPlanRequest(&plan, p)
 	if err != nil {

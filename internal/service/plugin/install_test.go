@@ -45,9 +45,9 @@ func installFixture() *fakeStore {
 	teamPkg := packageWith(rawAtt("AGENTS.md", "# Team\n\n## 协作方式\n1. first\n2. second"))
 	return &fakeStore{
 		plugins: map[string]*model.Plugin{
-			"expert-1": {ID: "expert-1", Name: "Alice", Type: model.PluginTypeExpert, OwnerUID: "user-1", SpaceID: &space, Manifest: json.RawMessage(`{"description":"expert summary"}`), Package: expertPkg},
-			"team-1":   {ID: "team-1", Name: "Team", Type: model.PluginTypeExpertTeam, OwnerUID: "user-1", SpaceID: &space, Manifest: json.RawMessage(`{"description":"team summary"}`), Package: teamPkg},
-			"skill-1":  {ID: "skill-1", Name: "Deploy", Type: model.PluginTypeSkill, OwnerUID: "user-1", SpaceID: &space, Manifest: json.RawMessage(`{}`), Package: skillPkg},
+			"expert-1": {ID: "expert-1", Name: "Alice", Type: model.PluginTypeExpert, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilitySpace, Manifest: json.RawMessage(`{"description":"expert summary"}`), Package: expertPkg},
+			"team-1":   {ID: "team-1", Name: "Team", Type: model.PluginTypeExpertTeam, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilitySpace, Manifest: json.RawMessage(`{"description":"team summary"}`), Package: teamPkg},
+			"skill-1":  {ID: "skill-1", Name: "Deploy", Type: model.PluginTypeSkill, OwnerUID: "user-1", SpaceID: &space, Visibility: model.PluginVisibilitySpace, Manifest: json.RawMessage(`{}`), Package: skillPkg},
 		},
 		relations: map[string][]model.PluginRelation{
 			"expert-1": {{ID: "r1", SourcePluginID: "expert-1", TargetPluginID: "skill-1", TargetPluginType: model.PluginTypeSkill, Type: "expert_skill", SortOrder: 0, Status: 1}},

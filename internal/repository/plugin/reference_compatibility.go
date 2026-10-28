@@ -29,11 +29,14 @@ func rejectSnapshotIncomingRelations(ctx context.Context, tx *sql.Tx, target str
 		return nil
 	}
 	// A missing current release snapshot is an integrity failure, not evidence
-	// that no one references the target. Delisted sources still protect edges.
+	// that no one references the target. Delisted formal releases still protect
+	// edges. Only currently published legacy Expert/Team rows use a current-only
+	// fallback; drafts and retained delisted history do not become delete locks.
 	if err := func() error {
 		rows, err := tx.QueryContext(ctx, `SELECT p.plugin_type,v.relations_json FROM plugins p
- LEFT JOIN plugin_versions v ON v.plugin_id=p.plugin_id AND v.version_id=p.published_version_id
- WHERE p.status=1 AND p.deleted_at IS NULL AND p.published_version_id IS NOT NULL`)
+ LEFT JOIN plugin_versions v ON v.plugin_id=p.plugin_id AND v.version_id=COALESCE(p.published_version_id,p.current_version_id)
+ WHERE p.status=1 AND p.deleted_at IS NULL AND (p.published_version_id IS NOT NULL
+ OR (p.plugin_type IN ('expert','expert_team') AND p.listing_state='published' AND p.current_version_id IS NOT NULL))`)
 		if err != nil {
 			return err
 		}
