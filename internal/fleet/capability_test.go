@@ -137,7 +137,7 @@ func connectorOnlyCapabilityRequest(names ...string) CapabilityInstallRequest {
 }
 
 func TestCapabilityInstallAcceptsConnectorOnlyResult(t *testing.T) {
-	const fixture = `{"data":{"type":"connectors","connectors":[{"connector_id":"connector-browser","name":"browser","version":"2.4.1","market_mcp_id":"market-browser","created":true}]}}`
+	const fixture = `{"data":{"type":"connectors","connectors":[{"connector_id":"11111111-1111-4111-8111-111111111111","name":"browser","version":"2.4.1","market_mcp_id":"market-browser","created":true}]}}`
 	version := "2.4.1"
 	request := CapabilityInstallRequest{Definition: CapabilityDefinition{
 		SchemaVersion: "1.0",
@@ -159,13 +159,13 @@ func TestCapabilityInstallAcceptsConnectorOnlyResult(t *testing.T) {
 		t.Fatal("connector-only result did not preserve its resource shape")
 	}
 	got := out.Connectors[0]
-	if got.ConnectorID != "connector-browser" || got.Name != "browser" || got.Version == nil || *got.Version != "2.4.1" || got.MarketMCPID == nil || *got.MarketMCPID != "market-browser" || !got.Created {
+	if got.ConnectorID != "11111111-1111-4111-8111-111111111111" || got.Name != "browser" || got.Version == nil || *got.Version != "2.4.1" || got.MarketMCPID == nil || *got.MarketMCPID != "market-browser" || !got.Created {
 		t.Fatal("connector-only result identity or metadata was not preserved")
 	}
 }
 
 func TestCapabilityInstallAcceptsTeamResultWithConnectorBindings(t *testing.T) {
-	const fixture = `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","experts":[{"expert_id":"expert-worker","name":"Worker","skill_ids":[],"connector_ids":["connector-private"]},{"expert_id":"expert-lead","name":"Lead","skill_ids":[],"is_leader":true,"connector_ids":["connector-shared"]}],"skills":[],"connectors":[{"connector_id":"connector-private","name":"private","version":null,"market_mcp_id":null,"created":false},{"connector_id":"connector-shared","name":"shared","version":"3.0","market_mcp_id":"market-shared","created":true}]}}`
+	const fixture = `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","experts":[{"expert_id":"expert-worker","name":"Worker","skill_ids":[],"connector_ids":["22222222-2222-4222-8222-222222222222"]},{"expert_id":"expert-lead","name":"Lead","skill_ids":[],"is_leader":true,"connector_ids":["33333333-3333-4333-8333-333333333333"]}],"skills":[],"connectors":[{"connector_id":"22222222-2222-4222-8222-222222222222","name":"private","version":null,"market_mcp_id":null,"created":false},{"connector_id":"33333333-3333-4333-8333-333333333333","name":"shared","version":"3.0","market_mcp_id":"market-shared","created":true}]}}`
 	sharedVersion := "3.0"
 	request := CapabilityInstallRequest{
 		Definition: CapabilityDefinition{
@@ -204,13 +204,13 @@ func TestCapabilityInstallAcceptsTeamResultWithConnectorBindings(t *testing.T) {
 	if out.Type != "expert_team" || out.ExpertTeamID != "team-1" || out.LeaderExpertID != "expert-lead" || len(out.Experts) != 2 || len(out.Connectors) != 2 {
 		t.Fatal("team connector result did not preserve its resource shape")
 	}
-	if out.Experts[0].Name != "Worker" || len(out.Experts[0].ConnectorIDs) != 1 || out.Experts[0].ConnectorIDs[0] != "connector-private" || out.Experts[1].Name != "Lead" || len(out.Experts[1].ConnectorIDs) != 1 || out.Experts[1].ConnectorIDs[0] != "connector-shared" {
+	if out.Experts[0].Name != "Worker" || len(out.Experts[0].ConnectorIDs) != 1 || out.Experts[0].ConnectorIDs[0] != "22222222-2222-4222-8222-222222222222" || out.Experts[1].Name != "Lead" || len(out.Experts[1].ConnectorIDs) != 1 || out.Experts[1].ConnectorIDs[0] != "33333333-3333-4333-8333-333333333333" {
 		t.Fatal("team connector bindings were not preserved by expert name")
 	}
 }
 
 func TestCapabilityInstallAcceptsExpertResultWithConnectorBinding(t *testing.T) {
-	const fixture = `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[],"connector_ids":["connector-browser"]}],"skills":[],"connectors":[{"connector_id":"connector-browser","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`
+	const fixture = `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[],"connector_ids":["44444444-4444-4444-8444-444444444444"]}],"skills":[],"connectors":[{"connector_id":"44444444-4444-4444-8444-444444444444","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`
 	request := capabilityRequest()
 	request.Definition.Connectors = []CapabilityConnector{capabilityConnectorFixture("browser", "market-browser", nil)}
 	request.Definition.Experts[0].ConnectorNames = []string{"browser"}
@@ -223,7 +223,7 @@ func TestCapabilityInstallAcceptsExpertResultWithConnectorBinding(t *testing.T) 
 	if err != nil {
 		t.Fatalf("expert result with connector binding was rejected: %v", err)
 	}
-	if out.Type != "expert" || out.ExpertID != "expert-1" || len(out.Connectors) != 1 || len(out.Experts) != 1 || len(out.Experts[0].ConnectorIDs) != 1 || out.Experts[0].ConnectorIDs[0] != "connector-browser" {
+	if out.Type != "expert" || out.ExpertID != "expert-1" || len(out.Connectors) != 1 || len(out.Experts) != 1 || len(out.Experts[0].ConnectorIDs) != 1 || out.Experts[0].ConnectorIDs[0] != "44444444-4444-4444-8444-444444444444" {
 		t.Fatal("expert connector result did not preserve its resource identity and binding")
 	}
 }
@@ -251,6 +251,12 @@ func TestCapabilityInstallRejectsInvalidConnectorIdentitiesAndBindings(t *testin
 			},
 		},
 	}
+	nullableIdentityRequest := CapabilityInstallRequest{Definition: CapabilityDefinition{
+		SchemaVersion: "1.0",
+		Name:          "workspace:connectors",
+		Connectors:    []CapabilityConnector{capabilityConnectorFixture("browser", "", nil)},
+	}}
+
 	tests := []struct {
 		name    string
 		request CapabilityInstallRequest
@@ -269,22 +275,37 @@ func TestCapabilityInstallRejectsInvalidConnectorIdentitiesAndBindings(t *testin
 		{
 			name:    "duplicate_connector_id",
 			request: connectorOnlyCapabilityRequest("browser", "alerts"),
-			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"connector-same","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"connector-same","name":"alerts","version":null,"market_mcp_id":"market-alerts","created":true}]}}`,
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"55555555-5555-4555-8555-555555555555","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"55555555-5555-4555-8555-555555555555","name":"alerts","version":null,"market_mcp_id":"market-alerts","created":true}]}}`,
+		},
+		{
+			name:    "invalid_connector_uuid",
+			request: connectorOnlyCapabilityRequest("browser"),
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"not-a-uuid","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
+		},
+		{
+			name:    "missing_connector_version",
+			request: nullableIdentityRequest,
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"55555555-5555-4555-8555-555555555555","name":"browser","market_mcp_id":null,"created":true}]}}`,
+		},
+		{
+			name:    "missing_connector_market_mcp_id",
+			request: nullableIdentityRequest,
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"55555555-5555-4555-8555-555555555555","name":"browser","version":null,"created":true}]}}`,
 		},
 		{
 			name:    "unknown_connector_name",
 			request: connectorOnlyCapabilityRequest("browser"),
-			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"connector-other","name":"unrequested","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"66666666-6666-4666-8666-666666666666","name":"unrequested","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
 		},
 		{
 			name:    "expert_binds_unknown_connector_id",
 			request: expertRequest,
-			fixture: `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[],"connector_ids":["connector-unknown"]}],"skills":[],"connectors":[{"connector_id":"connector-browser","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
+			fixture: `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[],"connector_ids":["88888888-8888-4888-8888-888888888888"]}],"skills":[],"connectors":[{"connector_id":"77777777-7777-4777-8777-777777777777","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
 		},
 		{
 			name:    "expert_bindings_are_swapped",
 			request: teamRequest,
-			fixture: `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","experts":[{"expert_id":"expert-worker","name":"Worker","skill_ids":[],"connector_ids":["connector-browser"]},{"expert_id":"expert-lead","name":"Lead","skill_ids":[],"is_leader":true,"connector_ids":["connector-docs"]}],"skills":[],"connectors":[{"connector_id":"connector-browser","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"connector-docs","name":"docs","version":null,"market_mcp_id":"market-docs","created":true}]}}`,
+			fixture: `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","experts":[{"expert_id":"expert-worker","name":"Worker","skill_ids":[],"connector_ids":["99999999-9999-4999-8999-999999999999"]},{"expert_id":"expert-lead","name":"Lead","skill_ids":[],"is_leader":true,"connector_ids":["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}],"skills":[],"connectors":[{"connector_id":"99999999-9999-4999-8999-999999999999","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"docs","version":null,"market_mcp_id":"market-docs","created":true}]}}`,
 		},
 	}
 	for _, tc := range tests {
@@ -304,6 +325,27 @@ func TestCapabilityInstallRejectsInvalidConnectorIdentitiesAndBindings(t *testin
 				t.Fatalf("Fleet calls=%d, want one fixed-fixture response", calls)
 			}
 		})
+	}
+}
+
+func TestCapabilityInstallAcceptsExplicitNullConnectorIdentityFields(t *testing.T) {
+	const fixture = `{"data":{"type":"connectors","connectors":[{"connector_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","name":"browser","version":null,"market_mcp_id":null,"created":true}]}}`
+	request := CapabilityInstallRequest{Definition: CapabilityDefinition{
+		SchemaVersion: "1.0",
+		Name:          "workspace:connectors",
+		Connectors:    []CapabilityConnector{capabilityConnectorFixture("browser", "", nil)},
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, fixture)
+	}))
+	defer server.Close()
+
+	out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "connector-key", request)
+	if err != nil {
+		t.Fatalf("explicit null connector identity fields were rejected: %v", err)
+	}
+	if len(out.Connectors) != 1 || out.Connectors[0].Version != nil || out.Connectors[0].MarketMCPID != nil {
+		t.Fatal("explicit null connector identity fields were not preserved")
 	}
 }
 

@@ -101,7 +101,9 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	var envelope struct {
 		Data *CapabilityInstallResult `json:"data"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil || !validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire) {
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil ||
+		(len(in.Definition.Connectors) > 0 && !capabilityConnectorNullableFieldsPresent(raw)) ||
+		!validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire) {
 		return nil, errors.New("invalid capability installation result; retry with the same idempotency key")
 	}
 	out := envelope.Data
@@ -116,6 +118,26 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 		}
 	}
 	return out, nil
+}
+
+func capabilityConnectorNullableFieldsPresent(raw []byte) bool {
+	var envelope struct {
+		Data struct {
+			Connectors []struct {
+				Version     json.RawMessage `json:"version"`
+				MarketMCPID json.RawMessage `json:"market_mcp_id"`
+			} `json:"connectors"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	for _, connector := range envelope.Data.Connectors {
+		if connector.Version == nil || connector.MarketMCPID == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult, legacySkillWire bool) bool {
@@ -252,7 +274,7 @@ func validCapabilityConnectorResults(def []CapabilityConnector, out []Capability
 	idsByName := make(map[string]string, len(out))
 	seenIDs := make(map[string]bool, len(out))
 	for _, connector := range out {
-		if connector.ConnectorID == "" || connector.Name == "" || seenIDs[connector.ConnectorID] {
+		if !isCapabilityConnectorUUID(connector.ConnectorID) || connector.Name == "" || seenIDs[connector.ConnectorID] {
 			return nil, false
 		}
 		wanted, exists := expected[connector.Name]
@@ -274,6 +296,26 @@ func validCapabilityConnectorResults(def []CapabilityConnector, out []Capability
 		idsByName[connector.Name] = connector.ConnectorID
 	}
 	return idsByName, true
+}
+
+func isCapabilityConnectorUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i := range len(value) {
+		switch i {
+		case 8, 13, 18, 23:
+			if value[i] != '-' {
+				return false
+			}
+		default:
+			c := value[i]
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func sameCapabilityNullableString(left, right *string) bool {

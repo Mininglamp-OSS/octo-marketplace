@@ -253,6 +253,11 @@ forwards `true` when Fleet explicitly supplies it; its absence is not proof of a
 new installation. Fleet response names/IDs, resource type, leader, Skill
 references, nullable Skill versions and Marketplace source IDs, connector
 metadata, and each expert's connector bindings are checked before success.
+
+For new-mode connector results, `connector_id` must be a UUID and each result
+must include both nullable fields, `version` and `market_mcp_id`; explicit
+`null` is valid. Legacy Expert and Skill IDs remain opaque.
+
 Skill versions and `market_skill_id` must exactly match the requested definition;
 `null` is distinct from any string value. Historical
 pinned receipts replayed with the original Skill wire format omit those metadata
