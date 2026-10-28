@@ -883,7 +883,11 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if sync != nil && sync.Relations != nil {
 		rels = sync.Relations
 	}
-	return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
+	out := &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}
+	if sync != nil {
+		out.DraftRevision = sync.DraftRevision
+	}
+	return out, nil
 }
 
 func relationResult(sync *pluginrepo.RelationSync) *RelationResult {

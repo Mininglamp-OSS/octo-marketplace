@@ -22,8 +22,18 @@ func PluginDraftRevision(p *Plugin) string {
 		Status                                                int
 	}{p.ID, p.Name, p.Publisher, p.Icon, p.Type, p.CategoryID, p.SpaceID,
 		p.CurrentVersionID, p.CurrentVersion, p.OwnerUID, p.Visibility, p.ListingState,
-		p.ManifestHash, p.PluginHash, string(p.Tags), string(p.AttachmentKeys), p.Status}
+		p.ManifestHash, p.PluginHash, draftRevisionJSON(p.Tags), draftRevisionJSON(p.AttachmentKeys), p.Status}
 	raw, _ := json.Marshal(state) // Only strings, integers and pointers to strings.
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// MySQL JSON formatting differs from request JSON; revisions compare values.
+func draftRevisionJSON(raw []byte) string {
+	var value any
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return string(raw)
+	}
+	canonical, _ := json.Marshal(value)
+	return string(canonical)
 }

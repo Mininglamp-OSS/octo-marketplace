@@ -468,7 +468,7 @@ func (h *Handler) GetGraph(c *gin.Context) {
 
 // Upsert godoc
 // @Summary Upsert plugin
-// @Description Create or replace a Plugin from {plugin,relations}; owner and Space remain server-derived. New Skill, Expert and Expert Team uploads reject normalized display names already reserved in this Space or the global market with DUPLICATE; change plugin_name or update an existing plugin by ID. For read-modify-write edits, send the draft response draft_revision as expected_draft_revision; a stale token returns CONFLICT without modifying the resource.
+// @Description Create or replace a Plugin from {plugin,relations}; owner and Space remain server-derived. New Skill, Expert and Expert Team uploads reject normalized display names already reserved in this Space or the global market with DUPLICATE; change plugin_name or update an existing plugin by ID. For read-modify-write edits, send the draft response draft_revision as expected_draft_revision; a stale token returns CONFLICT without modifying the resource. Successful updates return the saved draft_revision for subsequent conditional edits.
 // @Tags plugin
 // @ID plugin.upsert
 // @Accept json

@@ -163,6 +163,14 @@ func TestDraftCASHTTPRejectsStaleMetadataWithoutWrites(t *testing.T) {
 				if r.Code != 200 {
 					t.Fatalf("fresh CAS %d %s", r.Code, r.Body.String())
 				}
+				var saved struct {
+					Data struct {
+						Revision string `json:"draft_revision"`
+					} `json:"data"`
+				}
+				if json.Unmarshal(r.Body.Bytes(), &saved) != nil || saved.Data.Revision != revision() {
+					t.Fatalf("saved revision does not identify committed head: %s", r.Body.String())
+				}
 				// Competing metadata-only writes keep the same content version; the row
 				// lock must nevertheless admit exactly one reader of this draft revision.
 				token := revision()
@@ -188,5 +196,36 @@ func TestDraftCASHTTPRejectsStaleMetadataWithoutWrites(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSavedRevisionMatchesFormattedDatabaseJSON(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	req := managedSkillWrite("1.0.0", "revision-json", model.PluginVisibilityPrivate)
+	req.Tags = json.RawMessage(`["one","two"]`)
+	var manifest map[string]any
+	if err := json.Unmarshal(req.Manifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["labels"] = []string{"one", "two"}
+	req.Manifest, _ = json.Marshal(manifest)
+	ctx, owner := context.Background(), managedOwner()
+	d, err := svc.Create(ctx, owner, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Version = "1.0.1"
+	saved, err := svc.Update(ctx, owner, d.Plugin.ID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := svc.CurrentDetail(ctx, owner, d.Plugin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.DraftRevision == "" || saved.DraftRevision != read.DraftRevision {
+		t.Fatalf("write/read revision mismatch %q / %q", saved.DraftRevision, read.DraftRevision)
 	}
 }

@@ -8505,7 +8505,8 @@ paths:
         display names already reserved in this Space or the global market with DUPLICATE;
         change plugin_name or update an existing plugin by ID. For read-modify-write
         edits, send the draft response draft_revision as expected_draft_revision;
-        a stale token returns CONFLICT without modifying the resource.
+        a stale token returns CONFLICT without modifying the resource. Successful
+        updates return the saved draft_revision for subsequent conditional edits.
       operationId: plugin.upsert
       requestBody:
         content:

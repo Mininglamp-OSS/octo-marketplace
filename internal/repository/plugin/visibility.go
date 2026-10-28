@@ -98,7 +98,7 @@ func (r *Repo) ChangeVisibility(ctx context.Context, scope Scope, p VisibilityPa
 		return nil, err
 	}
 	frozen.Visibility = model.PluginVisibilitySpace
-	if err = validateVisibilityGraph(ctx, tx, frozen); err != nil {
+	if err = r.validateVisibilityGraph(ctx, tx, frozen); err != nil {
 		return nil, err
 	}
 	auto := true
@@ -154,12 +154,30 @@ func loadVisibilityRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, ver
 	out.Name, out.Tags = manifestNameAndTags(out.Manifest)
 	return out, nil
 }
-func validateVisibilityGraph(ctx context.Context, tx *sql.Tx, p *visibilityRelease) error {
+func (r *Repo) validateVisibilityGraph(ctx context.Context, tx *sql.Tx, p *visibilityRelease) error {
+	// Use the same rollout-aware validator and immutable version as publication.
+	if r.references {
+		return r.validateReleaseReferences(ctx, tx, p.Plugin, *p.CurrentVersionID)
+	}
 	rels, err := model.DecodeSnapshotRelations(p.Relations)
 	if err != nil {
 		return ErrInvalidRelation
 	}
-	return validateReferenceTree(ctx, tx, p.Plugin, p.Plugin, rels, true, map[string]bool{}, 0)
+	retained := map[string]struct{}{}
+	owner := Scope{CallerUID: p.OwnerUID, SpaceID: *p.SpaceID}
+	for _, edge := range rels {
+		child, err := getOwnedForUpdate(ctx, tx, owner, edge.TargetPluginID)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if child.IsEmbedded && validPersistedRelation(edge.Type, p.Type, child.Type) {
+			retained[child.ID] = struct{}{}
+		}
+	}
+	return r.validateReleaseReferences(ctx, tx, p.Plugin, *p.CurrentVersionID, retained)
 }
 func (r *Repo) applyAudience(ctx context.Context, tx *sql.Tx, scope Scope, p *model.Plugin, target model.PluginVisibility, uid, name, requestID, action string, now time.Time) error {
 	res, err := tx.ExecContext(ctx, `UPDATE plugins SET visibility=?,updated_at=? WHERE plugin_id=? AND space_id=? AND deleted_at IS NULL`, target, now, p.ID, scope.SpaceID)
@@ -167,6 +185,9 @@ func (r *Repo) applyAudience(ctx context.Context, tx *sql.Tx, scope Scope, p *mo
 		return err
 	}
 	if err = mustAffect(res); err != nil {
+		return err
+	}
+	if err = syncVisibilityEmbeddedAudience(ctx, tx, p, target, now); err != nil {
 		return err
 	}
 	remark := "visibility=" + string(p.Visibility) + "->" + string(target)
@@ -197,7 +218,7 @@ func (r *Repo) approveVisibilityReview(ctx context.Context, tx *sql.Tx, scope Sc
 		return nil, err
 	}
 	frozen.Visibility = to
-	if err = validateVisibilityGraph(ctx, tx, frozen); err != nil {
+	if err = r.validateVisibilityGraph(ctx, tx, frozen); err != nil {
 		return nil, err
 	}
 	now := p.Now

@@ -88,10 +88,12 @@ type Mutation struct {
 // known ID with changed fields updates, and live IDs absent from the submitted
 // list are soft-deleted. Relations carries the final rows with assigned IDs.
 type RelationSync struct {
-	Created   []string
-	Updated   []string
-	Deleted   []string
-	Relations []model.PluginRelation
+	// DraftRevision describes this committed write, not a later unlocked read.
+	DraftRevision string
+	Created       []string
+	Updated       []string
+	Deleted       []string
+	Relations     []model.PluginRelation
 	// NewVersionID is the id of the plugin_versions row this write snapshotted and
 	// advanced current_version_id to (empty when the write did not snapshot). The
 	// service stamps it back onto the returned plugin so the write response's
@@ -581,6 +583,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 			return nil, err
 		}
 	}
+	sync.DraftRevision = savedDraftRevision(*before, topPlugin, sync.NewVersionID, false)
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -861,6 +864,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err = insertAudit(ctx, tx, r.id(), now, p, "update", m, before.PluginHash, p.PluginHash); err != nil {
 		return nil, err
 	}
+	sync.DraftRevision = savedDraftRevision(*before, p, sync.NewVersionID, resetListing)
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -1564,4 +1568,24 @@ func ensureVisibleDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func()
 		return wrapped("insert default placement", err)
 	}
 	return nil
+}
+
+func savedDraftRevision(before, written model.Plugin, newVersion string, resetListing bool) string {
+	requestedVersion := written.CurrentVersion
+	written.OwnerUID, written.SpaceID = before.OwnerUID, before.SpaceID
+	written.ListingState = before.ListingState
+	written.CurrentVersionID, written.CurrentVersion = before.CurrentVersionID, before.CurrentVersion
+	if newVersion != "" {
+		written.CurrentVersionID = &newVersion
+		label := "1.0.0"
+		// The snapshot label is supplied by the write, or defaults in snapshotVersion.
+		if requestedVersion != nil && *requestedVersion != "" {
+			label = *requestedVersion
+		}
+		written.CurrentVersion = &label
+	}
+	if resetListing {
+		written.ListingState = model.PluginListingStateDraft
+	}
+	return model.PluginDraftRevision(&written)
 }

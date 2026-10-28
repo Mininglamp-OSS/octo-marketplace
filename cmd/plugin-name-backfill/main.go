@@ -146,6 +146,10 @@ func analyzeRows(rows []row) report {
 		if r.IsEmbedded {
 			continue
 		}
+		if r.DeletedAt != nil {
+			out.SkippedDeleted++
+			continue
+		}
 		scope := ""
 		if r.SpaceID != nil {
 			scope = *r.SpaceID
@@ -169,10 +173,6 @@ func analyzeRows(rows []row) report {
 				continue
 			}
 			r.PublishedKey = publishedKey
-		}
-		if r.DeletedAt != nil {
-			out.SkippedDeleted++
-			continue
 		}
 		for _, key := range keys {
 			gkey := scope + "\x00" + r.Type + "\x00" + key

@@ -42,3 +42,22 @@ func TestAnalyzeRowsIncludesExpertTeamsAndSkipsEmbedded(t *testing.T) {
 		t.Fatalf("team duplicates: %+v", out)
 	}
 }
+
+func TestAnalyzeRowsSkipsInvalidSoftDeletedNames(t *testing.T) {
+	deleted := "2026-10-28T00:00:00Z"
+	for _, kind := range []string{"skill", "expert", "expert_team"} {
+		rows := []row{{ID: "deleted-blank", Type: kind, Name: " ", PublishedName: " ", DeletedAt: &deleted},
+			{ID: "deleted-invalid", Type: kind, Name: string(make([]byte, 200)), DeletedAt: &deleted},
+			{ID: "deleted-duplicate", Type: kind, Name: "Alpha", DeletedAt: &deleted},
+			{ID: "active", Type: kind, Name: "Alpha"}}
+		out := analyzeRows(rows)
+		if len(out.Invalid) != 0 || len(out.DuplicateGroups) != 0 || out.SkippedDeleted != 3 || rows[3].Key != "alpha" {
+			t.Fatalf("%s: %+v", kind, out)
+		}
+		for _, r := range rows[:3] {
+			if r.Key != "" || r.PublishedKey != "" {
+				t.Fatal("deleted row was prepared for backfill")
+			}
+		}
+	}
+}
