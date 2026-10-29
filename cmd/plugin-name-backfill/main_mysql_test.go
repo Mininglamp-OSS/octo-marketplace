@@ -52,19 +52,25 @@ func nameBackfillTestDB(t *testing.T) *sql.DB {
 
 func TestNameBackfillGlobalReservationsMySQL(t *testing.T) {
 	for _, tc := range []struct {
-		name, visibility, listing string
-		conflict                  bool
+		name, visibility, listing, otherVisibility string
+		conflict                                   bool
 	}{
-		{"public", "public", "published", true},
-		{"system", "system", "published", true},
-		{"foreign-private", "private", "published", false},
-		{"unreleased-global", "system", "draft", false},
+		{"public/private", "public", "published", "private", false},
+		{"system/private", "system", "published", "private", false},
+		{"public/public", "public", "published", "public", true},
+		{"system/system", "system", "published", "system", true},
+		{"foreign-private", "private", "published", "private", false},
+		{"unreleased-global", "system", "draft", "private", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := nameBackfillTestDB(t)
+			otherListing := "draft"
+			if tc.otherVisibility != "private" {
+				otherListing = "published"
+			}
 			for _, r := range []struct{ id, name, space, visibility, listing string }{
 				{"market", "Draft", "space-a", tc.visibility, tc.listing},
-				{"tenant", " ＯＦＦＩＣＩＡＬ ", "space-b", "private", "draft"},
+				{"tenant", " ＯＦＦＩＣＩＡＬ ", "space-b", tc.otherVisibility, otherListing},
 			} {
 				if _, err := db.Exec(`INSERT INTO plugins(plugin_id,plugin_name,plugin_type,tags_json,owner_uid,space_id,visibility,listing_state,manifest_json,plugin_json,manifest_hash,plugin_hash,created_at,updated_at) VALUES (?,?,'skill',JSON_ARRAY(),'owner',?,?,?,JSON_OBJECT(),JSON_OBJECT(),REPEAT('a',71),REPEAT('b',71),NOW(3),NOW(3))`, r.id, r.name, r.space, r.visibility, r.listing); err != nil {
 					t.Fatal(err)

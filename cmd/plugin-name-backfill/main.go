@@ -219,6 +219,18 @@ func analyzeRows(rows []row) report {
 			if other.ID == r.ID || other.Scope == r.Scope {
 				continue
 			}
+			// A historical private name may predate a later global listing.
+			// Inventory repair must not force that unrelated row to be renamed.
+			if other.Status != 1 || other.ListingState != "published" || (other.Visibility != "public" && other.Visibility != "system") {
+				continue
+			}
+			effective := other.PublishedKey
+			if effective == "" {
+				effective = other.Key
+			}
+			if effective != name {
+				continue
+			}
 			gkey := "\x00global\x00" + r.Type + "\x00" + name
 			g := groups[gkey]
 			if g == nil {

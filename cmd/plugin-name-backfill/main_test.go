@@ -136,22 +136,23 @@ func TestAnalyzeRowsGlobalPublishedReservations(t *testing.T) {
 	a, b := "space-a", "space-b"
 	for _, kind := range []string{"skill", "expert", "expert_team"} {
 		for _, tc := range []struct {
-			name, visibility, listing, wanted string
-			status                            int
-			conflict                          bool
+			name, visibility, listing, otherVisibility, otherListing, otherPublished string
+			conflict                                                                 bool
 		}{
-			{"public release", "public", "published", "ＯＦＦＩＣＩＡＬ", 1, true},
-			{"system release", "system", "published", "official", 1, true},
-			{"unreleased global rename", "public", "published", "draft", 1, false},
-			{"foreign private", "private", "published", "official", 1, false},
-			{"global draft", "system", "draft", "official", 1, false},
-			{"delisted global", "public", "delisted", "official", 1, false},
-			{"inactive global", "public", "published", "official", 0, false},
+			{"public versus public", "public", "published", "public", "published", "Official", true},
+			{"system versus system", "system", "published", "system", "published", "ＯＦＦＩＣＩＡＬ", true},
+			{"existing private draft", "public", "published", "private", "draft", "", false},
+			{"existing private release", "system", "published", "private", "published", "Official", false},
+			{"existing unreleased public draft", "public", "published", "public", "draft", "", false},
+			{"public draft name matches but release differs", "public", "published", "public", "published", "Different", false},
+			{"foreign private market row", "private", "published", "public", "published", "Official", false},
+			{"global draft market row", "system", "draft", "public", "published", "Official", false},
+			{"delisted global", "public", "delisted", "public", "published", "Official", false},
 		} {
 			t.Run(kind+"/"+tc.name, func(t *testing.T) {
 				rows := []row{
-					{ID: "market", Name: "Draft", PublishedName: "Official", Type: kind, SpaceID: &a, Visibility: tc.visibility, ListingState: tc.listing, Status: tc.status},
-					{ID: "tenant", Name: tc.wanted, Type: kind, SpaceID: &b},
+					{ID: "market", Name: "Draft", PublishedName: "Official", Type: kind, SpaceID: &a, Visibility: tc.visibility, ListingState: tc.listing, Status: 1},
+					{ID: "tenant", Name: "ＯＦＦＩＣＩＡＬ", PublishedName: tc.otherPublished, Type: kind, SpaceID: &b, Visibility: tc.otherVisibility, ListingState: tc.otherListing, Status: 1},
 				}
 				out := analyzeRows(rows)
 				if len(out.Invalid) != 0 || (len(out.DuplicateGroups) > 0) != tc.conflict {
@@ -174,13 +175,17 @@ func TestRunBackfillRevalidatesLockedInventory(t *testing.T) {
 			}
 			defer db.Close()
 			columns := []string{"plugin_id", "name", "type", "embedded", "space", "deleted", "published_name", "visibility", "listing", "status"}
-			mock.ExpectQuery("SELECT p.plugin_id,p.plugin_name").WillReturnRows(sqlmock.NewRows(columns).AddRow("one", "Alpha", "skill", false, "space-a", nil, "", "private", "draft", 1))
+			initialVisibility, listing := "private", "draft"
+			if change == "new-global" {
+				initialVisibility, listing = "public", "published"
+			}
+			mock.ExpectQuery("SELECT p.plugin_id,p.plugin_name").WillReturnRows(sqlmock.NewRows(columns).AddRow("one", "Alpha", "skill", false, "space-a", nil, "", initialVisibility, listing, 1))
 			mock.ExpectBegin()
-			visibility := "private"
+			visibility := initialVisibility
 			if change == "visibility" {
 				visibility = "public"
 			}
-			locked := sqlmock.NewRows(columns).AddRow("one", "Alpha", "skill", change == "embedded", "space-a", nil, "", visibility, "draft", 1)
+			locked := sqlmock.NewRows(columns).AddRow("one", "Alpha", "skill", change == "embedded", "space-a", nil, "", visibility, listing, 1)
 			if change == "new-global" {
 				locked.AddRow("market", "Draft", "skill", false, nil, nil, "Alpha", "system", "published", 1)
 			}
