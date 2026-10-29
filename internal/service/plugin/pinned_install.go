@@ -158,7 +158,10 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 		if err = r.assets.text(instructions); err != nil {
 			return nil, err
 		}
-		out := fleet.CapabilityExpert{Name: name, Description: manifestDescription(expert.Plugin.Manifest), Instructions: instructions}
+		out := fleet.CapabilityExpert{
+			Name: name, Version: expert.Plugin.CurrentVersion, MarketExpertID: expert.Plugin.ID,
+			Description: manifestDescription(expert.Plugin.Manifest), Instructions: instructions,
+		}
 		if err = r.assets.boundedText("definition.experts.description", out.Description, 255); err != nil {
 			return nil, err
 		}
@@ -267,7 +270,10 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 		if err = r.assets.text(instructions); err != nil {
 			return nil, err
 		}
-		team := &fleet.CapabilityExpertTeam{Name: d.Plugin.Name, Description: manifestDescription(d.Plugin.Manifest), Instructions: instructions}
+		team := &fleet.CapabilityExpertTeam{
+			Name: d.Plugin.Name, Version: d.Plugin.CurrentVersion, MarketExpertTeamID: d.Plugin.ID,
+			Description: manifestDescription(d.Plugin.Manifest), Instructions: instructions,
+		}
 		leaders := 0
 		keys := map[string]bool{}
 		if !installationName(team.Name, 128) {
@@ -414,6 +420,7 @@ func (r *pinnedInstallResolver) detail(ctx context.Context, key pluginrepo.Insta
 	cp.Package = v.Package
 	cp.AttachmentKeys = v.AttachmentKeys
 	cp.CurrentVersionID = &v.ID
+	cp.CurrentVersion = v.DeclaredVersion
 	var manifest struct {
 		PluginName string `json:"plugin_name"`
 	}

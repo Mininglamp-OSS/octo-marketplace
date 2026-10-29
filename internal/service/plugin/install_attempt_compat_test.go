@@ -28,8 +28,8 @@ type historicalPinnedDefinition struct {
 	Name          string                      `json:"name"`
 	Skills        []historicalPinnedSkill     `json:"skills,omitempty"`
 	Connectors    []fleet.CapabilityConnector `json:"connectors,omitempty"`
-	Experts       []fleet.CapabilityExpert    `json:"experts"`
-	ExpertTeam    *fleet.CapabilityExpertTeam `json:"expert_team,omitempty"`
+	Experts       []historicalPinnedExpert    `json:"experts"`
+	ExpertTeam    *historicalPinnedExpertTeam `json:"expert_team,omitempty"`
 }
 
 type historicalPinnedSkill struct {
@@ -38,6 +38,23 @@ type historicalPinnedSkill struct {
 	Content     string                      `json:"content"`
 	Config      map[string]any              `json:"config"`
 	Files       []fleet.CapabilitySkillFile `json:"files,omitempty"`
+}
+
+type historicalPinnedExpert struct {
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	Instructions   string            `json:"instructions"`
+	SkillNames     []string          `json:"skill_names,omitempty"`
+	ConnectorNames []string          `json:"connector_names,omitempty"`
+	CustomEnv      map[string]string `json:"custom_env,omitempty"`
+	MCPConfig      json.RawMessage   `json:"mcp_config,omitempty"`
+}
+
+type historicalPinnedExpertTeam struct {
+	Name         string                       `json:"name"`
+	Members      []fleet.CapabilityTeamMember `json:"members"`
+	Description  string                       `json:"description"`
+	Instructions string                       `json:"instructions"`
 }
 
 func TestPinnedInstallReplaysSignedHistoricalReceiptWithOldSkillWireShape(t *testing.T) {
@@ -143,16 +160,25 @@ func makeHistoricalPinnedAttempt(t *testing.T, s *Service, p InstallationParams,
 	if err != nil {
 		t.Fatalf("build historical request fixture: %v", err)
 	}
-	oldRequest := historicalPinnedRequest{
-		Definition: historicalPinnedDefinition{
-			SchemaVersion: request.Definition.SchemaVersion,
-			Name:          request.Definition.Name,
-			Connectors:    request.Definition.Connectors,
-			Experts:       request.Definition.Experts,
-			ExpertTeam:    request.Definition.ExpertTeam,
-		},
-		Bindings: request.Bindings,
+	oldDefinition := historicalPinnedDefinition{
+		SchemaVersion: request.Definition.SchemaVersion,
+		Name:          request.Definition.Name,
+		Connectors:    request.Definition.Connectors,
 	}
+	for _, expert := range request.Definition.Experts {
+		oldDefinition.Experts = append(oldDefinition.Experts, historicalPinnedExpert{
+			Name: expert.Name, Description: expert.Description, Instructions: expert.Instructions,
+			SkillNames: expert.SkillNames, ConnectorNames: expert.ConnectorNames,
+			CustomEnv: expert.CustomEnv, MCPConfig: expert.MCPConfig,
+		})
+	}
+	if team := request.Definition.ExpertTeam; team != nil {
+		oldDefinition.ExpertTeam = &historicalPinnedExpertTeam{
+			Name: team.Name, Members: team.Members,
+			Description: team.Description, Instructions: team.Instructions,
+		}
+	}
+	oldRequest := historicalPinnedRequest{Definition: oldDefinition, Bindings: request.Bindings}
 	for _, skill := range request.Definition.Skills {
 		oldRequest.Definition.Skills = append(oldRequest.Definition.Skills, historicalPinnedSkill{
 			Name: skill.Name, Description: skill.Description, Content: skill.Content,
@@ -165,7 +191,9 @@ func makeHistoricalPinnedAttempt(t *testing.T, s *Service, p InstallationParams,
 	}
 	var decoded struct {
 		Definition struct {
-			Skills []map[string]json.RawMessage `json:"skills"`
+			Skills     []map[string]json.RawMessage `json:"skills"`
+			Experts    []map[string]json.RawMessage `json:"experts"`
+			ExpertTeam map[string]json.RawMessage   `json:"expert_team"`
 		} `json:"definition"`
 	}
 	if err := json.Unmarshal(wire, &decoded); err != nil || len(decoded.Definition.Skills) != len(request.Definition.Skills) {
@@ -178,6 +206,20 @@ func makeHistoricalPinnedAttempt(t *testing.T, s *Service, p InstallationParams,
 		if _, exists := skill["market_skill_id"]; exists {
 			t.Fatal("historical fixture contains the later Skill source field")
 		}
+	}
+	for _, expert := range decoded.Definition.Experts {
+		if _, exists := expert["version"]; exists {
+			t.Fatal("historical fixture contains the later Expert version field")
+		}
+		if _, exists := expert["market_expert_id"]; exists {
+			t.Fatal("historical fixture contains the later Expert source field")
+		}
+	}
+	if _, exists := decoded.Definition.ExpertTeam["version"]; exists {
+		t.Fatal("historical fixture contains the later ExpertTeam version field")
+	}
+	if _, exists := decoded.Definition.ExpertTeam["market_expert_team_id"]; exists {
+		t.Fatal("historical fixture contains the later ExpertTeam source field")
 	}
 	intent := digestInstall(struct {
 		Root, Space, Workspace, Runtime, Name string

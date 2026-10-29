@@ -484,20 +484,17 @@ gone; the name frees up for reuse. **Response (200):** `{"data":{}}`. **Errors:*
 ### 4.6.1 `POST /experts/{expert_id}/install` — provision to a Loop workspace/runtime
 
 Provision the expert as a Loop agent in the caller's chosen workspace/runtime.
-The server, acting **as the calling user** (the octo `Token` is forwarded to
-octo-fleet, which enforces workspace membership, runtime access, and space
-scoping — this service does not re-check them):
+The server, acting **as the calling user**, resolves the visible expert and
+assembles its instruction, MCP configuration, packaged Skills and supporting
+text files into one Fleet capability definition. It submits exactly one atomic
+capability-install request; the caller's octo `Token`, Space, Workspace and
+Runtime binding are forwarded for Fleet authorization.
 
-1. resolves the **visible** expert (§4.4 visibility rule),
-2. creates a Loop agent seeded with the expert's `instruction` + `mcp_config`,
-3. creates one workspace skill per packaged skill and attaches its supporting
-   files, then binds the skills to the agent.
-
-On any partial failure it **rolls back** the agent and every skill it created
-(best-effort, on a context detached from the request so cancellation still
-cleans up). The whole install is bounded by an aggregate timeout, and the total
-supporting-file fan-out is capped across all skills (a package exceeding it →
-`400`).
+The legacy expert model has no source-version field, so the definition sends a
+nullable `version` as JSON `null`. Fleet owns the resource transaction: Marketplace
+does not issue separate agent/skill creation calls or compensating deletes. A
+rejected install leaves no separately created agent or Skill. Supporting-file
+fan-out remains capped across all Skills (a package exceeding it returns `400`).
 
 **Request:**
 
@@ -537,26 +534,21 @@ and `squad_id`:
   octo-web squad editor. Immutable fields as §4.5.
 - `DELETE /squads/{squad_id}` — soft delete; 200 `{"data":{}}`.
 - `POST /squads/{squad_id}/install` — provision the squad into a Loop
-  workspace/runtime. Body `{ "workspace_id", "runtime_id" }`. The server first
-  installs **each member** as a Loop agent (create agent seeded with the
-  member's instruction + `mcp_config`, create + bind its packaged skills; exact
-  duplicate Skill names are first-wins across members, while case/whitespace
-  variants remain distinct), then
-  **forms the squad** via octo-fleet: create it led by the leader member (first
-  member flagged `is_leader`, else the one whose name matches the squad `leader`
-  label, else the first member — fleet auto-adds the leader as a member), write
-  the squad's `strategies` as its Loop instructions (one numbered line per
-  rule, via a bounded-retry follow-up squad update; skipped when the squad has no
-  strategies), and attach the remaining members with their roles. Aggregates the fleet calls on
-  behalf of the caller (forwarded token, so fleet enforces workspace membership
-  — squad create requires owner/admin — runtime access, and space scoping) and
-  **rolls back** the squad plus every provisioned member agent on any partial
-  failure. **Response (200):** `{ "squad_id", "leader_agent_id" }`. Mirrors the
-  single-agent expert flow `POST /experts/{expert_id}/install`. **Errors:** 400
-  (`invalid_request`, incl. a squad with no members, or an install that exceeds
-  the aggregate resource caps) · 401 · 403 · 404 · 409 (fleet rejects a duplicate
-  agent/squad name in the workspace) · 500 · 503 (`UPSTREAM_UNAVAILABLE` when
-  octo-fleet is unconfigured or unavailable).
+  workspace/runtime. Body `{ "workspace_id", "runtime_id" }`. The server resolves
+  the visible squad, assembles all member experts, their instruction + MCP
+  configuration, packaged Skills, team instructions and leader/role wiring into
+  one Fleet capability definition, then submits exactly one atomic capability
+  install request. Exact duplicate Skill names are shared first-wins across
+  members; case/whitespace variants remain distinct. The request forwards the
+  caller's token, Space, Workspace and each member's Runtime binding, so Fleet
+  enforces membership, runtime access, space scoping, and squad create
+  permissions. The legacy squad model has no source-version field, so expert
+  and team versions are sent as JSON `null`. Fleet owns the transaction; there
+  are no separate member-agent/Skill/squad create calls or compensating deletes.
+  Empty squads and resource-cap violations remain `400`. **Response (200):**
+  `{ "squad_id", "leader_agent_id" }`, unchanged from the legacy flow. **Errors:**
+  400 (`invalid_request`) · 401 · 403 · 404 · 409 (Fleet resource conflict) · 500
+  · 503 (`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).
 
   **Request:** `{ "workspace_id": "ws-123", "runtime_id": "rt-456" }` —
   **Response (200):** `{ "data": { "squad_id": "sq-1", "leader_agent_id": "agent-1" } }`.

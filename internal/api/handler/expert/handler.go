@@ -270,7 +270,7 @@ func (h *Handler) GetExpert(c *gin.Context) {
 
 // InstallExpert godoc
 // @Summary Install expert to a Loop workspace/runtime
-// @Description Provision the expert as a Loop agent (with its skills) in the chosen workspace/runtime. Aggregates octo-fleet calls on behalf of the caller and rolls back on partial failure.
+// @Description Installs the expert and its packaged Skills in one atomic Fleet capability operation.
 // @Tags expert
 // @ID expert.install
 // @Accept json
@@ -313,7 +313,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 
 // InstallSquad godoc
 // @Summary Install squad to a Loop workspace/runtime
-// @Description Provision a squad into the chosen workspace/runtime: install each member as a Loop agent (exact duplicate Skill names are first-wins across members), create the squad led by the leader member, write its strategies as instructions with bounded retries, and attach the rest. Aggregates octo-fleet calls on behalf of the caller and rolls back on persistent partial failure.
+// @Description Installs the squad, member experts, Skills, runtime bindings, and dispatch instructions in one atomic Fleet capability operation.
 // @Tags expert
 // @ID squad.install
 // @Accept json
@@ -989,17 +989,29 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 	}
 }
 
-// writeInstallError maps the extra failure modes of the install aggregation on
-// top of the shared sentinels: an unconfigured fleet → 503, and a fleet
-// *APIError → its own status (4xx surfaced verbatim, 5xx/transport collapsed to
-// UPSTREAM_UNAVAILABLE so a fleet hiccup never masquerades as a client fault).
+// writeInstallError maps Fleet installation errors without changing the legacy
+// endpoint response schema: permission and other 4xx statuses pass through,
+// while upstream failures and transport errors become 503.
 func writeInstallError(c *gin.Context, err error) {
 	if errors.Is(err, expertsvc.ErrFleetNotConfigured) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is not configured", nil, "")
 		return
 	}
+	if errors.Is(err, expertsvc.ErrFleetInstallUnavailable) {
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", nil, "")
+		return
+	}
 	if errors.Is(err, expertsvc.ErrInstallTooLarge) {
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "install exceeds resource limits", nil, "")
+		return
+	}
+	var capabilityErr *fleet.CapabilityAPIError
+	if errors.As(err, &capabilityErr) {
+		if capabilityErr.Status >= 400 && capabilityErr.Status < 500 {
+			apiresponse.Fail(c, capabilityErr.Status, installErrCode(capabilityErr.Status), "loop service rejected the request", nil, "")
+			return
+		}
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", nil, "")
 		return
 	}
 	var apiErr *fleet.APIError
@@ -1011,7 +1023,7 @@ func writeInstallError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", nil, "")
 		return
 	}
-	// ErrNotFound / ErrInvalidRequest and the rest share the catalog mapping.
+	// ErrNotFound / ErrInvalidRequest and local failures share catalog mapping.
 	writeServiceError(c, err, "expert.install")
 }
 

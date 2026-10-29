@@ -110,12 +110,33 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 		if err := b.boundedText("definition.expert_team.description", summary, 255); err != nil {
 			return nil, err
 		}
-		team := &fleet.CapabilityExpertTeam{Name: name, Description: summary, Instructions: instructions}
+		team := &fleet.CapabilityExpertTeam{
+			Name: name, Version: root.Plugin.CurrentVersion, MarketExpertTeamID: root.Plugin.ID,
+			Description: summary, Instructions: instructions,
+		}
 		leader := -1
 		for i, rel := range relations {
-			detail, err := s.resolveInstallDetail(ctx, caller, rel.TargetPluginID)
-			if err != nil {
-				return nil, err
+			var detail *Detail
+			if rel.TargetVersionID != nil {
+				if *rel.TargetVersionID == "" {
+					return nil, ErrIntegrity
+				}
+				if !s.versionManagement {
+					return nil, ErrVersionBaselineUnavailable
+				}
+				current, err := s.currentDetail(ctx, caller, rel.TargetPluginID, true)
+				if err != nil {
+					return nil, err
+				}
+				detail, err = s.publishedDetailAt(ctx, scope(caller), current.Plugin, current.Relations, *rel.TargetVersionID, false)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				detail, err = s.resolveInstallDetail(ctx, caller, rel.TargetPluginID)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if !detail.Plugin.IsEmbedded && !installAudience(root.Plugin, detail.Plugin) {
 				return nil, ErrDependencyHidden
@@ -221,7 +242,10 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	if err := b.boundedText("definition.experts.description", summary, 255); err != nil {
 		return nil, err
 	}
-	out := &fleet.CapabilityExpert{Name: name, Description: summary, Instructions: instructions}
+	out := &fleet.CapabilityExpert{
+		Name: name, Version: detail.Plugin.CurrentVersion, MarketExpertID: detail.Plugin.ID,
+		Description: summary, Instructions: instructions,
+	}
 	if workspaceConnectors {
 		relations := relationsOfType(detail.Relations, "expert_connector")
 		for _, rel := range relations {

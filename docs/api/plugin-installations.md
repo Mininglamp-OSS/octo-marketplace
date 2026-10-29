@@ -156,7 +156,21 @@ its member experts, their deduplicated Skills, and `expert_team`. Bindings ident
 each expert by the assembled name. `definition.name` is the stable catalog
 identity `marketplace:<plugin_id>`, not the custom display name.
 
-When `PLUGIN_PINNED_INSTALLATION_ENABLED` is enabled, this endpoint keeps the
+Both current and pinned adapters send each Expert's `market_expert_id` and its
+nullable selected source version; for a formal snapshot this is that snapshot's
+`DeclaredVersion`. An expert team sends its own `market_expert_team_id` and its
+nullable selected source version, likewise using the formal snapshot's
+`DeclaredVersion`. A missing source version remains JSON `null`.
+
+If a team relation has `TargetVersionID`, both adapters load that exact member
+snapshot. The member name, description, instructions, MCP configuration,
+dependencies, and declared version all come from that same snapshot; the pinned
+flag does not change member-version meaning. The current adapter uses the
+published root snapshot. The pinned adapter uses the current published root and
+its captured member snapshots. Arbitrary historical root selection is not
+exposed by this request.
+
+When `PLUGIN_PINNED_INSTALLATION_ENABLED` is enabled, the pinned path keeps the
 existing version-management, published-root, and dependency-audience rules.
 Skills come from the selected immutable release, including its nullable
 `DeclaredVersion` and real plugin ID; a later draft does not change the selected
@@ -250,21 +264,28 @@ Legacy mode omits `connectors`, even if Fleet returns connector metadata.
 
 Fleet test currently returns no `Idempotency-Replayed` header. Marketplace only
 forwards `true` when Fleet explicitly supplies it; its absence is not proof of a
-new installation. Fleet response names/IDs, resource type, leader, Skill
-references, nullable Skill versions and Marketplace source IDs, connector
-metadata, and each expert's connector bindings are checked before success.
+new installation. Fleet response type, root IDs, root version identity, and
+actual UUID references are checked before success. Actual expert/team source IDs
+and created/restored states are preserved. On reuse, the response describes the
+committed local graph, which may differ from the submitted definition; bindings
+are validated against the returned Skill and connector IDs.
 
 For new-mode connector results, `connector_id` must be a UUID and each result
 must include both nullable fields, `version` and `market_mcp_id`; explicit
 `null` is valid. Legacy Expert and Skill IDs remain opaque.
 
-Skill versions and `market_skill_id` must exactly match the requested definition;
-`null` is distinct from any string value. Historical
-pinned receipts replayed with the original Skill wire format omit those metadata
-fields, so only their Skill metadata comparison is skipped; identity and binding
-checks still apply. Missing, duplicate, unknown, or mismatched Skill or connector
-results leave the Fleet outcome uncertain; retry only with the same key and
-input. Errors use the standard `{ "error": { "code", "message", "details", "hint" } }`
+Root version identity is checked against the request. For resources that are
+newly created, version and source metadata must match the definition; reused or
+restored resources may retain their first source ID. Reused Experts preserve
+their actual Skill/connector bindings, and reused or restored Teams may return
+their existing local member graph, so those bindings/members are not compared to
+the submitted graph. Their actual IDs and Team version are still checked against
+the returned result. Historical pinned receipts replayed with the original wire
+format omit Skill, Expert, and Team source metadata, so those metadata checks
+are skipped; identity and binding-reference checks still apply. Missing,
+duplicate, unknown, or identity-mismatched resources leave the Fleet outcome
+uncertain; retry only with the same key and input. Errors use the standard
+`{ "error": { "code", "message", "details", "hint" } }`
 envelope. By explicit product requirement, Marketplace-generated `message` and
 `hint` are Chinese and may be displayed directly by the client; machine codes
 and `details` keys remain stable. This is a route-specific exception to the

@@ -1,10 +1,13 @@
 package expert
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
@@ -15,7 +18,7 @@ func installSquadFixture(t *testing.T, fleetClient FleetProvisioner, members []m
 }
 
 // installSquadFixtureStrategies is installSquadFixture with squad-level
-// dispatch strategies seeded (the instructions-write path).
+// dispatch strategies seeded for the capability request.
 func installSquadFixtureStrategies(t *testing.T, fleetClient FleetProvisioner, members []model.SquadMember, strategies []string) (*Service, Caller, string) {
 	t.Helper()
 	store := newFakeStore()
@@ -43,8 +46,8 @@ func installSquadFixtureStrategies(t *testing.T, fleetClient FleetProvisioner, m
 	return svc, caller, squadID
 }
 
-// threeMembers is a leader (index 1) flanked by two workers, exercising the
-// "skip the leader when attaching members" and role-passthrough paths.
+// threeMembers is a leader (index 1) flanked by two workers, exercising
+// leader selection, member ordering, and role defaults.
 func threeMembers() []model.SquadMember {
 	return []model.SquadMember{
 		{MemberKey: "member_01", Name: "Planner", Role: "planner", Instruction: "plan things"},
@@ -53,17 +56,10 @@ func threeMembers() []model.SquadMember {
 	}
 }
 
-// A successful squad install counts once under resource_type "squad" — and
-// never counts the member experts, which are snapshots inside the squad. A
-// failed squad install must not count.
+// A successful squad install counts once under resource_type "squad" and a
+// failed capability transaction must not count.
 func TestInstallSquadTracksInstallOnlyForSquad(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-	}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert_team", ExpertTeamID: "squad-x", LeaderExpertID: "leader-x"}}
 	svc, caller, id := installSquadFixture(t, ff, threeMembers())
 	tracker := &recordingTracker{}
 	svc = svc.WithMetrics(tracker)
@@ -72,17 +68,10 @@ func TestInstallSquadTracksInstallOnlyForSquad(t *testing.T) {
 		t.Fatalf("InstallSquad: %v", err)
 	}
 	if len(tracker.installs) != 1 || tracker.installs[0] != "squad/"+id {
-		t.Fatalf("installs = %v, want exactly [squad/%s] (no member expert counts)", tracker.installs, id)
+		t.Fatalf("installs = %v, want exactly [squad/%s]", tracker.installs, id)
 	}
 
-	// Failure path: squad formation fails → rollback, no count.
-	ffFail := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadErr:     errors.New("boom"),
-	}
+	ffFail := &fakeFleet{capabilityErr: errors.New("capability rejected")}
 	svcFail, callerFail, idFail := installSquadFixture(t, ffFail, threeMembers())
 	trackerFail := &recordingTracker{}
 	svcFail = svcFail.WithMetrics(trackerFail)
@@ -95,42 +84,24 @@ func TestInstallSquadTracksInstallOnlyForSquad(t *testing.T) {
 }
 
 func TestInstallSquadHappyPath(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-	}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{
+		Type: "expert_team", ExpertTeamID: "squad-x", LeaderExpertID: "leader-x",
+	}}
 	svc, caller, id := installSquadFixture(t, ff, threeMembers())
 
 	res, err := svc.InstallSquad(context.Background(), caller, id, baseInput())
 	if err != nil {
 		t.Fatalf("InstallSquad: %v", err)
 	}
-	if res.SquadID != "squad-x" || res.LeaderAgentID != "a1" {
-		t.Fatalf("result = %#v, want {squad-x, a1}", res)
+	if res.SquadID != "squad-x" || res.LeaderAgentID != "leader-x" {
+		t.Fatalf("result = %#v, want {squad-x, leader-x}", res)
 	}
-	if ff.agentIdx != 3 {
-		t.Fatalf("created %d agents, want 3", ff.agentIdx)
+	assertOnlyCapabilityInstall(t, ff)
+	if ff.capabilityToken != "tok" || ff.capabilitySpace != "space-1" || ff.capabilityWorkspace != "ws-1" || ff.capabilityKey == "" {
+		t.Fatalf("capability routing = token:%q space:%q workspace:%q key:%q", ff.capabilityToken, ff.capabilitySpace, ff.capabilityWorkspace, ff.capabilityKey)
 	}
-	// The squad is formed led by the leader member's agent.
-	if ff.squadSpec.LeaderAgentID != "a1" || ff.squadSpec.Name != "Delivery Squad" {
-		t.Fatalf("squad spec = %#v", ff.squadSpec)
-	}
-	// Only the two non-leader members are attached (leader auto-added by fleet).
-	if len(ff.addedMembers) != 2 {
-		t.Fatalf("added %d members, want 2: %#v", len(ff.addedMembers), ff.addedMembers)
-	}
-	if m := ff.addedMembers[0]; m.MemberType != "agent" || m.MemberID != "a0" || m.Role != "planner" {
-		t.Fatalf("member[0] = %#v", ff.addedMembers[0])
-	}
-	// Empty member role defaults to "member".
-	if m := ff.addedMembers[1]; m.MemberType != "agent" || m.MemberID != "a2" || m.Role != "member" {
-		t.Fatalf("member[1] = %#v", ff.addedMembers[1])
-	}
-	if len(ff.deletedAgents) != 0 || len(ff.deletedSquads) != 0 {
-		t.Fatalf("unexpected rollback: agents=%#v squads=%#v", ff.deletedAgents, ff.deletedSquads)
+	if team := ff.capabilityInput.Definition.ExpertTeam; team == nil || team.Name != "Delivery Squad" || len(team.Members) != 3 {
+		t.Fatalf("capability team = %+v", team)
 	}
 }
 
@@ -154,41 +125,39 @@ func TestInstallSquadBindsSharedSkillsToEveryMember(t *testing.T) {
 			},
 		},
 	}
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1"},
-		skillIDs:     []string{"shared", "planner", "coder"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-	}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert_team", ExpertTeamID: "squad-x", LeaderExpertID: "a0"}}
 	svc, caller, id := installSquadFixtureStrategies(t, ff, members, []string{"先分析", "再执行"})
 
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
 		t.Fatalf("InstallSquad: %v", err)
 	}
-	if len(ff.createdSkills) != 3 {
-		t.Fatalf("created skills = %#v, want three unique names", ff.createdSkills)
-	}
+	assertOnlyCapabilityInstall(t, ff)
+	definition := ff.capabilityInput.Definition
 	wantNames := []string{"Shared Skill", "Planner Only", "Coder Only"}
+	if len(definition.Skills) != len(wantNames) {
+		t.Fatalf("capability skills = %+v, want names %v", definition.Skills, wantNames)
+	}
 	for i, want := range wantNames {
-		if ff.createdSkills[i].Name != want {
-			t.Fatalf("createdSkills[%d].Name = %q, want %q", i, ff.createdSkills[i].Name, want)
+		if definition.Skills[i].Name != want {
+			t.Fatalf("capability skills[%d].Name = %q, want %q", i, definition.Skills[i].Name, want)
 		}
 	}
-	if got := ff.bindings["a0"]; len(got) != 2 || got[0] != "shared" || got[1] != "planner" {
-		t.Fatalf("leader bindings = %#v, want [shared planner]", got)
+	experts := make(map[string]fleet.CapabilityExpert, len(definition.Experts))
+	for _, expert := range definition.Experts {
+		experts[expert.Name] = expert
 	}
-	if got := ff.bindings["a1"]; len(got) != 2 || got[0] != "shared" || got[1] != "coder" {
-		t.Fatalf("second member bindings = %#v, want [shared coder]", got)
+	if got := experts["Planner"].SkillNames; len(got) != 2 || got[0] != "Shared Skill" || got[1] != "Planner Only" {
+		t.Fatalf("Planner skill names = %#v", got)
 	}
-	if ff.instrCalls != 1 || ff.instrValue != "1. 先分析\n2. 再执行" {
-		t.Fatalf("instruction update calls=%d value=%q", ff.instrCalls, ff.instrValue)
+	if got := experts["Coder"].SkillNames; len(got) != 2 || got[0] != "Shared Skill" || got[1] != "Coder Only" {
+		t.Fatalf("Coder skill names = %#v", got)
+	}
+	if team := definition.ExpertTeam; team == nil || team.Instructions != "1. 先分析\n2. 再执行" {
+		t.Fatalf("team instructions = %+v", team)
 	}
 }
 
-// The squad's dispatch strategies must land in fleet as the squad's
-// instructions — one numbered line per rule, blank rules skipped.
+// Skill names remain byte-exact across the one capability definition.
 func TestInstallSquadKeepsCaseAndWhitespaceVariantSkillNames(t *testing.T) {
 	members := []model.SquadMember{
 		{MemberKey: "member_01", Name: "Planner", IsLeader: true, Skills: []model.SkillRef{
@@ -199,127 +168,43 @@ func TestInstallSquadKeepsCaseAndWhitespaceVariantSkillNames(t *testing.T) {
 			{Name: "Deploy ", ObjectKey: "members/2/deploy-space"},
 		}},
 	}
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1"},
-		skillIDs:     []string{"upper", "lower", "space"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-	}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert_team", ExpertTeamID: "squad-x", LeaderExpertID: "a0"}}
 	svc, caller, id := installSquadFixture(t, ff, members)
 
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
 		t.Fatalf("InstallSquad: %v", err)
 	}
-	if len(ff.createdSkills) != 3 {
-		t.Fatalf("created skills = %#v, want all three exact-name variants", ff.createdSkills)
+	skills := ff.capabilityInput.Definition.Skills
+	if len(skills) != 3 || skills[0].Name != "Deploy" || skills[1].Name != "deploy" || skills[2].Name != "Deploy " {
+		t.Fatalf("capability skills = %+v, want exact names [Deploy deploy Deploy ]", skills)
 	}
-	if got := ff.bindings["a0"]; len(got) != 1 || got[0] != "upper" {
-		t.Fatalf("leader bindings = %#v, want [upper]", got)
-	}
-	if got := ff.bindings["a1"]; len(got) != 2 || got[0] != "lower" || got[1] != "space" {
-		t.Fatalf("second member bindings = %#v, want [lower space]", got)
+	if names := ff.capabilityInput.Definition.Experts[1].SkillNames; len(names) != 2 || names[0] != "deploy" || names[1] != "Deploy " {
+		t.Fatalf("Coder skill names = %#v", names)
 	}
 }
 
 func TestInstallSquadWritesStrategiesAsInstructions(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-	}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert_team", ExpertTeamID: "squad-x", LeaderExpertID: "a1"}}
 	strategies := []string{"先分析需求", "  ", "再分派给成员"}
 	svc, caller, id := installSquadFixtureStrategies(t, ff, threeMembers(), strategies)
 
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
 		t.Fatalf("InstallSquad: %v", err)
 	}
-	if ff.instrCalls != 1 || ff.instrSquadID != "squad-x" {
-		t.Fatalf("instructions calls = %d for %q, want 1 for squad-x", ff.instrCalls, ff.instrSquadID)
-	}
-	if want := "1. 先分析需求\n2. 再分派给成员"; ff.instrValue != want {
-		t.Fatalf("instructions = %q, want %q", ff.instrValue, want)
-	}
-}
-
-func TestInstallSquadRetriesTransientInstructionsFailure(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-		instrErrs:    []error{errors.New("temporary failure"), nil},
-	}
-	svc, caller, id := installSquadFixtureStrategies(t, ff, threeMembers(), []string{"规则一"})
-
-	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
-		t.Fatalf("InstallSquad: %v", err)
-	}
-	if ff.instrCalls != 2 {
-		t.Fatalf("instructions calls = %d, want 2", ff.instrCalls)
-	}
-	if len(ff.deletedSquads) != 0 || len(ff.deletedAgents) != 0 {
-		t.Fatalf("transient failure must not roll back: squads=%v agents=%v", ff.deletedSquads, ff.deletedAgents)
-	}
-	if len(ff.addedMembers) != 2 {
-		t.Fatalf("members added = %d, want 2", len(ff.addedMembers))
+	if team := ff.capabilityInput.Definition.ExpertTeam; team == nil || team.Instructions != "1. 先分析需求\n2. 再分派给成员" {
+		t.Fatalf("capability team instructions = %+v", team)
 	}
 }
 
 func TestInstallSquadSkipsInstructionsWithoutStrategies(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-	}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert_team", ExpertTeamID: "squad-x", LeaderExpertID: "a1"}}
 	svc, caller, id := installSquadFixture(t, ff, threeMembers())
 
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
 		t.Fatalf("InstallSquad: %v", err)
 	}
-	if ff.instrCalls != 0 {
-		t.Fatalf("instructions calls = %d, want 0 (no strategies)", ff.instrCalls)
-	}
-}
-
-func TestInstallSquadRollsBackOnInstructionsFailure(t *testing.T) {
-	members := threeMembers()
-	members[0].Skills = []model.SkillRef{{Name: "Planner Skill", ObjectKey: "members/0/planner"}}
-	members[1].Skills = []model.SkillRef{{Name: "Lead Skill", ObjectKey: "members/1/lead"}}
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		skillIDs:     []string{"s0", "s1"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		failMemberAt: -1,
-		squadID:      "squad-x",
-		instrErr:     errors.New("instructions boom"),
-	}
-	svc, caller, id := installSquadFixtureStrategies(t, ff, members, []string{"规则一"})
-
-	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
-		t.Fatal("expected error on instructions-write failure")
-	}
-	if len(ff.deletedSquads) != 1 || ff.deletedSquads[0] != "squad-x" {
-		t.Fatalf("deleted squads = %#v, want [squad-x]", ff.deletedSquads)
-	}
-	if len(ff.deletedAgents) != 3 {
-		t.Fatalf("deleted agents = %#v, want all 3", ff.deletedAgents)
-	}
-	if ff.instrCalls != squadInstructionUpdateAttempts {
-		t.Fatalf("instructions calls = %d, want %d", ff.instrCalls, squadInstructionUpdateAttempts)
-	}
-	if len(ff.deletedSkills) != 2 || ff.deletedSkills[0] != "s0" || ff.deletedSkills[1] != "s1" {
-		t.Fatalf("deleted skills = %#v, want [s0 s1]", ff.deletedSkills)
-	}
-	if len(ff.addedMembers) != 0 {
-		t.Fatalf("no members should be attached: %#v", ff.addedMembers)
+	if team := ff.capabilityInput.Definition.ExpertTeam; team == nil || team.Instructions != "" {
+		t.Fatalf("capability team instructions = %+v, want empty", team)
 	}
 }
 
@@ -328,102 +213,31 @@ func TestInstallSquadDefaultsLeaderToFirstMember(t *testing.T) {
 		{MemberKey: "member_01", Name: "First", Role: "a", Instruction: "i"},
 		{MemberKey: "member_02", Name: "Second", Role: "b", Instruction: "i"},
 	}
-	ff := &fakeFleet{agentIDs: []string{"a0", "a1"}, failAgentAt: -1, failSkillAt: -1, failMemberAt: -1, squadID: "sq"}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert_team", ExpertTeamID: "sq", LeaderExpertID: "a0"}}
 	svc, caller, id := installSquadFixture(t, ff, members)
 
 	res, err := svc.InstallSquad(context.Background(), caller, id, baseInput())
 	if err != nil {
 		t.Fatalf("InstallSquad: %v", err)
 	}
-	if res.LeaderAgentID != "a0" || ff.squadSpec.LeaderAgentID != "a0" {
+	if res.LeaderAgentID != "a0" {
 		t.Fatalf("leader = %q, want a0 (first member)", res.LeaderAgentID)
 	}
-	if len(ff.addedMembers) != 1 || ff.addedMembers[0].MemberID != "a1" {
-		t.Fatalf("added members = %#v, want only a1", ff.addedMembers)
-	}
-}
-
-func TestInstallSquadRollsBackEarlierAgentsOnMemberProvisionFailure(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:    []string{"a0", "a1", "a2"},
-		agentErr:    errors.New("create boom"),
-		failAgentAt: 1, // first member ok (a0), second CreateAgent fails
-		failSkillAt: -1,
-	}
-	svc, caller, id := installSquadFixture(t, ff, threeMembers())
-
-	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
-		t.Fatal("expected error when a member fails to provision")
-	}
-	// The earlier member agent is unwound; no squad was ever created.
-	if len(ff.deletedAgents) != 1 || ff.deletedAgents[0] != "a0" {
-		t.Fatalf("deleted agents = %#v, want [a0]", ff.deletedAgents)
-	}
-	if len(ff.deletedSquads) != 0 {
-		t.Fatalf("no squad should be created/deleted: %#v", ff.deletedSquads)
-	}
-	if ff.squadSpec.LeaderAgentID != "" {
-		t.Fatalf("CreateSquad should not be called: %#v", ff.squadSpec)
-	}
-}
-
-func TestInstallSquadRollsBackAllAgentsOnCreateSquadFailure(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:    []string{"a0", "a1", "a2"},
-		failAgentAt: -1,
-		failSkillAt: -1,
-		squadErr:    errors.New("squad boom"),
-	}
-	svc, caller, id := installSquadFixture(t, ff, threeMembers())
-
-	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
-		t.Fatal("expected error on CreateSquad failure")
-	}
-	if len(ff.deletedAgents) != 3 {
-		t.Fatalf("deleted agents = %#v, want all 3", ff.deletedAgents)
-	}
-	if len(ff.deletedSquads) != 0 {
-		t.Fatalf("squad create failed, nothing to delete: %#v", ff.deletedSquads)
-	}
-	if len(ff.addedMembers) != 0 {
-		t.Fatalf("no members should be attached: %#v", ff.addedMembers)
-	}
-}
-
-func TestInstallSquadRollsBackSquadAndAgentsOnAddMemberFailure(t *testing.T) {
-	ff := &fakeFleet{
-		agentIDs:     []string{"a0", "a1", "a2"},
-		failAgentAt:  -1,
-		failSkillAt:  -1,
-		squadID:      "squad-x",
-		memberErr:    errors.New("member boom"),
-		failMemberAt: 0, // first AddSquadMember fails
-	}
-	svc, caller, id := installSquadFixture(t, ff, threeMembers())
-
-	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
-		t.Fatal("expected error on AddSquadMember failure")
-	}
-	if len(ff.deletedSquads) != 1 || ff.deletedSquads[0] != "squad-x" {
-		t.Fatalf("deleted squads = %#v, want [squad-x]", ff.deletedSquads)
-	}
-	if len(ff.deletedAgents) != 3 {
-		t.Fatalf("deleted agents = %#v, want all 3", ff.deletedAgents)
-	}
-	// Rollback deletes must run on a live (detached) context, not a dead one.
-	if ff.deleteSquadCtxErr != nil {
-		t.Fatalf("DeleteSquad ran on canceled ctx (%v); want detached live ctx", ff.deleteSquadCtxErr)
+	team := ff.capabilityInput.Definition.ExpertTeam
+	if team == nil || len(team.Members) != 2 || !team.Members[0].IsLeader || team.Members[1].IsLeader ||
+		team.Members[0].Role != "leader" || team.Members[1].Role != "b" {
+		t.Fatalf("team members = %+v", team)
 	}
 }
 
 func TestInstallSquadEmptyMembersIsInvalid(t *testing.T) {
-	ff := &fakeFleet{failAgentAt: -1, failSkillAt: -1}
+	ff := &fakeFleet{}
 	svc, caller, id := installSquadFixture(t, ff, nil)
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("err = %v, want ErrInvalidRequest", err)
 	}
-	if ff.agentIdx != 0 {
-		t.Fatal("fleet should not be called for a memberless squad")
+	if ff.capabilityCalls != 0 {
+		t.Fatal("Fleet should not be called for a memberless squad")
 	}
 }
 
@@ -437,37 +251,136 @@ func TestInstallSquadNilFleetIsNotConfigured(t *testing.T) {
 }
 
 func TestInstallSquadRejectsMissingTarget(t *testing.T) {
-	ff := &fakeFleet{failAgentAt: -1, failSkillAt: -1}
+	ff := &fakeFleet{}
 	svc, caller, id := installSquadFixture(t, ff, threeMembers())
 	_, err := svc.InstallSquad(context.Background(), caller, id, InstallInput{RuntimeID: "rt-1", Token: "tok"})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("err = %v, want ErrInvalidRequest", err)
 	}
+	if ff.capabilityCalls != 0 {
+		t.Fatal("Fleet should not be called without a Workspace")
+	}
 }
 
 func TestInstallSquadHiddenSquadNotFound(t *testing.T) {
-	ff := &fakeFleet{failAgentAt: -1, failSkillAt: -1}
+	ff := &fakeFleet{}
 	svc, _, id := installSquadFixture(t, ff, threeMembers())
 	other := Caller{UID: "stranger", SpaceID: "space-2"} // different space cannot see it
 	if _, err := svc.InstallSquad(context.Background(), other, id, baseInput()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
-	if ff.agentIdx != 0 {
-		t.Fatal("fleet should not be called for a hidden squad")
+	if ff.capabilityCalls != 0 {
+		t.Fatal("Fleet should not be called for a hidden squad")
 	}
 }
 
-func TestSharedSkillRollbackDeletesOnlyItsCreatingMemberOnce(t *testing.T) {
-	members := []model.SquadMember{{MemberKey: "a", Name: "First", IsLeader: true, Skills: []model.SkillRef{{Name: "shared", Markdown: "shared bytes"}}}, {MemberKey: "b", Name: "Second", Skills: []model.SkillRef{{Name: "shared", Markdown: "shared bytes"}, {Name: "new", Markdown: "new bytes"}}}}
-	ff := &fakeFleet{agentIDs: []string{"a0", "a1"}, skillIDs: []string{"shared"}, skillErr: errors.New("skill failure"), failAgentAt: -1, failSkillAt: 1, failMemberAt: -1, squadID: "team"}
-	svc, caller, id := installSquadFixtureStrategies(t, ff, members, nil)
-	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
-		t.Fatal("expected second member skill creation failure")
+func TestInstallSquadUsesSingleCapabilityTransaction(t *testing.T) {
+	members := threeMembers()
+	members[0].Skills = []model.SkillRef{{Name: "Research", ObjectKey: "k/research", ZipObjectKey: "k/research.zip"}}
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{
+		Type: "expert_team", ExpertTeamID: "capability-team", LeaderExpertID: "capability-leader",
+	}}
+	svc, caller, id := installSquadFixtureStrategies(t, ff, members, []string{"Dispatch to owner", "Report status"})
+	if err := svc.store.(*memObjectStore).PutObject(context.Background(), "k/research.zip", bytes.NewReader(makeSkillZip(t, map[string][]byte{
+		"SKILL.md":            []byte("# Research"),
+		"references/guide.md": []byte("Keep supporting content"),
+	})), -1, "application/zip"); err != nil {
+		t.Fatalf("store skill package: %v", err)
 	}
-	if len(ff.deletedSkills) != 1 || ff.deletedSkills[0] != "shared" {
-		t.Fatalf("shared skill deleted by wrong member or twice: %#v", ff.deletedSkills)
+	input := baseInput()
+	input.CustomEnv = map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-1"}
+
+	result, err := svc.InstallSquad(context.Background(), caller, id, input)
+	if err != nil {
+		t.Fatalf("InstallSquad: %v", err)
 	}
-	if len(ff.deletedAgents) != 2 {
-		t.Fatalf("incomplete agent rollback: %#v", ff.deletedAgents)
+	if result.SquadID != "capability-team" || result.LeaderAgentID != "capability-leader" {
+		t.Fatalf("squad result = %+v, want Fleet capability IDs", result)
 	}
+	assertOnlyCapabilityInstall(t, ff)
+	if ff.capabilityToken != "tok" || ff.capabilitySpace != "space-1" || ff.capabilityWorkspace != "ws-1" || ff.capabilityKey == "" {
+		t.Fatalf("capability routing = token:%q space:%q workspace:%q key:%q", ff.capabilityToken, ff.capabilitySpace, ff.capabilityWorkspace, ff.capabilityKey)
+	}
+	definition := ff.capabilityInput.Definition
+	team := definition.ExpertTeam
+	if team == nil || team.Name != "Delivery Squad" || team.MarketExpertTeamID != id || team.Description != "ships features" ||
+		team.Instructions != "1. Dispatch to owner\n2. Report status" || len(team.Members) != 3 {
+		t.Fatalf("legacy squad content changed in capability definition: %+v", team)
+	}
+	wantMembers := map[string]struct {
+		role   string
+		leader bool
+	}{
+		"Planner": {role: "planner"},
+		"Lead":    {role: "leader", leader: true},
+		"Coder":   {role: "member"},
+	}
+	for _, member := range team.Members {
+		want, ok := wantMembers[member.ExpertName]
+		if !ok || member.Role != want.role || member.IsLeader != want.leader {
+			t.Fatalf("squad member wiring = %+v, want role/leader for %q", member, member.ExpertName)
+		}
+	}
+	experts := make(map[string]fleet.CapabilityExpert, len(definition.Experts))
+	for _, expert := range definition.Experts {
+		experts[expert.Name] = expert
+	}
+	if len(experts) != 3 {
+		t.Fatalf("member experts = %+v", definition.Experts)
+	}
+	for name, wantInstruction := range map[string]string{
+		"Planner": "plan things",
+		"Lead":    "lead the team",
+		"Coder":   "write code",
+	} {
+		expert := experts[name]
+		if expert.Name != name || expert.Instructions != wantInstruction || expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" {
+			t.Fatalf("member expert %q lost its content or environment: %+v", name, expert)
+		}
+	}
+	if string(experts["Lead"].MCPConfig) != `{"mcpServers":{}}` || len(experts["Planner"].SkillNames) != 1 || experts["Planner"].SkillNames[0] != "Research" {
+		t.Fatalf("member MCP/skill relationships changed: %+v", experts)
+	}
+	if len(definition.Skills) != 1 || definition.Skills[0].Name != "Research" ||
+		definition.Skills[0].Content != "# Research" || len(definition.Skills[0].Files) != 1 ||
+		definition.Skills[0].Files[0].Path != "references/guide.md" ||
+		definition.Skills[0].Files[0].Source.Type != "inline_text" ||
+		definition.Skills[0].Files[0].Source.Content != "Keep supporting content" {
+		t.Fatalf("legacy squad skill content changed: %+v", definition.Skills)
+	}
+	if len(ff.capabilityInput.Bindings.Experts) != 3 {
+		t.Fatalf("runtime bindings = %+v", ff.capabilityInput.Bindings.Experts)
+	}
+	for _, binding := range ff.capabilityInput.Bindings.Experts {
+		if _, ok := experts[binding.ExpertName]; !ok || binding.RuntimeID != "rt-1" {
+			t.Fatalf("runtime binding = %+v", binding)
+		}
+	}
+
+	wire := capabilityWireDefinition(t, ff.capabilityInput)
+	requireNullVersion(t, capabilityWireObject(t, wire["expert_team"]))
+	var wireExperts []json.RawMessage
+	if err := json.Unmarshal(wire["experts"], &wireExperts); err != nil || len(wireExperts) != 3 {
+		t.Fatalf("decode wire experts: %v (%s)", err, wire["experts"])
+	}
+	for _, raw := range wireExperts {
+		requireNullVersion(t, capabilityWireObject(t, raw))
+	}
+	var wireSkills []json.RawMessage
+	if err := json.Unmarshal(wire["skills"], &wireSkills); err != nil || len(wireSkills) != 1 {
+		t.Fatalf("decode wire skills: %v (%s)", err, wire["skills"])
+	}
+	requireNullVersion(t, capabilityWireObject(t, wireSkills[0]))
+}
+
+func TestInstallSquadCapabilityFailureCreatesNoSeparateResources(t *testing.T) {
+	wantErr := errors.New("capability transaction rejected")
+	ff := &fakeFleet{capabilityErr: wantErr}
+	svc, caller, id := installSquadFixture(t, ff, threeMembers())
+
+	_, err := svc.InstallSquad(context.Background(), caller, id, baseInput())
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrFleetInstallUnavailable) {
+		t.Fatalf("InstallSquad error = %v, want Fleet capability error marked unavailable", err)
+	}
+	assertOnlyCapabilityInstall(t, ff)
 }

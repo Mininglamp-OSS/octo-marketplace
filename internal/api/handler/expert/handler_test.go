@@ -1,11 +1,16 @@
 package expert
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	expertsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/expert"
 	"github.com/gin-gonic/gin"
 )
@@ -66,33 +71,63 @@ func TestWriteInstallErrorFleetNotConfigured(t *testing.T) {
 	}
 }
 
-// A fleet 4xx (e.g. duplicate agent name) is surfaced verbatim so the client
-// sees the real fault instead of a masking 503.
-func TestWriteInstallErrorFleet4xxPassthrough(t *testing.T) {
+// A capability 4xx (e.g. duplicate expert name) preserves the upstream status
+// and maps it to the existing Marketplace error code.
+func TestWriteInstallErrorCapability4xxPassthrough(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
-	writeInstallError(c, &fleet.APIError{Status: 409, Message: "an agent named \"X\" already exists"})
+	writeInstallError(c, &fleet.CapabilityAPIError{Status: http.StatusConflict, Code: "DUPLICATE"})
 
-	if w.Code != 409 {
-		t.Fatalf("status = %d, want 409", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusConflict)
 	}
 	if code := decodeErrCode(t, w); code != "CONFLICT" {
 		t.Fatalf("error.code = %q, want CONFLICT", code)
 	}
 }
 
-// A fleet 5xx / transport failure collapses to 503 UPSTREAM_UNAVAILABLE.
-func TestWriteInstallErrorFleet5xxIsUpstream(t *testing.T) {
+func TestWriteInstallErrorCapabilityForbiddenPreservesPermissionStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
-	writeInstallError(c, &fleet.APIError{Status: 500, Message: "boom"})
+	writeInstallError(c, &fleet.CapabilityAPIError{Status: http.StatusForbidden, Code: "FORBIDDEN"})
 
-	if w.Code != 503 {
-		t.Fatalf("status = %d, want 503", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusForbidden)
+	}
+	if code := decodeErrCode(t, w); code != "FORBIDDEN" {
+		t.Fatalf("error.code = %q, want FORBIDDEN", code)
+	}
+}
+
+// A Fleet capability 5xx collapses to 503 UPSTREAM_UNAVAILABLE.
+func TestWriteInstallErrorCapability5xxIsUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	writeInstallError(c, &fleet.CapabilityAPIError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR"})
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if code := decodeErrCode(t, w); code != "UPSTREAM_UNAVAILABLE" {
+		t.Fatalf("error.code = %q, want UPSTREAM_UNAVAILABLE", code)
+	}
+}
+
+func TestWriteInstallErrorCapabilityTransportIsUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	writeInstallError(c, expertsvc.ErrFleetInstallUnavailable)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
 	if code := decodeErrCode(t, w); code != "UPSTREAM_UNAVAILABLE" {
 		t.Fatalf("error.code = %q, want UPSTREAM_UNAVAILABLE", code)
@@ -110,5 +145,141 @@ func TestWriteInstallErrorNotFound(t *testing.T) {
 
 	if w.Code != 404 {
 		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+type legacyInstallStore struct {
+	expertsvc.Store
+	expert *model.Expert
+	squad  *model.Squad
+}
+
+func (s *legacyInstallStore) GetExpertByID(_ context.Context, id string) (*model.Expert, error) {
+	if s.expert != nil && s.expert.ID == id {
+		return s.expert, nil
+	}
+	return nil, expertsvc.ErrNotFound
+}
+
+func (s *legacyInstallStore) GetSquadByID(_ context.Context, id string) (*model.Squad, error) {
+	if s.squad != nil && s.squad.ID == id {
+		return s.squad, nil
+	}
+	return nil, expertsvc.ErrNotFound
+}
+
+func legacyInstallRouter(svc *expertsvc.Service) *gin.Engine {
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("marketplace.identity", model.Identity{UID: "caller", Name: "Caller"})
+		c.Set("marketplace.space_id", "space-1")
+		c.Next()
+	})
+	New(svc).Register(router.Group("/v1"))
+	return router
+}
+
+func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name, path string
+		expert     *model.Expert
+		squad      *model.Squad
+		want       map[string]string
+	}{
+		{
+			name: "expert",
+			path: "/v1/experts/exp-1/install",
+			expert: &model.Expert{
+				ID: "exp-1", Name: "Code Helper", Visibility: model.VisibilityPublic, SpaceID: "space-1",
+				Instruction: "Write code.",
+			},
+			want: map[string]string{"agent_id": "fleet-agent-1"},
+		},
+		{
+			name: "squad",
+			path: "/v1/squads/squad-1/install",
+			squad: &model.Squad{
+				ID: "squad-1", Name: "Delivery Squad", Visibility: model.VisibilityPublic, SpaceID: "space-1",
+				Members: []model.SquadMember{{MemberKey: "leader", Name: "Lead", IsLeader: true, Instruction: "Lead work."}},
+			},
+			want: map[string]string{"squad_id": "fleet-team-1", "leader_agent_id": "fleet-agent-1"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var paths []string
+			var forwardedToken, forwardedSpace, forwardedWorkspace string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.Method+" "+r.URL.Path)
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/capabilities/install" {
+					http.NotFound(w, r)
+					return
+				}
+				forwardedToken = r.Header.Get("Token")
+				forwardedSpace = r.Header.Get("X-Space-Id")
+				forwardedWorkspace = r.Header.Get("X-Workspace-Id")
+				var request struct {
+					Definition fleet.CapabilityDefinition `json:"definition"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				result := fleet.CapabilityInstallResult{Type: "expert", ExpertID: "fleet-agent-1"}
+				for i, member := range request.Definition.Experts {
+					id := "fleet-agent-" + strconv.Itoa(i+1)
+					result.Experts = append(result.Experts, fleet.CapabilityExpertResult{ExpertID: id, Name: member.Name})
+				}
+				if request.Definition.ExpertTeam != nil {
+					result.Type = "expert_team"
+					result.ExpertID = ""
+					result.ExpertTeamID = "fleet-team-1"
+					for _, member := range request.Definition.ExpertTeam.Members {
+						if !member.IsLeader {
+							continue
+						}
+						for i, expert := range request.Definition.Experts {
+							if expert.Name == member.ExpertName {
+								result.LeaderExpertID = "fleet-agent-" + strconv.Itoa(i+1)
+							}
+						}
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": result})
+			}))
+			defer server.Close()
+
+			store := &legacyInstallStore{expert: tc.expert, squad: tc.squad}
+			svc := expertsvc.New(store, nil, func() string { return "install-key" }).WithFleet(fleet.New(server.URL))
+			router := legacyInstallRouter(svc)
+			body := strings.NewReader(`{"workspace_id":"workspace-1","runtime_id":"runtime-1"}`)
+			request := httptest.NewRequest(http.MethodPost, tc.path, body)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer legacy-caller-token")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+			}
+			if len(paths) != 1 || paths[0] != "POST /v1/capabilities/install" {
+				t.Fatalf("Fleet calls = %v, want one capability transaction", paths)
+			}
+			if forwardedToken != "legacy-caller-token" || forwardedSpace != "space-1" || forwardedWorkspace != "workspace-1" {
+				t.Fatalf("Fleet authorization/target = token:%q space:%q workspace:%q", forwardedToken, forwardedSpace, forwardedWorkspace)
+			}
+			var responseBody struct {
+				Data map[string]string `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &responseBody); err != nil {
+				t.Fatalf("decode legacy response: %v (%s)", err, response.Body.String())
+			}
+			for field, want := range tc.want {
+				if responseBody.Data[field] != want {
+					t.Fatalf("response data.%s = %q, want %q (full response %s)", field, responseBody.Data[field], want, response.Body.String())
+				}
+			}
+		})
 	}
 }

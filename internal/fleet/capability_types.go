@@ -25,14 +25,32 @@ func MarshalCapabilityInstallRequest(in CapabilityInstallRequest) ([]byte, error
 			})
 		}
 	}
+	var experts []legacyCapabilityExpert
+	if in.Definition.Experts != nil {
+		experts = make([]legacyCapabilityExpert, 0, len(in.Definition.Experts))
+		for _, expert := range in.Definition.Experts {
+			experts = append(experts, legacyCapabilityExpert{
+				Name: expert.Name, Description: expert.Description, Instructions: expert.Instructions,
+				SkillNames: expert.SkillNames, ConnectorNames: expert.ConnectorNames,
+				CustomEnv: expert.CustomEnv, MCPConfig: expert.MCPConfig,
+			})
+		}
+	}
+	var team *legacyCapabilityExpertTeam
+	if in.Definition.ExpertTeam != nil {
+		team = &legacyCapabilityExpertTeam{
+			Name: in.Definition.ExpertTeam.Name, Members: in.Definition.ExpertTeam.Members,
+			Description: in.Definition.ExpertTeam.Description, Instructions: in.Definition.ExpertTeam.Instructions,
+		}
+	}
 	request := legacyCapabilityInstallRequest{
 		Definition: legacyCapabilityDefinition{
 			SchemaVersion: in.Definition.SchemaVersion,
 			Name:          in.Definition.Name,
 			Skills:        skills,
 			Connectors:    in.Definition.Connectors,
-			Experts:       in.Definition.Experts,
-			ExpertTeam:    in.Definition.ExpertTeam,
+			Experts:       experts,
+			ExpertTeam:    team,
 		},
 		Bindings: in.Bindings,
 	}
@@ -45,12 +63,29 @@ type legacyCapabilityInstallRequest struct {
 }
 
 type legacyCapabilityDefinition struct {
-	SchemaVersion string                  `json:"schema_version"`
-	Name          string                  `json:"name"`
-	Skills        []legacyCapabilitySkill `json:"skills,omitempty"`
-	Connectors    []CapabilityConnector   `json:"connectors,omitempty"`
-	Experts       []CapabilityExpert      `json:"experts"`
-	ExpertTeam    *CapabilityExpertTeam   `json:"expert_team,omitempty"`
+	SchemaVersion string                      `json:"schema_version"`
+	Name          string                      `json:"name"`
+	Skills        []legacyCapabilitySkill     `json:"skills,omitempty"`
+	Connectors    []CapabilityConnector       `json:"connectors,omitempty"`
+	Experts       []legacyCapabilityExpert    `json:"experts"`
+	ExpertTeam    *legacyCapabilityExpertTeam `json:"expert_team,omitempty"`
+}
+
+type legacyCapabilityExpert struct {
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	Instructions   string            `json:"instructions"`
+	SkillNames     []string          `json:"skill_names,omitempty"`
+	ConnectorNames []string          `json:"connector_names,omitempty"`
+	CustomEnv      map[string]string `json:"custom_env,omitempty"`
+	MCPConfig      json.RawMessage   `json:"mcp_config,omitempty"`
+}
+
+type legacyCapabilityExpertTeam struct {
+	Name         string                 `json:"name"`
+	Members      []CapabilityTeamMember `json:"members"`
+	Description  string                 `json:"description"`
+	Instructions string                 `json:"instructions"`
 }
 
 type legacyCapabilitySkill struct {
@@ -105,6 +140,8 @@ type CapabilityConnector struct {
 
 type CapabilityExpert struct {
 	Name           string   `json:"name"`
+	Version        *string  `json:"version"`
+	MarketExpertID string   `json:"market_expert_id,omitempty"`
 	Description    string   `json:"description"`
 	Instructions   string   `json:"instructions"`
 	SkillNames     []string `json:"skill_names,omitempty"`
@@ -115,10 +152,12 @@ type CapabilityExpert struct {
 }
 
 type CapabilityExpertTeam struct {
-	Name         string                 `json:"name"`
-	Members      []CapabilityTeamMember `json:"members"`
-	Description  string                 `json:"description"`
-	Instructions string                 `json:"instructions"`
+	Name               string                 `json:"name"`
+	Version            *string                `json:"version"`
+	MarketExpertTeamID string                 `json:"market_expert_team_id,omitempty"`
+	Members            []CapabilityTeamMember `json:"members"`
+	Description        string                 `json:"description"`
+	Instructions       string                 `json:"instructions"`
 }
 
 type CapabilityTeamMember struct {
@@ -141,6 +180,7 @@ type CapabilityInstallResult struct {
 	ExpertID       string                      `json:"expert_id,omitempty"`
 	ExpertTeamID   string                      `json:"expert_team_id,omitempty"`
 	LeaderExpertID string                      `json:"leader_expert_id,omitempty"`
+	ExpertTeam     *CapabilityExpertTeamResult `json:"expert_team,omitempty"`
 	Experts        []CapabilityExpertResult    `json:"experts"`
 	Skills         []CapabilitySkillResult     `json:"skills"`
 	Connectors     []CapabilityConnectorResult `json:"connectors,omitempty"`
@@ -149,11 +189,24 @@ type CapabilityInstallResult struct {
 }
 
 type CapabilityExpertResult struct {
-	ExpertID     string   `json:"expert_id"`
-	Name         string   `json:"name"`
-	SkillIDs     []string `json:"skill_ids"`
-	ConnectorIDs []string `json:"connector_ids,omitempty"`
-	IsLeader     bool     `json:"is_leader,omitempty"`
+	ExpertID       string   `json:"expert_id"`
+	Name           string   `json:"name"`
+	Version        *string  `json:"version,omitempty"`
+	MarketExpertID string   `json:"market_expert_id,omitempty"`
+	Created        bool     `json:"created"`
+	Restored       bool     `json:"restored"`
+	SkillIDs       []string `json:"skill_ids"`
+	ConnectorIDs   []string `json:"connector_ids,omitempty"`
+	IsLeader       bool     `json:"is_leader,omitempty"`
+}
+
+type CapabilityExpertTeamResult struct {
+	ExpertTeamID       string  `json:"expert_team_id"`
+	Name               string  `json:"name"`
+	Version            *string `json:"version,omitempty"`
+	MarketExpertTeamID string  `json:"market_expert_team_id,omitempty"`
+	Created            bool    `json:"created"`
+	Restored           bool    `json:"restored"`
 }
 
 type CapabilitySkillResult struct {
