@@ -2,7 +2,8 @@
 -- A signed event for a vanished/unknown review still needs a durable terminal
 -- receipt. Keep review_id as the immutable event binding, without requiring a
 -- live parent. The event_id primary key and review lookup index are unchanged.
--- +migrate StatementBegin
+-- Execute each statement separately on the migration transaction connection;
+-- do not require the application DSN to enable multiStatements.
 SET @card_receipt_ddl = IF(EXISTS(
  SELECT 1 FROM information_schema.referential_constraints
  WHERE constraint_schema=DATABASE() AND table_name='plugin_card_action_receipts'
@@ -11,7 +12,6 @@ SET @card_receipt_ddl = IF(EXISTS(
 PREPARE card_receipt_stmt FROM @card_receipt_ddl;
 EXECUTE card_receipt_stmt;
 DEALLOCATE PREPARE card_receipt_stmt;
--- +migrate StatementEnd
 
 -- +migrate Down
 -- +migrate StatementBegin
