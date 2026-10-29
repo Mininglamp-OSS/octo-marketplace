@@ -250,7 +250,9 @@ func writeReferenceIndex(ctx context.Context, tx *sql.Tx, source, version string
 	return err
 }
 
-func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p model.Plugin, versionID string) error {
+// retainedOwned is supplied only for an already published visibility snapshot;
+// it preserves that release's owned embedded edges when a newer draft removed them.
+func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p model.Plugin, versionID string, retainedOwned ...map[string]struct{}) error {
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, versionID).Scan(&raw); err != nil {
 		return err
@@ -270,6 +272,11 @@ func (r *Repo) validateReleaseReferences(ctx context.Context, tx *sql.Tx, p mode
 		sc := Scope{CallerUID: p.OwnerUID, Admin: p.SpaceID == nil}
 		if p.SpaceID != nil {
 			sc.SpaceID = *p.SpaceID
+		}
+		for _, ids := range retainedOwned {
+			for id := range ids {
+				owned[id] = struct{}{}
+			}
 		}
 		// A rollback can leave a mixed root: retained pins alongside new unpinned
 		// edges. Preserve legacy validation for the complete root, including owned

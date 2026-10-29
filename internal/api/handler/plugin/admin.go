@@ -334,7 +334,7 @@ func (h *AdminHandler) Create(c *gin.Context) {
 
 // ImportContainer godoc
 // @Summary Import expert/expert_team container (admin)
-// @Description Admin-only upload. With independent references enabled, schema 2 carries released skill/expert IDs and ID-only connectors; inline child packages are rejected. With the rollout disabled, legacy container behavior remains unchanged.
+// @Description Admin-only upload. With independent references enabled, schema 2 carries released skill/expert IDs and ID-only connectors; inline child packages are rejected. With the rollout disabled, legacy container behavior remains unchanged. Duplicate root display names return DUPLICATE and require renaming before uploading.
 // @Tags admin_plugin
 // @ID admin_plugin.import
 // @Accept multipart/form-data
@@ -349,7 +349,7 @@ func (h *AdminHandler) Create(c *gin.Context) {
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 409 {object} apiresponse.Error "DUPLICATE or CONFLICT"
 // @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /admin/plugins/import [post]
@@ -497,7 +497,7 @@ func (r adminSkillImportRequest) params(pluginID string) pluginsvc.ImportParams 
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
-// @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 409 {object} apiresponse.Error "DUPLICATE or CONFLICT"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Router /admin/plugins/skill_import [post]
 func (h *AdminHandler) SkillImport(c *gin.Context) {

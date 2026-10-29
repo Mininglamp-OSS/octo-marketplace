@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
@@ -129,7 +130,10 @@ func TestManagedPrivateReleasePreservesDraft(t *testing.T) {
 	if _, err = svc.ManagedVersion(ctx, outsider, id, v1, false); !errors.Is(err, pluginsvc.ErrNotFound) {
 		t.Fatalf("cross-space err=%v", err)
 	}
-	second, err := svc.Create(ctx, owner, managedWrite("1.0.0", "second", model.PluginVisibilityPrivate))
+	secondReq := managedWrite("1.0.0", "second", model.PluginVisibilityPrivate)
+	secondReq.Name = "Second Versioned Expert"
+	secondReq.Manifest = json.RawMessage(strings.Replace(string(secondReq.Manifest), `"plugin_name":"Versioned Expert"`, `"plugin_name":"Second Versioned Expert"`, 1))
+	second, err := svc.Create(ctx, owner, secondReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +276,11 @@ func TestManagedAdminAndHistoricalArtifactIntegrity(t *testing.T) {
 	pkg, _ := json.Marshal(map[string]any{"attachments": []any{map[string]any{"path": "old.bin", "content_type": "storage", "content_size": len("historical bytes"), "content_hash": digest}}})
 	keys, _ := json.Marshal(map[string]string{"old.bin": key})
 	// Tenant fixture so the own-Space object namespace is authoritative.
-	tenant, err := svc.Create(ctx, reader, managedWrite("1.0.0", "fixture", model.PluginVisibilityPrivate))
+	tenantReq := managedWrite("1.0.0", "fixture", model.PluginVisibilityPrivate)
+	// A tenant upload may not shadow the global market expert created above.
+	tenantReq.Name = "Historical Artifact Fixture"
+	tenantReq.Manifest = json.RawMessage(strings.Replace(string(tenantReq.Manifest), "Versioned Expert", tenantReq.Name, 1))
+	tenant, err := svc.Create(ctx, reader, tenantReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,12 +464,26 @@ func TestManagedLegacyPublishedBaselineAdoption(t *testing.T) {
 			if _, err = database.Exec(`DELETE FROM plugin_version_releases WHERE plugin_id=?`, id); err != nil {
 				t.Fatal(err)
 			}
+			// The editable draft is already differently named from the selected
+			// release snapshot. Adoption must reserve the snapshot name, not this
+			// mutable draft name.
+			if _, err = database.Exec(`UPDATE plugins SET plugin_name='Draft Beta',name_key='draft beta',name_scope='space-a' WHERE plugin_id=?`, id); err != nil {
+				t.Fatal(err)
+			}
 			adopted, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
 			if err != nil {
 				t.Fatalf("adoption failed: %v", err)
 			}
 			if adopted.Review != nil {
 				t.Fatal("adoption opened a review instead of registering the baseline")
+			}
+			var publishedNameKey string
+			if err = database.QueryRow(`SELECT published_name_key FROM plugins WHERE plugin_id=?`, id).Scan(&publishedNameKey); err != nil || publishedNameKey != "versioned expert" {
+				t.Fatalf("adoption published key=%q err=%v; must come from released snapshot", publishedNameKey, err)
+			}
+			var reserved int
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_name_reservations WHERE plugin_id=? AND name_key='versioned expert'`, id).Scan(&reserved); err != nil || reserved != 1 {
+				t.Fatalf("adoption snapshot reservation=%d err=%v", reserved, err)
 			}
 			state, err := repo.GetVersionState(ctx, tenantScope(), id)
 			if err != nil || state.PublishedVersionID == nil {
@@ -912,5 +934,418 @@ func TestManagedMissingReleaseLabelsNeverExposeDraftTags(t *testing.T) {
 				t.Fatalf("author's draft tags lost: %+v err=%v", mine, err)
 			}
 		})
+	}
+}
+
+func TestManagedDraftChangelogRoundTripAndClear(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx, owner := context.Background(), managedOwner()
+	req := managedWrite("1.0.0", "draft instructions", model.PluginVisibilityPrivate)
+	created, err := svc.Create(ctx, owner, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Plugin.ID
+	check := func(want string) {
+		t.Helper()
+		draft, err := svc.CurrentDetail(ctx, owner, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if draft.DraftChangelog == nil || *draft.DraftChangelog != want {
+			t.Fatalf("draft note=%v want %q", draft.DraftChangelog, want)
+		}
+	}
+	note := "current draft explanation"
+	req.Changelog = &note
+	if _, err = svc.Update(ctx, owner, id, req); err != nil {
+		t.Fatal(err)
+	}
+	check(note)
+	before, _ := repo.GetVersionState(ctx, tenantScope(), id)
+	if _, err = svc.Update(ctx, owner, id, req); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := repo.GetVersionState(ctx, tenantScope(), id)
+	if *before.CurrentVersionID != *after.CurrentVersionID {
+		t.Fatal("identical note save created a new snapshot")
+	}
+	note = ""
+	if _, err = svc.Update(ctx, owner, id, req); err != nil {
+		t.Fatal(err)
+	}
+	check("")
+	note = "release explanation"
+	if _, err = svc.Update(ctx, owner, id, req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+		t.Fatal(err)
+	}
+	check("") // A new editing session cannot copy the prior release explanation.
+	// Explicitly reusing the release note is a new editable note, not a no-op.
+	if _, err = svc.Update(ctx, owner, id, req); err != nil {
+		t.Fatal(err)
+	}
+	check(note)
+	if _, err = svc.CurrentDetail(ctx, pluginsvc.Caller{UID: "other", SpaceID: owner.SpaceID}, id); !errors.Is(err, pluginsvc.ErrNotFound) {
+		t.Fatalf("non-owner=%v", err)
+	}
+	if _, err = svc.CurrentDetail(ctx, pluginsvc.Caller{UID: owner.UID, SpaceID: "other-space"}, id); !errors.Is(err, pluginsvc.ErrNotFound) {
+		t.Fatalf("cross-space=%v", err)
+	}
+}
+
+func TestLegacyReleaseRepairsNameScope(t *testing.T) {
+	for _, adopt := range []bool{false, true} {
+		t.Run(fmt.Sprint(adopt), func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			svc := pluginsvc.New(repo).WithVersionManagement(true)
+			ctx := context.Background()
+			for _, space := range []string{"space-a", "space-b"} {
+				owner := managedOwner()
+				owner.SpaceID = space
+				d, err := svc.Create(ctx, owner, managedWrite("1.0.0", "legacy content", model.PluginVisibilityPrivate))
+				if err != nil {
+					t.Fatal(err)
+				}
+				listing := "draft"
+				if adopt {
+					listing = "published"
+				}
+				// Reconstruct exactly the name-column defaults left by the schema
+				// upgrade, without the optional backfill or a modern name writer.
+				if _, err = database.Exec(`UPDATE plugins SET name_key=NULL,published_name_key=NULL,name_scope='',published_version_id=NULL,listing_state=? WHERE plugin_id=?`, listing, d.Plugin.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+					t.Fatalf("space=%s adopt=%v: %v", space, adopt, err)
+				}
+				var gotScope, key string
+				if err = database.QueryRow(`SELECT name_scope,published_name_key FROM plugins WHERE plugin_id=?`, d.Plugin.ID).Scan(&gotScope, &key); err != nil || gotScope != space || key != "versioned expert" {
+					t.Fatalf("scope=%q key=%q err=%v", gotScope, key, err)
+				}
+				if _, err = svc.Create(ctx, owner, managedWrite("1.0.0", "duplicate", model.PluginVisibilityPrivate)); !errors.Is(err, pluginsvc.ErrNameTaken) {
+					t.Fatalf("same-space duplicate: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestAdminDraftRevisionAndNotesRoundTrip(t *testing.T) {
+	database := reviewDB(t)
+	svc := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true)
+	ctx, owner := context.Background(), managedOwner()
+	req := managedWrite("1.0.0", "draft content", model.PluginVisibilityPrivate)
+	d, err := svc.Create(ctx, owner, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := svc.CurrentDetail(ctx, owner, d.Plugin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.PluginDraftRevision(draft.Plugin)
+	note := "admin draft note"
+	req.Changelog, req.ExpectedDraftRevision = &note, &revision
+	admin := pluginsvc.Caller{UID: "admin", IsSystemAdmin: true}
+	if _, err = svc.AdminUpdate(ctx, admin, d.Plugin.ID, req); err != nil {
+		t.Fatal(err)
+	}
+	draft, err = svc.CurrentDetail(ctx, owner, d.Plugin.ID)
+	if err != nil || draft.DraftChangelog == nil || *draft.DraftChangelog != note {
+		t.Fatalf("note round trip: %+v %v", draft, err)
+	}
+	note = "stale admin write"
+	if _, err = svc.AdminUpdate(ctx, admin, d.Plugin.ID, req); !errors.Is(err, pluginsvc.ErrConflict) {
+		t.Fatalf("stale admin token: %v", err)
+	}
+}
+
+func TestPublishedVisibilityChangesKeepSameReleaseAndDraft(t *testing.T) {
+	for _, auto := range []bool{true, false} {
+		t.Run(fmt.Sprint(auto), func(t *testing.T) {
+			database := reviewDB(t)
+			repo := pluginrepo.New(database)
+			svc := pluginsvc.New(repo).WithVersionManagement(true)
+			ctx, owner := context.Background(), managedOwner()
+			if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), auto, owner.UID, owner.Name); err != nil {
+				t.Fatal(err)
+			}
+			created, err := svc.Create(ctx, owner, managedWrite("1.0.0", "released original", model.PluginVisibilityPrivate))
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := created.Plugin.ID
+			if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+				t.Fatal(err)
+			}
+			state, err := repo.GetVersionState(ctx, tenantScope(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publishedID := *state.PublishedVersionID
+			draft, err := svc.Update(ctx, owner, id, managedWrite("2.0.0", "unapproved future draft", model.PluginVisibilityPrivate))
+			if err != nil {
+				t.Fatal(err)
+			}
+			draftID := *draft.Plugin.CurrentVersionID
+			p := pluginsvc.VisibilityParams{PluginID: id, ExpectedPublishedVersionID: publishedID, Visibility: model.PluginVisibilitySpace}
+			out, err := svc.ChangeVisibility(ctx, owner, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Pending == auto {
+				t.Fatalf("pending=%v auto=%v", out.Pending, auto)
+			}
+			member := pluginsvc.Caller{UID: "member", SpaceID: owner.SpaceID}
+			if !auto {
+				if out.Plugin.Visibility != model.PluginVisibilityPrivate {
+					t.Fatal("pending audience leaked")
+				}
+				if _, err = svc.Detail(ctx, member, id, true); !errors.Is(err, pluginsvc.ErrNotFound) {
+					t.Fatalf("pending member=%v", err)
+				}
+				duplicate, err := svc.ChangeVisibility(ctx, owner, p)
+				if err != nil || duplicate.ReviewID != out.ReviewID {
+					t.Fatalf("duplicate=%+v %v", duplicate, err)
+				}
+				if _, err = svc.ApproveReview(ctx, member, out.ReviewID); !errors.Is(err, pluginsvc.ErrReviewForbidden) {
+					t.Fatalf("member approval=%v", err)
+				}
+				if _, err = svc.ApproveReview(ctx, managedReviewer(), out.ReviewID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			visible, err := svc.Detail(ctx, member, id, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *visible.Plugin.CurrentVersionID != publishedID || *visible.Plugin.CurrentVersion != "1.0.0" || !strings.Contains(string(visible.Plugin.Package), "released original") {
+				t.Fatal("visibility change released a draft")
+			}
+			edit, err := svc.CurrentDetail(ctx, owner, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *edit.Plugin.CurrentVersionID != draftID || *edit.Plugin.CurrentVersion != "2.0.0" || !strings.Contains(string(edit.Plugin.Package), "unapproved future draft") {
+				t.Fatal("editable draft changed")
+			}
+			var releases, snapshots int
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_version_releases WHERE plugin_id=?`, id).Scan(&releases); err != nil {
+				t.Fatal(err)
+			}
+			if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id=?`, id).Scan(&snapshots); err != nil {
+				t.Fatal(err)
+			}
+			if releases != 1 || snapshots != 2 {
+				t.Fatalf("release/snapshot drift %d/%d", releases, snapshots)
+			}
+			for _, actor := range []pluginsvc.Caller{member, {UID: owner.UID, SpaceID: "other-space"}} {
+				if _, err = svc.ChangeVisibility(ctx, actor, p); !errors.Is(err, pluginsvc.ErrNotFound) {
+					t.Fatalf("unauthorized visibility=%v", err)
+				}
+			}
+			stale := p
+			stale.ExpectedPublishedVersionID = draftID
+			if _, err = svc.ChangeVisibility(ctx, owner, stale); !errors.Is(err, pluginsvc.ErrConflict) {
+				t.Fatalf("stale version=%v", err)
+			}
+			p.Visibility = model.PluginVisibilityPrivate
+			if _, err = svc.ChangeVisibility(ctx, owner, p); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = svc.Detail(ctx, member, id, true); !errors.Is(err, pluginsvc.ErrNotFound) {
+				t.Fatalf("narrowed member=%v", err)
+			}
+			state, err = repo.GetVersionState(ctx, tenantScope(), id)
+			if err != nil || *state.PublishedVersionID != publishedID || *state.CurrentVersionID != draftID {
+				t.Fatal("narrowing changed version identities")
+			}
+		})
+	}
+}
+
+func TestVisibilityReviewCancelAndRejectPreserveAudience(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx, owner := context.Background(), managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, owner.UID, owner.Name); err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.Create(ctx, owner, managedWrite("1.0.0", "original", model.PluginVisibilityPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Plugin.ID
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := repo.GetVersionState(ctx, tenantScope(), id)
+	p := pluginsvc.VisibilityParams{PluginID: id, ExpectedPublishedVersionID: *state.PublishedVersionID, Visibility: model.PluginVisibilitySpace}
+	first, err := svc.ChangeVisibility(ctx, owner, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.CancelReview(ctx, owner, first.ReviewID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), first.ReviewID); err == nil {
+		t.Fatal("canceled request approved")
+	}
+	second, err := svc.ChangeVisibility(ctx, owner, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.RejectReview(ctx, managedReviewer(), second.ReviewID, "not approved"); err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.Detail(ctx, owner, id, true)
+	if err != nil || visible.Plugin.Visibility != model.PluginVisibilityPrivate {
+		t.Fatal("rejection changed visibility")
+	}
+	final, _ := repo.GetVersionState(ctx, tenantScope(), id)
+	if *final.PublishedVersionID != *state.PublishedVersionID {
+		t.Fatal("review decision changed content version")
+	}
+}
+
+func TestSameVersionVisibilityValidatesPublishedPinnedGraph(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+	ctx, owner := context.Background(), managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, owner.UID, owner.Name); err != nil {
+		t.Fatal(err)
+	}
+	skill, err := svc.Create(ctx, owner, managedSkillWrite("1.0.0", "Audience Skill", model.PluginVisibilityPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, skill.Plugin.ID)
+	skillState, _ := repo.GetVersionState(ctx, tenantScope(), skill.Plugin.ID)
+	eReq := managedWrite("1.0.0", "Expert V1", model.PluginVisibilityPrivate)
+	eReq.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skill.Plugin.ID, TargetVersionID: skillState.PublishedVersionID, Type: "expert_skill"}}
+	expert, err := svc.Create(ctx, owner, eReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, expert.Plugin.ID)
+	expertState, _ := repo.GetVersionState(ctx, tenantScope(), expert.Plugin.ID)
+	widen := func(id, version string) (*pluginrepo.VisibilityResult, error) {
+		return svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: id, ExpectedPublishedVersionID: version, Visibility: model.PluginVisibilitySpace})
+	}
+	// Widening cannot expose a private fixed Skill dependency.
+	if _, err = widen(expert.Plugin.ID, *expertState.PublishedVersionID); err == nil {
+		t.Fatal("private dependency became visible")
+	}
+	// Widen the dependency, then approve the same expert content version.
+	request, err := widen(skill.Plugin.ID, *skillState.PublishedVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), request.ReviewID); err != nil {
+		t.Fatal(err)
+	}
+	request, err = widen(expert.Plugin.ID, *expertState.PublishedVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), request.ReviewID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: skill.Plugin.ID, ExpectedPublishedVersionID: *skillState.PublishedVersionID, Visibility: model.PluginVisibilityPrivate}); !errors.Is(err, pluginsvc.ErrRelationInUse) {
+		t.Fatalf("published incoming pin must block narrowing: %v", err)
+	}
+	// Team visibility validates the pinned member and its own pinned Skill graph.
+	teamReq := managedWrite("1.0.0", "Team V1", model.PluginVisibilityPrivate)
+	teamReq.Name = "Audience Team"
+	teamReq.Type = model.PluginTypeExpertTeam
+	teamReq.Manifest = json.RawMessage(`{"$schema":"cowork-plugin-manifest-2.0.json","plugin_name":"Audience Team","plugin_type":"expert_team","name":"audience-team","description":"fixture","labels":[],"examples":[]}`)
+	teamReq.Relations = []pluginsvc.RelationRequest{{TargetPluginID: expert.Plugin.ID, TargetVersionID: expertState.PublishedVersionID, Type: "expert_team_expert", Data: json.RawMessage(`{"member_key":"leader","is_leader":true,"role":"leader"}`)}}
+	team, err := svc.Create(ctx, owner, teamReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, team.Plugin.ID)
+	teamState, _ := repo.GetVersionState(ctx, tenantScope(), team.Plugin.ID)
+	request, err = widen(team.Plugin.ID, *teamState.PublishedVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), request.ReviewID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: expert.Plugin.ID, ExpectedPublishedVersionID: *expertState.PublishedVersionID, Visibility: model.PluginVisibilityPrivate}); !errors.Is(err, pluginsvc.ErrRelationInUse) {
+		t.Fatalf("Team pin must block expert narrowing: %v", err)
+	}
+	teamAfter, _ := repo.GetVersionState(ctx, tenantScope(), team.Plugin.ID)
+	if *teamAfter.PublishedVersionID != *teamState.PublishedVersionID {
+		t.Fatal("Team content version drift")
+	}
+}
+
+func TestSameVersionVisibilityConcurrentRequestsShareOneReview(t *testing.T) {
+	database := reviewDB(t)
+	repo := pluginrepo.New(database)
+	svc := pluginsvc.New(repo).WithVersionManagement(true)
+	ctx, owner := context.Background(), managedOwner()
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), false, owner.UID, owner.Name); err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.Create(ctx, owner, managedWrite("1.0.0", "original", model.PluginVisibilityPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Plugin.ID
+	publishManaged(t, svc, owner, id)
+	state, _ := repo.GetVersionState(ctx, tenantScope(), id)
+	params := pluginsvc.VisibilityParams{PluginID: id, ExpectedPublishedVersionID: *state.PublishedVersionID, Visibility: model.PluginVisibilitySpace}
+	var wg sync.WaitGroup
+	ids := make(chan string, 8)
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := svc.ChangeVisibility(ctx, owner, params)
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- result.ReviewID
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	one := ""
+	for id := range ids {
+		if one != "" && one != id {
+			t.Fatal("duplicate review created")
+		}
+		one = id
+	}
+	var reviews int
+	if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_review_requests WHERE plugin_id=? AND status='pending'`, id).Scan(&reviews); err != nil || reviews != 1 {
+		t.Fatalf("pending=%d err=%v", reviews, err)
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), one); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApproveReview(ctx, managedReviewer(), one); err == nil {
+		t.Fatal("stale approval was accepted")
+	}
+	final, _ := repo.GetVersionState(ctx, tenantScope(), id)
+	if *final.PublishedVersionID != *state.PublishedVersionID {
+		t.Fatal("duplicate request or stale approval changed release")
 	}
 }

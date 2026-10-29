@@ -248,7 +248,7 @@ type adminHistoricalVersionResponse struct {
 
 // GetDraft godoc
 // @Summary Get the current editable draft
-// @Description Requires enabled version management. Draft access is owner-only; admin routes require the marketplace admin gate.
+// @Description Returns an opaque draft_revision for conditional full-replace updates. Requires enabled version management. Draft access is owner-only; admin routes require the marketplace admin gate.
 // @Tags plugin
 // @ID plugin.draft.get
 // @Produce json

@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.1
+	github.com/aws/smithy-go v1.27.3
 	github.com/gin-gonic/gin v1.10.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/redis/go-redis/v9 v9.18.0
@@ -17,6 +18,7 @@ require (
 	github.com/yuin/goldmark v1.8.2
 	go.uber.org/zap v1.28.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/text v0.40.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -31,7 +33,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.23 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.30 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.31 // indirect
-	github.com/aws/smithy-go v1.27.3 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -60,6 +61,5 @@ require (
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
 )

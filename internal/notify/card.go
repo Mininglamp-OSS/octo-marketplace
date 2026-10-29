@@ -49,6 +49,8 @@ func CardTitle(pluginName string) string {
 func CardDescription(pluginType model.PluginType, applicantName, version, currentVersion string, kind model.ReviewKind, changelog string) string {
 	var versionNote string
 	switch kind {
+	case model.ReviewKindVisibility:
+		versionNote = "仅修改可见范围：仅自己 → 本组织，内容版本不变"
 	case model.ReviewKindFirst:
 		versionNote = "新上架"
 	case model.ReviewKindUpgrade:
