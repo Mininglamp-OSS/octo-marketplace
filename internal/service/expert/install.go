@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,49 +15,48 @@ import (
 	"go.uber.org/zap"
 )
 
-// cleanupTimeout bounds the detached rollback deletes so they can't hang.
-const cleanupTimeout = 15 * time.Second
-
-// squadInstructionUpdateAttempts gives the post-create instructions update a
-// small bounded retry window before destructive rollback. A transient failure at
-// this late stage would otherwise archive every member agent and can make a
-// clean retry collide with Fleet's archived-name uniqueness.
-const squadInstructionUpdateAttempts = 3
-
-// installTimeout bounds a whole install (expert or squad). The per-fleet-call
-// timeout on the http client bounds each hop, but nothing bounds their sum: a
-// squad of many members each with many packaged skills fans out to a large
-// number of sequential upstream calls. This aggregate deadline caps the total.
+// installTimeout bounds source-content reads and the single atomic Fleet
+// installation request.
 const installTimeout = 5 * time.Minute
 
-// maxSkillFilesPerSkill caps how many supporting files one packaged skill
-// contributes to the created fleet skill, bounding the PUT fan-out.
+// maxSkillFilesPerSkill caps the UTF-8 supporting files extracted from one
+// packaged Skill. Oversized or unreadable archives contribute no supporting files.
 const maxSkillFilesPerSkill = 50
 
-// maxSkillFilesPerInstall caps the TOTAL supporting files one install may push
-// to fleet across every skill and (for a squad) every member — a bound on the
-// aggregate UpsertSkillFile fan-out that maxSkillFilesPerSkill alone can't give
-// (30 members × 20 skills × 50 files would otherwise be ~30k PUTs per request).
+// maxSkillFilesPerInstall caps supporting files across every Skill/member in
+// one install.
 const maxSkillFilesPerInstall = 500
 
-// ErrFleetNotConfigured is returned by InstallExpert when no fleet client is
-// wired (OCTO_FLEET_URL unset). The handler maps it to UPSTREAM_UNAVAILABLE.
+// ErrFleetNotConfigured is returned when no Fleet client is wired. The handler
+// maps it to UPSTREAM_UNAVAILABLE.
 var ErrFleetNotConfigured = errors.New("fleet not configured")
 
-// ErrInstallTooLarge is returned when an install would exceed the aggregate
-// skill-file fan-out cap (maxSkillFilesPerInstall). The handler maps it to 400.
+// ErrInstallTooLarge is returned when an install exceeds the aggregate request
+// byte budget or the aggregate Skill file limit. The handler maps it to 400.
 var ErrInstallTooLarge = errors.New("install exceeds resource limits")
 
-// fileBudget bounds the total supporting files an install may push to fleet. It
-// is created once per install and shared across all skills/members, so the cap
-// is on the aggregate — not reset per skill the way maxSkillFilesPerSkill is.
+// ErrFleetInstallUnavailable marks a capability request whose result could not
+// be determined from Fleet (for example, a transport failure).
+var ErrFleetInstallUnavailable = errors.New("fleet capability install unavailable")
+
+// InstallDispatchError wraps a capability install failure that was already
+// dispatched to Fleet and carries the idempotency key actually sent, so a
+// caller that supplied none can recover a 503 by retrying with that key.
+// Unwrap preserves the original classification (transport unavailability,
+// *fleet.CapabilityAPIError); handlers only expose the key on 503 responses.
+type InstallDispatchError struct {
+	IdempotencyKey string
+	Err            error
+}
+
+func (e *InstallDispatchError) Error() string { return e.Err.Error() }
+
+func (e *InstallDispatchError) Unwrap() error { return e.Err }
+
+// fileBudget caps supporting files across every Skill/member in one install.
 type fileBudget struct{ remaining int }
 
-// take consumes one file from the budget, reporting false once it's exhausted.
 func (b *fileBudget) take() bool {
-	if b == nil {
-		return true
-	}
 	if b.remaining <= 0 {
 		return false
 	}
@@ -64,37 +64,134 @@ func (b *fileBudget) take() bool {
 	return true
 }
 
-// FleetProvisioner is the octo-fleet surface InstallExpert drives. *fleet.Client
-// satisfies it; tests provide a fake. Every method forwards the end user's octo
-// token + space + workspace so fleet authorizes the call as that user.
-type FleetProvisioner interface {
-	CreateAgent(ctx context.Context, token, spaceID, workspaceID string, spec fleet.AgentSpec) (agentID string, err error)
-	CreateSkill(ctx context.Context, token, spaceID, workspaceID string, spec fleet.SkillSpec) (skillID string, err error)
-	UpsertSkillFile(ctx context.Context, token, spaceID, workspaceID, skillID, path, content string) error
-	SetAgentSkills(ctx context.Context, token, spaceID, workspaceID, agentID string, skillIDs []string) error
-	DeleteAgent(ctx context.Context, token, spaceID, workspaceID, agentID string) error
-	DeleteSkill(ctx context.Context, token, spaceID, workspaceID, skillID string) error
-	// Squad provisioning (used by InstallSquad): create a squad led by an
-	// already-created member agent, write its instructions (fleet's create
-	// endpoint doesn't accept them), attach the remaining members, and archive
-	// the squad on rollback.
-	CreateSquad(ctx context.Context, token, spaceID, workspaceID string, spec fleet.SquadSpec) (squadID string, err error)
-	UpdateSquadInstructions(ctx context.Context, token, spaceID, workspaceID, squadID, instructions string) error
-	AddSquadMember(ctx context.Context, token, spaceID, workspaceID, squadID string, m fleet.SquadMemberSpec) error
-	DeleteSquad(ctx context.Context, token, spaceID, workspaceID, squadID string) error
+// capabilityBudget tracks the exact encoded size of a capability install
+// request while it is assembled. The initial size comes from marshalling a real
+// empty request, so root-level fields stay accounted automatically. Every
+// charge is taken before the next resource read, so an oversized definition
+// never materializes its remaining Skills.
+type capabilityBudget struct {
+	remaining    int64
+	skillCount   int
+	expertCount  int
+	bindingCount int
 }
 
-// WithFleet wires the fleet provisioner and returns the Service for chaining
-// at construction (router). Kept off New so existing callers/tests are unchanged.
+func newCapabilityBudget(name string) *capabilityBudget {
+	initial, _ := json.Marshal(fleet.CapabilityInstallRequest{
+		Definition: fleet.CapabilityDefinition{
+			SchemaVersion: "1.0",
+			Name:          name,
+			Experts:       []fleet.CapabilityExpert{},
+		},
+		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{}},
+	})
+	return &capabilityBudget{remaining: fleet.MaxCapabilityRequestBytes - int64(len(initial))}
+}
+
+func (b *capabilityBudget) take(n int64) error {
+	if n > b.remaining {
+		return ErrInstallTooLarge
+	}
+	b.remaining -= n
+	return nil
+}
+
+func (b *capabilityBudget) addJSON(value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return b.take(int64(len(encoded)))
+}
+
+// beginSkill charges the optional skills field and its empty array on the first
+// element, then one comma per subsequent element.
+func (b *capabilityBudget) beginSkill() error {
+	if b.skillCount == 0 {
+		if err := b.take(int64(len(`,"skills":[]`))); err != nil {
+			return err
+		}
+		b.skillCount = 1
+		return nil
+	}
+	if err := b.take(1); err != nil {
+		return err
+	}
+	b.skillCount++
+	return nil
+}
+
+// beginExpert charges only the comma for experts after the first; the initial
+// request already contains the empty experts array.
+func (b *capabilityBudget) beginExpert() error {
+	if b.expertCount > 0 {
+		if err := b.take(1); err != nil {
+			return err
+		}
+	}
+	b.expertCount++
+	return nil
+}
+
+// beginBinding charges only the comma for bindings after the first; the initial
+// request already contains the empty bindings array.
+func (b *capabilityBudget) beginBinding() error {
+	if b.bindingCount > 0 {
+		if err := b.take(1); err != nil {
+			return err
+		}
+	}
+	b.bindingCount++
+	return nil
+}
+
+// addTeam charges the optional expert_team field and its JSON payload.
+func (b *capabilityBudget) addTeam(team *fleet.CapabilityExpertTeam) error {
+	encoded, err := json.Marshal(team)
+	if err != nil {
+		return err
+	}
+	return b.take(int64(len(`,"expert_team":`)) + int64(len(encoded)))
+}
+
+// addSkillName charges one skill_names reference: the field and its empty array
+// on the first name, then one comma per subsequent name.
+func (b *capabilityBudget) addSkillName(first bool, name string) error {
+	encoded, _ := json.Marshal(name)
+	if first {
+		return b.take(int64(len(`,"skill_names":[]`)) + int64(len(encoded)))
+	}
+	return b.take(int64(len(encoded)) + 1)
+}
+
+// addSkillFile charges one supporting file: the files field and its empty array
+// on the first file, then one comma per subsequent file.
+func (b *capabilityBudget) addSkillFile(first bool, file fleet.CapabilitySkillFile) error {
+	encoded, err := json.Marshal(file)
+	if err != nil {
+		return err
+	}
+	if first {
+		return b.take(int64(len(`,"files":[]`)) + int64(len(encoded)))
+	}
+	return b.take(int64(len(encoded)) + 1)
+}
+
+// FleetProvisioner is the single atomic octo-fleet installation surface used by
+// legacy expert and squad endpoints. *fleet.Client satisfies it.
+type FleetProvisioner interface {
+	InstallCapability(ctx context.Context, token, spaceID, workspaceID, key string, in fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error)
+}
+
+// WithFleet wires the provisioner at construction (router).
 func (s *Service) WithFleet(f FleetProvisioner) *Service {
 	s.fleet = f
 	return s
 }
 
-// InstallTracker is the metrics surface the install paths use to bump
-// install_count after a successful provision. *metricssvc.Service satisfies it;
-// the interface lives here (not an import) because the metrics package already
-// imports this one for its visibility resolvers.
+// InstallTracker is the metrics surface used to bump install_count after a
+// successful install. *metricssvc.Service satisfies it; the interface lives
+// here because the metrics package imports this package for visibility.
 type InstallTracker interface {
 	TrackInstall(ctx context.Context, resourceType, resourceID string) error
 }
@@ -106,17 +203,11 @@ func (s *Service) WithMetrics(m InstallTracker) *Service {
 	return s
 }
 
-// trackTimeout bounds the best-effort install counter bump. Deliberately much
-// tighter than cleanupTimeout: tracking runs on the response path AFTER the
-// install succeeded, and install is not idempotent — a stalled Redis must not
-// hold a successful response long enough for a gateway/client timeout to
-// trigger a duplicate-provisioning retry.
+// trackTimeout bounds the best-effort install counter bump on the response path.
 const trackTimeout = 2 * time.Second
 
-// trackInstall bumps the install counter after a successful install.
-// Best-effort and detached from the request context (a client disconnect right
-// after a successful provision must not cancel the count); failures are logged,
-// never returned — the install itself already succeeded.
+// trackInstall bumps the install counter after a successful atomic install.
+// It is best-effort and detached from request cancellation.
 func (s *Service) trackInstall(ctx context.Context, resourceType, resourceID string) {
 	if s.metrics == nil {
 		return
@@ -143,19 +234,18 @@ type InstallInput struct {
 	CustomEnv   map[string]string
 	SpaceID     string
 	Token       string
+	// IdempotencyKey is forwarded unchanged; empty preserves generated-key behavior.
+	IdempotencyKey string
 }
 
-// InstallResult is the created agent's id.
+// InstallResult carries the installed Loop agent id.
 type InstallResult struct {
 	AgentID string
 }
 
-// InstallExpert provisions the expert as a Loop agent in the caller's chosen
-// workspace/runtime. It acts as the calling user (forwarded token), so fleet
-// enforces workspace membership, runtime access, and space scoping — this layer
-// does not re-check them. The per-agent provisioning (create agent → create
-// skills → bind, with rollback on partial failure) is shared with InstallSquad
-// via provisionAgent.
+// InstallExpert installs the visible expert into the caller's workspace and
+// runtime through one Fleet capability transaction. Fleet enforces workspace
+// membership, runtime access, and Space scoping using the forwarded token.
 func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID string, in InstallInput) (InstallResult, error) {
 	if s.fleet == nil {
 		return InstallResult{}, ErrFleetNotConfigured
@@ -164,8 +254,6 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		return InstallResult{}, ErrInvalidRequest
 	}
 
-	// Bound the whole install; rollback runs on a detached context so it still
-	// fires if this deadline is what trips.
 	ctx, cancel := context.WithTimeout(ctx, installTimeout)
 	defer cancel()
 
@@ -173,227 +261,240 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	if err != nil {
 		return InstallResult{}, err
 	}
-
-	agentID, _, err := s.provisionAgent(ctx, in, agentProvisionSpec{
-		Name:        m.Name,
-		Summary:     m.Summary,
-		Instruction: m.Instruction,
-		MCPConfig:   m.MCPConfig,
-		Skills:      m.Skills,
-	}, &fileBudget{remaining: maxSkillFilesPerInstall}, nil)
+	budget := newCapabilityBudget("marketplace:" + m.ID)
+	mcpConfig, err := capabilityMCPConfig(m.MCPConfig)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	expert := fleet.CapabilityExpert{
+		Name: m.Name, Version: nil, MarketExpertID: m.ID, Description: m.Summary, Instructions: m.Instruction,
+		CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
+	}
+	if err := budget.beginExpert(); err != nil {
+		return InstallResult{}, err
+	}
+	if err := budget.addJSON(expert); err != nil {
+		return InstallResult{}, err
+	}
+	binding := fleet.CapabilityExpertBinding{ExpertName: m.Name, RuntimeID: in.RuntimeID}
+	if err := budget.beginBinding(); err != nil {
+		return InstallResult{}, err
+	}
+	if err := budget.addJSON(binding); err != nil {
+		return InstallResult{}, err
+	}
+	skillNames, skills, err := s.capabilitySkills(ctx, m.Skills, m.Summary, &fileBudget{remaining: maxSkillFilesPerInstall}, budget, nil)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	expert.SkillNames = skillNames
+	request := fleet.CapabilityInstallRequest{
+		Definition: fleet.CapabilityDefinition{
+			SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Skills: skills,
+			Experts: []fleet.CapabilityExpert{expert},
+		},
+		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{binding}},
+	}
+	result, err := s.installCapability(ctx, in, request)
 	if err != nil {
 		return InstallResult{}, err
 	}
 	s.trackInstall(ctx, "expert", expertID)
-	return InstallResult{AgentID: agentID}, nil
+	return InstallResult{AgentID: result.ExpertID}, nil
 }
 
-// agentProvisionSpec is the per-agent input to provisionAgent: the expert (or
-// squad member) fields that seed one Loop agent and its skills.
-type agentProvisionSpec struct {
-	Name        string
-	Summary     string
-	Instruction string
-	MCPConfig   string
-	Skills      []model.SkillRef
+func (s *Service) installCapability(ctx context.Context, in InstallInput, request fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	key := in.IdempotencyKey
+	if key == "" {
+		key = s.idGen()
+	}
+	result, err := s.fleet.InstallCapability(ctx, in.Token, in.SpaceID, in.WorkspaceID, key, request)
+	if err == nil {
+		return result, nil
+	}
+	var apiErr *fleet.CapabilityAPIError
+	if errors.As(err, &apiErr) {
+		return nil, &InstallDispatchError{IdempotencyKey: key, Err: err}
+	}
+	return nil, &InstallDispatchError{IdempotencyKey: key, Err: fmt.Errorf("%w: %w", ErrFleetInstallUnavailable, err)}
 }
 
-// ProvisionAgentSpec is the externally-buildable form of agentProvisionSpec:
-// the unified plugin install maps plugin_json attachments onto it. Field-for-
-// field identical so the conversion is a struct cast.
-type ProvisionAgentSpec struct {
-	Name        string
-	Summary     string
-	Instruction string
-	MCPConfig   string
-	Skills      []model.SkillRef
-}
-
-// ProvisionAgentFromSpec provisions one Loop agent from an externally built
-// spec with InstallExpert's exact semantics: aggregate install timeout, shared
-// file budget, and atomic rollback of everything created on failure. It bumps
-// no metrics counter — the caller owns attribution.
-func (s *Service) ProvisionAgentFromSpec(ctx context.Context, in InstallInput, spec ProvisionAgentSpec) (string, error) {
-	if s.fleet == nil {
-		return "", ErrFleetNotConfigured
-	}
-	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.RuntimeID) == "" {
-		return "", ErrInvalidRequest
-	}
-	ctx, cancel := context.WithTimeout(ctx, installTimeout)
-	defer cancel()
-	agentID, _, err := s.provisionAgent(ctx, in, agentProvisionSpec(spec), &fileBudget{remaining: maxSkillFilesPerInstall}, nil)
-	return agentID, err
-}
-
-// provisionAgent creates one Loop agent (seeded with the instruction +
-// mcp_config), creates one workspace skill per packaged skill, then binds those
-// skills to the agent. It is atomic: on any failure after the agent exists it
-// rolls back everything IT created (skills + agent) and returns the error, so
-// the caller has nothing to unwind for this agent. Shared by InstallExpert (one
-// agent) and InstallSquad (one per member).
-func (s *Service) provisionAgent(ctx context.Context, in InstallInput, spec agentProvisionSpec, budget *fileBudget, seenSkillNames map[string]string) (string, []string, error) {
-	agentSpec := fleet.AgentSpec{
-		Name:         spec.Name,
-		Description:  spec.Summary,
-		Instructions: spec.Instruction,
-		RuntimeID:    in.RuntimeID,
-		CustomEnv:    in.CustomEnv,
-	}
-	if mc := strings.TrimSpace(spec.MCPConfig); mc != "" {
-		agentSpec.MCPConfig = json.RawMessage(mc)
+// capabilityMCPConfig translates only the legacy stdio discriminator to the
+// command-only stdio shape required by Fleet. Stored source configuration is
+// not changed; empty and remote configurations remain untouched.
+func capabilityMCPConfig(raw string) (json.RawMessage, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
 	}
 
-	agentID, err := s.fleet.CreateAgent(ctx, in.Token, in.SpaceID, in.WorkspaceID, agentSpec)
-	if err != nil {
-		return "", nil, err
+	config := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return json.RawMessage(raw), nil
+		}
+		return nil, err
+	}
+	serversRaw, ok := config["mcpServers"]
+	if !ok {
+		return json.RawMessage(raw), nil
+	}
+	servers := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(serversRaw, &servers); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return json.RawMessage(raw), nil
+		}
+		return nil, err
 	}
 
-	// From here on, roll back the created agent (and any skills) on failure so a
-	// partial provision never leaves an orphaned agent behind.
-	skillIDs, boundIDs, err := s.installSkills(ctx, spec.Skills, spec.Summary, in, budget, seenSkillNames)
-	if err != nil {
-		s.rollbackAgent(ctx, in, agentID, skillIDs)
-		return "", nil, err
-	}
-
-	if len(boundIDs) > 0 {
-		if err := s.fleet.SetAgentSkills(ctx, in.Token, in.SpaceID, in.WorkspaceID, agentID, boundIDs); err != nil {
-			s.rollbackAgent(ctx, in, agentID, skillIDs)
-			return "", nil, err
+	changed := false
+	for name, serverRaw := range servers {
+		var server map[string]json.RawMessage
+		if err := json.Unmarshal(serverRaw, &server); err != nil {
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				return json.RawMessage(raw), nil
+			}
+			return nil, err
+		}
+		typeRaw, hasType := server["type"]
+		if hasType {
+			var serverType string
+			if err := json.Unmarshal(typeRaw, &serverType); err != nil {
+				var typeErr *json.UnmarshalTypeError
+				if errors.As(err, &typeErr) {
+					return json.RawMessage(raw), nil
+				}
+				return nil, err
+			}
+			if serverType == "stdio" {
+				commandRaw, hasCommand := server["command"]
+				if hasCommand {
+					var command string
+					if err := json.Unmarshal(commandRaw, &command); err != nil {
+						var typeErr *json.UnmarshalTypeError
+						if errors.As(err, &typeErr) {
+							return json.RawMessage(raw), nil
+						}
+						return nil, err
+					}
+					if command != "" {
+						delete(server, "type")
+						normalizedServer, err := json.Marshal(server)
+						if err != nil {
+							return nil, err
+						}
+						servers[name] = normalizedServer
+						changed = true
+					}
+				}
+			}
 		}
 	}
-
-	return agentID, skillIDs, nil
+	if !changed {
+		return json.RawMessage(raw), nil
+	}
+	normalizedServers, err := json.Marshal(servers)
+	if err != nil {
+		return nil, err
+	}
+	config["mcpServers"] = normalizedServers
+	normalized, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
-// installSkills creates one fleet workspace skill per packaged skill (those with
-// stored SKILL.md content), then attaches each skill package's supporting files,
-// returning the new skill ids. Name-only skills (no ObjectKey) carry nothing to
-// install and are skipped. On the first failure it deletes the skills it already
-// created and returns the error, so the caller only has the agent left to unwind.
-func (s *Service) installSkills(ctx context.Context, skills []model.SkillRef, summary string, in InstallInput, budget *fileBudget, seenSkillNames map[string]string) ([]string, []string, error) {
-	created := make([]string, 0, len(skills))
-	bound := make([]string, 0, len(skills))
-	for i := range skills {
-		if skills[i].ObjectKey == "" && skills[i].Markdown == "" {
+func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, description string, budget *fileBudget, request *capabilityBudget, seen map[string]struct{}) ([]string, []fleet.CapabilitySkill, error) {
+	names := make([]string, 0, len(refs))
+	skills := make([]fleet.CapabilitySkill, 0, len(refs))
+	for i := range refs {
+		ref := refs[i]
+		if ref.ObjectKey == "" && ref.Markdown == "" {
 			continue
 		}
-		// Fleet's UNIQUE(workspace_id, name) constraint is byte-exact. Deduplicate
-		// only the names that Fleet itself would reject; case/whitespace variants
-		// remain distinct packaged Skills and must both be installed.
-		nameKey := skills[i].Name
-		if seenSkillNames != nil {
-			if id, exists := seenSkillNames[nameKey]; exists {
-				bound = append(bound, id)
+		if err := request.addSkillName(len(names) == 0, ref.Name); err != nil {
+			return nil, nil, err
+		}
+		if seen != nil {
+			if _, exists := seen[ref.Name]; exists {
+				names = append(names, ref.Name)
 				continue
 			}
 		}
-		content, err := s.readSkillContent(ctx, skills, i)
+		if err := request.beginSkill(); err != nil {
+			return nil, nil, err
+		}
+		content, err := s.readSkillContent(ctx, refs, i)
 		if err != nil {
-			s.deleteSkills(ctx, in, created)
 			return nil, nil, err
 		}
-		skillID, err := s.fleet.CreateSkill(ctx, in.Token, in.SpaceID, in.WorkspaceID, fleet.SkillSpec{
-			Name:        skills[i].Name,
-			Description: summary,
-			Content:     content,
-		})
+		skill := fleet.CapabilitySkill{
+			Name: ref.Name, Version: nil, Description: description, Content: content,
+			Config: map[string]any{},
+		}
+		if err := request.addJSON(skill); err != nil {
+			return nil, nil, err
+		}
+		files, err := s.capabilitySkillFiles(ctx, ref, budget, request)
 		if err != nil {
-			s.deleteSkills(ctx, in, created)
 			return nil, nil, err
 		}
-		// Track before attaching files so a file failure also unwinds this skill.
-		created = append(created, skillID)
-		bound = append(bound, skillID)
-		if err := s.attachSkillFiles(ctx, in, skills[i], skillID, budget); err != nil {
-			s.deleteSkills(ctx, in, created)
-			return nil, nil, err
-		}
-		if seenSkillNames != nil {
-			seenSkillNames[nameKey] = skillID
+		skill.Files = files
+		skills = append(skills, skill)
+		names = append(names, ref.Name)
+		if seen != nil {
+			seen[ref.Name] = struct{}{}
 		}
 	}
-	return created, bound, nil
+	return names, skills, nil
 }
 
-// attachSkillFiles pushes the packaged skill's supporting files (everything but
-// SKILL.md) onto the freshly-created fleet skill via UpsertSkillFile. Tree-shaped
-// skills carry their supporting text files inline (resolved by the plugin path)
-// and are pushed directly; legacy pointer skills read the stored .zip, extracting
-// UTF-8 text files only (binaries are skipped by ExtractSkillFiles). A missing or
-// unreadable package is treated as "no extra files" — the SKILL.md-backed skill is
-// already usable — so it does NOT fail the install; only an actual fleet PUT error
-// or the aggregate budget does.
-func (s *Service) attachSkillFiles(ctx context.Context, in InstallInput, ref model.SkillRef, skillID string, budget *fileBudget) error {
-	// Tree shape: the plugin path already resolved the supporting text files.
+func (s *Service) capabilitySkillFiles(ctx context.Context, ref model.SkillRef, budget *fileBudget, request *capabilityBudget) ([]fleet.CapabilitySkillFile, error) {
 	if ref.Markdown != "" {
-		for _, f := range ref.SupportingFiles {
+		files := make([]fleet.CapabilitySkillFile, 0, len(ref.SupportingFiles))
+		for _, file := range ref.SupportingFiles {
 			if !budget.take() {
-				return ErrInstallTooLarge
+				return nil, ErrInstallTooLarge
 			}
-			if err := s.fleet.UpsertSkillFile(ctx, in.Token, in.SpaceID, in.WorkspaceID, skillID, f.Path, f.Content); err != nil {
-				return err
+			capabilityFile := fleet.CapabilitySkillFile{
+				Path: file.Path, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: file.Content},
 			}
+			if err := request.addSkillFile(len(files) == 0, capabilityFile); err != nil {
+				return nil, err
+			}
+			files = append(files, capabilityFile)
 		}
-		return nil
+		return files, nil
 	}
 	if ref.ZipObjectKey == "" || s.store == nil {
-		return nil
+		return nil, nil
 	}
 	tmpPath, _, cleanup, err := s.downloadToTempFile(ctx, ref.ZipObjectKey)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer cleanup()
 
-	files, _, code, _ := parse.ExtractSkillFiles(tmpPath, maxSkillPackageBytes, maxSkillFilesPerSkill)
+	extracted, _, code, _ := parse.ExtractSkillFiles(tmpPath, maxSkillPackageBytes, maxSkillFilesPerSkill)
 	if code != "" {
-		return nil
+		return nil, nil
 	}
-	for _, f := range files {
-		// Charge the aggregate budget first: an install that would push more than
-		// maxSkillFilesPerInstall files across all skills/members is rejected
-		// (and rolled back) rather than allowed to fan out unbounded.
+	files := make([]fleet.CapabilitySkillFile, 0, len(extracted))
+	for _, file := range extracted {
 		if !budget.take() {
-			return ErrInstallTooLarge
+			return nil, ErrInstallTooLarge
 		}
-		if err := s.fleet.UpsertSkillFile(ctx, in.Token, in.SpaceID, in.WorkspaceID, skillID, f.Path, f.Content); err != nil {
-			return err
+		capabilityFile := fleet.CapabilitySkillFile{
+			Path: file.Path, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: file.Content},
 		}
+		if err := request.addSkillFile(len(files) == 0, capabilityFile); err != nil {
+			return nil, err
+		}
+		files = append(files, capabilityFile)
 	}
-	return nil
-}
-
-// rollbackAgent best-effort deletes the created skills then the agent. Errors
-// are ignored: the original failure is what the caller reports, and fleet GC /
-// the user can clean up any residue.
-func (s *Service) rollbackAgent(ctx context.Context, in InstallInput, agentID string, skillIDs []string) {
-	s.deleteSkills(ctx, in, skillIDs)
-	if agentID != "" {
-		cctx, cancel := cleanupContext(ctx)
-		defer cancel()
-		_ = s.fleet.DeleteAgent(cctx, in.Token, in.SpaceID, in.WorkspaceID, agentID)
-	}
-}
-
-func (s *Service) deleteSkills(ctx context.Context, in InstallInput, skillIDs []string) {
-	if len(skillIDs) == 0 {
-		return
-	}
-	cctx, cancel := cleanupContext(ctx)
-	defer cancel()
-	for _, id := range skillIDs {
-		_ = s.fleet.DeleteSkill(cctx, in.Token, in.SpaceID, in.WorkspaceID, id)
-	}
-}
-
-// cleanupContext derives the context for best-effort rollback deletes. It is
-// DETACHED from the request's cancellation/deadline (via WithoutCancel) so the
-// deletes still run when the install failed *because* the request was canceled
-// or timed out mid-flight — otherwise the rollback would no-op on a canceled ctx
-// and leave exactly the orphaned agent/skills it exists to prevent. A fresh
-// timeout keeps the detached calls bounded.
-func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	return files, nil
 }

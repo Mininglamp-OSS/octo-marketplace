@@ -16,7 +16,7 @@ func TestCapabilityResultValidatesTeamAndSkillBindings(t *testing.T) {
 	in.Definition.Skills = []CapabilitySkill{{Name: "review"}, {Name: "deploy"}}
 	in.Definition.Experts[0].SkillNames = []string{"review", "deploy"}
 	in.Definition.ExpertTeam = &CapabilityExpertTeam{Name: "team", Members: []CapabilityTeamMember{{ExpertName: "Custom name", IsLeader: true}}}
-	valid := `{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":["skill-1","skill-2"],"is_leader":true}],"skills":[{"skill_id":"skill-1","name":"review"},{"skill_id":"skill-2","name":"deploy"}]}`
+	valid := `{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-1","expert_team":{"expert_team_id":"team-1","name":"team","version":null,"created":true,"restored":false},"experts":[{"expert_id":"expert-1","name":"Custom name","version":null,"created":true,"restored":false,"skill_ids":["skill-1","skill-2"],"is_leader":true}],"skills":[{"skill_id":"skill-1","name":"review","version":null,"created":true},{"skill_id":"skill-2","name":"deploy","version":null,"created":true}]}`
 	for _, tc := range []struct {
 		name   string
 		mutate func(*CapabilityInstallResult)
@@ -37,7 +37,7 @@ func TestCapabilityResultValidatesTeamAndSkillBindings(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&out)
 			}
-			if got := validCapabilityResult(in.Definition, out, false); got != tc.want {
+			if got := validCapabilityResult(in.Definition, out, false, false); got != tc.want {
 				t.Fatalf("valid=%v want=%v", got, tc.want)
 			}
 		})
@@ -54,33 +54,44 @@ const expertEnvelopeJSON = `{"data":` + expertResultJSON + `}`
 func TestCapabilityInstallValidatesSkillMetadata(t *testing.T) {
 	version := "1.2.3"
 	for _, tc := range []struct {
-		name          string
-		version       *string
-		marketSkillID string
-		metadata      string
-		legacy        bool
-		badBinding    bool
-		wantSuccess   bool
+		name             string
+		version          *string
+		marketSkillID    string
+		metadata         string
+		legacy           bool
+		legacyExpertWire bool
+		badBinding       bool
+		wantSuccess      bool
 	}{
-		{name: "matching_version_and_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review"`, wantSuccess: true},
-		{name: "different_version", version: &version, marketSkillID: "market-review", metadata: `"version":"2.0.0","market_skill_id":"market-review"`},
-		{name: "missing_version", version: &version, marketSkillID: "market-review", metadata: `"market_skill_id":"market-review"`},
-		{name: "null_version", marketSkillID: "market-review", metadata: `"version":null,"market_skill_id":"market-review"`, wantSuccess: true},
-		{name: "unexpected_version", marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review"`},
+		{name: "matching_version_and_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review","created":true`, wantSuccess: true},
+		{name: "different_version", version: &version, marketSkillID: "market-review", metadata: `"version":"2.0.0","market_skill_id":"market-review","created":true`},
+		{name: "missing_version", version: &version, marketSkillID: "market-review", metadata: `"market_skill_id":"market-review","created":true`},
+		{name: "null_version", marketSkillID: "market-review", metadata: `"version":null,"market_skill_id":"market-review","created":true`, wantSuccess: true},
+		{name: "unexpected_version", marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review","created":true`},
 		{name: "empty_is_not_null", metadata: `"version":"","created":true`},
-		{name: "different_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-other"`},
+		{name: "different_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-other","created":true`},
 		{name: "missing_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","created":true`},
-		{name: "unexpected_source", metadata: `"version":null,"market_skill_id":"market-other"`},
+		{name: "unexpected_source", metadata: `"version":null,"market_skill_id":"market-other","created":true`},
 		{name: "no_version_or_source", metadata: `"version":null,"created":true`, wantSuccess: true},
 		{name: "historical_wire_without_metadata", version: &version, marketSkillID: "market-review", metadata: `"created":false`, legacy: true, wantSuccess: true},
 		{name: "historical_wire_still_validates_bindings", version: &version, marketSkillID: "market-review", metadata: `"created":false`, legacy: true, badBinding: true},
+		{name: "historical_expert_metadata_omitted", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review","created":true`, legacyExpertWire: true, wantSuccess: true},
+		{name: "historical_expert_wire_keeps_skill_checks", version: &version, marketSkillID: "market-review", metadata: `"version":"2.0.0","market_skill_id":"market-review","created":true`, legacyExpertWire: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := capabilityRequest()
 			request.Definition.Skills = []CapabilitySkill{{Name: "review", Version: tc.version, MarketSkillID: tc.marketSkillID}}
 			request.Definition.Experts[0].SkillNames = []string{"review"}
 			request.LegacySkillWire = tc.legacy
-			fixture := `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":["skill-1"]}],"skills":[{"skill_id":"skill-1","name":"review",` + tc.metadata + `}]}}`
+			request.LegacyExpertWire = tc.legacyExpertWire
+			expertMetadata := `"version":null,`
+			if tc.legacyExpertWire {
+				expertVersion := "expert-4.0"
+				request.Definition.Experts[0].Version = &expertVersion
+				request.Definition.Experts[0].MarketExpertID = "market-expert"
+				expertMetadata = ""
+			}
+			fixture := `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name",` + expertMetadata + `"created":true,"restored":false,"skill_ids":["skill-1"]}],"skills":[{"skill_id":"skill-1","name":"review",` + tc.metadata + `}]}}`
 			if tc.badBinding {
 				fixture = strings.Replace(fixture, `"skill_ids":["skill-1"]`, `"skill_ids":["other"]`, 1)
 			}
@@ -104,6 +115,47 @@ func TestCapabilityInstallValidatesSkillMetadata(t *testing.T) {
 			}
 			if calls != 1 {
 				t.Fatalf("Fleet mutations=%d, want exactly one", calls)
+			}
+		})
+	}
+}
+func TestCapabilityResultLegacyExpertWireStillValidatesConnectorGraph(t *testing.T) {
+	expertVersion, connectorVersion := "expert-4.0", "connector-3.0"
+	marketMCPID := "market-calendar"
+	connectorID := "11111111-1111-4111-8111-111111111111"
+	stringPtr := func(value string) *string { return &value }
+	in := capabilityRequest()
+	in.Definition.Experts[0].Version = &expertVersion
+	in.Definition.Experts[0].MarketExpertID = "market-expert"
+	in.Definition.Experts[0].ConnectorNames = []string{"Calendar"}
+	in.Definition.Connectors = []CapabilityConnector{capabilityConnectorFixture("Calendar", marketMCPID, &connectorVersion)}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*CapabilityInstallResult)
+		want   bool
+	}{
+		{name: "expert_metadata_omitted", want: true},
+		{name: "connector_version_mismatch", mutate: func(r *CapabilityInstallResult) { r.Connectors[0].Version = stringPtr("connector-9.0") }},
+		{name: "connector_source_mismatch", mutate: func(r *CapabilityInstallResult) { r.Connectors[0].MarketMCPID = stringPtr("market-other") }},
+		{name: "connector_reference_not_closed", mutate: func(r *CapabilityInstallResult) { r.Experts[0].ConnectorIDs = []string{"missing-connector"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := CapabilityInstallResult{
+				Type: "expert", ExpertID: "expert-1",
+				Experts: []CapabilityExpertResult{{
+					ExpertID: "expert-1", Name: "Custom name", ConnectorIDs: []string{connectorID}, Created: true,
+				}},
+				Connectors: []CapabilityConnectorResult{{
+					ConnectorID: connectorID, Name: "Calendar", Version: &connectorVersion,
+					MarketMCPID: &marketMCPID, Created: true,
+				}},
+			}
+			if tc.mutate != nil {
+				tc.mutate(&out)
+			}
+			if got := validCapabilityResult(in.Definition, out, false, true); got != tc.want {
+				t.Fatalf("validCapabilityResult=%v want %v", got, tc.want)
 			}
 		})
 	}
@@ -305,7 +357,7 @@ func TestCapabilityInstallRejectsInvalidConnectorIdentitiesAndBindings(t *testin
 		{
 			name:    "expert_bindings_are_swapped",
 			request: teamRequest,
-			fixture: `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","experts":[{"expert_id":"expert-worker","name":"Worker","skill_ids":[],"connector_ids":["99999999-9999-4999-8999-999999999999"]},{"expert_id":"expert-lead","name":"Lead","skill_ids":[],"is_leader":true,"connector_ids":["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}],"skills":[],"connectors":[{"connector_id":"99999999-9999-4999-8999-999999999999","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"docs","version":null,"market_mcp_id":"market-docs","created":true}]}}`,
+			fixture: `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","expert_team":{"expert_team_id":"team-1","name":"team","version":null,"created":true,"restored":false},"experts":[{"expert_id":"expert-worker","name":"Worker","version":null,"created":true,"skill_ids":[],"connector_ids":["99999999-9999-4999-8999-999999999999"]},{"expert_id":"expert-lead","name":"Lead","version":null,"created":true,"skill_ids":[],"is_leader":true,"connector_ids":["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}],"skills":[],"connectors":[{"connector_id":"99999999-9999-4999-8999-999999999999","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"docs","version":null,"market_mcp_id":"market-docs","created":true}]}}`,
 		},
 	}
 	for _, tc := range tests {
@@ -570,5 +622,287 @@ func TestCapabilityInstallRecognizesIdempotencyConflictDetails(t *testing.T) {
 				t.Fatal("upstream details must not enter the error text")
 			}
 		})
+	}
+}
+
+func TestCapabilityResultValidatesExpertSourceMetadata(t *testing.T) {
+	version := "1.2.3"
+	in := capabilityRequest()
+	in.Definition.Experts[0].Version = &version
+	in.Definition.Experts[0].MarketExpertID = "market-expert"
+
+	for _, tc := range []struct {
+		name string
+		json string
+		ok   bool
+	}{
+		{
+			name: "matching",
+			json: `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","version":"1.2.3","market_expert_id":"market-expert","created":true,"restored":false,"skill_ids":[]}],"skills":[]}`,
+			ok:   true,
+		},
+		{
+			name: "wrong_version",
+			json: `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","version":"2.0.0","market_expert_id":"market-expert","skill_ids":[]}],"skills":[]}`,
+		},
+		{
+			name: "missing_version",
+			json: `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","market_expert_id":"market-expert","skill_ids":[]}],"skills":[]}`,
+		},
+		{
+			name: "reused_expert_keeps_first_source",
+			json: `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","version":"1.2.3","market_expert_id":"market-expert-old","created":false,"skill_ids":[]}],"skills":[]}`,
+			ok:   true,
+		},
+		{
+			name: "reused_expert_without_source_metadata",
+			json: `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","version":"1.2.3","skill_ids":[]}],"skills":[]}`,
+			ok:   true,
+		},
+		{
+			name: "created_expert_wrong_source",
+			json: `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","version":"1.2.3","market_expert_id":"other","created":true,"skill_ids":[]}],"skills":[]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out CapabilityInstallResult
+			if err := json.Unmarshal([]byte(tc.json), &out); err != nil {
+				t.Fatal(err)
+			}
+			if got := validCapabilityResult(in.Definition, out, false, false); got != tc.ok {
+				t.Fatalf("validCapabilityResult=%v want %v", got, tc.ok)
+			}
+		})
+	}
+}
+
+func TestCapabilityResultValidatesExpertTeamSourceMetadata(t *testing.T) {
+	version := "team-4.0"
+	memberVersion := "expert-1.0"
+	stringPtr := func(value string) *string { return &value }
+	in := capabilityRequest()
+	in.Definition.Experts[0].Version = &memberVersion
+	in.Definition.Experts[0].MarketExpertID = "market-expert"
+	in.Definition.ExpertTeam = &CapabilityExpertTeam{
+		Name: "Delivery", Version: &version, MarketExpertTeamID: "market-team",
+		Members: []CapabilityTeamMember{{ExpertName: "Custom name", IsLeader: true}},
+	}
+	valid := `{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-1","expert_team":{"expert_team_id":"team-1","name":"Delivery","version":"team-4.0","market_expert_team_id":"market-team","created":true,"restored":false},"experts":[{"expert_id":"expert-1","name":"Custom name","version":"expert-1.0","market_expert_id":"market-expert","is_leader":true,"skill_ids":[]}],"skills":[]}`
+	for _, tc := range []struct {
+		name   string
+		json   string
+		mutate func(*CapabilityInstallResult)
+		want   bool
+	}{
+		{name: "matching", json: valid, want: true},
+		{name: "missing_team_result", json: `{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","version":"expert-1.0","market_expert_id":"market-expert","is_leader":true,"skill_ids":[]}],"skills":[]}`},
+		{name: "wrong_team_version", json: valid, mutate: func(r *CapabilityInstallResult) { r.ExpertTeam.Version = stringPtr("team-9.0") }},
+		{name: "wrong_team_source", json: valid, mutate: func(r *CapabilityInstallResult) { r.ExpertTeam.MarketExpertTeamID = "other" }},
+		{name: "wrong_member_version", json: valid, mutate: func(r *CapabilityInstallResult) { r.Experts[0].Version = stringPtr("expert-9.0") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out CapabilityInstallResult
+			if err := json.Unmarshal([]byte(tc.json), &out); err != nil {
+				t.Fatal(err)
+			}
+			if tc.mutate != nil {
+				tc.mutate(&out)
+			}
+			if got := validCapabilityResult(in.Definition, out, false, false); got != tc.want {
+				t.Fatalf("validCapabilityResult=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+func TestCapabilityResultValidatesBaselineTeamGraphWithoutExpertMetadata(t *testing.T) {
+	skillVersion, memberVersion, teamVersion := "skill-1.2.3", "expert-2.0.0", "team-3.0.0"
+	stringPtr := func(value string) *string { return &value }
+	in := capabilityRequest()
+	in.Definition.Skills = []CapabilitySkill{{Name: "Review", Version: &skillVersion, MarketSkillID: "market-skill"}}
+	in.Definition.Experts[0].Version = &memberVersion
+	in.Definition.Experts[0].MarketExpertID = "market-expert"
+	in.Definition.Experts[0].SkillNames = []string{"Review"}
+	in.Definition.ExpertTeam = &CapabilityExpertTeam{
+		Name: "Delivery", Version: &teamVersion, MarketExpertTeamID: "market-team",
+		Members: []CapabilityTeamMember{{ExpertName: "Custom name", IsLeader: true}},
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*CapabilityInstallResult)
+		want   bool
+	}{
+		{name: "metadata_omitted_from_historical_team_wire", want: true},
+		{name: "historical_team_result_object_absent", mutate: func(r *CapabilityInstallResult) { r.ExpertTeam = nil }, want: true},
+		{name: "skill_version_still_checked", mutate: func(r *CapabilityInstallResult) { r.Skills[0].Version = stringPtr("skill-9.0.0") }},
+		{name: "skill_source_still_checked", mutate: func(r *CapabilityInstallResult) { r.Skills[0].MarketSkillID = "market-other" }},
+		{name: "team_member_graph_still_checked", mutate: func(r *CapabilityInstallResult) { r.Experts[0].Name = "Other member" }},
+		{name: "leader_reference_still_closed", mutate: func(r *CapabilityInstallResult) { r.LeaderExpertID = "missing-expert" }},
+		{name: "skill_reference_still_closed", mutate: func(r *CapabilityInstallResult) { r.Experts[0].SkillIDs = []string{"missing-skill"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := CapabilityInstallResult{
+				Type: "expert_team", ExpertTeamID: "team-1", LeaderExpertID: "expert-1",
+				ExpertTeam: &CapabilityExpertTeamResult{ExpertTeamID: "team-1", Name: "Delivery", Created: true},
+				Experts: []CapabilityExpertResult{{
+					ExpertID: "expert-1", Name: "Custom name", SkillIDs: []string{"skill-1"},
+					IsLeader: true, Created: true,
+				}},
+				Skills: []CapabilitySkillResult{{
+					SkillID: "skill-1", Name: "Review", Version: &skillVersion, MarketSkillID: "market-skill", Created: true,
+				}},
+			}
+			if tc.mutate != nil {
+				tc.mutate(&out)
+			}
+			if got := validCapabilityResult(in.Definition, out, false, true); got != tc.want {
+				t.Fatalf("validCapabilityResult=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLegacyCapabilityWireOmitsExpertSourceMetadata(t *testing.T) {
+	version := "1.2.3"
+	in := capabilityRequest()
+	in.LegacySkillWire = true
+	in.LegacyExpertWire = true
+	in.Definition.Experts[0].Version = &version
+	in.Definition.Experts[0].MarketExpertID = "market-expert"
+	in.Definition.ExpertTeam = &CapabilityExpertTeam{
+		Name: "Delivery", Version: &version, MarketExpertTeamID: "market-team",
+		Members: []CapabilityTeamMember{{ExpertName: "Custom name", IsLeader: true}},
+	}
+
+	body, err := MarshalCapabilityInstallRequest(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Definition struct {
+			Experts []map[string]json.RawMessage `json:"experts"`
+			Team    map[string]json.RawMessage   `json:"expert_team"`
+		} `json:"definition"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Definition.Experts) != 1 || raw.Definition.Experts[0]["version"] != nil || raw.Definition.Experts[0]["market_expert_id"] != nil {
+		t.Fatalf("legacy expert metadata was added to replay bytes: %s", body)
+	}
+	if raw.Definition.Team["version"] != nil || raw.Definition.Team["market_expert_team_id"] != nil {
+		t.Fatalf("legacy team metadata was added to replay bytes: %s", body)
+	}
+}
+func TestCapabilityWireCanOmitSkillAndExpertMetadataIndependently(t *testing.T) {
+	skillVersion, expertVersion, teamVersion, connectorVersion := "skill-1.2.3", "expert-2.0.0", "team-3.0.0", "connector-4.0.0"
+	for _, tc := range []struct {
+		name               string
+		legacySkillWire    bool
+		legacyExpertWire   bool
+		wantSkillMetadata  bool
+		wantExpertMetadata bool
+	}{
+		{name: "current", wantSkillMetadata: true, wantExpertMetadata: true},
+		{name: "baseline", legacyExpertWire: true, wantSkillMetadata: true},
+		{name: "oldest", legacySkillWire: true, legacyExpertWire: true},
+		{name: "skill_only", legacySkillWire: true, wantExpertMetadata: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := capabilityRequest()
+			in.Definition.Skills = []CapabilitySkill{{Name: "Review", Version: &skillVersion, MarketSkillID: "market-skill"}}
+			in.Definition.Experts[0].Version = &expertVersion
+			in.Definition.Experts[0].MarketExpertID = "market-expert"
+			in.Definition.Experts[0].ConnectorNames = []string{"Calendar"}
+			in.Definition.Connectors = []CapabilityConnector{capabilityConnectorFixture("Calendar", "market-calendar", &connectorVersion)}
+			in.Definition.ExpertTeam = &CapabilityExpertTeam{
+				Name: "Delivery", Version: &teamVersion, MarketExpertTeamID: "market-team",
+				Members: []CapabilityTeamMember{{ExpertName: "Custom name", IsLeader: true}},
+			}
+			in.LegacySkillWire = tc.legacySkillWire
+			in.LegacyExpertWire = tc.legacyExpertWire
+
+			body, err := MarshalCapabilityInstallRequest(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw struct {
+				Definition struct {
+					Skills     []map[string]json.RawMessage `json:"skills"`
+					Experts    []map[string]json.RawMessage `json:"experts"`
+					Team       map[string]json.RawMessage   `json:"expert_team"`
+					Connectors []map[string]json.RawMessage `json:"connectors"`
+				} `json:"definition"`
+			}
+			if err := json.Unmarshal(body, &raw); err != nil {
+				t.Fatal(err)
+			}
+			if len(raw.Definition.Skills) != 1 || len(raw.Definition.Experts) != 1 {
+				t.Fatalf("wire resources changed shape: %s", body)
+			}
+			if len(raw.Definition.Connectors) != 1 {
+				t.Fatalf("connector disappeared from compatibility wire: %s", body)
+			}
+			assertField := func(fields map[string]json.RawMessage, key string, want bool) {
+				t.Helper()
+				_, present := fields[key]
+				if present != want {
+					t.Errorf("%s present=%t want=%t in %s", key, present, want, body)
+				}
+			}
+			for _, field := range []string{"version", "market_skill_id"} {
+				assertField(raw.Definition.Skills[0], field, tc.wantSkillMetadata)
+			}
+			for _, field := range []string{"version", "market_expert_id"} {
+				assertField(raw.Definition.Experts[0], field, tc.wantExpertMetadata)
+			}
+			for _, field := range []string{"version", "market_expert_team_id"} {
+				assertField(raw.Definition.Team, field, tc.wantExpertMetadata)
+			}
+			for _, field := range []string{"version", "market_mcp_id"} {
+				assertField(raw.Definition.Connectors[0], field, true)
+			}
+		})
+	}
+}
+
+func TestCapabilityResultAcceptsReusedTeamLocalVersionGraph(t *testing.T) {
+	teamVersion := "team-4.0"
+	memberVersion := "expert-1.0"
+	skillVersion := "review-3.0"
+	in := capabilityRequest()
+	in.Definition.Experts = []CapabilityExpert{{
+		Name: "Local member", Version: &memberVersion, MarketExpertID: "market-member-new",
+		SkillNames: []string{"Review"},
+	}}
+	in.Definition.Skills = []CapabilitySkill{{Name: "Review", Version: &skillVersion, MarketSkillID: "market-skill-new"}}
+	in.Definition.ExpertTeam = &CapabilityExpertTeam{
+		Name: "Delivery", Version: &teamVersion, MarketExpertTeamID: "market-team-new",
+		Members: []CapabilityTeamMember{{ExpertName: "Local member", IsLeader: true}},
+	}
+	fixture := `{"type":"expert_team","expert_team_id":"team-local","leader_expert_id":"expert-v1","expert_team":{"expert_team_id":"team-local","name":"Delivery","version":"team-4.0","market_expert_team_id":"market-team-original","created":false,"restored":false},"experts":[{"expert_id":"expert-v1","name":"Local member","version":"expert-1.0","market_expert_id":"market-member-original","created":false,"skill_ids":["skill-v1"]},{"expert_id":"expert-v2","name":"Local member","version":"expert-2.0","market_expert_id":"market-member-v2","created":false,"skill_ids":["skill-v2"]}],"skills":[{"skill_id":"skill-v1","name":"Review","version":"review-2.0","market_skill_id":"market-skill-original","created":false},{"skill_id":"skill-v2","name":"Review","version":"review-3.0","market_skill_id":"market-skill-v2","created":false}]}`
+	var out CapabilityInstallResult
+	if err := json.Unmarshal([]byte(fixture), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !validCapabilityResult(in.Definition, out, false, false) {
+		t.Fatal("valid committed local entity snapshot was rejected")
+	}
+}
+
+func TestCapabilityResultAcceptsReusedExpertFirstSourceAndBindings(t *testing.T) {
+	version := "expert-4.0"
+	skillVersion := "review-3.0"
+	in := capabilityRequest()
+	in.Definition.Experts[0].Version = &version
+	in.Definition.Experts[0].MarketExpertID = "market-expert-new"
+	in.Definition.Experts[0].SkillNames = []string{"Review"}
+	in.Definition.Skills = []CapabilitySkill{{Name: "Review", Version: &skillVersion, MarketSkillID: "market-skill-new"}}
+	fixture := `{"type":"expert","expert_id":"expert-local","experts":[{"expert_id":"expert-local","name":"Custom name","version":"expert-4.0","market_expert_id":"market-expert-original","created":false,"skill_ids":["skill-local"]}],"skills":[{"skill_id":"skill-local","name":"Review","version":"review-3.0","market_skill_id":"market-skill-original","created":false}]}`
+	var out CapabilityInstallResult
+	if err := json.Unmarshal([]byte(fixture), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !validCapabilityResult(in.Definition, out, false, false) {
+		t.Fatal("valid committed local entity snapshot was rejected")
 	}
 }

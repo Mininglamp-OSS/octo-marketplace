@@ -103,7 +103,7 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	}
 	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil ||
 		(len(in.Definition.Connectors) > 0 && !capabilityConnectorNullableFieldsPresent(raw)) ||
-		!validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire) {
+		!validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire, in.LegacyExpertWire) {
 		return nil, errors.New("invalid capability installation result; retry with the same idempotency key")
 	}
 	out := envelope.Data
@@ -140,162 +140,301 @@ func capabilityConnectorNullableFieldsPresent(raw []byte) bool {
 	return true
 }
 
-func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult, legacySkillWire bool) bool {
-	connectorIDs, ok := validCapabilityConnectorResults(def.Connectors, out.Connectors)
+func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult, legacySkillWire, legacyExpertWire bool) bool {
+	connectorIDs, ok := validCapabilityConnectorResults(out.Connectors)
 	if !ok {
 		return false
 	}
 	if len(def.Experts) == 0 {
-		return len(def.Connectors) > 0 &&
-			len(def.Skills) == 0 &&
-			def.ExpertTeam == nil &&
-			out.Type == "connectors" &&
-			out.ExpertID == "" &&
-			out.ExpertTeamID == "" &&
-			out.LeaderExpertID == "" &&
-			len(out.Experts) == 0 &&
-			len(out.Skills) == 0
+		return validCapabilityConnectorOnlyResult(def, out)
 	}
-	if out.Type == "connectors" {
+	if len(out.Experts) == 0 {
 		return false
 	}
-	if len(out.Experts) != len(def.Experts) || len(out.Skills) != len(def.Skills) {
-		return false
-	}
-	experts := make(map[string]string, len(out.Experts))
-	ids := make(map[string]bool, len(out.Experts))
+	expertsByID := make(map[string]CapabilityExpertResult, len(out.Experts))
 	for _, expert := range out.Experts {
-		if expert.ExpertID == "" || experts[expert.Name] != "" || ids[expert.ExpertID] {
+		if expert.ExpertID == "" || expert.Name == "" {
 			return false
 		}
-		experts[expert.Name], ids[expert.ExpertID] = expert.ExpertID, true
+		if _, exists := expertsByID[expert.ExpertID]; exists {
+			return false
+		}
+		expertsByID[expert.ExpertID] = expert
 	}
-	for _, expert := range def.Experts {
-		if experts[expert.Name] == "" {
+	skillsByID := make(map[string]CapabilitySkillResult, len(out.Skills))
+	for _, skill := range out.Skills {
+		if skill.SkillID == "" || skill.Name == "" {
 			return false
 		}
+		if _, exists := skillsByID[skill.SkillID]; exists {
+			return false
+		}
+		skillsByID[skill.SkillID] = skill
 	}
-	skills := make(map[string]*CapabilitySkillResult, len(out.Skills))
-	skillIDs := make(map[string]bool, len(out.Skills))
-	for i := range out.Skills {
-		skill := &out.Skills[i]
-		if skill.SkillID == "" || skills[skill.Name] != nil || skillIDs[skill.SkillID] {
-			return false
-		}
-		skills[skill.Name] = skill
-		skillIDs[skill.SkillID] = true
-	}
-	for _, skill := range def.Skills {
-		actual := skills[skill.Name]
-		if actual == nil {
-			return false
-		}
-		if !legacySkillWire && (!sameCapabilityNullableString(actual.Version, skill.Version) ||
-			actual.MarketSkillID != skill.MarketSkillID) {
-			return false
-		}
-	}
-	expectedSkills := make(map[string]map[string]bool, len(def.Experts))
-	expectedConnectors := make(map[string]map[string]bool, len(def.Experts))
-	for _, expert := range def.Experts {
-		if _, exists := expectedConnectors[expert.Name]; exists {
-			return false
-		}
-		skillRefs := make(map[string]bool, len(expert.SkillNames))
-		for _, name := range expert.SkillNames {
-			if skills[name] == nil {
-				return false
-			}
-			skillRefs[skills[name].SkillID] = true
-		}
-		expectedSkills[expert.Name] = skillRefs
-
-		connectorRefs := make(map[string]bool, len(expert.ConnectorNames))
-		for _, name := range expert.ConnectorNames {
-			id := connectorIDs[name]
-			if id == "" {
-				return false
-			}
-			connectorRefs[id] = true
-		}
-		expectedConnectors[expert.Name] = connectorRefs
-	}
-	for _, expert := range out.Experts {
-		skillRefs := expectedSkills[expert.Name]
-		if len(skillRefs) != len(expert.SkillIDs) {
-			return false
-		}
+	// Every reported Skill and Connector must be bound by a returned expert,
+	// and one expert must not repeat a binding. The stored value is the last
+	// expert index plus one, so seeing the current index means that same expert
+	// already bound the resource.
+	skillRefs := make(map[string]int, len(out.Skills))
+	connectorRefs := make(map[string]int, len(out.Connectors))
+	for index, expert := range out.Experts {
 		for _, id := range expert.SkillIDs {
-			if !skillRefs[id] {
+			if _, exists := skillsByID[id]; !exists || skillRefs[id] == index+1 {
 				return false
 			}
-			delete(skillRefs, id)
-		}
-		connectorRefs := expectedConnectors[expert.Name]
-		if len(connectorRefs) != len(expert.ConnectorIDs) {
-			return false
+			skillRefs[id] = index + 1
 		}
 		for _, id := range expert.ConnectorIDs {
-			if !connectorRefs[id] {
+			if _, exists := connectorIDs[id]; !exists || connectorRefs[id] == index+1 {
 				return false
 			}
-			delete(connectorRefs, id)
+			connectorRefs[id] = index + 1
 		}
 	}
-	if def.ExpertTeam == nil {
-		return out.Type == "expert" && len(def.Experts) == 1 && out.ExpertID == experts[def.Experts[0].Name] && out.ExpertTeamID == ""
-	}
-	if out.Type != "expert_team" || out.ExpertTeamID == "" || out.ExpertID != "" {
+	if len(skillRefs) != len(skillsByID) || len(connectorRefs) != len(connectorIDs) {
 		return false
 	}
-	for _, member := range def.ExpertTeam.Members {
-		if member.IsLeader {
-			return out.LeaderExpertID == experts[member.ExpertName]
+	if def.ExpertTeam == nil {
+		if out.Type != "expert" || len(def.Experts) != 1 || len(out.Experts) != 1 || out.ExpertID == "" ||
+			out.ExpertTeamID != "" || out.LeaderExpertID != "" || out.ExpertTeam != nil {
+			return false
+		}
+		root, exists := expertsByID[out.ExpertID]
+		if !exists || root.Name != def.Experts[0].Name {
+			return false
+		}
+		if !legacyExpertWire && !sameCapabilityNullableString(root.Version, def.Experts[0].Version) {
+			return false
+		}
+		if root.Created {
+			if !legacyExpertWire && root.MarketExpertID != def.Experts[0].MarketExpertID {
+				return false
+			}
+			if !validCreatedExpertBindings(def.Experts[0], root, def.Skills, skillsByID, def.Connectors, connectorIDs, legacySkillWire) {
+				return false
+			}
+		}
+		return true
+	}
+	if out.Type != "expert_team" || out.ExpertTeamID == "" || out.ExpertID != "" || out.LeaderExpertID == "" {
+		return false
+	}
+	if _, exists := expertsByID[out.LeaderExpertID]; !exists {
+		return false
+	}
+	for _, expert := range out.Experts {
+		if expert.IsLeader && expert.ExpertID != out.LeaderExpertID {
+			return false
 		}
 	}
-	return false
+	team := out.ExpertTeam
+	if team == nil {
+		if !legacyExpertWire && def.ExpertTeam.Version != nil {
+			return false
+		}
+	} else if team.ExpertTeamID != out.ExpertTeamID || team.Name != def.ExpertTeam.Name ||
+		(!legacyExpertWire && !sameCapabilityNullableString(team.Version, def.ExpertTeam.Version)) {
+		return false
+	} else if !legacyExpertWire && team.Created && team.MarketExpertTeamID != def.ExpertTeam.MarketExpertTeamID {
+		return false
+	}
+	if team != nil && team.Created &&
+		!validCreatedTeamGraph(def, out, skillsByID, connectorIDs, legacySkillWire, legacyExpertWire) {
+		return false
+	}
+	return true
 }
 
-func validCapabilityConnectorResults(def []CapabilityConnector, out []CapabilityConnectorResult) (map[string]string, bool) {
-	if len(def) != len(out) {
-		return nil, false
+type capabilityResourceIdentity struct {
+	name       string
+	version    string
+	hasVersion bool
+}
+
+func capabilityIdentity(name string, version *string) capabilityResourceIdentity {
+	if version == nil {
+		return capabilityResourceIdentity{name: name}
 	}
-	expected := make(map[string]CapabilityConnector, len(def))
-	for _, connector := range def {
-		if connector.Name == "" {
-			return nil, false
+	return capabilityResourceIdentity{name: name, version: *version, hasVersion: true}
+}
+
+func validCreatedTeamGraph(def CapabilityDefinition, out CapabilityInstallResult, skillsByID map[string]CapabilitySkillResult, connectorsByID map[string]CapabilityConnectorResult, legacySkillWire, legacyExpertWire bool) bool {
+	if len(out.Experts) != len(def.Experts) {
+		return false
+	}
+	wantedByName := make(map[string]CapabilityExpert, len(def.Experts))
+	leadersByName := make(map[string]bool, len(def.Experts))
+	for _, expert := range def.Experts {
+		if expert.Name == "" {
+			return false
 		}
-		if _, exists := expected[connector.Name]; exists {
-			return nil, false
+		if _, exists := wantedByName[expert.Name]; exists {
+			return false
 		}
-		expected[connector.Name] = connector
+		wantedByName[expert.Name] = expert
+	}
+	leaderCount := 0
+	for _, member := range def.ExpertTeam.Members {
+		if _, exists := wantedByName[member.ExpertName]; !exists {
+			return false
+		}
+		if _, exists := leadersByName[member.ExpertName]; exists {
+			return false
+		}
+		leadersByName[member.ExpertName] = member.IsLeader
+		if member.IsLeader {
+			leaderCount++
+		}
+	}
+	if len(leadersByName) != len(wantedByName) || leaderCount != 1 {
+		return false
+	}
+	leaderID := ""
+	for _, actual := range out.Experts {
+		wanted, exists := wantedByName[actual.Name]
+		if !exists || (!legacyExpertWire && !sameCapabilityNullableString(actual.Version, wanted.Version)) {
+			return false
+		}
+		if leadersByName[actual.Name] {
+			leaderID = actual.ExpertID
+		}
+		if actual.Created {
+			if !legacyExpertWire && actual.MarketExpertID != wanted.MarketExpertID {
+				return false
+			}
+			if !validCreatedExpertBindings(wanted, actual, def.Skills, skillsByID, def.Connectors, connectorsByID, legacySkillWire) {
+				return false
+			}
+		}
+		delete(wantedByName, actual.Name)
+	}
+	return len(wantedByName) == 0 && leaderID == out.LeaderExpertID
+}
+
+func validCreatedExpertBindings(wanted CapabilityExpert, actual CapabilityExpertResult, skills []CapabilitySkill, skillsByID map[string]CapabilitySkillResult, connectors []CapabilityConnector, connectorsByID map[string]CapabilityConnectorResult, legacySkillWire bool) bool {
+	expectedSkills := make(map[capabilityResourceIdentity]CapabilitySkill, len(wanted.SkillNames))
+	for _, name := range wanted.SkillNames {
+		matches := 0
+		for _, skill := range skills {
+			if skill.Name == name {
+				identity := capabilityIdentity(skill.Name, skill.Version)
+				if legacySkillWire {
+					identity = capabilityIdentity(skill.Name, nil)
+				}
+				expectedSkills[identity] = skill
+				matches++
+			}
+		}
+		if matches != 1 {
+			return false
+		}
+	}
+	actualSkills := make(map[capabilityResourceIdentity]bool, len(actual.SkillIDs))
+	for _, id := range actual.SkillIDs {
+		skill, exists := skillsByID[id]
+		if !exists {
+			return false
+		}
+		identity := capabilityIdentity(skill.Name, skill.Version)
+		if legacySkillWire {
+			identity = capabilityIdentity(skill.Name, nil)
+		}
+		wantedSkill, exists := expectedSkills[identity]
+		if !exists || actualSkills[identity] {
+			return false
+		}
+		if !legacySkillWire && skill.Created && skill.MarketSkillID != wantedSkill.MarketSkillID {
+			return false
+		}
+		actualSkills[identity] = true
+	}
+	if len(actualSkills) != len(expectedSkills) {
+		return false
 	}
 
-	idsByName := make(map[string]string, len(out))
-	seenIDs := make(map[string]bool, len(out))
-	for _, connector := range out {
-		if !isCapabilityConnectorUUID(connector.ConnectorID) || connector.Name == "" || seenIDs[connector.ConnectorID] {
-			return nil, false
+	expectedConnectors := make(map[capabilityResourceIdentity]CapabilityConnector, len(wanted.ConnectorNames))
+	for _, name := range wanted.ConnectorNames {
+		matches := 0
+		for _, connector := range connectors {
+			if connector.Name == name {
+				expectedConnectors[capabilityIdentity(connector.Name, connector.Version)] = connector
+				matches++
+			}
 		}
-		wanted, exists := expected[connector.Name]
-		if !exists {
-			return nil, false
+		if matches != 1 {
+			return false
 		}
-		if _, exists := idsByName[connector.Name]; exists {
-			return nil, false
-		}
-		var wantedMarketMCPID *string
-		if wanted.MarketMCPID != "" {
-			wantedMarketMCPID = &wanted.MarketMCPID
-		}
-		if !sameCapabilityNullableString(connector.Version, wanted.Version) ||
-			!sameCapabilityNullableString(connector.MarketMCPID, wantedMarketMCPID) {
-			return nil, false
-		}
-		seenIDs[connector.ConnectorID] = true
-		idsByName[connector.Name] = connector.ConnectorID
 	}
-	return idsByName, true
+	actualConnectors := make(map[capabilityResourceIdentity]bool, len(actual.ConnectorIDs))
+	for _, id := range actual.ConnectorIDs {
+		connector, exists := connectorsByID[id]
+		if !exists {
+			return false
+		}
+		identity := capabilityIdentity(connector.Name, connector.Version)
+		wantedConnector, exists := expectedConnectors[identity]
+		if !exists || actualConnectors[identity] {
+			return false
+		}
+		if connector.Created && !sameCapabilityMarketMCPID(connector.MarketMCPID, wantedConnector.MarketMCPID) {
+			return false
+		}
+		actualConnectors[identity] = true
+	}
+	return len(actualConnectors) == len(expectedConnectors)
+}
+
+func validCapabilityConnectorOnlyResult(def CapabilityDefinition, out CapabilityInstallResult) bool {
+	if len(def.Connectors) == 0 || len(out.Connectors) != len(def.Connectors) || len(def.Skills) != 0 ||
+		def.ExpertTeam != nil || out.Type != "connectors" || out.ExpertID != "" ||
+		out.ExpertTeamID != "" || out.LeaderExpertID != "" || out.ExpertTeam != nil ||
+		len(out.Experts) != 0 || len(out.Skills) != 0 {
+		return false
+	}
+	expected := make(map[capabilityResourceIdentity]CapabilityConnector, len(def.Connectors))
+	for _, connector := range def.Connectors {
+		identity := capabilityIdentity(connector.Name, connector.Version)
+		if connector.Name == "" {
+			return false
+		}
+		if _, exists := expected[identity]; exists {
+			return false
+		}
+		expected[identity] = connector
+	}
+	for _, connector := range out.Connectors {
+		identity := capabilityIdentity(connector.Name, connector.Version)
+		wanted, exists := expected[identity]
+		if !exists {
+			return false
+		}
+		if connector.Created && !sameCapabilityMarketMCPID(connector.MarketMCPID, wanted.MarketMCPID) {
+			return false
+		}
+		delete(expected, identity)
+	}
+	return len(expected) == 0
+}
+
+func sameCapabilityMarketMCPID(actual *string, wanted string) bool {
+	if wanted == "" {
+		return actual == nil
+	}
+	return actual != nil && *actual == wanted
+}
+
+func validCapabilityConnectorResults(out []CapabilityConnectorResult) (map[string]CapabilityConnectorResult, bool) {
+	ids := make(map[string]CapabilityConnectorResult, len(out))
+	for _, connector := range out {
+		if !isCapabilityConnectorUUID(connector.ConnectorID) || connector.Name == "" {
+			return nil, false
+		}
+		if _, exists := ids[connector.ConnectorID]; exists {
+			return nil, false
+		}
+		ids[connector.ConnectorID] = connector
+	}
+	return ids, true
 }
 
 func isCapabilityConnectorUUID(value string) bool {

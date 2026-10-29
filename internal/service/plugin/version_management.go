@@ -556,7 +556,10 @@ func (s *Service) publishedGraphDetail(ctx context.Context, caller Caller, plugi
 		return nil, err
 	}
 	sc := scope(caller)
-	if versionID != nil && s.versionManagement && d.Plugin.Type != model.PluginTypeConnector {
+	if versionID != nil && d.Plugin.Type != model.PluginTypeConnector {
+		if !s.versionManagement {
+			return nil, ErrVersionBaselineUnavailable
+		}
 		return s.publishedDetailAt(ctx, sc, d.Plugin, d.Relations, *versionID, false)
 	}
 	return s.publishedDetail(ctx, sc, d.Plugin, d.Relations, false)

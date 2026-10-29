@@ -9,9 +9,8 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
-
-const maxCapabilityBytes = 16 << 20
 
 type capabilityConnectorAudience struct {
 	ownerUID   string
@@ -39,7 +38,7 @@ type capabilityBuilder struct {
 	service               *Service
 	caller                Caller
 	remaining             int64
-	skillsByID            map[string]string
+	skillsByVersion       map[pluginrepo.InstallVersionKey]string
 	skillsByName          map[string]fleet.CapabilitySkill
 	expertNames           map[string]bool
 	connectorsByID        map[string]fleet.CapabilityConnector
@@ -56,7 +55,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 	if root.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
-	b := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes), skillsByID: map[string]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
+	b := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, fleet.MaxCapabilityRequestBytes), skillsByVersion: map[pluginrepo.InstallVersionKey]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
 	if p.WorkspaceConnectors {
 		b.connectorsByID = map[string]fleet.CapabilityConnector{}
 		b.connectorOwnerByName = map[string]string{}
@@ -110,12 +109,33 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 		if err := b.boundedText("definition.expert_team.description", summary, 255); err != nil {
 			return nil, err
 		}
-		team := &fleet.CapabilityExpertTeam{Name: name, Description: summary, Instructions: instructions}
+		team := &fleet.CapabilityExpertTeam{
+			Name: name, Version: root.Plugin.CurrentVersion, MarketExpertTeamID: root.Plugin.ID,
+			Description: summary, Instructions: instructions,
+		}
 		leader := -1
 		for i, rel := range relations {
-			detail, err := s.resolveInstallDetail(ctx, caller, rel.TargetPluginID)
-			if err != nil {
-				return nil, err
+			var detail *Detail
+			if rel.TargetVersionID != nil {
+				if *rel.TargetVersionID == "" {
+					return nil, ErrIntegrity
+				}
+				if !s.versionManagement {
+					return nil, ErrVersionBaselineUnavailable
+				}
+				current, err := s.currentDetail(ctx, caller, rel.TargetPluginID, true)
+				if err != nil {
+					return nil, err
+				}
+				detail, err = s.publishedDetailAt(ctx, scope(caller), current.Plugin, current.Relations, *rel.TargetVersionID, false)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				detail, err = s.resolveInstallDetail(ctx, caller, rel.TargetPluginID)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if !detail.Plugin.IsEmbedded && !installAudience(root.Plugin, detail.Plugin) {
 				return nil, ErrDependencyHidden
@@ -221,7 +241,10 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	if err := b.boundedText("definition.experts.description", summary, 255); err != nil {
 		return nil, err
 	}
-	out := &fleet.CapabilityExpert{Name: name, Description: summary, Instructions: instructions}
+	out := &fleet.CapabilityExpert{
+		Name: name, Version: detail.Plugin.CurrentVersion, MarketExpertID: detail.Plugin.ID,
+		Description: summary, Instructions: instructions,
+	}
 	if workspaceConnectors {
 		relations := relationsOfType(detail.Relations, "expert_connector")
 		for _, rel := range relations {
@@ -297,7 +320,7 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	}
 	names := map[string]bool{}
 	for _, rel := range relations {
-		name, err := b.skill(ctx, rel.TargetPluginID, detail.Plugin)
+		name, err := b.skill(ctx, rel.TargetPluginID, rel.TargetVersionID, detail.Plugin)
 		if err != nil {
 			return nil, err
 		}
@@ -310,8 +333,8 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	return out, nil
 }
 
-func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.Plugin) (string, error) {
-	detail, err := b.service.Detail(ctx, b.caller, id, false)
+func (b *capabilityBuilder) skill(ctx context.Context, id string, versionID *string, source *model.Plugin) (string, error) {
+	detail, err := b.service.publishedGraphDetail(ctx, b.caller, id, versionID)
 	if err != nil {
 		return "", err
 	}
@@ -322,10 +345,14 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.
 	if !p.IsEmbedded && !installAudience(source, p) {
 		return "", ErrDependencyHidden
 	}
-	if name, ok := b.skillsByID[id]; ok {
+	key := pluginrepo.InstallVersionKey{PluginID: p.ID}
+	if p.CurrentVersionID != nil {
+		key.VersionID = *p.CurrentVersionID
+	}
+	if name, ok := b.skillsByVersion[key]; ok {
 		return name, nil
 	}
-	if len(b.skillsByID) >= 600 {
+	if len(b.skillsByVersion) >= 600 {
 		return "", ErrTooLarge
 	}
 	name := strings.TrimSpace(p.Name)
@@ -365,7 +392,7 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, source *model.
 	} else {
 		b.skillsByName[name] = skill
 	}
-	b.skillsByID[id] = name
+	b.skillsByVersion[key] = name
 	return name, nil
 }
 

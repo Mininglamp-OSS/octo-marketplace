@@ -35,9 +35,14 @@ version and content. Private resources have no review channel, so the matching
 snapshot is the evidence. Older records lacking the necessary metadata/evidence
 return `409` with `reason=version_migration_required` and wait for the separately
 planned data inventory/migration; historical rows are not rewritten or all marked
-as published. Published container ZIP rebuilds are refused
-in this staged mode pending PR3; the compatibility mode remains available with
-the rollout off. Disabling this staged switch is not a production rollback strategy: the legacy read path expects current content, so do not turn it off against a database containing unpublished managed drafts. Production switching/rollback remains gated on PR3 and the migration plan. This work does not implement fixed-version Fleet installation.
+as published. Published container ZIP rebuilds are refused in this staged mode
+pending PR3; the compatibility mode remains available with the rollout off.
+Disabling this staged switch is not a production rollback strategy: the legacy
+read path expects current content, so do not turn it off against a database
+containing unpublished managed drafts. Production switching/rollback remains
+gated on PR3 and the migration plan. Pinned capability installation selects the
+current published root and its exact released member snapshots; clients cannot
+select an arbitrary historical root version.
 
 ## Version endpoints
 
@@ -90,6 +95,35 @@ transaction (current and published are the same snapshot). Saving a delisted or
 draft system resource, or any tenant resource, only advances the editable head
 and leaves the published pointer and listing state unchanged. Admin DTOs do not
 expose the published pointer.
+
+## Capability installation source versions
+
+Marketplace capability definitions carry each expert's own `market_expert_id`
+and nullable declared `version`; an expert team carries the corresponding
+`market_expert_team_id` and its own nullable declared version. A missing source
+version is sent as JSON `null`, not borrowed from another resource.
+
+When a published team relation has `TargetVersionID`, installation resolves that
+exact member snapshot in both pinned and current adapters. The member's name,
+content, and declared version all come from the same selected snapshot. The
+current adapter uses the published root snapshot; the pinned adapter uses the
+current published root and its captured member snapshots. The Marketplace public
+install request and its legacy `agent_id` / `squad_id` response shape are
+unchanged; this source metadata belongs to the complete Fleet capability
+request/result boundary.
+
+With version management enabled, expert-to-skill edges follow the same rule: a
+`TargetVersionID` selects that exact released Skill snapshot; an unpinned edge
+follows the normal published-detail resolution. When version management is
+disabled, installation rejects a pinned non-connector Skill with a
+version-baseline conflict instead of silently using current content; unpinned
+edges retain the legacy current-detail path. Connector relations keep their
+current-state behavior. The Skill name, declared version, content, and files are
+all taken from the selected snapshot, and the expert's `skill_names` refer to
+that name. Existing visibility, audience, and historical-dependency availability
+checks still apply; same-name snapshots with different definitions retain the
+existing explicit conflict behavior.
+
 
 ## Local acceptance
 
