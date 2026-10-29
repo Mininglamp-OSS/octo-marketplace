@@ -180,11 +180,16 @@ first plan, so later edits do not change an existing operation. Connectors do no
 acquire fabricated immutable release IDs. The pinned path's existing
 inline-dependency rejection remains in force.
 
-Signed frozen attempts created with the earlier Skill wire shape retain their
-original fields and fingerprints on same-key replay. New attempts include
-source/version metadata; switching `workspace_connectors` with a previously used
-key is a conflict. Recovery still requires the original adapter, valid eligibility
-HMAC, available key-ring entry, current authorization and original retry deadline.
+Signed frozen attempts preserve their original fingerprints, key ID, stable
+attempt key and retry deadline. A retry selects a historical wire shape only
+when its bytes match the request HMAC already stored on that attempt. The
+earliest shape omits Skill and Expert/Team version/source metadata; the
+`3f04192` shape retains Skill version/source metadata but predates Expert/Team
+version/source metadata; current requests include all metadata. The same
+fingerprint selection applies to expert/team retries with
+`workspace_connectors: true`. New attempts always use the current shape.
+Recovery still requires the original adapter, valid eligibility HMAC, available
+key-ring entry and current authorization.
 
 Each expert uses its own manifest description, including team members; the
 team itself uses the team manifest description. This is intentional metadata
@@ -264,27 +269,29 @@ Legacy mode omits `connectors`, even if Fleet returns connector metadata.
 
 Fleet test currently returns no `Idempotency-Replayed` header. Marketplace only
 forwards `true` when Fleet explicitly supplies it; its absence is not proof of a
-new installation. Fleet response type, root IDs, root version identity, and
-actual UUID references are checked before success. Actual expert/team source IDs
-and created/restored states are preserved. On reuse, the response describes the
-committed local graph, which may differ from the submitted definition; bindings
-are validated against the returned Skill and connector IDs.
+new installation. Response type, root IDs and root version identity are checked
+before success. Newly created Expert/Team resources are validated against their
+version identity and source metadata present in the matched wire shape. A
+created Team member graph and each created Expert's Skill/Connector bindings
+must match the request's resource identities and point to returned IDs.
 
-For new-mode connector results, `connector_id` must be a UUID and each result
-must include both nullable fields, `version` and `market_mcp_id`; explicit
-`null` is valid. Legacy Expert and Skill IDs remain opaque.
+Reused or restored Experts and Teams describe their actual local resources.
+Their existing Team members and leader, Expert bindings, and returned resource
+IDs may differ from the request graph; root identity still matches the requested
+version key, while first-persisted source metadata is retained. Every result
+keeps references closed: the Team leader ID points to a returned Expert, and
+each Expert's Skill and Connector IDs point to returned resources. Connector
+IDs are UUIDs with nullable `version` and `market_mcp_id`; Expert and Skill IDs
+remain opaque.
 
-Root version identity is checked against the request. For resources that are
-newly created, version and source metadata must match the definition; reused or
-restored resources may retain their first source ID. Reused Experts preserve
-their actual Skill/connector bindings, and reused or restored Teams may return
-their existing local member graph, so those bindings/members are not compared to
-the submitted graph. Their actual IDs and Team version are still checked against
-the returned result. Historical pinned receipts replayed with the original wire
-format omit Skill, Expert, and Team source metadata, so those metadata checks
-are skipped; identity and binding-reference checks still apply. Missing,
-duplicate, unknown, or identity-mismatched resources leave the Fleet outcome
-uncertain; retry only with the same key and input. Errors use the standard
+Historical pinned receipts replay in the matching authenticated wire shape.
+The oldest shape omits Skill, Expert and Team version/source metadata; the
+`3f04192` shape retains Skill metadata and omits Expert/Team metadata. Checks
+follow the fields present in the matched shape, while identity and reference
+closure still apply. Missing, duplicate, unknown, or
+identity-mismatched resources leave the Fleet outcome uncertain; retry only
+with the same key and input.
+Errors use the standard
 `{ "error": { "code", "message", "details", "hint" } }`
 envelope. By explicit product requirement, Marketplace-generated `message` and
 `hint` are Chinese and may be displayed directly by the client; machine codes

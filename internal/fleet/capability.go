@@ -103,7 +103,7 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	}
 	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil ||
 		(len(in.Definition.Connectors) > 0 && !capabilityConnectorNullableFieldsPresent(raw)) ||
-		!validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire) {
+		!validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire, in.LegacyExpertWire) {
 		return nil, errors.New("invalid capability installation result; retry with the same idempotency key")
 	}
 	out := envelope.Data
@@ -140,7 +140,7 @@ func capabilityConnectorNullableFieldsPresent(raw []byte) bool {
 	return true
 }
 
-func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult, legacySkillWire bool) bool {
+func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult, legacySkillWire, legacyExpertWire bool) bool {
 	connectorIDs, ok := validCapabilityConnectorResults(out.Connectors)
 	if !ok {
 		return false
@@ -196,13 +196,16 @@ func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult
 		if !exists || root.Name != def.Experts[0].Name {
 			return false
 		}
-		if !legacySkillWire && !sameCapabilityNullableString(root.Version, def.Experts[0].Version) {
+		if !legacyExpertWire && !sameCapabilityNullableString(root.Version, def.Experts[0].Version) {
 			return false
 		}
-		if !legacySkillWire && root.Created &&
-			(root.MarketExpertID != def.Experts[0].MarketExpertID ||
-				!validCreatedExpertBindings(def.Experts[0], root, def.Skills, skillsByID, def.Connectors, connectorIDs)) {
-			return false
+		if root.Created {
+			if !legacyExpertWire && root.MarketExpertID != def.Experts[0].MarketExpertID {
+				return false
+			}
+			if !validCreatedExpertBindings(def.Experts[0], root, def.Skills, skillsByID, def.Connectors, connectorIDs, legacySkillWire) {
+				return false
+			}
 		}
 		return true
 	}
@@ -218,21 +221,19 @@ func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult
 		}
 	}
 	team := out.ExpertTeam
-	if !legacySkillWire {
-		if team == nil {
-			if def.ExpertTeam.Version != nil {
-				return false
-			}
-		} else if team.ExpertTeamID != out.ExpertTeamID || team.Name != def.ExpertTeam.Name ||
-			!sameCapabilityNullableString(team.Version, def.ExpertTeam.Version) {
-			return false
-		} else if team.Created && team.MarketExpertTeamID != def.ExpertTeam.MarketExpertTeamID {
+	if team == nil {
+		if !legacyExpertWire && def.ExpertTeam.Version != nil {
 			return false
 		}
-		if team != nil && team.Created &&
-			!validCreatedTeamGraph(def, out, skillsByID, connectorIDs) {
-			return false
-		}
+	} else if team.ExpertTeamID != out.ExpertTeamID || team.Name != def.ExpertTeam.Name ||
+		(!legacyExpertWire && !sameCapabilityNullableString(team.Version, def.ExpertTeam.Version)) {
+		return false
+	} else if !legacyExpertWire && team.Created && team.MarketExpertTeamID != def.ExpertTeam.MarketExpertTeamID {
+		return false
+	}
+	if team != nil && team.Created &&
+		!validCreatedTeamGraph(def, out, skillsByID, connectorIDs, legacySkillWire, legacyExpertWire) {
+		return false
 	}
 	return true
 }
@@ -250,7 +251,7 @@ func capabilityIdentity(name string, version *string) capabilityResourceIdentity
 	return capabilityResourceIdentity{name: name, version: *version, hasVersion: true}
 }
 
-func validCreatedTeamGraph(def CapabilityDefinition, out CapabilityInstallResult, skillsByID map[string]CapabilitySkillResult, connectorsByID map[string]CapabilityConnectorResult) bool {
+func validCreatedTeamGraph(def CapabilityDefinition, out CapabilityInstallResult, skillsByID map[string]CapabilitySkillResult, connectorsByID map[string]CapabilityConnectorResult, legacySkillWire, legacyExpertWire bool) bool {
 	if len(out.Experts) != len(def.Experts) {
 		return false
 	}
@@ -284,28 +285,36 @@ func validCreatedTeamGraph(def CapabilityDefinition, out CapabilityInstallResult
 	leaderID := ""
 	for _, actual := range out.Experts {
 		wanted, exists := wantedByName[actual.Name]
-		if !exists || !sameCapabilityNullableString(actual.Version, wanted.Version) {
+		if !exists || (!legacyExpertWire && !sameCapabilityNullableString(actual.Version, wanted.Version)) {
 			return false
 		}
 		if leadersByName[actual.Name] {
 			leaderID = actual.ExpertID
 		}
-		if actual.Created && (actual.MarketExpertID != wanted.MarketExpertID ||
-			!validCreatedExpertBindings(wanted, actual, def.Skills, skillsByID, def.Connectors, connectorsByID)) {
-			return false
+		if actual.Created {
+			if !legacyExpertWire && actual.MarketExpertID != wanted.MarketExpertID {
+				return false
+			}
+			if !validCreatedExpertBindings(wanted, actual, def.Skills, skillsByID, def.Connectors, connectorsByID, legacySkillWire) {
+				return false
+			}
 		}
 		delete(wantedByName, actual.Name)
 	}
 	return len(wantedByName) == 0 && leaderID == out.LeaderExpertID
 }
 
-func validCreatedExpertBindings(wanted CapabilityExpert, actual CapabilityExpertResult, skills []CapabilitySkill, skillsByID map[string]CapabilitySkillResult, connectors []CapabilityConnector, connectorsByID map[string]CapabilityConnectorResult) bool {
+func validCreatedExpertBindings(wanted CapabilityExpert, actual CapabilityExpertResult, skills []CapabilitySkill, skillsByID map[string]CapabilitySkillResult, connectors []CapabilityConnector, connectorsByID map[string]CapabilityConnectorResult, legacySkillWire bool) bool {
 	expectedSkills := make(map[capabilityResourceIdentity]CapabilitySkill, len(wanted.SkillNames))
 	for _, name := range wanted.SkillNames {
 		matches := 0
 		for _, skill := range skills {
 			if skill.Name == name {
-				expectedSkills[capabilityIdentity(skill.Name, skill.Version)] = skill
+				identity := capabilityIdentity(skill.Name, skill.Version)
+				if legacySkillWire {
+					identity = capabilityIdentity(skill.Name, nil)
+				}
+				expectedSkills[identity] = skill
 				matches++
 			}
 		}
@@ -320,11 +329,14 @@ func validCreatedExpertBindings(wanted CapabilityExpert, actual CapabilityExpert
 			return false
 		}
 		identity := capabilityIdentity(skill.Name, skill.Version)
+		if legacySkillWire {
+			identity = capabilityIdentity(skill.Name, nil)
+		}
 		wantedSkill, exists := expectedSkills[identity]
 		if !exists || actualSkills[identity] {
 			return false
 		}
-		if skill.Created && skill.MarketSkillID != wantedSkill.MarketSkillID {
+		if !legacySkillWire && skill.Created && skill.MarketSkillID != wantedSkill.MarketSkillID {
 			return false
 		}
 		actualSkills[identity] = true

@@ -107,6 +107,8 @@ type InstallInput struct {
 	CustomEnv   map[string]string
 	SpaceID     string
 	Token       string
+	// IdempotencyKey is forwarded unchanged; empty preserves generated-key behavior.
+	IdempotencyKey string
 }
 
 // InstallResult carries the installed Loop agent id.
@@ -136,9 +138,13 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	if err != nil {
 		return InstallResult{}, err
 	}
+	mcpConfig, err := capabilityMCPConfig(m.MCPConfig)
+	if err != nil {
+		return InstallResult{}, err
+	}
 	expert := fleet.CapabilityExpert{
 		Name: m.Name, Version: nil, MarketExpertID: m.ID, Description: m.Summary, Instructions: m.Instruction,
-		SkillNames: skillNames, CustomEnv: in.CustomEnv, MCPConfig: capabilityMCPConfig(m.MCPConfig),
+		SkillNames: skillNames, CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
 	}
 	request := fleet.CapabilityInstallRequest{
 		Definition: fleet.CapabilityDefinition{
@@ -158,7 +164,11 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 }
 
 func (s *Service) installCapability(ctx context.Context, in InstallInput, request fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
-	result, err := s.fleet.InstallCapability(ctx, in.Token, in.SpaceID, in.WorkspaceID, s.idGen(), request)
+	key := in.IdempotencyKey
+	if key == "" {
+		key = s.idGen()
+	}
+	result, err := s.fleet.InstallCapability(ctx, in.Token, in.SpaceID, in.WorkspaceID, key, request)
 	if err == nil {
 		return result, nil
 	}
@@ -169,11 +179,93 @@ func (s *Service) installCapability(ctx context.Context, in InstallInput, reques
 	return nil, fmt.Errorf("%w: %w", ErrFleetInstallUnavailable, err)
 }
 
-func capabilityMCPConfig(raw string) json.RawMessage {
-	if raw = strings.TrimSpace(raw); raw != "" {
-		return json.RawMessage(raw)
+// capabilityMCPConfig translates only the legacy stdio discriminator to the
+// command-only stdio shape required by Fleet. Stored source configuration is
+// not changed; empty and remote configurations remain untouched.
+func capabilityMCPConfig(raw string) (json.RawMessage, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
 	}
-	return nil
+
+	config := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return json.RawMessage(raw), nil
+		}
+		return nil, err
+	}
+	serversRaw, ok := config["mcpServers"]
+	if !ok {
+		return json.RawMessage(raw), nil
+	}
+	servers := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(serversRaw, &servers); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return json.RawMessage(raw), nil
+		}
+		return nil, err
+	}
+
+	changed := false
+	for name, serverRaw := range servers {
+		var server map[string]json.RawMessage
+		if err := json.Unmarshal(serverRaw, &server); err != nil {
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				return json.RawMessage(raw), nil
+			}
+			return nil, err
+		}
+		typeRaw, hasType := server["type"]
+		if hasType {
+			var serverType string
+			if err := json.Unmarshal(typeRaw, &serverType); err != nil {
+				var typeErr *json.UnmarshalTypeError
+				if errors.As(err, &typeErr) {
+					return json.RawMessage(raw), nil
+				}
+				return nil, err
+			}
+			if serverType == "stdio" {
+				commandRaw, hasCommand := server["command"]
+				if hasCommand {
+					var command string
+					if err := json.Unmarshal(commandRaw, &command); err != nil {
+						var typeErr *json.UnmarshalTypeError
+						if errors.As(err, &typeErr) {
+							return json.RawMessage(raw), nil
+						}
+						return nil, err
+					}
+					if command != "" {
+						delete(server, "type")
+						normalizedServer, err := json.Marshal(server)
+						if err != nil {
+							return nil, err
+						}
+						servers[name] = normalizedServer
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	if !changed {
+		return json.RawMessage(raw), nil
+	}
+	normalizedServers, err := json.Marshal(servers)
+	if err != nil {
+		return nil, err
+	}
+	config["mcpServers"] = normalizedServers
+	normalized, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, description string, budget *fileBudget, seen map[string]struct{}) ([]string, []fleet.CapabilitySkill, error) {

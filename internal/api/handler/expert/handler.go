@@ -277,6 +277,7 @@ func (h *Handler) GetExpert(c *gin.Context) {
 // @Produce json
 // @Security Bearer
 // @Param expert_id path string true "Expert ID"
+// @Param Idempotency-Key header string false "Opaque key for retrying the same install"
 // @Param body body InstallExpertReq true "Target workspace + runtime"
 // @Success 200 {object} apiresponse.Data[InstallExpertResp]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
@@ -302,7 +303,8 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 		RuntimeID:   strings.TrimSpace(req.RuntimeID),
 		SpaceID:     caller.SpaceID,
 		// The token is forwarded to fleet; middleware discarded it, so re-read it.
-		Token: middleware.Token(c),
+		Token:          middleware.Token(c),
+		IdempotencyKey: c.GetHeader("Idempotency-Key"),
 	})
 	if err != nil {
 		writeInstallError(c, err)
@@ -320,6 +322,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 // @Produce json
 // @Security Bearer
 // @Param squad_id path string true "Squad ID"
+// @Param Idempotency-Key header string false "Opaque key for retrying the same install"
 // @Param body body InstallSquadReq true "Target workspace + runtime"
 // @Success 200 {object} apiresponse.Data[InstallSquadResp]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
@@ -345,7 +348,8 @@ func (h *Handler) InstallSquad(c *gin.Context) {
 		RuntimeID:   strings.TrimSpace(req.RuntimeID),
 		SpaceID:     caller.SpaceID,
 		// The token is forwarded to fleet; middleware discarded it, so re-read it.
-		Token: middleware.Token(c),
+		Token:          middleware.Token(c),
+		IdempotencyKey: c.GetHeader("Idempotency-Key"),
 	})
 	if err != nil {
 		writeInstallError(c, err)

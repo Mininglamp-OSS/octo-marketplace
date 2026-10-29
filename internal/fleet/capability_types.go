@@ -4,43 +4,61 @@ import "encoding/json"
 
 // CapabilityInstallRequest is the versioned Skill installation contract with Fleet.
 type CapabilityInstallRequest struct {
-	Definition      CapabilityDefinition `json:"definition"`
-	Bindings        CapabilityBindings   `json:"bindings"`
-	LegacySkillWire bool                 `json:"-"`
+	Definition CapabilityDefinition `json:"definition"`
+	Bindings   CapabilityBindings   `json:"bindings"`
+	// LegacySkillWire omits Skill version/source fields for authenticated historical attempts.
+	LegacySkillWire bool `json:"-"`
+	// LegacyExpertWire omits Expert and ExpertTeam version/source fields for authenticated historical attempts.
+	LegacyExpertWire bool `json:"-"`
 }
 
-// MarshalCapabilityInstallRequest preserves the original mk1 Skill shape only
-// when replaying a receipt written before version and source fields were added.
+// MarshalCapabilityInstallRequest preserves independently selected historical
+// Skill and Expert/ExpertTeam wire shapes when replaying pinned attempts.
 func MarshalCapabilityInstallRequest(in CapabilityInstallRequest) ([]byte, error) {
-	if !in.LegacySkillWire {
+	if !in.LegacySkillWire && !in.LegacyExpertWire {
 		return json.Marshal(in)
 	}
-	var skills []legacyCapabilitySkill
-	if in.Definition.Skills != nil {
-		skills = make([]legacyCapabilitySkill, 0, len(in.Definition.Skills))
-		for _, skill := range in.Definition.Skills {
-			skills = append(skills, legacyCapabilitySkill{
-				Name: skill.Name, Description: skill.Description, Content: skill.Content,
-				Config: skill.Config, Files: skill.Files,
-			})
+	var skills any
+	if len(in.Definition.Skills) > 0 {
+		if in.LegacySkillWire {
+			legacySkills := make([]legacyCapabilitySkill, 0, len(in.Definition.Skills))
+			for _, skill := range in.Definition.Skills {
+				legacySkills = append(legacySkills, legacyCapabilitySkill{
+					Name: skill.Name, Description: skill.Description, Content: skill.Content,
+					Config: skill.Config, Files: skill.Files,
+				})
+			}
+			skills = legacySkills
+		} else {
+			skills = in.Definition.Skills
 		}
 	}
-	var experts []legacyCapabilityExpert
-	if in.Definition.Experts != nil {
-		experts = make([]legacyCapabilityExpert, 0, len(in.Definition.Experts))
-		for _, expert := range in.Definition.Experts {
-			experts = append(experts, legacyCapabilityExpert{
-				Name: expert.Name, Description: expert.Description, Instructions: expert.Instructions,
-				SkillNames: expert.SkillNames, ConnectorNames: expert.ConnectorNames,
-				CustomEnv: expert.CustomEnv, MCPConfig: expert.MCPConfig,
-			})
+	var experts any
+	if in.LegacyExpertWire {
+		var legacyExperts []legacyCapabilityExpert
+		if in.Definition.Experts != nil {
+			legacyExperts = make([]legacyCapabilityExpert, 0, len(in.Definition.Experts))
+			for _, expert := range in.Definition.Experts {
+				legacyExperts = append(legacyExperts, legacyCapabilityExpert{
+					Name: expert.Name, Description: expert.Description, Instructions: expert.Instructions,
+					SkillNames: expert.SkillNames, ConnectorNames: expert.ConnectorNames,
+					CustomEnv: expert.CustomEnv, MCPConfig: expert.MCPConfig,
+				})
+			}
 		}
+		experts = legacyExperts
+	} else {
+		experts = in.Definition.Experts
 	}
-	var team *legacyCapabilityExpertTeam
+	var team any
 	if in.Definition.ExpertTeam != nil {
-		team = &legacyCapabilityExpertTeam{
-			Name: in.Definition.ExpertTeam.Name, Members: in.Definition.ExpertTeam.Members,
-			Description: in.Definition.ExpertTeam.Description, Instructions: in.Definition.ExpertTeam.Instructions,
+		if in.LegacyExpertWire {
+			team = &legacyCapabilityExpertTeam{
+				Name: in.Definition.ExpertTeam.Name, Members: in.Definition.ExpertTeam.Members,
+				Description: in.Definition.ExpertTeam.Description, Instructions: in.Definition.ExpertTeam.Instructions,
+			}
+		} else {
+			team = in.Definition.ExpertTeam
 		}
 	}
 	request := legacyCapabilityInstallRequest{
@@ -63,12 +81,12 @@ type legacyCapabilityInstallRequest struct {
 }
 
 type legacyCapabilityDefinition struct {
-	SchemaVersion string                      `json:"schema_version"`
-	Name          string                      `json:"name"`
-	Skills        []legacyCapabilitySkill     `json:"skills,omitempty"`
-	Connectors    []CapabilityConnector       `json:"connectors,omitempty"`
-	Experts       []legacyCapabilityExpert    `json:"experts"`
-	ExpertTeam    *legacyCapabilityExpertTeam `json:"expert_team,omitempty"`
+	SchemaVersion string                `json:"schema_version"`
+	Name          string                `json:"name"`
+	Skills        any                   `json:"skills,omitempty"`
+	Connectors    []CapabilityConnector `json:"connectors,omitempty"`
+	Experts       any                   `json:"experts"`
+	ExpertTeam    any                   `json:"expert_team,omitempty"`
 }
 
 type legacyCapabilityExpert struct {

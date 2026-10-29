@@ -54,10 +54,14 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		if err != nil {
 			return InstallSquadResult{}, err
 		}
+		mcpConfig, err := capabilityMCPConfig(member.MCPConfig)
+		if err != nil {
+			return InstallSquadResult{}, err
+		}
 		definition.Skills = append(definition.Skills, skills...)
 		definition.Experts = append(definition.Experts, fleet.CapabilityExpert{
 			Name: member.Name, Version: nil, Description: m.Summary, Instructions: member.Instruction,
-			SkillNames: skillNames, CustomEnv: in.CustomEnv, MCPConfig: capabilityMCPConfig(member.MCPConfig),
+			SkillNames: skillNames, CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
 		})
 		bindings.Experts = append(bindings.Experts, fleet.CapabilityExpertBinding{
 			ExpertName: member.Name, RuntimeID: in.RuntimeID,

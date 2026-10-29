@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
@@ -383,4 +384,134 @@ func TestInstallSquadCapabilityFailureCreatesNoSeparateResources(t *testing.T) {
 		t.Fatalf("InstallSquad error = %v, want Fleet capability error marked unavailable", err)
 	}
 	assertOnlyCapabilityInstall(t, ff)
+}
+
+func TestInstallSquadReplaysUncertainCapabilityInstallByIdempotencyKey(t *testing.T) {
+	ff := &statefulCapabilityFleet{timeoutFirstCommit: true}
+	svc, caller, id := installSquadFixture(t, ff, threeMembers())
+	nextGeneratedKey := 0
+	svc.idGen = func() string {
+		nextGeneratedKey++
+		return fmt.Sprintf("generated-%d", nextGeneratedKey)
+	}
+	input := baseInput()
+	const firstKey = "marketplace/squad-install:v1+opaque_key"
+	input.IdempotencyKey = firstKey
+
+	if _, err := svc.InstallSquad(context.Background(), caller, id, input); !errors.Is(err, context.DeadlineExceeded) ||
+		!errors.Is(err, ErrFleetInstallUnavailable) {
+		t.Fatalf("first InstallSquad error = %v, want uncertain deadline error", err)
+	}
+	retried, err := svc.InstallSquad(context.Background(), caller, id, input)
+	if err != nil {
+		t.Fatalf("retry InstallSquad: %v", err)
+	}
+	if retried.SquadID != "team-1" || retried.LeaderAgentID != "agent-1" || ff.createdResources != 4 {
+		t.Fatalf("retry result/resources = %+v/%d, want original team/leader IDs and four graph resources created once", retried, ff.createdResources)
+	}
+
+	input.IdempotencyKey = "marketplace/squad-install:v1+different"
+	different, err := svc.InstallSquad(context.Background(), caller, id, input)
+	if err != nil {
+		t.Fatalf("InstallSquad with a different key: %v", err)
+	}
+	if different.SquadID != "team-2" || different.LeaderAgentID != "agent-2" || ff.createdResources != 8 {
+		t.Fatalf("different-key result/resources = %+v/%d, want new team/leader IDs and a second graph", different, ff.createdResources)
+	}
+	assertCapabilityKeys(t, ff, firstKey, firstKey, input.IdempotencyKey)
+}
+
+func TestInstallSquadGeneratesFreshKeysWhenIdempotencyKeyIsAbsent(t *testing.T) {
+	ff := &statefulCapabilityFleet{}
+	svc, caller, id := installSquadFixture(t, ff, threeMembers())
+	nextKey := 0
+	svc.idGen = func() string {
+		nextKey++
+		return fmt.Sprintf("generated-%d", nextKey)
+	}
+
+	first, err := svc.InstallSquad(context.Background(), caller, id, baseInput())
+	if err != nil {
+		t.Fatalf("first InstallSquad: %v", err)
+	}
+	second, err := svc.InstallSquad(context.Background(), caller, id, baseInput())
+	if err != nil {
+		t.Fatalf("second InstallSquad: %v", err)
+	}
+	if first.SquadID != "team-1" || first.LeaderAgentID != "agent-1" ||
+		second.SquadID != "team-2" || second.LeaderAgentID != "agent-2" || ff.createdResources != 8 {
+		t.Fatalf("keyless results/resources = %+v, %+v / %d, want two distinct squad graphs", first, second, ff.createdResources)
+	}
+	assertCapabilityKeys(t, ff, "generated-1", "generated-2")
+}
+
+func TestInstallSquadNormalizesLegacyStdioMCPConfig(t *testing.T) {
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{
+		Type: "expert_team", ExpertTeamID: "team-1", LeaderExpertID: "agent-1",
+	}}
+	members := threeMembers()
+	members[1].MCPConfig = `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}}}}`
+	svc, caller, id := installSquadFixture(t, ff, members)
+
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallSquad: %v", err)
+	}
+	requireLegacyStdioMCPServer(t, capabilityMCPConfigForExpert(t, ff.capabilityInput, "Lead"))
+}
+
+func TestInstallSquadPreservesEmptyAndRemoteMCPConfigs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "explicit empty", raw: `{}`},
+		{name: "wrapped empty", raw: `{"mcpServers":{}}`},
+		{name: "remote URL", raw: `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}},"remote":{"type":"http","url":"https://mcp.example.test/mcp","headers":{"X-Fixture":"header"}}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{
+				Type: "expert_team", ExpertTeamID: "team-1", LeaderExpertID: "agent-1",
+			}}
+			members := threeMembers()
+			members[1].MCPConfig = tc.raw
+			svc, caller, id := installSquadFixture(t, ff, members)
+
+			if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
+				t.Fatalf("InstallSquad: %v", err)
+			}
+			got := capabilityMCPConfigForExpert(t, ff.capabilityInput, "Lead")
+			if len(got) == 0 {
+				t.Fatal("explicit member MCP config was omitted from capability definition")
+			}
+			switch tc.name {
+			case "explicit empty":
+				var object map[string]json.RawMessage
+				if err := json.Unmarshal(got, &object); err != nil || len(object) != 0 {
+					t.Fatalf("explicit empty member config = %s, want {}", got)
+				}
+			case "wrapped empty":
+				if servers := capabilityMCPServers(t, got); servers == nil || len(servers) != 0 {
+					t.Fatalf("wrapped empty member config = %s, want an explicit empty mcpServers object", got)
+				}
+			case "remote URL":
+				requireLegacyStdioMCPServer(t, got)
+				servers := capabilityMCPServers(t, got)
+				var server map[string]json.RawMessage
+				if err := json.Unmarshal(servers["remote"], &server); err != nil {
+					t.Fatalf("decode remote MCP server: %v", err)
+				}
+				var gotType, gotURL string
+				if err := json.Unmarshal(server["type"], &gotType); err != nil || gotType != "http" {
+					t.Fatalf("remote MCP server type = %q, want http", gotType)
+				}
+				if err := json.Unmarshal(server["url"], &gotURL); err != nil || gotURL != "https://mcp.example.test/mcp" {
+					t.Fatalf("remote MCP server URL = %q, want original URL", gotURL)
+				}
+				var headers map[string]string
+				if err := json.Unmarshal(server["headers"], &headers); err != nil || headers["X-Fixture"] != "header" {
+					t.Fatalf("remote MCP server headers = %s, want X-Fixture=header", server["headers"])
+				}
+			}
+		})
+	}
 }

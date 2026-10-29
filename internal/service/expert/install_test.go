@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
@@ -32,6 +34,75 @@ func (f *fakeFleet) InstallCapability(_ context.Context, token, spaceID, workspa
 		return f.capabilityResult, nil
 	}
 	return &fleet.CapabilityInstallResult{}, nil
+}
+
+type capabilityReceipt struct {
+	fingerprint string
+	result      fleet.CapabilityInstallResult
+}
+
+// statefulCapabilityFleet models Fleet's persisted idempotency receipt: it
+// records the resource graph before optionally losing the first response.
+type statefulCapabilityFleet struct {
+	keys               []string
+	receipts           map[string]capabilityReceipt
+	commits            int
+	createdResources   int
+	timeoutFirstCommit bool
+}
+
+func (f *statefulCapabilityFleet) InstallCapability(_ context.Context, _, spaceID, workspaceID, key string, in fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	if f.receipts == nil {
+		f.receipts = make(map[string]capabilityReceipt)
+	}
+	f.keys = append(f.keys, key)
+	fingerprint, err := json.Marshal(struct {
+		SpaceID     string
+		WorkspaceID string
+		Request     fleet.CapabilityInstallRequest
+	}{SpaceID: spaceID, WorkspaceID: workspaceID, Request: in})
+	if err != nil {
+		return nil, err
+	}
+	if previous, ok := f.receipts[key]; ok {
+		if previous.fingerprint != string(fingerprint) {
+			return nil, &fleet.CapabilityAPIError{
+				Status: http.StatusConflict, Code: "DUPLICATE", IdempotencyKeyReused: true,
+			}
+		}
+		result := previous.result
+		return &result, nil
+	}
+
+	f.commits++
+	result := fleet.CapabilityInstallResult{}
+	if in.Definition.ExpertTeam == nil {
+		result.Type = "expert"
+		result.ExpertID = fmt.Sprintf("agent-%d", f.commits)
+		f.createdResources += len(in.Definition.Experts)
+	} else {
+		result.Type = "expert_team"
+		result.ExpertTeamID = fmt.Sprintf("team-%d", f.commits)
+		result.LeaderExpertID = fmt.Sprintf("agent-%d", f.commits)
+		f.createdResources += len(in.Definition.Experts) + 1
+	}
+	f.receipts[key] = capabilityReceipt{fingerprint: string(fingerprint), result: result}
+	if f.timeoutFirstCommit && f.commits == 1 {
+		return nil, context.DeadlineExceeded
+	}
+	return &result, nil
+}
+
+func assertCapabilityKeys(t *testing.T, ff *statefulCapabilityFleet, want ...string) {
+	t.Helper()
+	if len(ff.keys) != len(want) {
+		t.Fatalf("Fleet keys = %q, want %q", ff.keys, want)
+	}
+	for i := range want {
+		if ff.keys[i] != want[i] {
+			t.Fatalf("Fleet key[%d] = %q, want exact opaque value %q", i, ff.keys[i], want[i])
+		}
+	}
 }
 
 // installFixture wires a Service over an in-memory store + object store holding
@@ -101,6 +172,204 @@ func requireNullVersion(t *testing.T, object map[string]json.RawMessage) {
 	}
 }
 
+func capabilityMCPConfigForExpert(t *testing.T, in fleet.CapabilityInstallRequest, name string) json.RawMessage {
+	t.Helper()
+	definition := capabilityWireDefinition(t, in)
+	var experts []json.RawMessage
+	if err := json.Unmarshal(definition["experts"], &experts); err != nil {
+		t.Fatalf("decode wire experts: %v (%s)", err, definition["experts"])
+	}
+	for _, raw := range experts {
+		expert := capabilityWireObject(t, raw)
+		var gotName string
+		if err := json.Unmarshal(expert["name"], &gotName); err != nil {
+			t.Fatalf("decode expert name: %v", err)
+		}
+		if gotName == name {
+			return expert["mcp_config"]
+		}
+	}
+	t.Fatalf("capability definition has no expert %q", name)
+	return nil
+}
+
+func capabilityMCPServers(t *testing.T, raw json.RawMessage) map[string]json.RawMessage {
+	t.Helper()
+	var config struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("decode MCP config: %v (%s)", err, raw)
+	}
+	return config.MCPServers
+}
+
+func requireLegacyStdioMCPServer(t *testing.T, raw json.RawMessage) {
+	t.Helper()
+	servers := capabilityMCPServers(t, raw)
+	var server map[string]json.RawMessage
+	if err := json.Unmarshal(servers["local"], &server); err != nil {
+		t.Fatalf("decode local MCP server: %v (%s)", err, servers["local"])
+	}
+	if _, ok := server["type"]; ok {
+		t.Fatalf("stdio capability server still has legacy type field: %s", servers["local"])
+	}
+	var command string
+	var args []string
+	var env map[string]string
+	if err := json.Unmarshal(server["command"], &command); err != nil {
+		t.Fatalf("decode stdio command: %v", err)
+	}
+	if err := json.Unmarshal(server["args"], &args); err != nil {
+		t.Fatalf("decode stdio args: %v", err)
+	}
+	if err := json.Unmarshal(server["env"], &env); err != nil {
+		t.Fatalf("decode stdio env: %v", err)
+	}
+	if command != "npx" || len(args) != 1 || args[0] != "tool" || len(env) != 1 || env["X"] != "fixture" {
+		t.Fatalf("stdio capability config = %s, want command npx, args [tool], env {X:fixture}", servers["local"])
+	}
+}
+
+func TestInstallExpertReplaysUncertainCapabilityInstallByIdempotencyKey(t *testing.T) {
+	ff := &statefulCapabilityFleet{timeoutFirstCommit: true}
+	svc, caller, id := installFixture(t, ff, nil)
+	nextGeneratedKey := 0
+	svc.idGen = func() string {
+		nextGeneratedKey++
+		return fmt.Sprintf("generated-%d", nextGeneratedKey)
+	}
+	input := baseInput()
+	const firstKey = "marketplace/expert-install:v1+opaque_key"
+	input.IdempotencyKey = firstKey
+
+	if _, err := svc.InstallExpert(context.Background(), caller, id, input); !errors.Is(err, context.DeadlineExceeded) ||
+		!errors.Is(err, ErrFleetInstallUnavailable) {
+		t.Fatalf("first InstallExpert error = %v, want uncertain deadline error", err)
+	}
+	retried, err := svc.InstallExpert(context.Background(), caller, id, input)
+	if err != nil {
+		t.Fatalf("retry InstallExpert: %v", err)
+	}
+	if retried.AgentID != "agent-1" || ff.createdResources != 1 {
+		t.Fatalf("retry result/resources = %+v/%d, want original agent-1 and one remote resource", retried, ff.createdResources)
+	}
+
+	input.IdempotencyKey = "marketplace/expert-install:v1+different"
+	different, err := svc.InstallExpert(context.Background(), caller, id, input)
+	if err != nil {
+		t.Fatalf("InstallExpert with a different key: %v", err)
+	}
+	if different.AgentID != "agent-2" || ff.createdResources != 2 {
+		t.Fatalf("different-key result/resources = %+v/%d, want new agent-2 and two remote resources", different, ff.createdResources)
+	}
+	assertCapabilityKeys(t, ff, firstKey, firstKey, input.IdempotencyKey)
+}
+
+func TestInstallExpertGeneratesFreshKeysWhenIdempotencyKeyIsAbsent(t *testing.T) {
+	ff := &statefulCapabilityFleet{}
+	svc, caller, id := installFixture(t, ff, nil)
+	nextKey := 0
+	svc.idGen = func() string {
+		nextKey++
+		return fmt.Sprintf("generated-%d", nextKey)
+	}
+
+	first, err := svc.InstallExpert(context.Background(), caller, id, baseInput())
+	if err != nil {
+		t.Fatalf("first InstallExpert: %v", err)
+	}
+	second, err := svc.InstallExpert(context.Background(), caller, id, baseInput())
+	if err != nil {
+		t.Fatalf("second InstallExpert: %v", err)
+	}
+	if first.AgentID != "agent-1" || second.AgentID != "agent-2" || ff.createdResources != 2 {
+		t.Fatalf("keyless results/resources = %q, %q / %d, want distinct installs", first.AgentID, second.AgentID, ff.createdResources)
+	}
+	assertCapabilityKeys(t, ff, "generated-1", "generated-2")
+}
+
+func TestInstallExpertNormalizesLegacyStdioMCPConfig(t *testing.T) {
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
+	svc, caller, id := installFixture(t, ff, nil)
+	svc.repo.(*fakeStore).experts[id].MCPConfig = `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}}}}`
+
+	if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallExpert: %v", err)
+	}
+	requireLegacyStdioMCPServer(t, capabilityMCPConfigForExpert(t, ff.capabilityInput, "Code Helper"))
+}
+
+func TestInstallExpertPreservesLegacyMCPConfigOverridesAndRemoteServers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "explicit empty", raw: `{}`},
+		{name: "wrapped empty", raw: `{"mcpServers":{}}`},
+		{name: "remote servers", raw: `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}},"http":{"type":"http","url":"https://mcp.example.test/mcp","headers":{"X-Fixture":"header"}},"url_only":{"url":"https://mcp.example.test/events"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
+			svc, caller, id := installFixture(t, ff, nil)
+			svc.repo.(*fakeStore).experts[id].MCPConfig = tc.raw
+
+			if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
+				t.Fatalf("InstallExpert: %v", err)
+			}
+			got := capabilityMCPConfigForExpert(t, ff.capabilityInput, "Code Helper")
+			if len(got) == 0 {
+				t.Fatal("explicit legacy MCP config was omitted from capability definition")
+			}
+			switch tc.name {
+			case "explicit empty":
+				var object map[string]json.RawMessage
+				if err := json.Unmarshal(got, &object); err != nil || len(object) != 0 {
+					t.Fatalf("explicit empty config = %s, want {}", got)
+				}
+			case "wrapped empty":
+				if servers := capabilityMCPServers(t, got); servers == nil || len(servers) != 0 {
+					t.Fatalf("wrapped empty config = %s, want an explicit empty mcpServers object", got)
+				}
+			case "remote servers":
+				requireLegacyStdioMCPServer(t, got)
+				servers := capabilityMCPServers(t, got)
+				for name, want := range map[string]struct {
+					typeName string
+					url      string
+				}{
+					"http":     {typeName: "http", url: "https://mcp.example.test/mcp"},
+					"url_only": {url: "https://mcp.example.test/events"},
+				} {
+					var server map[string]json.RawMessage
+					if err := json.Unmarshal(servers[name], &server); err != nil {
+						t.Fatalf("decode %s server: %v", name, err)
+					}
+					if want.typeName == "" {
+						if _, ok := server["type"]; ok {
+							t.Fatalf("remote MCP server %q gained type: %s", name, servers[name])
+						}
+					} else {
+						var gotType string
+						if err := json.Unmarshal(server["type"], &gotType); err != nil || gotType != want.typeName {
+							t.Fatalf("remote MCP server %q type = %q, want %q", name, gotType, want.typeName)
+						}
+					}
+					var gotURL string
+					if err := json.Unmarshal(server["url"], &gotURL); err != nil || gotURL != want.url {
+						t.Fatalf("remote MCP server %q URL = %q, want %q", name, gotURL, want.url)
+					}
+					if name == "http" {
+						var headers map[string]string
+						if err := json.Unmarshal(server["headers"], &headers); err != nil || headers["X-Fixture"] != "header" {
+							t.Fatalf("remote MCP server headers = %s, want X-Fixture=header", server["headers"])
+						}
+					}
+				}
+			}
+		})
+	}
+}
 func baseInput() InstallInput {
 	return InstallInput{WorkspaceID: "ws-1", RuntimeID: "rt-1", SpaceID: "space-1", Token: "tok"}
 }

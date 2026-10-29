@@ -47,6 +47,7 @@ require a valid Octo token.
 | --- | --- | --- |
 | `token` | Octo access token | Matches `octo-web`'s `WKApp.apiClient` convention. |
 | `X-Space-Id` | Space UUID | Required on every endpoint; anchors visibility + ownership scope. |
+| `Idempotency-Key` | Opaque caller-supplied key | Optional on both install routes; forwarded unchanged. See §4.6.1. |
 | `Accept-Language` | e.g. `zh-CN, en;q=0.8` | Optional; forwarded to the token resolver. |
 
 Server-side flow on every business request:
@@ -490,6 +491,13 @@ text files into one Fleet capability definition. It submits exactly one atomic
 capability-install request; the caller's octo `Token`, Space, Workspace and
 Runtime binding are forwarded for Fleet authorization.
 
+`Idempotency-Key` is optional. If the caller supplies one, Marketplace forwards it
+unchanged to Fleet. After an uncertain response, callers may retry with the same
+key and identical install inputs; reusing it with changed source content or
+target follows Fleet's request-fingerprint conflict behavior. Marketplace does
+not retry automatically. When the header is omitted, Marketplace generates a
+fresh key as before, so each keyless request remains a new install operation.
+
 The legacy expert model has no source-version field, so the definition sends a
 nullable `version` as JSON `null`. Fleet owns the resource transaction: Marketplace
 does not issue separate agent/skill creation calls or compensating deletes. A
@@ -510,8 +518,8 @@ fan-out remains capped across all Skills (a package exceeding it returns `400`).
 
 **Errors:** 400 (`invalid_request` — missing workspace/runtime, or an install
 that exceeds the resource caps) · 401 · 403 · 404 (expert not visible) · 409
-(fleet rejects a duplicate agent name in the workspace) · 500 · 503
-(`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).
+(Fleet rejects a duplicate agent name or a reused key with changed fingerprint)
+· 500 · 503 (`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).
 
 ### 4.7–4.12 `/squads` family
 
@@ -552,6 +560,9 @@ and `squad_id`:
 
   **Request:** `{ "workspace_id": "ws-123", "runtime_id": "rt-456" }` —
   **Response (200):** `{ "data": { "squad_id": "sq-1", "leader_agent_id": "agent-1" } }`.
+
+The optional `Idempotency-Key` header follows the same retry, fingerprint, and
+keyless behavior as the expert install route (§4.6.1).
 
 **Errors:** same catalog as the experts family, with
 `err.marketplace.expert.invalid_members` added on create/update.
@@ -638,13 +649,17 @@ and for each squad member's `mcp_config`:
   (`VALIDATION_ERROR`). Empty string / omitted is allowed (no MCP).
 - **Size-capped** (v1: 64 KiB per config). Oversized → `VALIDATION_ERROR`.
 - **Stored verbatim** as text (MEDIUMTEXT), preserving the author's exact
-  formatting; returned byte-for-byte on read. The server does NOT reformat,
-  reorder keys, parse into server descriptors, spawn any process, or fetch any
-  URL. Treated purely as an opaque, untrusted config document.
+  formatting; returned byte-for-byte on read. Create/update do not parse or
+  reformat the stored document.
+- **Install boundary adaptation only:** for Fleet, a server entry containing
+  both `"type":"stdio"` and `"command"` is converted to the command-based stdio
+  shape by removing only `type`; `command`, `args`, and `env` are preserved.
+  HTTP/URL entries and explicit empty `{}` / `{"mcpServers":{}}` configs are
+  left unchanged. The source document remains verbatim in storage; Marketplace
+  does not spawn a process or fetch a URL.
 - **No secret redaction in v1** (brief Out-of-scope). Authors are guided by the
-  frontend to use `SECRET_PLACEHOLDER_SENTINEL` (§0) instead of real tokens. A
-  later slice may add env-value blanking mirroring `mcp-v1.md` §5 once a real
-  install flow exists.
+  frontend to use `SECRET_PLACEHOLDER_SENTINEL` (§0) instead of real tokens.
+  The install adapter preserves environment values as supplied.
 
 ## 7. Performance & limits (v1 posture)
 

@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
@@ -276,6 +277,35 @@ func requireExpertSkillName(t *testing.T, experts []fleet.CapabilityExpert, expe
 		return
 	}
 	t.Fatalf("missing expert %q in capability definition", expertID)
+}
+
+func TestCapabilityExpertSkillPinRequiresVersionManagement(t *testing.T) {
+	svc, store := publishedGraphVersionsFixture(t, pin("skill-v1"), nil)
+	svc.WithVersionManagement(false).WithPinnedInstallation(false)
+	setCapabilitySkillSnapshot(t, store, "skill-v1", "Pinned skill v1", "skill-1.0", "body from skill v1", "guide from skill v1")
+	setCapabilitySkillSnapshot(t, store, "skill-v2", "Current skill v2", "skill-2.0", "body from skill v2", "guide from skill v2")
+
+	currentSkill := store.plugins["skill-a"]
+	currentVersion := store.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v2"}]
+	currentSkill.Name = "Current skill v2"
+	currentSkill.CurrentVersion = stringPtr("skill-2.0")
+	currentSkill.CurrentVersionID = stringPtr("skill-v2")
+	currentSkill.Manifest = currentVersion.Manifest
+	currentSkill.Package = currentVersion.Package
+	store.published["skill-a"] = "skill-v2"
+
+	store.Store.(*fakeStore).relations = map[string][]model.PluginRelation{
+		"expert-a": {{
+			Type:            "expert_skill",
+			TargetPluginID:  "skill-a",
+			TargetVersionID: pin("skill-v1"),
+			Status:          1,
+		}},
+	}
+	installer := svc.capabilityInstaller.(*fakeCapabilityInstaller)
+	if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-a", installationParams()); !errors.Is(err, ErrVersionBaselineUnavailable) || installer.calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, installer.calls)
+	}
 }
 
 func TestCurrentTeamInstallUsesMemberAndSkillRelationSnapshots(t *testing.T) {

@@ -198,18 +198,36 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		return nil, err
 	}
 	if !equalInstallationHMAC(attempt.RequestFingerprint, fingerprint) {
-		if p.WorkspaceConnectors || plan.ConnectorOnly {
+		if plan.ConnectorOnly {
 			return nil, ErrConflict
 		}
-		// A legacy request is accepted only when the old wire bytes match the
-		// request fingerprint already authenticated by the frozen-plan HMAC.
-		request.LegacySkillWire = true
-		body, err = fleet.MarshalCapabilityInstallRequest(*request)
-		if err != nil {
-			return nil, ErrConflict
+		// Only an authenticated request fingerprint selects one of the two
+		// published historical shapes; never rewrite its HMAC or attempt key.
+		matchedHistoricalWire := false
+		for _, wire := range []struct {
+			legacySkill  bool
+			legacyExpert bool
+		}{
+			{legacyExpert: true},
+			{legacySkill: true, legacyExpert: true},
+		} {
+			request.LegacySkillWire = wire.legacySkill
+			request.LegacyExpertWire = wire.legacyExpert
+			historicalBody, marshalErr := fleet.MarshalCapabilityInstallRequest(*request)
+			if marshalErr != nil {
+				return nil, ErrConflict
+			}
+			historicalFingerprint, signErr := s.installationHMAC(attempt.HMACKeyID, "request", json.RawMessage(historicalBody))
+			if signErr != nil {
+				return nil, ErrConflict
+			}
+			if equalInstallationHMAC(attempt.RequestFingerprint, historicalFingerprint) {
+				body = historicalBody
+				matchedHistoricalWire = true
+				break
+			}
 		}
-		fingerprint, err = s.installationHMAC(attempt.HMACKeyID, "request", json.RawMessage(body))
-		if err != nil || !equalInstallationHMAC(attempt.RequestFingerprint, fingerprint) {
+		if !matchedHistoricalWire {
 			return nil, ErrConflict
 		}
 	}

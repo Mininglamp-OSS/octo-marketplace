@@ -182,14 +182,17 @@ func legacyInstallRouter(svc *expertsvc.Service) *gin.Engine {
 func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, tc := range []struct {
-		name, path string
-		expert     *model.Expert
-		squad      *model.Squad
-		want       map[string]string
+		name, path     string
+		idempotencyKey string
+		wantKey        string
+		expert         *model.Expert
+		squad          *model.Squad
+		want           map[string]string
 	}{
 		{
-			name: "expert",
-			path: "/v1/experts/exp-1/install",
+			name:    "expert without caller key",
+			path:    "/v1/experts/exp-1/install",
+			wantKey: "install-key",
 			expert: &model.Expert{
 				ID: "exp-1", Name: "Code Helper", Visibility: model.VisibilityPublic, SpaceID: "space-1",
 				Instruction: "Write code.",
@@ -197,8 +200,31 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 			want: map[string]string{"agent_id": "fleet-agent-1"},
 		},
 		{
-			name: "squad",
-			path: "/v1/squads/squad-1/install",
+			name:           "expert with opaque caller key",
+			path:           "/v1/experts/exp-1/install",
+			idempotencyKey: "marketplace/expert-install:v1+opaque_key",
+			wantKey:        "marketplace/expert-install:v1+opaque_key",
+			expert: &model.Expert{
+				ID: "exp-1", Name: "Code Helper", Visibility: model.VisibilityPublic, SpaceID: "space-1",
+				Instruction: "Write code.",
+			},
+			want: map[string]string{"agent_id": "fleet-agent-1"},
+		},
+		{
+			name:    "squad without caller key",
+			path:    "/v1/squads/squad-1/install",
+			wantKey: "install-key",
+			squad: &model.Squad{
+				ID: "squad-1", Name: "Delivery Squad", Visibility: model.VisibilityPublic, SpaceID: "space-1",
+				Members: []model.SquadMember{{MemberKey: "leader", Name: "Lead", IsLeader: true, Instruction: "Lead work."}},
+			},
+			want: map[string]string{"squad_id": "fleet-team-1", "leader_agent_id": "fleet-agent-1"},
+		},
+		{
+			name:           "squad with opaque caller key",
+			path:           "/v1/squads/squad-1/install",
+			idempotencyKey: "marketplace/squad-install:v1+opaque_key",
+			wantKey:        "marketplace/squad-install:v1+opaque_key",
 			squad: &model.Squad{
 				ID: "squad-1", Name: "Delivery Squad", Visibility: model.VisibilityPublic, SpaceID: "space-1",
 				Members: []model.SquadMember{{MemberKey: "leader", Name: "Lead", IsLeader: true, Instruction: "Lead work."}},
@@ -208,7 +234,7 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var paths []string
-			var forwardedToken, forwardedSpace, forwardedWorkspace string
+			var forwardedToken, forwardedSpace, forwardedWorkspace, forwardedKey string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.Method+" "+r.URL.Path)
 				if r.Method != http.MethodPost || r.URL.Path != "/v1/capabilities/install" {
@@ -218,6 +244,7 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 				forwardedToken = r.Header.Get("Token")
 				forwardedSpace = r.Header.Get("X-Space-Id")
 				forwardedWorkspace = r.Header.Get("X-Workspace-Id")
+				forwardedKey = r.Header.Get("Idempotency-Key")
 				var request struct {
 					Definition fleet.CapabilityDefinition `json:"definition"`
 				}
@@ -257,6 +284,9 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 			request := httptest.NewRequest(http.MethodPost, tc.path, body)
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Authorization", "Bearer legacy-caller-token")
+			if tc.idempotencyKey != "" {
+				request.Header.Set("Idempotency-Key", tc.idempotencyKey)
+			}
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
 
@@ -268,6 +298,9 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 			}
 			if forwardedToken != "legacy-caller-token" || forwardedSpace != "space-1" || forwardedWorkspace != "workspace-1" {
 				t.Fatalf("Fleet authorization/target = token:%q space:%q workspace:%q", forwardedToken, forwardedSpace, forwardedWorkspace)
+			}
+			if forwardedKey != tc.wantKey {
+				t.Fatalf("Fleet Idempotency-Key = %q, want %q", forwardedKey, tc.wantKey)
 			}
 			var responseBody struct {
 				Data map[string]string `json:"data"`

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,37 @@ type historicalPinnedExpertTeam struct {
 	Instructions string                       `json:"instructions"`
 }
 
+// These mirror the request DTOs at 3f04192: Skills already carried version
+// and source metadata, while Experts and ExpertTeam did not.
+type baselinePinnedRequest struct {
+	Definition baselinePinnedDefinition `json:"definition"`
+	Bindings   fleet.CapabilityBindings `json:"bindings"`
+}
+
+type baselinePinnedDefinition struct {
+	SchemaVersion string                      `json:"schema_version"`
+	Name          string                      `json:"name"`
+	Skills        []baselinePinnedSkill       `json:"skills,omitempty"`
+	Connectors    []fleet.CapabilityConnector `json:"connectors,omitempty"`
+	Experts       []historicalPinnedExpert    `json:"experts"`
+	ExpertTeam    *historicalPinnedExpertTeam `json:"expert_team,omitempty"`
+}
+
+type baselinePinnedSkill struct {
+	Name          string                      `json:"name"`
+	Version       *string                     `json:"version"`
+	MarketSkillID string                      `json:"market_skill_id,omitempty"`
+	Description   string                      `json:"description"`
+	Content       string                      `json:"content"`
+	Config        map[string]any              `json:"config"`
+	Files         []fleet.CapabilitySkillFile `json:"files,omitempty"`
+}
+
+type baselinePinnedResource struct {
+	name, pluginID, versionID string
+	wantAgentID, wantTeamID   string
+}
+
 func TestPinnedInstallReplaysSignedHistoricalReceiptWithOldSkillWireShape(t *testing.T) {
 	s, f, _ := fixturePinned()
 	p := installationParams()
@@ -104,6 +136,97 @@ func TestPinnedInstallReplaysSignedHistoricalReceiptWithOldSkillWireShape(t *tes
 	}
 	if out == nil || out.AgentID != "historical-agent" || !out.Replayed {
 		t.Fatalf("historical replay result was not returned: %#v", out)
+	}
+}
+func TestPinnedInstallReplaysBaselineHistoricalReceiptWithVersionedSkill(t *testing.T) {
+	runBaselineHistoricalPinnedAttempts(t, true)
+}
+
+func TestPinnedInstallRecoversUnknownBaselineAttemptWithVersionedSkill(t *testing.T) {
+	runBaselineHistoricalPinnedAttempts(t, false)
+}
+
+func runBaselineHistoricalPinnedAttempts(t *testing.T, completed bool) {
+	t.Helper()
+	resources := []baselinePinnedResource{
+		{name: "expert", pluginID: "expert-a", versionID: "expert-v1", wantAgentID: "historical-agent"},
+		{name: "team", pluginID: "team", versionID: "root-v1", wantTeamID: "historical-team"},
+	}
+	for _, workspaceConnectors := range []bool{false, true} {
+		mode := "default"
+		if workspaceConnectors {
+			mode = "workspace-connectors"
+		}
+		for _, resource := range resources {
+			t.Run(resource.name+"/"+mode, func(t *testing.T) {
+				s, f, _ := fixturePinned()
+				p := installationParams()
+				p.WorkspaceConnectors = workspaceConnectors
+				if workspaceConnectors {
+					setPinnedMarketConnector(f, "Shared Connector", pinnedConnectorExtensionFixture())
+				}
+				attempt, historicalWire := makeBaselineHistoricalPinnedAttempt(t, s, p, resource.pluginID, resource.versionID)
+				attempt.AgentID, attempt.TeamID = resource.wantAgentID, resource.wantTeamID
+				attempt.Completed = completed
+				if completed {
+					attempt.State = "SUCCEEDED"
+				} else {
+					attempt.AgentID, attempt.TeamID = "", ""
+					attempt.State = "UNKNOWN"
+					attempt.HadUnknown = true
+				}
+				f.attempts = map[string]*pluginrepo.InstallAttempt{p.WorkspaceID + attempt.KeyDigest: attempt}
+
+				var captureMu sync.Mutex
+				var received [][]byte
+				var receivedKeys []string
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Errorf("read retry body: %v", err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					captureMu.Lock()
+					received = append(received, append([]byte(nil), body...))
+					receivedKeys = append(receivedKeys, r.Header.Get("Idempotency-Key"))
+					captureMu.Unlock()
+					var in fleet.CapabilityInstallRequest
+					if err := json.Unmarshal(body, &in); err != nil {
+						t.Errorf("decode retry body: %v", err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Idempotency-Replayed", "true")
+					_, _ = w.Write(baselineHistoricalInstallResponse(t, in))
+				}))
+				defer server.Close()
+				s.WithCapabilityInstaller(fleet.New(server.URL))
+
+				out, err := s.CreateInstallation(context.Background(), testCaller, resource.pluginID, p)
+				if err != nil {
+					t.Fatalf("historical attempt retry failed: %v", err)
+				}
+				captureMu.Lock()
+				gotBodies := append([][]byte(nil), received...)
+				gotKeys := append([]string(nil), receivedKeys...)
+				captureMu.Unlock()
+				wantAttemptID := digestInstall([]string{testCaller.SpaceID, testCaller.UID, p.WorkspaceID, attempt.KeyDigest})
+				if len(gotBodies) != 1 || !bytes.Equal(gotBodies[0], historicalWire) || !reflect.DeepEqual(gotKeys, []string{wantAttemptID}) {
+					t.Fatalf("retry did not preserve the authenticated baseline body and key: calls=%d keys=%v", len(gotBodies), gotKeys)
+				}
+				if out == nil || out.AgentID != resource.wantAgentID || out.SquadID != resource.wantTeamID || (completed && !out.Replayed) {
+					t.Fatalf("historical IDs were not returned: got=%#v want agent=%q team=%q completed=%t", out, resource.wantAgentID, resource.wantTeamID, completed)
+				}
+				if !completed {
+					recovered := f.attempts[p.WorkspaceID+attempt.KeyDigest]
+					if recovered == nil || !recovered.Completed || recovered.AgentID != resource.wantAgentID || recovered.TeamID != resource.wantTeamID {
+						t.Fatalf("unknown historical result was not persisted with its original IDs: %#v", recovered)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -253,6 +376,182 @@ func makeHistoricalPinnedAttempt(t *testing.T, s *Service, p InstallationParams,
 		t.Fatalf("marshal historical frozen plan: %v", err)
 	}
 	return attempt, wire
+}
+func makeBaselineHistoricalPinnedAttempt(t *testing.T, s *Service, p InstallationParams, pluginID, rootVersionID string) (*pluginrepo.InstallAttempt, []byte) {
+	t.Helper()
+	store := s.repo.(*pinnedFixtureStore)
+	for _, skillID := range []string{"skill-a", "skill-b"} {
+		versionKey := pluginrepo.InstallVersionKey{PluginID: skillID, VersionID: "skill-v1"}
+		store.versions[versionKey].DeclaredVersion = pin("1.4.2")
+	}
+	plan, err := s.resolvePinnedInstallation(context.Background(), testCaller, pluginID, rootVersionID, p.WorkspaceConnectors)
+	if err != nil {
+		t.Fatalf("resolve baseline request fixture: %v", err)
+	}
+	request, err := pinnedPlanRequest(plan, p)
+	if err != nil {
+		t.Fatalf("build baseline request fixture: %v", err)
+	}
+	baselineDefinition := baselinePinnedDefinition{
+		SchemaVersion: request.Definition.SchemaVersion,
+		Name:          request.Definition.Name,
+		Connectors:    request.Definition.Connectors,
+	}
+	for _, expert := range request.Definition.Experts {
+		baselineDefinition.Experts = append(baselineDefinition.Experts, historicalPinnedExpert{
+			Name: expert.Name, Description: expert.Description, Instructions: expert.Instructions,
+			SkillNames: expert.SkillNames, ConnectorNames: expert.ConnectorNames,
+			CustomEnv: expert.CustomEnv, MCPConfig: expert.MCPConfig,
+		})
+	}
+	if team := request.Definition.ExpertTeam; team != nil {
+		baselineDefinition.ExpertTeam = &historicalPinnedExpertTeam{
+			Name: team.Name, Members: team.Members,
+			Description: team.Description, Instructions: team.Instructions,
+		}
+	}
+	for _, skill := range request.Definition.Skills {
+		baselineDefinition.Skills = append(baselineDefinition.Skills, baselinePinnedSkill{
+			Name: skill.Name, Version: skill.Version, MarketSkillID: skill.MarketSkillID,
+			Description: skill.Description, Content: skill.Content, Config: skill.Config, Files: skill.Files,
+		})
+	}
+	wire, err := json.Marshal(baselinePinnedRequest{Definition: baselineDefinition, Bindings: request.Bindings})
+	if err != nil {
+		t.Fatalf("marshal baseline request: %v", err)
+	}
+	var decoded struct {
+		Definition struct {
+			Skills     []map[string]json.RawMessage `json:"skills"`
+			Experts    []map[string]json.RawMessage `json:"experts"`
+			ExpertTeam map[string]json.RawMessage   `json:"expert_team"`
+		} `json:"definition"`
+	}
+	if err := json.Unmarshal(wire, &decoded); err != nil || len(decoded.Definition.Skills) == 0 {
+		t.Fatalf("baseline fixture is not an install request: err=%v skills=%d", err, len(decoded.Definition.Skills))
+	}
+	for _, skill := range decoded.Definition.Skills {
+		var version, marketSkillID string
+		if json.Unmarshal(skill["version"], &version) != nil || version != "1.4.2" ||
+			json.Unmarshal(skill["market_skill_id"], &marketSkillID) != nil || marketSkillID == "" {
+			t.Fatalf("baseline fixture lost Skill version/source metadata: %v", skill)
+		}
+	}
+	for _, expert := range decoded.Definition.Experts {
+		if _, exists := expert["version"]; exists {
+			t.Fatal("baseline fixture contains the later Expert version field")
+		}
+		if _, exists := expert["market_expert_id"]; exists {
+			t.Fatal("baseline fixture contains the later Expert source field")
+		}
+	}
+	if _, exists := decoded.Definition.ExpertTeam["version"]; exists {
+		t.Fatal("baseline fixture contains the later ExpertTeam version field")
+	}
+	if _, exists := decoded.Definition.ExpertTeam["market_expert_team_id"]; exists {
+		t.Fatal("baseline fixture contains the later ExpertTeam source field")
+	}
+	intent := digestInstall(struct {
+		Root, Space, Workspace, Runtime, Name string
+		WorkspaceConnectors                   bool `json:"workspace_connectors,omitempty"`
+	}{pluginID, testCaller.SpaceID, p.WorkspaceID, p.RuntimeID, p.ResourceName, p.WorkspaceConnectors})
+	inputFingerprint, err := s.installationHMAC(s.installHMACKeyID, "input", struct {
+		Intent string
+		Env    map[string]string
+	}{intent, p.CustomEnv})
+	if err != nil {
+		t.Fatalf("sign baseline input: %v", err)
+	}
+	requestFingerprint, err := s.installationHMAC(s.installHMACKeyID, "request", json.RawMessage(wire))
+	if err != nil {
+		t.Fatalf("sign baseline request: %v", err)
+	}
+	key := digestInstall(p.IdempotencyKey)
+	retryUntil := time.Now().UTC().Add(time.Hour)
+	attempt := &pluginrepo.InstallAttempt{
+		WorkspaceID: p.WorkspaceID, KeyDigest: key, PluginID: pluginID, RootVersionID: rootVersionID,
+		AdapterVersion: SkillInstallAdapterVersion, InputFingerprint: inputFingerprint, RequestFingerprint: requestFingerprint,
+		HMACKeyID: s.installHMACKeyID, IntentDigest: intent,
+		AgentID: "historical-agent", TeamID: "historical-team", Completed: true, RetryUntil: &retryUntil, CreatedAt: time.Now().UTC(),
+	}
+	plan.EligibilityHMAC, err = s.installationEligibilityHMAC(testCaller, *attempt, plan)
+	if err != nil {
+		t.Fatalf("sign baseline eligibility: %v", err)
+	}
+	attempt.FrozenPlan, err = json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal baseline frozen plan: %v", err)
+	}
+	return attempt, wire
+}
+
+func baselineHistoricalInstallResponse(t *testing.T, in fleet.CapabilityInstallRequest) []byte {
+	t.Helper()
+	var skills []fleet.CapabilitySkillResult
+	skillIDs := make(map[string]string, len(in.Definition.Skills))
+	for i, skill := range in.Definition.Skills {
+		id := "historical-skill-" + string(rune('a'+i))
+		skills = append(skills, fleet.CapabilitySkillResult{
+			SkillID: id, Name: skill.Name, Version: skill.Version, MarketSkillID: skill.MarketSkillID, Created: true,
+		})
+		skillIDs[skill.Name] = id
+	}
+	var connectors []fleet.CapabilityConnectorResult
+	connectorIDs := make(map[string]string, len(in.Definition.Connectors))
+	for i, connector := range in.Definition.Connectors {
+		id := fmt.Sprintf("11111111-1111-4111-8111-%012x", i+1)
+		var marketMCPID *string
+		if connector.MarketMCPID != "" {
+			marketMCPID = &in.Definition.Connectors[i].MarketMCPID
+		}
+		connectors = append(connectors, fleet.CapabilityConnectorResult{
+			ConnectorID: id, Name: connector.Name, Version: connector.Version,
+			MarketMCPID: marketMCPID, Created: true,
+		})
+		connectorIDs[connector.Name] = id
+	}
+	result := fleet.CapabilityInstallResult{Type: "expert", ExpertID: "historical-agent", Skills: skills, Connectors: connectors}
+	if in.Definition.ExpertTeam != nil {
+		result.Type, result.ExpertID, result.ExpertTeamID = "expert_team", "", "historical-team"
+	}
+	experts := make([]fleet.CapabilityExpertResult, 0, len(in.Definition.Experts))
+	leaderID := ""
+	for i, expert := range in.Definition.Experts {
+		id := "historical-agent"
+		if in.Definition.ExpertTeam != nil {
+			id += "-" + string(rune('a'+i))
+		}
+		var boundSkills []string
+		for _, name := range expert.SkillNames {
+			boundSkills = append(boundSkills, skillIDs[name])
+		}
+		var boundConnectors []string
+		for _, name := range expert.ConnectorNames {
+			boundConnectors = append(boundConnectors, connectorIDs[name])
+		}
+		isLeader := false
+		if in.Definition.ExpertTeam != nil {
+			for _, member := range in.Definition.ExpertTeam.Members {
+				if member.ExpertName == expert.Name && member.IsLeader {
+					isLeader = true
+					leaderID = id
+				}
+			}
+		}
+		experts = append(experts, fleet.CapabilityExpertResult{
+			ExpertID: id, Name: expert.Name, SkillIDs: boundSkills, ConnectorIDs: boundConnectors,
+			IsLeader: isLeader, Created: true,
+		})
+	}
+	result.Experts = experts
+	if in.Definition.ExpertTeam != nil {
+		result.LeaderExpertID = leaderID
+	}
+	payload, err := json.Marshal(map[string]any{"data": result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func historicalInstallResponse(t *testing.T, in fleet.CapabilityInstallRequest) []byte {
