@@ -166,8 +166,34 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE plugins SET published_version_id=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, p.ID)
-	return err
+	// The market displays the selected version's manifest name, not the mutable
+	// draft name. Read the name from the version being released; p.Name can be a
+	// later draft (adoption/historical flows) and must not release or misreserve a
+	// different display name.
+	var releaseName string
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(manifest_json,'$.plugin_name')),'') FROM plugin_versions WHERE plugin_id=? AND version_id=?`, p.ID, versionID).Scan(&releaseName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrConflict
+		}
+		return err
+	}
+	if strings.TrimSpace(releaseName) == "" {
+		releaseName = p.Name
+	}
+	publishedKey, nameScope, nameErr := pluginNameColumns(releaseName, p.Type, p.SpaceID)
+	if nameErr != nil {
+		return nameErr
+	}
+	if publishedKey != nil && !p.IsEmbedded {
+		if err := rejectPluginNameCollision(ctx, tx, *p, publishedKey.(string), nameScope); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE plugins SET published_version_id=?,published_name_key=?,name_scope=? WHERE plugin_id=? AND deleted_at IS NULL`, versionID, publishedKey, nameScope, p.ID)
+	if err != nil {
+		return wrapped("publish release", mapPluginNameTaken(err))
+	}
+	return nil
 }
 
 // PublishManaged publishes the explicitly selected draft. ExpectedVersionID

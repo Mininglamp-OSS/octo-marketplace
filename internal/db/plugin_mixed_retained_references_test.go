@@ -82,6 +82,17 @@ func TestMixedRetainedReferencesPreserveLegacyPublication(t *testing.T) {
 			newReq := managedSkillWrite("1.0.0", "Legacy Dependency", model.PluginVisibilitySpace)
 			if tc.targetKind == "expert" {
 				newReq = managedWrite("1.0.0", "legacy member", model.PluginVisibilitySpace)
+				// This is a distinct member, not a rename/update of the pinned Expert.
+				newReq.Name = "Legacy Unpinned Member"
+				var manifest map[string]any
+				if err := json.Unmarshal(newReq.Manifest, &manifest); err != nil {
+					t.Fatal(err)
+				}
+				manifest["plugin_name"] = newReq.Name
+				newReq.Manifest, err = json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			unpinned, err := legacy.Create(ctx, owner, newReq)
 			if err != nil {

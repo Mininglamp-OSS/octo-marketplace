@@ -210,3 +210,38 @@ func TestCachedPrivateSkillDoesNotBypassSecondExpertAudience(t *testing.T) {
 		t.Fatal("invalid private graph dispatched")
 	}
 }
+
+func TestFrozenRetryRequiresCurrentListingAndEveryPersistedEdge(t *testing.T) {
+	for _, adapter := range []string{"new", "legacy"} {
+		for _, mutation := range []string{"root_delisted", "dependency_delisted", "broader_intermediate"} {
+			t.Run(adapter+"/"+mutation, func(t *testing.T) {
+				svc, f, remote := fixturePinned()
+				p := installationParams()
+				remote.err = errors.New("response lost")
+				if err := invokeIntegrityInstall(svc, adapter, p); err == nil || remote.calls != 1 {
+					t.Fatalf("initial: %v calls=%d", err, remote.calls)
+				}
+				target := f.plugins["skill-a"]
+				switch mutation {
+				case "root_delisted":
+					target = f.plugins["team"]
+					target.ListingState = model.PluginListingStateDelisted
+				case "dependency_delisted":
+					target.ListingState = model.PluginListingStateDelisted
+				case "broader_intermediate":
+					target = f.plugins["expert-a"]
+					target.Visibility = model.PluginVisibilitySpace
+				}
+				remote.err = nil
+				if err := invokeIntegrityInstall(svc, adapter, p); !errors.Is(err, ErrDependencyHidden) || remote.calls != 1 {
+					t.Fatalf("blocked retry: %v calls=%d", err, remote.calls)
+				}
+				target.ListingState = model.PluginListingStatePublished
+				target.Visibility = model.PluginVisibilityPrivate
+				if err := invokeIntegrityInstall(svc, adapter, p); err != nil || remote.calls != 2 {
+					t.Fatalf("restored valid transitive graph: %v calls=%d", err, remote.calls)
+				}
+			})
+		}
+	}
+}

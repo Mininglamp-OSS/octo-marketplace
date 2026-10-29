@@ -7,12 +7,15 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	"github.com/go-sql-driver/mysql"
 )
 
 // Mutation contains current state, replacement relations, and append-only audit metadata.
 type Mutation struct {
+	ExpectedDraftRevision *string
 	// ExpectedCurrentVersionID opts internal callers into a saved-head CAS.
 	// Empty preserves existing write semantics; it is not a public DTO field.
 	ExpectedCurrentVersionID string
@@ -85,10 +88,12 @@ type Mutation struct {
 // known ID with changed fields updates, and live IDs absent from the submitted
 // list are soft-deleted. Relations carries the final rows with assigned IDs.
 type RelationSync struct {
-	Created   []string
-	Updated   []string
-	Deleted   []string
-	Relations []model.PluginRelation
+	// DraftRevision describes this committed write, not a later unlocked read.
+	DraftRevision string
+	Created       []string
+	Updated       []string
+	Deleted       []string
+	Relations     []model.PluginRelation
 	// NewVersionID is the id of the plugin_versions row this write snapshotted and
 	// advanced current_version_id to (empty when the write did not snapshot). The
 	// service stamps it back onto the returned plugin so the write response's
@@ -162,6 +167,43 @@ func jsonColumn(raw []byte) any {
 	return string(raw)
 }
 
+// pluginNameColumns returns the normalized name key and scope for the unique
+// active-name index. Skills, Experts and Expert Teams participate; Connectors
+// keep the historical duplicate-name behavior. The same normalization MUST be
+// used by the backfill command and migration preflight.
+func pluginNameColumns(name string, typ model.PluginType, spaceID *string) (any, string, error) {
+	scope := ""
+	if spaceID != nil {
+		scope = *spaceID
+	}
+	if typ != model.PluginTypeExpert && typ != model.PluginTypeSkill && typ != model.PluginTypeExpertTeam {
+		return nil, scope, nil
+	}
+	// Enforce the invariant at the repository boundary too: an admin/internal
+	// caller must not create a blank Expert/Skill that bypasses the unique index.
+	// Historical malformed rows are normalized only by the explicit backfill
+	// command, which writes directly rather than through this path.
+	if strings.TrimSpace(name) == "" {
+		return nil, scope, ErrInvalidName
+	}
+	key, err := model.NormalizePluginName(name)
+	if err != nil {
+		return nil, scope, err
+	}
+	return key, scope, nil
+}
+
+// mapPluginNameTaken translates the unique active-name index violation into a
+// stable repository error. All name-bearing write paths must use it so callers
+// can return a 409 instead of an opaque 500.
+func mapPluginNameTaken(err error) error {
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 && (strings.Contains(mysqlErr.Message, "uq_plugins_active_name") || strings.Contains(mysqlErr.Message, "uq_plugin_name_reservation")) {
+		return ErrNameTaken
+	}
+	return err
+}
+
 // insertPlugin writes one current-state plugin row. Callers hold the
 // transaction and have already locked the category and relation targets.
 //
@@ -175,13 +217,33 @@ func insertPlugin(ctx context.Context, tx *sql.Tx, now interface{}, p model.Plug
 	if listing == "" {
 		listing = model.PluginListingStateDraft
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO plugins (plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,
-creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version_id,current_version,status,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Type, p.IsEmbedded, p.CategoryID, string(p.Tags), p.Publisher, p.OwnerUID, p.SpaceID, p.Visibility, listing, p.CreatorName, p.CreatedByType, p.CreatedByBotUID, p.CreatedByBotName, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, p.CurrentVersion, p.Status, now, now)
+	nameKey, nameScope, err := pluginNameColumns(p.Name, p.Type, p.SpaceID)
 	if err != nil {
-		return wrapped("create", err)
+		return err
+	}
+	if nameKey != nil && !p.IsEmbedded {
+		if err := rejectPluginNameCollision(ctx, tx, p, nameKey.(string), nameScope); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO plugins (plugin_id,plugin_name,plugin_type,is_embedded,category_id,tags_json,publisher,owner_uid,space_id,visibility,listing_state,
+creator_name,created_by_type,created_by_bot_uid,created_by_bot_name,icon,tool_count,manifest_json,plugin_json,attachment_keys_json,manifest_hash,plugin_hash,current_version_id,current_version,status,created_at,updated_at,name_key,published_name_key,name_scope)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Type, p.IsEmbedded, p.CategoryID, string(p.Tags), p.Publisher, p.OwnerUID, p.SpaceID, p.Visibility, listing, p.CreatorName, p.CreatedByType, p.CreatedByBotUID, p.CreatedByBotName, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.CurrentVersionID, p.CurrentVersion, p.Status, now, now, nameKey, nil, nameScope)
+	if err != nil {
+		return wrapped("create", mapPluginNameTaken(err))
 	}
 	return nil
+}
+
+// editableDraftChangelog reads the editing baseline after the caller locks the
+// current plugin. A formal release's note is never a new draft's note.
+func editableDraftChangelog(ctx context.Context, tx *sql.Tx, p *model.Plugin) (sql.NullString, error) {
+	var note sql.NullString
+	if p.CurrentVersionID == nil {
+		return note, nil
+	}
+	err := tx.QueryRowContext(ctx, `SELECT CASE WHEN EXISTS (SELECT 1 FROM plugin_version_releases r WHERE r.plugin_id=v.plugin_id AND r.version_id=v.version_id) THEN NULL ELSE v.changelog END FROM plugin_versions v WHERE v.plugin_id=? AND v.version_id=?`, p.ID, *p.CurrentVersionID).Scan(&note)
+	return note, err
 }
 
 // snapshotVersion appends one immutable plugin_versions row capturing p's current
@@ -480,10 +542,21 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	if scope.Admin {
 		updWhere, updTail = `WHERE plugin_id=? AND deleted_at IS NULL`, []any{topPlugin.ID}
 	}
-	updArgs := append([]any{topPlugin.Name, topPlugin.Type, topPlugin.CategoryID, string(topPlugin.Tags), topPlugin.Publisher, topPlugin.Visibility, topPlugin.Icon, topPlugin.ToolCount, string(topPlugin.Manifest), string(topPlugin.Package), jsonColumn(topPlugin.AttachmentKeys), topPlugin.ManifestHash, topPlugin.PluginHash, topPlugin.Status, now}, updTail...)
-	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
+	nameKey, nameScope, nameErr := pluginNameColumns(topPlugin.Name, topPlugin.Type, topPlugin.SpaceID)
+	if nameErr != nil {
+		return nil, nameErr
+	}
+	// Historical rows with NULL keys are absent from both uniqueness indexes.
+	// Check their draft/released names under the same transaction as the write.
+	if nameKey != nil && !before.IsEmbedded {
+		if err = rejectPluginNameCollision(ctx, tx, topPlugin, nameKey.(string), nameScope); err != nil {
+			return nil, err
+		}
+	}
+	updArgs := append([]any{topPlugin.Name, topPlugin.Type, topPlugin.CategoryID, string(topPlugin.Tags), topPlugin.Publisher, topPlugin.Visibility, topPlugin.Icon, topPlugin.ToolCount, string(topPlugin.Manifest), string(topPlugin.Package), jsonColumn(topPlugin.AttachmentKeys), topPlugin.ManifestHash, topPlugin.PluginHash, topPlugin.Status, now, nameKey, nameScope}, updTail...)
+	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?,name_key=?,name_scope=?
 `+updWhere, updArgs...); err != nil {
-		return nil, wrapped("rebuild", err)
+		return nil, wrapped("rebuild", mapPluginNameTaken(err))
 	}
 	if err = syncDefaultPlacement(ctx, tx, r.id, now, topPlugin.ID, topPlugin.CategoryID); err != nil {
 		return nil, err
@@ -508,6 +581,15 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 	// Snapshot the rebuilt top as a new history version (its content was just
 	// swapped) and advance current_version_id/current_version onto it.
 	if top.SnapshotVersion {
+		if top.Changelog == nil {
+			previous, err := editableDraftChangelog(ctx, tx, before)
+			if err != nil {
+				return nil, err
+			}
+			if previous.Valid {
+				top.Changelog = &previous.String
+			}
+		}
 		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, topPlugin, top.Relations, top.Changelog, top.OperatorID, r.references); err != nil {
 			return nil, err
 		}
@@ -521,6 +603,7 @@ func (r *Repo) RebuildGraph(ctx context.Context, scope Scope, top Mutation, newC
 			return nil, err
 		}
 	}
+	sync.DraftRevision = savedDraftRevision(*before, topPlugin, sync.NewVersionID, false, top.SnapshotVersion)
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -584,6 +667,9 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	before, err := getOwnedForUpdate(ctx, tx, scope, m.Plugin.ID)
 	if err != nil {
 		return nil, err
+	}
+	if m.ExpectedDraftRevision != nil && *m.ExpectedDraftRevision != model.PluginDraftRevision(before) {
+		return nil, ErrConflict
 	}
 	// Compare only after acquiring the same row lock used for the mutation.
 	// A stale writer must not alter content, relations, snapshots or audit.
@@ -711,11 +797,22 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if resetListing {
 		listingReset = `listing_state='draft',`
 	}
-	updArgs := append([]any{p.Name, p.Type, p.CategoryID, string(p.Tags), p.Publisher, p.Visibility, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.Status, now}, updTail...)
-	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?
+	nameKey, nameScope, nameErr := pluginNameColumns(p.Name, p.Type, p.SpaceID)
+	if nameErr != nil {
+		return nil, nameErr
+	}
+	// Historical rows with NULL keys are absent from both uniqueness indexes.
+	// Check their draft/released names under the same transaction as the write.
+	if nameKey != nil && !before.IsEmbedded {
+		if err = rejectPluginNameCollision(ctx, tx, p, nameKey.(string), nameScope); err != nil {
+			return nil, err
+		}
+	}
+	updArgs := append([]any{p.Name, p.Type, p.CategoryID, string(p.Tags), p.Publisher, p.Visibility, p.Icon, p.ToolCount, string(p.Manifest), string(p.Package), jsonColumn(p.AttachmentKeys), p.ManifestHash, p.PluginHash, p.Status, now, nameKey, nameScope}, updTail...)
+	_, err = tx.ExecContext(ctx, `UPDATE plugins SET plugin_name=?,plugin_type=?,category_id=?,tags_json=?,publisher=?,visibility=?,`+listingReset+`icon=?,tool_count=?,manifest_json=?,plugin_json=?,attachment_keys_json=?,manifest_hash=?,plugin_hash=?,status=?,updated_at=?,name_key=?,name_scope=?
 `+updWhere, updArgs...)
 	if err != nil {
-		return nil, wrapped("update", err)
+		return nil, wrapped("update", mapPluginNameTaken(err))
 	}
 	// Placements filter list pages by their own category copy; keep it in sync
 	// with the current-state category on every update — including clearing it to
@@ -749,8 +846,21 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 		(p.CurrentVersion == nil || *p.CurrentVersion == *before.CurrentVersion)
 	relationsChanged := len(sync.Created) > 0 || len(sync.Updated) > 0 || len(sync.Deleted) > 0
 	sidecarUnchanged := sameAttachmentKeys(p.AttachmentKeys, before.AttachmentKeys)
-	hasChangelog := m.Changelog != nil && *m.Changelog != ""
-	if m.SnapshotVersion && (!contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || hasChangelog) {
+	changelogChanged := false
+	if m.SnapshotVersion || m.Changelog != nil {
+		previous, err := editableDraftChangelog(ctx, tx, before)
+		if err != nil {
+			return nil, err
+		}
+		if m.Changelog != nil {
+			changelogChanged = previous.String != *m.Changelog
+		} else if previous.Valid {
+			// Omission preserves an editable draft note; explicit empty clears.
+			// The query above deliberately excludes formal release notes.
+			m.Changelog = &previous.String
+		}
+	}
+	if m.SnapshotVersion && (!contentUnchanged || !labelUnchanged || relationsChanged || !sidecarUnchanged || changelogChanged) {
 		if sync.NewVersionID, err = snapshotVersion(ctx, tx, r.id, now, p, m.Relations, m.Changelog, m.OperatorID, r.references); err != nil {
 			return nil, err
 		}
@@ -778,6 +888,7 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err = insertAudit(ctx, tx, r.id(), now, p, "update", m, before.PluginHash, p.PluginHash); err != nil {
 		return nil, err
 	}
+	sync.DraftRevision = savedDraftRevision(*before, p, sync.NewVersionID, resetListing, m.SnapshotVersion)
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -1481,4 +1592,28 @@ func ensureVisibleDefaultPlacement(ctx context.Context, tx *sql.Tx, newID func()
 		return wrapped("insert default placement", err)
 	}
 	return nil
+}
+
+func savedDraftRevision(before, written model.Plugin, newVersion string, resetListing, snapshotEnabled bool) string {
+	requestedVersion := written.CurrentVersion
+	written.OwnerUID, written.SpaceID = before.OwnerUID, before.SpaceID
+	written.ListingState = before.ListingState
+	written.CurrentVersionID, written.CurrentVersion = before.CurrentVersionID, before.CurrentVersion
+	if newVersion != "" {
+		written.CurrentVersionID = &newVersion
+		label := "1.0.0"
+		// The snapshot label is supplied by the write, or defaults in snapshotVersion.
+		if requestedVersion != nil && *requestedVersion != "" {
+			label = *requestedVersion
+		}
+		written.CurrentVersion = &label
+	}
+	if snapshotEnabled && written.Type == model.PluginTypeConnector && requestedVersion != nil && *requestedVersion != "" {
+		// Connectors persist the label without creating a version pointer.
+		written.CurrentVersion = requestedVersion
+	}
+	if resetListing {
+		written.ListingState = model.PluginListingStateDraft
+	}
+	return model.PluginDraftRevision(&written)
 }

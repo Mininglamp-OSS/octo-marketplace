@@ -23,6 +23,7 @@ var (
 	ErrAttemptExpired = errors.New("installation retry window expired")
 	ErrNotFound       = errors.New("plugin not found")
 	ErrConflict       = errors.New("plugin conflict")
+	ErrNameTaken      = errors.New("plugin name is already taken")
 	ErrRelationInUse  = errors.New("plugin is referenced by another live plugin")
 	ErrInvalidRequest = errors.New("invalid plugin request")
 	ErrTooLarge       = errors.New("plugin artifact exceeds size limit")
@@ -235,6 +236,9 @@ type ListParams struct {
 }
 
 type Detail struct {
+	DraftRevision string
+	// DraftChangelog is populated only by the explicit owner editing read.
+	DraftChangelog   *string
 	Plugin           *model.Plugin
 	Relations        []model.PluginRelation
 	DependencyIssues []model.DependencyIssue
@@ -263,6 +267,7 @@ type RelationResult struct {
 }
 
 type WriteRequest struct {
+	ExpectedDraftRevision    *string
 	expectedCurrentVersionID string
 	// grandfatheredVersion is the plugin's STORED version label, set only by
 	// Service.update. A label minted before the format was tightened (v999,
@@ -719,6 +724,11 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if old.IsEmbedded {
 		return nil, ErrNotFound
 	}
+	// Report a stale edit before validating its now-obsolete version or audience.
+	// Repo.Update repeats this check under the write lock to close the read race.
+	if req.ExpectedDraftRevision != nil && *req.ExpectedDraftRevision != model.PluginDraftRevision(old) {
+		return nil, ErrConflict
+	}
 	if req.Type != old.Type {
 		return nil, ErrInvalidRequest
 	}
@@ -820,6 +830,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m.SnapshotVersion = true
 	m.Changelog = req.Changelog
 	m.ExpectedCurrentVersionID = req.expectedCurrentVersionID
+	m.ExpectedDraftRevision = req.ExpectedDraftRevision
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
 	// restate it against the row it locks, for the same reason the two listing
 	// decisions below are re-derived: an approval that publishes a frozen label can
@@ -872,7 +883,11 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if sync != nil && sync.Relations != nil {
 		rels = sync.Relations
 	}
-	return &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}, nil
+	out := &Detail{Plugin: p, Relations: rels, RelationResult: relationResult(sync)}
+	if sync != nil {
+		out.DraftRevision = sync.DraftRevision
+	}
+	return out, nil
 }
 
 func relationResult(sync *pluginrepo.RelationSync) *RelationResult {
@@ -960,6 +975,11 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	name := strings.TrimSpace(req.Name)
 	if !validName(name) || !validPluginType(req.Type) || !validVisibility(req.Visibility, c.IsSystemAdmin) {
 		return nil, nil, ErrInvalidRequest
+	}
+	if req.Type == model.PluginTypeExpert || req.Type == model.PluginTypeSkill || req.Type == model.PluginTypeExpertTeam {
+		if _, err := model.NormalizePluginName(name); err != nil {
+			return nil, nil, ErrInvalidRequest
+		}
 	}
 	if s.references {
 		if err := rejectInlineCapabilities(req.Type, req.Manifest); err != nil {
@@ -1114,6 +1134,10 @@ func mapStoreError(err error) error {
 		return ErrNotFound
 	case errors.Is(err, pluginrepo.ErrConflict):
 		return ErrConflict
+	case errors.Is(err, pluginrepo.ErrNameTaken):
+		return ErrNameTaken
+	case errors.Is(err, pluginrepo.ErrInvalidName), errors.Is(err, model.ErrPluginNameEmpty), errors.Is(err, model.ErrPluginNameTooLong):
+		return ErrInvalidRequest
 	case errors.Is(err, pluginrepo.ErrRelationInUse):
 		return ErrRelationInUse
 	case errors.Is(err, pluginrepo.ErrGraphTooLarge):

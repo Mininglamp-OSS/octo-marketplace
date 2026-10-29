@@ -57,6 +57,23 @@ func (s *Service) CurrentDetail(ctx context.Context, caller Caller, pluginID str
 	if d.Plugin.OwnerUID != caller.UID || d.Plugin.SpaceID == nil || *d.Plugin.SpaceID != caller.SpaceID || d.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
+	// Never prefill a new draft with the previous formal release's notes.
+	note := ""
+	if d.Plugin.CurrentVersionID != nil {
+		store, err := s.versionStore()
+		if err != nil {
+			return nil, err
+		}
+		v, err := store.GetManagedVersion(ctx, scope(caller), d.Plugin.ID, *d.Plugin.CurrentVersionID)
+		if err != nil {
+			return nil, mapStoreError(err)
+		}
+		if v.Release == nil && v.Changelog != nil {
+			note = *v.Changelog
+		}
+	}
+	d.DraftChangelog = &note
+	d.DraftRevision = model.PluginDraftRevision(d.Plugin)
 	return d, nil
 }
 

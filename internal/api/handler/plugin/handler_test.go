@@ -626,6 +626,22 @@ func TestWriteServiceErrorMapsArtifactConditions(t *testing.T) {
 		})
 	}
 }
+func TestUpsertNameTakenIsStableConflict(t *testing.T) {
+	f := &fakeService{err: pluginsvc.ErrNameTaken}
+	body := []byte(`{"plugin":{"plugin_name":"Demo","plugin_type":"skill","visibility":"private","tags":[],"manifest_json":{},"plugin_json":{}},"relations":[]}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/upsert", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	testEngine(f).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"code":"DUPLICATE"`)) ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`"field":"plugin_name"`)) ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`"conflict_reason":"name_taken"`)) {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
 
 func TestLegacyInstallOptionalKeyAndUnknownOutcome(t *testing.T) {
 	for _, key := range []string{"", "existing-client-operation"} {
@@ -648,5 +664,28 @@ func TestLegacyInstallOptionalKeyAndUnknownOutcome(t *testing.T) {
 	testEngine(f).ServeHTTP(rec, req)
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), `"can_retry_same_key":false`) {
 		t.Fatalf("keyless timeout suggests unsafe replay: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadCreationNameTakenRequiresRename(t *testing.T) {
+	for _, kind := range []string{"skill", "expert", "expert_team"} {
+		t.Run(kind, func(t *testing.T) {
+			f := &fakeService{err: pluginsvc.ErrNameTaken}
+			body := []byte(`{"plugin":{"plugin_name":"Demo","plugin_type":"` + kind + `","visibility":"private","tags":[],"manifest_json":{},"plugin_json":{}},"relations":[]}`)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/upsert", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			testEngine(f).ServeHTTP(rec, req)
+			if rec.Code != 409 || !bytes.Contains(rec.Body.Bytes(), []byte(`"code":"DUPLICATE"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"field":"plugin_name"`)) || !bytes.Contains(rec.Body.Bytes(), []byte("Change the display name")) {
+				t.Fatalf("rename response: %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/import", bytes.NewBufferString(`{"parse_task_id":"task-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	testEngine(&fakeService{err: pluginsvc.ErrNameTaken}).ServeHTTP(rec, req)
+	if rec.Code != 409 || !bytes.Contains(rec.Body.Bytes(), []byte(`"code":"DUPLICATE"`)) {
+		t.Fatalf("skill upload response: %d %s", rec.Code, rec.Body.String())
 	}
 }
