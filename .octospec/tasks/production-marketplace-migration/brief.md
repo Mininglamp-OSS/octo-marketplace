@@ -1,0 +1,9 @@
+# Marketplace single-database migration
+Goal: convert the current existing database in place, using one MYSQL_DSN. Copying production data to test is separate environment preparation.
+Load-bearing: restore missing Skill descriptions only from intact original frontmatter and block unavailable metadata; platform/Space/owner isolation, agreed duplicate policy, full file bytes, valid releases and fixed references, stable IDs, transactional receipts and same-run resume, immutable history, safe error reporting.
+Scope: Go command/core/tests/docs plus the required platform attachment ownership support in Marketplace. No database export/restore, schema upgrade, deployment, feature-gate removal or cross-database copying.
+Acceptance: planner negative isolation cases; database binding; private checkpoint integrity; object digest and ownership; conversion and retry tests; full Go test/vet/build. Real MySQL and test environment runs must be reported separately when actually executed.
+Operator guide: docs/production-marketplace-migration.md.
+
+Decision for the replacement in-place migration: preserve existing MCP endpoint, authentication and extension configuration as requested, superseding the retired backfill sanitizer. Existing literal values remain readable to the source resource's authorized audience; this is not a secret-reference conversion or a claim that credentials are absent. Extracted connectors must retain the source owner/Space/visibility/listing boundary; private checkpoint/report rules still apply. Persisted-package and system/Space/private read-audience regressions cover this decision.
+Managed scalar icons retain the proven global upload namespace independently of resource IDs, with frozen bytes, source digest/size evidence and final object inspection. External icon URLs are preserved but not fetched. Checkpoint v5 requires this new evidence contract and rejects prior format versions.

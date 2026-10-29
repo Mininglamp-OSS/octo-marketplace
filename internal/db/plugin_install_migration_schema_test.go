@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Mininglamp-OSS/octo-marketplace/internal/backfill/stockmigration"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	migrationsql "github.com/Mininglamp-OSS/octo-marketplace/migrations/sql"
 	migrate "github.com/rubenv/sql-migrate"
@@ -76,23 +75,22 @@ func TestInstallMigrationIndexesUpgradePreservesDataAndScanPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	seedStockRoot(t, database, "index-upgrade", "private", "published")
-	evidence, err := stockmigration.Read(ctx, database, 1000)
-	if err != nil {
+	seedMigrationRoot(t, database, "index-upgrade", "private", "published")
+	// Audit retention is a schema contract independent of the retired data tool.
+	if _, err := database.Exec(`INSERT INTO plugin_stock_migration_batches VALUES ('index-batch','active',NOW(3))`); err != nil {
 		t.Fatal(err)
 	}
-	plan := stockmigration.Build(evidence)
-	if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "index-batch", "index-upgrade", plan.Digest, true); err != nil {
+	if _, err := database.Exec(`INSERT INTO plugin_stock_migration_roots VALUES ('index-batch','index-upgrade',REPEAT('a',64),JSON_ARRAY(),JSON_OBJECT('saved','before'),JSON_OBJECT('saved','after'),JSON_ARRAY(),NOW(3))`); err != nil {
 		t.Fatal(err)
 	}
 	var originalAudit string
 	const audit = `SELECT CONCAT(source_digest,mappings_json,before_json,after_json,node_states_json) FROM plugin_stock_migration_roots WHERE batch_id='index-batch'`
-	if err = database.QueryRow(audit).Scan(&originalAudit); err != nil {
+	if err := database.QueryRow(audit).Scan(&originalAudit); err != nil {
 		t.Fatal(err)
 	}
 	repo := pluginrepo.New(database)
 	attempt := pluginrepo.InstallAttempt{WorkspaceID: "workspace", KeyDigest: strings.Repeat("a", 64), PluginID: "index-upgrade", RootVersionID: "version", AdapterVersion: "1", InputFingerprint: strings.Repeat("b", 64), RequestFingerprint: strings.Repeat("c", 64)}
-	if _, err = database.ExecContext(ctx, `INSERT INTO plugin_install_attempts(space_id,caller_uid,workspace_id,key_digest,plugin_id,root_version_id,adapter_version,input_fingerprint,request_fingerprint,created_at) VALUES (?,?,?,?,?,?,?,?,?,NOW(3))`, tenantScope().SpaceID, tenantScope().CallerUID, attempt.WorkspaceID, attempt.KeyDigest, attempt.PluginID, attempt.RootVersionID, attempt.AdapterVersion, attempt.InputFingerprint, attempt.RequestFingerprint); err != nil {
+	if _, err := database.ExecContext(ctx, `INSERT INTO plugin_install_attempts(space_id,caller_uid,workspace_id,key_digest,plugin_id,root_version_id,adapter_version,input_fingerprint,request_fingerprint,created_at) VALUES (?,?,?,?,?,?,?,?,?,NOW(3))`, tenantScope().SpaceID, tenantScope().CallerUID, attempt.WorkspaceID, attempt.KeyDigest, attempt.PluginID, attempt.RootVersionID, attempt.AdapterVersion, attempt.InputFingerprint, attempt.RequestFingerprint); err != nil {
 		t.Fatal(err)
 	}
 	source := &migrate.EmbedFileSystemMigrationSource{FileSystem: migrationsql.FS, Root: "."}

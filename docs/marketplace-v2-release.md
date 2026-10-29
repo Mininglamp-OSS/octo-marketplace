@@ -35,7 +35,7 @@
 ## 2. 上线前与灰度验收
 
 1. **备份并盘点。** 备份数据库、对象存储、当前镜像和开关配置；在隔离副本运行
-   [现有迁移工具](marketplace-stock-migration.md)的只读预览。分别记录已发布、
+   [现有迁移工具](production-marketplace-migration.md)的只读预览。分别记录已发布、
    下架、内嵌旧图、无正式版本、引用索引缺失资源。预览不是转换授权。
 2. **核对 Fleet 部署。** 不需要更新旧客户端，但服务端 Fleet 必须已经提供当前
    capability installation 契约和幂等回执。先在测试工作区使用真实用户凭证分别
@@ -84,13 +84,13 @@
 
 当某个资源确实需要重新发布或安装时，由 owner/运维按以下顺序单独处理：
 
-1. 在隔离副本对该 root 和所需依赖做只读预览，核对 owner、Space、visibility、
-   文件完整性和版本映射。现有 CLI 仍会读取全量有界清单，`--root-id` 只限制写入
-   目标，不代表只锁定该子图；必须使用受控维护窗口，不能在在线安装请求中调用。
-2. 使用现有工具的 `--apply --root-id ROOT_ID --expected-digest DIGEST --batch-id ...`
-   明确转换这一个根，按技能/成员/团依赖顺序处理。命令和必要前置条件见
-   [迁移工具说明](marketplace-stock-migration.md)。有异常时停止，不猜版本或放宽
-   private 权限。工具不支持安全转换的形态保持原状，先修复数据/工具再重试。
+1. 在隔离副本运行 [单库迁移工具](production-marketplace-migration.md) 的全库只读预览，
+   核对 owner、Space、visibility、文件完整性和版本映射。必须使用暂停写入的维护窗口，
+   不能在在线安装请求中调用。
+2. 使用 `marketplace-migrate --database CURRENT_DATABASE --apply --state-file /secure/run.state`
+   执行同库转换，按 Skill/MCP、专家、专家团的依赖顺序处理；中断后使用同一恢复文件重试。
+   如需 frontend-dev 中文选择，按工具说明提供 policy。旧的 root/digest/batch 参数已移除。
+   有异常时停止，不猜版本或放宽 private 权限；先修复数据或工具再重试。
 3. 转换保留下架状态。owner 核对后按正常发布流程逐个恢复需要的依赖与来源；Admin
    沿用主干已有直接生效规则，不新增审核。根仍下架、依赖下架或缺少正式版本/pin
    时，不允许新安装。只有整个图满足发布与访问规则后，才重新尝试安装。

@@ -451,7 +451,7 @@ func (s *Service) freezeSubmission(ctx context.Context, caller Caller, detail *D
 			}
 		}
 		pkg := reinjectUpdateStorageKeys(params.Package, plugin.Package, plugin.AttachmentKeys)
-		docs, err := CanonicalizeDocuments(plugin.Name, plugin.Type, plugin.Tags, params.Manifest, pkg, caller.SpaceID)
+		docs, err := canonicalizePluginDocuments(plugin, plugin.Name, plugin.Type, plugin.Tags, params.Manifest, pkg, caller.SpaceID)
 		if err != nil {
 			// CanonicalizeDocuments errors are all ErrInvalidRequest; surface as
 			// manifest_json so the client knows which field to fix.
@@ -488,7 +488,7 @@ func (s *Service) freezeSubmission(ctx context.Context, caller Caller, detail *D
 		}
 	}
 	docs := &CanonicalDocuments{Manifest: snap.Manifest, Package: snap.Package, PluginHash: snap.PluginHash, AttachmentKeys: snap.AttachmentKeys}
-	if err := s.freezeVersionArtifacts(ctx, plugin.Type, docs, caller.SpaceID); err != nil {
+	if err := s.freezeVersionArtifacts(ctx, plugin.Type, docs, caller.SpaceID, plugin); err != nil {
 		return pluginrepo.FrozenSnapshot{}, err
 	}
 	snap.Package, snap.PluginHash, snap.AttachmentKeys = docs.Package, docs.PluginHash, docs.AttachmentKeys
@@ -551,14 +551,14 @@ func (s *Service) freezeSubmissionFromParseTask(ctx context.Context, caller Call
 	// but buildImportedSkillWrite also uses splitStorageKeys through buildWrite's
 	// CanonicalizeDocuments in the Create/Update flow; here we only built the
 	// WriteRequest).
-	docs, err := CanonicalizeDocuments(plugin.Name, plugin.Type, req.Tags, req.Manifest, req.Package, caller.SpaceID)
+	docs, err := canonicalizePluginDocuments(plugin, plugin.Name, plugin.Type, req.Tags, req.Manifest, req.Package, caller.SpaceID)
 	if err != nil {
 		s.deleteObjects(ctx, uploadedKeys...)
 		*uploaded = (*uploaded)[:0]
 		return pluginrepo.FrozenSnapshot{}, &ReviewFieldError{Field: "parse_task_id", Reason: "invalid_package", Err: err}
 	}
 
-	if err := s.freezeVersionArtifacts(ctx, plugin.Type, docs, caller.SpaceID); err != nil {
+	if err := s.freezeVersionArtifacts(ctx, plugin.Type, docs, caller.SpaceID, plugin); err != nil {
 		return pluginrepo.FrozenSnapshot{}, err
 	}
 	// Relations: if the submit body included relations, use them; otherwise
