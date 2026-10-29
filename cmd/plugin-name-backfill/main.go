@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"sort"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -31,6 +32,9 @@ type row struct {
 	PublishedKey  string  `json:"-"`
 	PublishedName string  `json:"-"`
 	Scope         string  `json:"-"`
+	Visibility    string  `json:"-"`
+	ListingState  string  `json:"-"`
+	Status        int     `json:"-"`
 }
 
 type duplicateGroup struct {
@@ -81,7 +85,7 @@ func run(args []string) error {
 }
 
 func runBackfill(ctx context.Context, db *sql.DB, apply bool, output io.Writer) error {
-	rows, err := readRows(ctx, db)
+	rows, err := readRows(ctx, db, false)
 	if err != nil {
 		return err
 	}
@@ -95,32 +99,36 @@ func runBackfill(ctx context.Context, db *sql.DB, apply bool, output io.Writer) 
 	if !apply {
 		return json.NewEncoder(output).Encode(out)
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for _, r := range rows {
-		if r.Key == "" || r.DeletedAt != nil {
+	// Rebuild the entire operator inventory under locking reads. This
+	// catches new global reservations and participation changes after preview.
+	locked, err := readRows(ctx, tx, true)
+	if err != nil {
+		return err
+	}
+	lockedReport := analyzeRows(locked)
+	if len(lockedReport.Invalid) > 0 || len(lockedReport.DuplicateGroups) > 0 {
+		if err := json.NewEncoder(output).Encode(lockedReport); err != nil {
+			return err
+		}
+		return fmt.Errorf("backfill blocked: locked inventory has invalid names or duplicate groups")
+	}
+	if !reflect.DeepEqual(rows, locked) {
+		return fmt.Errorf("backfill inventory changed after snapshot; re-run")
+	}
+	for _, r := range locked {
+		if r.Key == "" || r.DeletedAt != nil || r.IsEmbedded {
 			continue
-		}
-		// Lock and revalidate the row against the snapshot before writing. A
-		// concurrent rename must abort the backfill rather than be overwritten by
-		// a stale key.
-		var name, typ, publishedName string
-		var scope sql.NullString
-		var deleted sql.NullString
-		if err := tx.QueryRowContext(ctx, `SELECT p.plugin_name,p.plugin_type,p.space_id,DATE_FORMAT(p.deleted_at,'%Y-%m-%dT%H:%i:%s.%fZ'),COALESCE(JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name')),'') FROM plugins p LEFT JOIN plugin_versions pv ON pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id WHERE p.plugin_id=? FOR UPDATE`, r.ID).Scan(&name, &typ, &scope, &deleted, &publishedName); err != nil {
-			return fmt.Errorf("lock %s: %w", r.ID, err)
-		}
-		if name != r.Name || typ != r.Type || (scope.Valid != (r.SpaceID != nil)) || (scope.Valid && r.SpaceID != nil && scope.String != *r.SpaceID) || deleted.Valid != (r.DeletedAt != nil) || publishedName != r.PublishedName {
-			return fmt.Errorf("backfill %s: row changed after snapshot; re-run", r.ID)
 		}
 		var published any
 		if r.PublishedKey != "" {
 			published = r.PublishedKey
 		}
-		res, err := tx.ExecContext(ctx, `UPDATE plugins SET name_key=?,published_name_key=?,name_scope=? WHERE plugin_id=? AND deleted_at IS NULL`, r.Key, published, r.Scope, r.ID)
+		res, err := tx.ExecContext(ctx, `UPDATE plugins SET name_key=?,published_name_key=?,name_scope=? WHERE plugin_id=? AND deleted_at IS NULL AND is_embedded=0`, r.Key, published, r.Scope, r.ID)
 		if err != nil {
 			return fmt.Errorf("backfill %s: %w", r.ID, err)
 		}
@@ -142,6 +150,7 @@ func analyzeRows(rows []row) report {
 	out := report{Total: len(rows)}
 	groups := map[string]*duplicateGroup{}
 	seenInGroup := map[string]map[string]struct{}{}
+	candidates := map[string][]int{}
 	for i := range rows {
 		r := &rows[i]
 		if r.Type != string(model.PluginTypeExpert) && r.Type != string(model.PluginTypeSkill) && r.Type != string(model.PluginTypeExpertTeam) {
@@ -179,6 +188,8 @@ func analyzeRows(rows []row) report {
 			r.PublishedKey = publishedKey
 		}
 		for _, key := range keys {
+			candidateKey := r.Type + "\x00" + key
+			candidates[candidateKey] = append(candidates[candidateKey], i)
 			gkey := scope + "\x00" + r.Type + "\x00" + key
 			g := groups[gkey]
 			if g == nil {
@@ -191,6 +202,36 @@ func analyzeRows(rows []row) report {
 			}
 			seenInGroup[gkey][r.ID] = struct{}{}
 			g.IDs = append(g.IDs, r.ID)
+		}
+	}
+	// Only the effective public/system market name crosses scope boundaries;
+	// both draft and published names still reserve within their own scope.
+	for _, r := range rows {
+		if r.Key == "" || r.IsEmbedded || r.DeletedAt != nil || r.Status != 1 || r.ListingState != "published" || (r.Visibility != "public" && r.Visibility != "system") {
+			continue
+		}
+		name := r.PublishedKey
+		if name == "" {
+			name = r.Key
+		}
+		for _, index := range candidates[r.Type+"\x00"+name] {
+			other := rows[index]
+			if other.ID == r.ID || other.Scope == r.Scope {
+				continue
+			}
+			gkey := "\x00global\x00" + r.Type + "\x00" + name
+			g := groups[gkey]
+			if g == nil {
+				g = &duplicateGroup{Scope: "global-market", Type: r.Type, Key: name}
+				groups[gkey] = g
+				seenInGroup[gkey] = map[string]struct{}{}
+			}
+			for _, id := range []string{r.ID, other.ID} {
+				if _, ok := seenInGroup[gkey][id]; !ok {
+					g.IDs = append(g.IDs, id)
+					seenInGroup[gkey][id] = struct{}{}
+				}
+			}
 		}
 	}
 	for _, g := range groups {
@@ -211,10 +252,18 @@ func analyzeRows(rows []row) report {
 	return out
 }
 
-func readRows(ctx context.Context, db *sql.DB) ([]row, error) {
-	rows, err := db.QueryContext(ctx, `SELECT p.plugin_id,p.plugin_name,p.plugin_type,p.is_embedded,p.space_id,DATE_FORMAT(p.deleted_at,'%Y-%m-%dT%H:%i:%s.%fZ'),COALESCE(JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name')),'')
+type rowReader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func readRows(ctx context.Context, db rowReader, lock bool) ([]row, error) {
+	query := `SELECT p.plugin_id,p.plugin_name,p.plugin_type,p.is_embedded,p.space_id,DATE_FORMAT(p.deleted_at,'%Y-%m-%dT%H:%i:%s.%fZ'),COALESCE(JSON_UNQUOTE(JSON_EXTRACT(pv.manifest_json,'$.plugin_name')),''),p.visibility,p.listing_state,p.status
 FROM plugins p LEFT JOIN plugin_versions pv ON pv.plugin_id=p.plugin_id AND pv.version_id=p.published_version_id
-WHERE p.plugin_type IN ('expert','skill','expert_team') ORDER BY p.plugin_id`)
+WHERE p.plugin_type IN ('expert','skill','expert_team') ORDER BY p.plugin_id`
+	if lock {
+		query += " FOR UPDATE"
+	}
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +272,7 @@ WHERE p.plugin_type IN ('expert','skill','expert_team') ORDER BY p.plugin_id`)
 	for rows.Next() {
 		var r row
 		var space, deleted sql.NullString
-		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.IsEmbedded, &space, &deleted, &r.PublishedName); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.IsEmbedded, &space, &deleted, &r.PublishedName, &r.Visibility, &r.ListingState, &r.Status); err != nil {
 			return nil, err
 		}
 		if space.Valid {

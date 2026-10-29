@@ -311,12 +311,16 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 	if state != "active" {
 		return 0, ErrConflict
 	}
-	var exists int
-	if e = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugin_stock_migration_roots WHERE batch_id=? AND root_plugin_id=?`, batch, root).Scan(&exists); e != nil {
-		return 0, ErrRead
-	}
-	if exists > 0 {
+	var appliedDigest string
+	e = tx.QueryRowContext(ctx, `SELECT source_digest FROM plugin_stock_migration_roots WHERE batch_id=? AND root_plugin_id=?`, batch, root).Scan(&appliedDigest)
+	if e == nil {
+		if appliedDigest != digest {
+			return 0, ErrConflict
+		}
 		return 0, tx.Commit()
+	}
+	if !errors.Is(e, sql.ErrNoRows) {
+		return 0, ErrRead
 	}
 	d, e := read(ctx, tx, limit, true)
 	if e != nil {

@@ -13,7 +13,10 @@ Marketplace display names are unique per Space and per Plugin type:
   participate under the same name.
 - Expert and Skill names are checked independently, so an Expert and a Skill may
   share a name.
-- The same name may exist in different Spaces.
+- The same name may exist in different Spaces, except that active published
+  public/system market names reserve the released name across Spaces. An
+  unreleased global draft name does not participate outside its own scope.
+  The backfill reports cross-Space collisions with scope `global-market`.
 - Soft-deleted rows (`deleted_at IS NOT NULL`) do not reserve a name.
 - Delisted rows are not deleted and continue to reserve their name.
 - With version management, the market displays the published snapshot's name,
@@ -101,3 +104,8 @@ The stock-migration tool blocks an extracted Expert/Skill whose normalized name
 is already occupied by another active plugin in the same Space. It never appends
 an installation suffix or silently renames a market display name. An operator
 must rename/reuse the source and re-run preview before applying that root.
+
+Apply re-reads the full name inventory under transaction locks and repeats the
+global-name analysis before writing. Changed names, embedded participation,
+Space, visibility, listing state or status abort the run rather than applying
+stale keys. This is an operator-only, database-wide maintenance operation.

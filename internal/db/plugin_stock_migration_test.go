@@ -211,6 +211,9 @@ func TestStockMigrationRehearsalResumeRollbackAndHistoricalIntegrity(t *testing.
 	if err != nil || n != 4 {
 		t.Fatalf("apply one nodes%d err%v", n, err)
 	}
+	if n, err = stockmigration.ApplyRoot(ctx, database, 1000, "rehearsal", "one", strings.Repeat("f", 64), true); !errors.Is(err, stockmigration.ErrConflict) || n != 0 {
+		t.Fatalf("mismatched replay accepted: nodes=%d err=%v", n, err)
+	}
 	if n, err = stockmigration.ApplyRoot(ctx, database, 1000, "rehearsal", "one", plan.Digest, true); err != nil || n != 0 {
 		t.Fatalf("repeat %d %v", n, err)
 	}
