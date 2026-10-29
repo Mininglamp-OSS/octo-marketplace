@@ -32,7 +32,7 @@ func (e *CapabilityAPIError) Error() string { return "Fleet capability installat
 // and identical assembled bytes on retry; an uncertain result never falls back
 // to the legacy per-resource installer. c.http also disables redirects.
 func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspaceID, key string, in CapabilityInstallRequest) (*CapabilityInstallResult, error) {
-	body, err := json.Marshal(in)
+	body, err := MarshalCapabilityInstallRequest(in)
 	if err != nil {
 		return nil, errors.New("cannot encode capability installation")
 	}
@@ -101,7 +101,9 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	var envelope struct {
 		Data *CapabilityInstallResult `json:"data"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil || !validCapabilityResult(in.Definition, *envelope.Data) {
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil ||
+		(len(in.Definition.Connectors) > 0 && !capabilityConnectorNullableFieldsPresent(raw)) ||
+		!validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire) {
 		return nil, errors.New("invalid capability installation result; retry with the same idempotency key")
 	}
 	out := envelope.Data
@@ -118,7 +120,45 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	return out, nil
 }
 
-func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult) bool {
+func capabilityConnectorNullableFieldsPresent(raw []byte) bool {
+	var envelope struct {
+		Data struct {
+			Connectors []struct {
+				Version     json.RawMessage `json:"version"`
+				MarketMCPID json.RawMessage `json:"market_mcp_id"`
+			} `json:"connectors"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	for _, connector := range envelope.Data.Connectors {
+		if connector.Version == nil || connector.MarketMCPID == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult, legacySkillWire bool) bool {
+	connectorIDs, ok := validCapabilityConnectorResults(def.Connectors, out.Connectors)
+	if !ok {
+		return false
+	}
+	if len(def.Experts) == 0 {
+		return len(def.Connectors) > 0 &&
+			len(def.Skills) == 0 &&
+			def.ExpertTeam == nil &&
+			out.Type == "connectors" &&
+			out.ExpertID == "" &&
+			out.ExpertTeamID == "" &&
+			out.LeaderExpertID == "" &&
+			len(out.Experts) == 0 &&
+			len(out.Skills) == 0
+	}
+	if out.Type == "connectors" {
+		return false
+	}
 	if len(out.Experts) != len(def.Experts) || len(out.Skills) != len(def.Skills) {
 		return false
 	}
@@ -135,41 +175,71 @@ func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult
 			return false
 		}
 	}
-	skills := make(map[string]string, len(out.Skills))
+	skills := make(map[string]*CapabilitySkillResult, len(out.Skills))
 	skillIDs := make(map[string]bool, len(out.Skills))
-	for _, skill := range out.Skills {
-		if skill.SkillID == "" || skills[skill.Name] != "" || skillIDs[skill.SkillID] {
+	for i := range out.Skills {
+		skill := &out.Skills[i]
+		if skill.SkillID == "" || skills[skill.Name] != nil || skillIDs[skill.SkillID] {
 			return false
 		}
-		skills[skill.Name] = skill.SkillID
+		skills[skill.Name] = skill
 		skillIDs[skill.SkillID] = true
 	}
 	for _, skill := range def.Skills {
-		if skills[skill.Name] == "" {
+		actual := skills[skill.Name]
+		if actual == nil {
+			return false
+		}
+		if !legacySkillWire && (!sameCapabilityNullableString(actual.Version, skill.Version) ||
+			actual.MarketSkillID != skill.MarketSkillID) {
 			return false
 		}
 	}
 	expectedSkills := make(map[string]map[string]bool, len(def.Experts))
+	expectedConnectors := make(map[string]map[string]bool, len(def.Experts))
 	for _, expert := range def.Experts {
-		refs := make(map[string]bool, len(expert.SkillNames))
+		if _, exists := expectedConnectors[expert.Name]; exists {
+			return false
+		}
+		skillRefs := make(map[string]bool, len(expert.SkillNames))
 		for _, name := range expert.SkillNames {
-			if skills[name] == "" {
+			if skills[name] == nil {
 				return false
 			}
-			refs[skills[name]] = true
+			skillRefs[skills[name].SkillID] = true
 		}
-		expectedSkills[expert.Name] = refs
+		expectedSkills[expert.Name] = skillRefs
+
+		connectorRefs := make(map[string]bool, len(expert.ConnectorNames))
+		for _, name := range expert.ConnectorNames {
+			id := connectorIDs[name]
+			if id == "" {
+				return false
+			}
+			connectorRefs[id] = true
+		}
+		expectedConnectors[expert.Name] = connectorRefs
 	}
 	for _, expert := range out.Experts {
-		refs := expectedSkills[expert.Name]
-		if len(refs) != len(expert.SkillIDs) {
+		skillRefs := expectedSkills[expert.Name]
+		if len(skillRefs) != len(expert.SkillIDs) {
 			return false
 		}
 		for _, id := range expert.SkillIDs {
-			if !refs[id] {
+			if !skillRefs[id] {
 				return false
 			}
-			delete(refs, id)
+			delete(skillRefs, id)
+		}
+		connectorRefs := expectedConnectors[expert.Name]
+		if len(connectorRefs) != len(expert.ConnectorIDs) {
+			return false
+		}
+		for _, id := range expert.ConnectorIDs {
+			if !connectorRefs[id] {
+				return false
+			}
+			delete(connectorRefs, id)
 		}
 	}
 	if def.ExpertTeam == nil {
@@ -184,4 +254,73 @@ func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult
 		}
 	}
 	return false
+}
+
+func validCapabilityConnectorResults(def []CapabilityConnector, out []CapabilityConnectorResult) (map[string]string, bool) {
+	if len(def) != len(out) {
+		return nil, false
+	}
+	expected := make(map[string]CapabilityConnector, len(def))
+	for _, connector := range def {
+		if connector.Name == "" {
+			return nil, false
+		}
+		if _, exists := expected[connector.Name]; exists {
+			return nil, false
+		}
+		expected[connector.Name] = connector
+	}
+
+	idsByName := make(map[string]string, len(out))
+	seenIDs := make(map[string]bool, len(out))
+	for _, connector := range out {
+		if !isCapabilityConnectorUUID(connector.ConnectorID) || connector.Name == "" || seenIDs[connector.ConnectorID] {
+			return nil, false
+		}
+		wanted, exists := expected[connector.Name]
+		if !exists {
+			return nil, false
+		}
+		if _, exists := idsByName[connector.Name]; exists {
+			return nil, false
+		}
+		var wantedMarketMCPID *string
+		if wanted.MarketMCPID != "" {
+			wantedMarketMCPID = &wanted.MarketMCPID
+		}
+		if !sameCapabilityNullableString(connector.Version, wanted.Version) ||
+			!sameCapabilityNullableString(connector.MarketMCPID, wantedMarketMCPID) {
+			return nil, false
+		}
+		seenIDs[connector.ConnectorID] = true
+		idsByName[connector.Name] = connector.ConnectorID
+	}
+	return idsByName, true
+}
+
+func isCapabilityConnectorUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i := range len(value) {
+		switch i {
+		case 8, 13, 18, 23:
+			if value[i] != '-' {
+				return false
+			}
+		default:
+			c := value[i]
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func sameCapabilityNullableString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

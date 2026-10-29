@@ -24,18 +24,20 @@ func (s *Service) WithCapabilityInstaller(installer CapabilityInstaller) *Servic
 }
 
 type InstallationParams struct {
-	WorkspaceID    string
-	RuntimeID      string
-	ResourceName   string
-	CustomEnv      map[string]string
-	IdempotencyKey string
-	Token          string
+	WorkspaceID         string
+	RuntimeID           string
+	ResourceName        string
+	CustomEnv           map[string]string
+	IdempotencyKey      string
+	Token               string
+	WorkspaceConnectors bool
 }
 
 type InstallationOutcome struct {
-	AgentID  string
-	SquadID  string
-	Replayed bool
+	AgentID    string
+	SquadID    string
+	Replayed   bool
+	Connectors []fleet.CapabilityConnectorResult
 }
 
 // InstallationAttemptError marks the boundary after the Fleet adapter was
@@ -76,7 +78,7 @@ func normalizeInstallationParams(p InstallationParams, strictRuntime bool) (Inst
 	if p.WorkspaceID == "" || len(p.WorkspaceID) > 200 || !printableHeader(p.WorkspaceID) {
 		return p, installationInvalid("X-Workspace-ID", "required")
 	}
-	if (strictRuntime && !runtimeUUID.MatchString(p.RuntimeID)) || (!strictRuntime && (p.RuntimeID == "" || len(p.RuntimeID) > 200 || !printableHeader(p.RuntimeID))) {
+	if (strictRuntime && !runtimeUUID.MatchString(p.RuntimeID) && !(p.WorkspaceConnectors && p.RuntimeID == "")) || (!strictRuntime && (p.RuntimeID == "" || len(p.RuntimeID) > 200 || !printableHeader(p.RuntimeID))) {
 		return p, installationInvalid("runtime_id", "invalid_uuid")
 	}
 	if len(p.IdempotencyKey) < 1 || len(p.IdempotencyKey) > 200 || !printableHeader(p.IdempotencyKey) {
@@ -171,7 +173,11 @@ func (s *Service) createInstallation(ctx context.Context, caller Caller, pluginI
 	// Match legacy /plugins/install: count successful API invocations, including
 	// receipt replays. This is not a count of uniquely created Fleet resources.
 	s.trackInstall(ctx, pluginID)
-	return &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}, nil
+	outcome := &InstallationOutcome{AgentID: result.ExpertID, SquadID: result.ExpertTeamID, Replayed: result.ReplayKnown && result.Replayed}
+	if p.WorkspaceConnectors {
+		outcome.Connectors = result.Connectors
+	}
+	return outcome, nil
 }
 
 // Only recognized rejections prove that this send did not install anything.

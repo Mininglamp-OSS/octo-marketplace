@@ -37,7 +37,7 @@ func TestCapabilityResultValidatesTeamAndSkillBindings(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&out)
 			}
-			if got := validCapabilityResult(in.Definition, out); got != tc.want {
+			if got := validCapabilityResult(in.Definition, out, false); got != tc.want {
 				t.Fatalf("valid=%v want=%v", got, tc.want)
 			}
 		})
@@ -50,6 +50,304 @@ func capabilityRequest() CapabilityInstallRequest {
 
 const expertResultJSON = `{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[]}],"skills":[]}`
 const expertEnvelopeJSON = `{"data":` + expertResultJSON + `}`
+
+func TestCapabilityInstallValidatesSkillMetadata(t *testing.T) {
+	version := "1.2.3"
+	for _, tc := range []struct {
+		name          string
+		version       *string
+		marketSkillID string
+		metadata      string
+		legacy        bool
+		badBinding    bool
+		wantSuccess   bool
+	}{
+		{name: "matching_version_and_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review"`, wantSuccess: true},
+		{name: "different_version", version: &version, marketSkillID: "market-review", metadata: `"version":"2.0.0","market_skill_id":"market-review"`},
+		{name: "missing_version", version: &version, marketSkillID: "market-review", metadata: `"market_skill_id":"market-review"`},
+		{name: "null_version", marketSkillID: "market-review", metadata: `"version":null,"market_skill_id":"market-review"`, wantSuccess: true},
+		{name: "unexpected_version", marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-review"`},
+		{name: "empty_is_not_null", metadata: `"version":"","created":true`},
+		{name: "different_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","market_skill_id":"market-other"`},
+		{name: "missing_source", version: &version, marketSkillID: "market-review", metadata: `"version":"1.2.3","created":true`},
+		{name: "unexpected_source", metadata: `"version":null,"market_skill_id":"market-other"`},
+		{name: "no_version_or_source", metadata: `"version":null,"created":true`, wantSuccess: true},
+		{name: "historical_wire_without_metadata", version: &version, marketSkillID: "market-review", metadata: `"created":false`, legacy: true, wantSuccess: true},
+		{name: "historical_wire_still_validates_bindings", version: &version, marketSkillID: "market-review", metadata: `"created":false`, legacy: true, badBinding: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := capabilityRequest()
+			request.Definition.Skills = []CapabilitySkill{{Name: "review", Version: tc.version, MarketSkillID: tc.marketSkillID}}
+			request.Definition.Experts[0].SkillNames = []string{"review"}
+			request.LegacySkillWire = tc.legacy
+			fixture := `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":["skill-1"]}],"skills":[{"skill_id":"skill-1","name":"review",` + tc.metadata + `}]}}`
+			if tc.badBinding {
+				fixture = strings.Replace(fixture, `"skill_ids":["skill-1"]`, `"skill_ids":["other"]`, 1)
+			}
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				io.WriteString(w, fixture)
+			}))
+			defer server.Close()
+
+			out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "skill-key", request)
+			if tc.wantSuccess {
+				if err != nil {
+					t.Fatalf("valid Skill installation rejected: %v", err)
+				}
+				if out.Skills[0].SkillID != "skill-1" || out.Experts[0].SkillIDs[0] != "skill-1" {
+					t.Fatalf("unexpected installed Skill binding: %#v", out)
+				}
+			} else if err == nil || out != nil {
+				t.Fatal("invalid Skill metadata or binding was accepted")
+			}
+			if calls != 1 {
+				t.Fatalf("Fleet mutations=%d, want exactly one", calls)
+			}
+		})
+	}
+}
+
+func capabilityConnectorFixture(name, marketMCPID string, version *string) CapabilityConnector {
+	lowerName := strings.ToLower(name)
+	return CapabilityConnector{
+		Name:          name,
+		Description:   name + " integration fixture",
+		Slug:          lowerName,
+		Category:      "testing",
+		Documentation: "https://example.test/connectors/" + lowerName,
+		Tags:          []string{"test"},
+		Config:        json.RawMessage(`{"mcpServers":{"fixture":{"url":"https://mcp.example.test"}}}`),
+		Version:       version,
+		MarketMCPID:   marketMCPID,
+	}
+}
+
+func connectorOnlyCapabilityRequest(names ...string) CapabilityInstallRequest {
+	connectors := make([]CapabilityConnector, 0, len(names))
+	for _, name := range names {
+		connectors = append(connectors, capabilityConnectorFixture(name, "market-"+strings.ToLower(name), nil))
+	}
+	return CapabilityInstallRequest{Definition: CapabilityDefinition{
+		SchemaVersion: "1.0",
+		Name:          "workspace:connectors",
+		Connectors:    connectors,
+	}}
+}
+
+func TestCapabilityInstallAcceptsConnectorOnlyResult(t *testing.T) {
+	const fixture = `{"data":{"type":"connectors","connectors":[{"connector_id":"11111111-1111-4111-8111-111111111111","name":"browser","version":"2.4.1","market_mcp_id":"market-browser","created":true}]}}`
+	version := "2.4.1"
+	request := CapabilityInstallRequest{Definition: CapabilityDefinition{
+		SchemaVersion: "1.0",
+		Name:          "workspace:connectors",
+		Connectors: []CapabilityConnector{
+			capabilityConnectorFixture("browser", "market-browser", &version),
+		},
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, fixture)
+	}))
+	defer server.Close()
+
+	out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "connector-key", request)
+	if err != nil {
+		t.Fatalf("connector-only result was rejected: %v", err)
+	}
+	if out.Type != "connectors" || len(out.Experts) != 0 || len(out.Skills) != 0 || len(out.Connectors) != 1 {
+		t.Fatal("connector-only result did not preserve its resource shape")
+	}
+	got := out.Connectors[0]
+	if got.ConnectorID != "11111111-1111-4111-8111-111111111111" || got.Name != "browser" || got.Version == nil || *got.Version != "2.4.1" || got.MarketMCPID == nil || *got.MarketMCPID != "market-browser" || !got.Created {
+		t.Fatal("connector-only result identity or metadata was not preserved")
+	}
+}
+
+func TestCapabilityInstallAcceptsTeamResultWithConnectorBindings(t *testing.T) {
+	const fixture = `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","experts":[{"expert_id":"expert-worker","name":"Worker","skill_ids":[],"connector_ids":["22222222-2222-4222-8222-222222222222"]},{"expert_id":"expert-lead","name":"Lead","skill_ids":[],"is_leader":true,"connector_ids":["33333333-3333-4333-8333-333333333333"]}],"skills":[],"connectors":[{"connector_id":"22222222-2222-4222-8222-222222222222","name":"private","version":null,"market_mcp_id":null,"created":false},{"connector_id":"33333333-3333-4333-8333-333333333333","name":"shared","version":"3.0","market_mcp_id":"market-shared","created":true}]}}`
+	sharedVersion := "3.0"
+	request := CapabilityInstallRequest{
+		Definition: CapabilityDefinition{
+			SchemaVersion: "1.0",
+			Name:          "marketplace:team",
+			Connectors: []CapabilityConnector{
+				capabilityConnectorFixture("shared", "market-shared", &sharedVersion),
+				capabilityConnectorFixture("private", "", nil),
+			},
+			Experts: []CapabilityExpert{
+				{Name: "Lead", ConnectorNames: []string{"shared"}},
+				{Name: "Worker", ConnectorNames: []string{"private"}},
+			},
+			ExpertTeam: &CapabilityExpertTeam{
+				Name: "team",
+				Members: []CapabilityTeamMember{
+					{ExpertName: "Lead", IsLeader: true},
+					{ExpertName: "Worker"},
+				},
+			},
+		},
+		Bindings: CapabilityBindings{Experts: []CapabilityExpertBinding{
+			{ExpertName: "Lead", RuntimeID: "runtime-lead"},
+			{ExpertName: "Worker", RuntimeID: "runtime-worker"},
+		}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, fixture)
+	}))
+	defer server.Close()
+
+	out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "team-key", request)
+	if err != nil {
+		t.Fatalf("team result with connector bindings was rejected: %v", err)
+	}
+	if out.Type != "expert_team" || out.ExpertTeamID != "team-1" || out.LeaderExpertID != "expert-lead" || len(out.Experts) != 2 || len(out.Connectors) != 2 {
+		t.Fatal("team connector result did not preserve its resource shape")
+	}
+	if out.Experts[0].Name != "Worker" || len(out.Experts[0].ConnectorIDs) != 1 || out.Experts[0].ConnectorIDs[0] != "22222222-2222-4222-8222-222222222222" || out.Experts[1].Name != "Lead" || len(out.Experts[1].ConnectorIDs) != 1 || out.Experts[1].ConnectorIDs[0] != "33333333-3333-4333-8333-333333333333" {
+		t.Fatal("team connector bindings were not preserved by expert name")
+	}
+}
+
+func TestCapabilityInstallAcceptsExpertResultWithConnectorBinding(t *testing.T) {
+	const fixture = `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[],"connector_ids":["44444444-4444-4444-8444-444444444444"]}],"skills":[],"connectors":[{"connector_id":"44444444-4444-4444-8444-444444444444","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`
+	request := capabilityRequest()
+	request.Definition.Connectors = []CapabilityConnector{capabilityConnectorFixture("browser", "market-browser", nil)}
+	request.Definition.Experts[0].ConnectorNames = []string{"browser"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, fixture)
+	}))
+	defer server.Close()
+
+	out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "expert-key", request)
+	if err != nil {
+		t.Fatalf("expert result with connector binding was rejected: %v", err)
+	}
+	if out.Type != "expert" || out.ExpertID != "expert-1" || len(out.Connectors) != 1 || len(out.Experts) != 1 || len(out.Experts[0].ConnectorIDs) != 1 || out.Experts[0].ConnectorIDs[0] != "44444444-4444-4444-8444-444444444444" {
+		t.Fatal("expert connector result did not preserve its resource identity and binding")
+	}
+}
+
+func TestCapabilityInstallRejectsInvalidConnectorIdentitiesAndBindings(t *testing.T) {
+	expertRequest := capabilityRequest()
+	expertRequest.Definition.Connectors = []CapabilityConnector{capabilityConnectorFixture("browser", "market-browser", nil)}
+	expertRequest.Definition.Experts[0].ConnectorNames = []string{"browser"}
+
+	teamRequest := CapabilityInstallRequest{
+		Definition: CapabilityDefinition{
+			SchemaVersion: "1.0",
+			Name:          "marketplace:team",
+			Connectors: []CapabilityConnector{
+				capabilityConnectorFixture("browser", "market-browser", nil),
+				capabilityConnectorFixture("docs", "market-docs", nil),
+			},
+			Experts: []CapabilityExpert{
+				{Name: "Lead", ConnectorNames: []string{"browser"}},
+				{Name: "Worker", ConnectorNames: []string{"docs"}},
+			},
+			ExpertTeam: &CapabilityExpertTeam{
+				Name:    "team",
+				Members: []CapabilityTeamMember{{ExpertName: "Lead", IsLeader: true}, {ExpertName: "Worker"}},
+			},
+		},
+	}
+	nullableIdentityRequest := CapabilityInstallRequest{Definition: CapabilityDefinition{
+		SchemaVersion: "1.0",
+		Name:          "workspace:connectors",
+		Connectors:    []CapabilityConnector{capabilityConnectorFixture("browser", "", nil)},
+	}}
+
+	tests := []struct {
+		name    string
+		request CapabilityInstallRequest
+		fixture string
+	}{
+		{
+			name:    "missing_connector_result",
+			request: connectorOnlyCapabilityRequest("browser"),
+			fixture: `{"data":{"type":"connectors","connectors":[]}}`,
+		},
+		{
+			name:    "missing_connector_id",
+			request: connectorOnlyCapabilityRequest("browser"),
+			fixture: `{"data":{"type":"connectors","connectors":[{"name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
+		},
+		{
+			name:    "duplicate_connector_id",
+			request: connectorOnlyCapabilityRequest("browser", "alerts"),
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"55555555-5555-4555-8555-555555555555","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"55555555-5555-4555-8555-555555555555","name":"alerts","version":null,"market_mcp_id":"market-alerts","created":true}]}}`,
+		},
+		{
+			name:    "invalid_connector_uuid",
+			request: connectorOnlyCapabilityRequest("browser"),
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"not-a-uuid","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
+		},
+		{
+			name:    "missing_connector_version",
+			request: nullableIdentityRequest,
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"55555555-5555-4555-8555-555555555555","name":"browser","market_mcp_id":null,"created":true}]}}`,
+		},
+		{
+			name:    "missing_connector_market_mcp_id",
+			request: nullableIdentityRequest,
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"55555555-5555-4555-8555-555555555555","name":"browser","version":null,"created":true}]}}`,
+		},
+		{
+			name:    "unknown_connector_name",
+			request: connectorOnlyCapabilityRequest("browser"),
+			fixture: `{"data":{"type":"connectors","connectors":[{"connector_id":"66666666-6666-4666-8666-666666666666","name":"unrequested","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
+		},
+		{
+			name:    "expert_binds_unknown_connector_id",
+			request: expertRequest,
+			fixture: `{"data":{"type":"expert","expert_id":"expert-1","experts":[{"expert_id":"expert-1","name":"Custom name","skill_ids":[],"connector_ids":["88888888-8888-4888-8888-888888888888"]}],"skills":[],"connectors":[{"connector_id":"77777777-7777-4777-8777-777777777777","name":"browser","version":null,"market_mcp_id":"market-browser","created":true}]}}`,
+		},
+		{
+			name:    "expert_bindings_are_swapped",
+			request: teamRequest,
+			fixture: `{"data":{"type":"expert_team","expert_team_id":"team-1","leader_expert_id":"expert-lead","experts":[{"expert_id":"expert-worker","name":"Worker","skill_ids":[],"connector_ids":["99999999-9999-4999-8999-999999999999"]},{"expert_id":"expert-lead","name":"Lead","skill_ids":[],"is_leader":true,"connector_ids":["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}],"skills":[],"connectors":[{"connector_id":"99999999-9999-4999-8999-999999999999","name":"browser","version":null,"market_mcp_id":"market-browser","created":true},{"connector_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"docs","version":null,"market_mcp_id":"market-docs","created":true}]}}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				io.WriteString(w, tc.fixture)
+			}))
+			defer server.Close()
+
+			out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "connector-key", tc.request)
+			if err == nil || out != nil {
+				t.Fatal("invalid connector identity or binding was accepted")
+			}
+			if calls != 1 {
+				t.Fatalf("Fleet calls=%d, want one fixed-fixture response", calls)
+			}
+		})
+	}
+}
+
+func TestCapabilityInstallAcceptsExplicitNullConnectorIdentityFields(t *testing.T) {
+	const fixture = `{"data":{"type":"connectors","connectors":[{"connector_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","name":"browser","version":null,"market_mcp_id":null,"created":true}]}}`
+	request := CapabilityInstallRequest{Definition: CapabilityDefinition{
+		SchemaVersion: "1.0",
+		Name:          "workspace:connectors",
+		Connectors:    []CapabilityConnector{capabilityConnectorFixture("browser", "", nil)},
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, fixture)
+	}))
+	defer server.Close()
+
+	out, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "workspace", "connector-key", request)
+	if err != nil {
+		t.Fatalf("explicit null connector identity fields were rejected: %v", err)
+	}
+	if len(out.Connectors) != 1 || out.Connectors[0].Version != nil || out.Connectors[0].MarketMCPID != nil {
+		t.Fatal("explicit null connector identity fields were not preserved")
+	}
+}
 
 func TestCapabilityInstallForwardsIdentityAndReplay(t *testing.T) {
 	var bodies []string
@@ -86,12 +384,30 @@ func TestCapabilityInstallForwardsIdentityAndReplay(t *testing.T) {
 	client := New(server.URL)
 	for range 2 {
 		out, err := client.InstallCapability(context.Background(), "user-token", "space", "workspace", "operation-key", capabilityRequest())
-		if err != nil || out.ExpertID != "expert-1" || !out.Replayed || !out.ReplayKnown {
-			t.Fatalf("out=%+v err=%v", out, err)
+		if err != nil || out.ExpertID != "expert-1" || len(out.Connectors) != 0 || !out.Replayed || !out.ReplayKnown {
+			t.Fatalf("legacy result changed or was rejected: err=%v", err)
 		}
 	}
 	if bodies[0] != bodies[1] || !strings.Contains(bodies[0], `"custom_env":{"OCTOBUDDY_PROVIDER_ID":"provider"}`) {
 		t.Fatal("request is not stable or environment binding was lost")
+	}
+	var legacyRequest map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(bodies[0]), &legacyRequest); err != nil {
+		t.Fatal("legacy request was not valid JSON")
+	}
+	var definition map[string]json.RawMessage
+	if err := json.Unmarshal(legacyRequest["definition"], &definition); err != nil {
+		t.Fatal("legacy definition was not valid JSON")
+	}
+	if _, exists := definition["connectors"]; exists {
+		t.Fatal("legacy request gained a definition.connectors field")
+	}
+	var experts []map[string]json.RawMessage
+	if err := json.Unmarshal(definition["experts"], &experts); err != nil || len(experts) != 1 {
+		t.Fatal("legacy expert request changed")
+	}
+	if _, exists := experts[0]["connector_names"]; exists {
+		t.Fatal("legacy request gained an expert connector binding")
 	}
 }
 

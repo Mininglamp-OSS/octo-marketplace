@@ -58,13 +58,14 @@ if os.path.exists(yaml_path):
     import yaml
     with open(yaml_path) as f:
         spec = yaml.safe_load(f)
-    # swag v2 also wraps body parameters in an unconstrained `oneOf: [object,
-    # $ref]`. That makes `{}` valid even when the referenced request schema has
-    # required fields. Collapse this known generator artifact for strict
-    # bodies so the published contract matches runtime validation.
+    # swag v2 wraps body parameters in `oneOf: [object, $ref]`. A valid typed
+    # object matches both branches and is rejected by JSON Schema consumers.
+    # Collapse this generator artifact so published request schemas match
+    # the runtime bodies.
     strict_body_operations = (
         ('/plugin_review_policies', 'patch'),
         ('/admin/plugins/{plugin_id}/rating', 'patch'),
+        ('/plugins/install', 'post'),
         ('/plugins/{plugin_id}/installations', 'post'),
         ('/plugins/{plugin_id}/versions/{version_id}/restore', 'post'),
         ('/admin/plugins/{plugin_id}/versions/{version_id}/restore', 'post'),
@@ -89,6 +90,11 @@ if os.path.exists(yaml_path):
         'internal_api_handler_plugin.createInstallationRequest')
     if installation_schema is not None:
         installation_schema['additionalProperties'] = False
+        installation_schema['if'] = {
+            'properties': {'workspace_connectors': {'const': True}},
+            'required': ['workspace_connectors'],
+        }
+        installation_schema['else'] = {'required': ['runtime_id']}
 
     # OpenAPI 3.1 uses JSON Schema nullability. swag emits the legacy vendor
     # extension for pointer scalars, which strict clients ignore. Convert every

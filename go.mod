@@ -14,6 +14,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/rubenv/sql-migrate v1.7.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/yuin/goldmark v1.8.2
 	go.uber.org/zap v1.28.0
 	golang.org/x/sys v0.47.0

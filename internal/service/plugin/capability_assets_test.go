@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -175,5 +176,46 @@ func TestCapabilityTiedMemberOrderKeepsFallbackLeaderStable(t *testing.T) {
 	after, _ := json.Marshal(installer.in)
 	if string(before) != string(after) {
 		t.Fatal("fallback leader depends on store ordering")
+	}
+}
+
+func TestWorkspaceConnectorStoragePreservesSnapshotAndRejectsCorruption(t *testing.T) {
+	const raw = `{"mcpServers":{"files":{"type":"stdio","command":"node","args":["server.js"],"extension":{"nested":[1,true]}}},"extensions":{"keep":true}}`
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprint(corrupt), func(t *testing.T) {
+			svc, store, installer := connectorRegressionFixture()
+			key := "plugins/space-a/attachments/mcp.json"
+			data := []byte(raw)
+			sum := sha256.Sum256(data)
+			digest := "sha256:" + hex.EncodeToString(sum[:])
+			if corrupt {
+				digest = "sha256:" + strings.Repeat("0", 64)
+			}
+			store.plugins["expert-1"].Package = packageWith(rawAtt("AGENTS.md", "# Expert"), fmt.Sprintf(`{"path":"mcp.json","content_type":"storage","content_size":%d,"content_hash":%q}`, len(data), digest))
+			store.plugins["expert-1"].AttachmentKeys = json.RawMessage(`{"mcp.json":"` + key + `"}`)
+			svc.storage = &importStorage{objects: map[string][]byte{key: data}}
+			params := installationParams()
+			params.WorkspaceConnectors = true
+			_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", params)
+			if corrupt {
+				if !errors.Is(err, ErrIntegrity) || installer.calls != 0 {
+					t.Fatalf("corrupt MCP reached Fleet: err=%v calls=%d", err, installer.calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual, expected any
+			if err := json.Unmarshal(installer.in.Definition.Connectors[0].Config, &actual); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &expected); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(actual, expected) || installer.in.Definition.Experts[0].MCPConfig != nil {
+				t.Fatal("stored MCP configuration was narrowed, omitted, or duplicated into legacy configuration")
+			}
+		})
 	}
 }

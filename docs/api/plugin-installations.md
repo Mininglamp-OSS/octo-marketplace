@@ -20,10 +20,10 @@ retain direct-service behavior; the hostname is not used to infer routing.
 Legacy `/api/agents`, `/api/skills` and `/api/squads` paths are unchanged. There
 is no extra configuration, route probing, retry or fallback between paths.
 
-The adapter is aligned with Fleet `origin/test` commit `49a8266`, fetched on
-2026-09-24, specifically `pkg/capability/{definition,validation}.go`, the published
-Definition schema, `internal/handler/capability_installation.go`, and the public
-API facade. This supersedes the earlier draft's provisional field locations.
+The adapter follows Fleet's capability Definition contract, including Workspace
+connectors from Fleet commit `489c2ad`. The source contract is recorded in
+`octo-fleet/docs/specs/2026-10-27-workspace-mcp-connectors-design.md`;
+the wire implementation lives in Fleet's `pkg/capability` and installation handlers.
 
 | Existing behavior | Fleet wire field |
 | --- | --- |
@@ -35,6 +35,20 @@ These shapes are isolated in `internal/fleet/capability_types.go`. The public
 Fleet route responds with `{ "data": ... }`, not the internal handler's bare
 result. Runtime access, deployment configuration, atomicity and replay still
 require integration verification in the target environment before switching clients.
+
+## OpenAPI compatibility
+
+Schema-diff reports for these installation changes have the following wire
+disposition:
+
+| Schema change | Consumer impact |
+| --- | --- |
+| Legacy `/plugins/install` body: overlapping `oneOf` removed and body typed as the actual request object | Generator correction. Both branches previously matched valid request objects, making `oneOf` reject them. The HTTP body fields and opaque legacy IDs are unchanged. |
+| New `/plugins/{plugin_id}/installations` body: `if` / `else` Runtime requirement | Additive connector mode. Default-mode requests still require Runtime; connector-mode requests may omit it at the schema boundary. Expert/team targets still require it during graph validation. |
+
+Existing legacy callers keep their current request bodies. Clients opting into
+connector-only installation omit `runtime_id` when no Runtime is selected;
+an explicitly supplied value must be a UUID string.
 
 ## Request
 
@@ -55,21 +69,52 @@ Content-Type: application/json
 }
 ```
 
+`workspace_connectors` is an optional boolean. Omitting it or setting it to
+`false` preserves the existing expert/team installation request, Fleet
+definition, MCP configuration path, validation, and response shape. Set it to
+`true` only to opt into Workspace connector storage:
+
+- Expert and expert-team installations still require a valid `runtime_id`.
+- An independent connector installation may omit `runtime_id`; if supplied,
+  it must still be a valid UUID. In this mode `resource_name` names the
+  Workspace connector. A non-empty `custom_env` is rejected; it is not treated
+  as connector configuration.
+- For expert/team installs, `resource_name` retains its existing expert/team
+  naming behavior and `custom_env` remains the expert execution environment.
+
+To import an independent catalog connector, use its plugin ID in the same
+installation path and send `{"workspace_connectors": true}`. No Runtime is
+needed. To recruit an expert/team with saved connector dependencies, add
+`"workspace_connectors": true` to the expert/team request above.
+
+The new mode includes explicit market connector dependencies where present.
+Shared dependencies are sent once in the Fleet Definition and each expert is
+bound only to its own references. If same-name dependencies have different
+sources or content and cannot be uniquely referenced, preparation fails rather
+than merging them by name. MCP configuration continues to be carried as a
+complete snapshot. Definitions carry the real Marketplace source ID where
+known, but never a pre-existing Workspace connector UUID.
+
 `/market` is the gateway mount; Marketplace mounts `/api/v1`. The OpenAPI path
 is `/plugins/{plugin_id}/installations` relative to `/v1`.
 
 - Authentication also accepts the existing `Token` header. Identity and Space
   access come from Marketplace authentication, not request-body fields. Bot
   identities are rejected. The same end-user credential is forwarded to Fleet,
-  which authorizes the selected Workspace and runtime.
+  which authorizes the selected Workspace and, when applicable, runtime.
 - `X-Workspace-ID` and `Idempotency-Key` must each occur exactly once. This new
   Marketplace route is **ID-only** and rejects `X-Workspace-Slug`, including when
   an ID is present. A future Client migration must stop sending the legacy slug
   selector on this route. No Workspace identifier is accepted in the body.
-- `runtime_id` is a required UUID; all team members use this runtime.
+- `runtime_id` is a required UUID on this route when Workspace connector mode is
+  disabled, and for expert/team installations when `workspace_connectors` is true.
+  It may be omitted only for an independent connector installation in the new
+  mode. If supplied, it must be a UUID string: empty, whitespace-only, `null`,
+  and non-string values return `400 VALIDATION_ERROR` before installation.
 - `resource_name` is optional, trimmed, and limited to 128 characters without
   control characters. It defaults to the catalog name. For a single expert it
-  sets that expert's name; for a team it sets only the team name. Member names
+  sets that expert's name; for a team it sets only the team name; for an
+  independent connector it sets the Workspace connector name. Member names
   remain their catalog names. No catalog record is renamed.
 - `custom_env` is optional and is copied into every Expert Definition, not the
   runtime bindings or Marketplace persistence. Fleet persists the values per
@@ -79,8 +124,10 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
   and unpaired Unicode surrogate escapes are rejected instead of being silently
   converted. Empty strings and whitespace are preserved. Do not log credentials
   or environment values.
-- Definition may contain actual secrets in custom_env and MCP env/headers. It
-  exists only in this request's memory and must not enter logs, events or Git.
+- Tokens and `custom_env` remain request-local and are not persisted. Pinned
+  attempts freeze the authorized catalog definition, including MCP configuration,
+  in the caller/Space/Workspace-scoped attempt store. Definitions may contain MCP
+  credentials and must not enter logs, events or Git.
 - Keys contain 1–200 visible ASCII characters without spaces. Unknown JSON
   fields, compressed bodies, and non-JSON requests are rejected. The HTTP body
   limit is 3 MiB; the assembled Fleet request is limited to 16 MiB.
@@ -90,6 +137,11 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
 Marketplace resolves the root expert/team and every dependency under the
 authenticated caller's visibility. An embedded member cannot be installed as a
 standalone root. Hidden dependencies reject the entire operation before Fleet.
+Connector relations must belong to the source Expert and resolve to their exact
+target ID and actual connector type. Each source's publication audience is
+checked before materializing the dependency and again on shared-cache reuse;
+the caller's ability to read a private connector alone does not authorize its
+distribution through a broader-audience Expert.
 For pinned installation, the root and every dependency must currently be
 published, active, undeleted and authorized, on both first dispatch and frozen-plan
 retry. A retained release/pin does not exempt a delisted dependency. Blocked
@@ -104,29 +156,52 @@ its member experts, their deduplicated Skills, and `expert_team`. Bindings ident
 each expert by the assembled name. `definition.name` is the stable catalog
 identity `marketplace:<plugin_id>`, not the custom display name.
 
+When `PLUGIN_PINNED_INSTALLATION_ENABLED` is enabled, this endpoint keeps the
+existing version-management, published-root, and dependency-audience rules.
+Skills come from the selected immutable release, including its nullable
+`DeclaredVersion` and real plugin ID; a later draft does not change the selected
+release, Skill name or original file bytes. Workspace connector mode is supported
+on this path as well. Authorized current connector snapshots are frozen with the
+first plan, so later edits do not change an existing operation. Connectors do not
+acquire fabricated immutable release IDs. The pinned path's existing
+inline-dependency rejection remains in force.
+
+Signed frozen attempts created with the earlier Skill wire shape retain their
+original fields and fingerprints on same-key replay. New attempts include
+source/version metadata; switching `workspace_connectors` with a previously used
+key is a conflict. Recovery still requires the original adapter, valid eligibility
+HMAC, available key-ring entry, current authorization and original retry deadline.
+
 Each expert uses its own manifest description, including team members; the
 team itself uses the team manifest description. This is intentional metadata
 improvement over the legacy team's shared summary; the legacy route is unchanged.
 
-The adapter preserves expert AGENTS.md/MCP and team AGENTS.md. These documents
-must be inline (`content_type: raw`); a declared storage-backed MCP is rejected
-before Fleet rather than omitted. Experts without MCP remain supported. Same-name
+The adapter preserves expert AGENTS.md/MCP and team AGENTS.md. Instructions
+must be inline (`content_type: raw`). Legacy MCP must also be inline;
+Workspace connector mode additionally uses the existing verified object reader
+for storage-backed `mcp.json`, checking trusted keys, size, and checksum before
+Fleet. Experts without MCP remain supported. Same-name
 Skills within one request are shared only if their normalized content, description,
 configuration, and complete file tree match. Skill descriptions come from the
 Skill manifest rather than the installing expert/team, so shared content has a
 stable fingerprint. Conflicting content is rejected, not overwritten.
 
-Known empty MCP defaults (`{}` or `{"mcpServers":{}}`) are omitted. Non-empty
-MCP uses Fleet's closed stdio/remote structure: command or HTTP(S) URL, never
-both; unknown fields, invalid transports and explicit null values are rejected.
-Command/URL/type are normalized as Fleet does, while environment, arguments and
-headers retain their values. Normalized JSON is capped at 64 KiB. No MCP process
-is started and no MCP URL is fetched by Marketplace.
-
+For requests that omit `workspace_connectors` or set it to `false`, known empty
+MCP defaults (`{}` or `{"mcpServers":{}}`) are omitted. Non-empty legacy
+`mcp_config` uses Fleet's closed stdio/remote structure: command or HTTP(S) URL,
+never both; unknown fields, invalid transports and explicit null values are
+rejected. Command/URL/type are normalized as Fleet does, while environment,
+arguments and headers retain their values. Normalized JSON is capped at 64 KiB.
 For stdio, `command` selects the transport: a non-empty `type` (including
 `"stdio"`) or non-empty `headers` is unsupported and returns 400
-`VALIDATION_ERROR` before Fleet. This restriction is intentional; Marketplace
-does not strip those fields or reinterpret them as environment variables.
+`VALIDATION_ERROR` before Fleet. Marketplace does not strip those fields or
+reinterpret them as environment variables.
+
+With `workspace_connectors: true`, MCP dependencies become Workspace connector
+snapshots rather than legacy `mcp_config`. Their complete `mcp.json` configuration
+is retained, including actual server keys, headers, environment, arguments, and
+service extension fields; it is not narrowed through the legacy MCP normalizer.
+No MCP process is started and no MCP URL is fetched by Marketplace.
 
 Team leadership uses the first explicitly flagged leader, otherwise the first
 member, matching the legacy selection rule. Tied display orders are resolved by
@@ -161,11 +236,35 @@ or:
 {"data":{"squad_id":"<fleet-expert-team-id>"}}
 ```
 
+Connector-only success has no `agent_id` or `squad_id`:
+
+```json
+{"data":{"connectors":[{"connector_id":"<workspace-connector-uuid>","name":"Calendar","version":null,"market_mcp_id":"market-calendar","created":true}]}}
+```
+
+An expert or team installation in Workspace connector mode keeps its original
+`agent_id` or `squad_id` and may additionally return `connectors`. Connector
+results contain only `connector_id`, `name`, nullable `version`,
+nullable `market_mcp_id`, and `created`; configuration is never included.
+Legacy mode omits `connectors`, even if Fleet returns connector metadata.
+
 Fleet test currently returns no `Idempotency-Replayed` header. Marketplace only
 forwards `true` when Fleet explicitly supplies it; its absence is not proof of a
-new installation. Fleet response names/IDs, resource type, leader, and Skill
-references are checked before returning success. Errors
-use the standard `{ "error": { "code", "message", "details", "hint" } }`
+new installation. Fleet response names/IDs, resource type, leader, Skill
+references, nullable Skill versions and Marketplace source IDs, connector
+metadata, and each expert's connector bindings are checked before success.
+
+For new-mode connector results, `connector_id` must be a UUID and each result
+must include both nullable fields, `version` and `market_mcp_id`; explicit
+`null` is valid. Legacy Expert and Skill IDs remain opaque.
+
+Skill versions and `market_skill_id` must exactly match the requested definition;
+`null` is distinct from any string value. Historical
+pinned receipts replayed with the original Skill wire format omit those metadata
+fields, so only their Skill metadata comparison is skipped; identity and binding
+checks still apply. Missing, duplicate, unknown, or mismatched Skill or connector
+results leave the Fleet outcome uncertain; retry only with the same key and
+input. Errors use the standard `{ "error": { "code", "message", "details", "hint" } }`
 envelope. By explicit product requirement, Marketplace-generated `message` and
 `hint` are Chinese and may be displayed directly by the client; machine codes
 and `details` keys remain stable. This is a route-specific exception to the
@@ -225,21 +324,23 @@ key/input and reconcile that earlier outcome before starting a new operation.
   the old proposal's seven days. Retry within 24 hours of the first request;
   after expiry, reconcile the Workspace before creating
   another installation. The adapter itself makes no automatic retry.
-- Marketplace re-reads the source on retry; it does **not** store historical
-  Definition snapshots. Editing the plugin, dependencies, environment, or
-  adapter serialization between attempts can produce a safe 409 rather than a
-  replay. Do not claim exact replay across such changes. Retain the original
-  client input securely and reconcile before starting a replacement operation.
-- Installation metrics match `/plugins/install`: each successful invocation
-  increments the root plugin's counter once, including same-key receipt replays
-  and responses without replay metadata. Failures do not increment it. This
-  counts successful API calls, not distinct created resources; metrics remain
-  best-effort through the existing tracker. Fleet resource creation stays
-  idempotent and the replay response header keeps its original meaning.
-- The new route has a two-minute operation deadline, including asset preparation
-  and the Fleet HTTP call. Earlier caller cancellation still applies; legacy
-  Fleet requests retain their 30-second HTTP timeout. Timeout recovery always
-  uses the original idempotency key and never falls back to another installer.
+- With pinned installation enabled, Marketplace preserves the first signed
+  definition, selected versions, names and file bytes. Later publications or
+  connector edits do not rebuild the plan. Current root/dependency eligibility
+  and source audiences are rechecked before every dispatch. Token rotation does
+  not change the operation; callers resupply the same environment values, which
+  are verified by a keyed input fingerprint rather than persisted. Without pinned
+  installation, sources are re-read and changed content can produce a safe 409
+  instead of replay.
+- Pinned installation metrics count the first locally completed attempt once;
+  completed receipt replays do not increment the counter. The non-pinned path
+  counts successful API invocations, including same-key replays. Metrics remain
+  best-effort and do not replace Fleet idempotency.
+- Both installation adapters use the two-minute operation deadline, including
+  asset preparation and the Fleet HTTP call. Earlier caller cancellation still
+  applies. Recovery uses the original operation and frozen input, never another
+  installer. For keyless legacy calls with uncertain outcomes, inspect the
+  Workspace rather than starting a replacement operation.
 
 Before switching Client, verify single expert and multi-member team installs,
 custom naming, MCP, provider environment, complete Skill files, cross-Space and

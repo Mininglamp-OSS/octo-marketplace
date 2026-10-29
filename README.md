@@ -177,6 +177,31 @@ and examples are documented in [`docs/api/mcp-v1.md`](docs/api/mcp-v1.md).
 Legacy singular Skill routes remain available during migration, but new clients
 should use the canonical plural routes above.
 
+`make openapi-check` includes executable installation consumer contracts in
+addition to generation, drift, coverage and lint checks. The contract gate
+validates public request/result schemas, conditional Runtime requirements,
+environment value types, Unicode name limits, nullable connector metadata and
+the legacy installation body.
+
+Expert recruitment through the Fleet capability-install endpoint forwards each
+Skill's source version as `definition.skills[].version` and its catalog ID as
+`market_skill_id`. Ordinary installations use the stored `current_version`;
+pinned installations use the selected immutable release's `DeclaredVersion`.
+A missing version is sent as JSON `null`; no substitute version is invented.
+A non-null version is opaque text and must be non-empty with no leading or
+trailing whitespace. Expert and team versions are not substituted for individual
+Skill versions. Pinned installations preserve the selected release's original
+Skill name, directory identity, frontmatter and complete file bytes.
+
+Fleet reuses Skills only when the version is non-null, by Workspace, name, and
+version, including across installers. An unversioned install is not a reuse key:
+each new installation with a different idempotency key gets a distinct Skill ID,
+while a valid retry with the same key returns the original ID. Skill names stay
+unique within one definition; conflicting same-name definitions are rejected.
+Deploy Fleet's nullable-version contract first: it continues accepting existing
+callers that omit a version, so Marketplace can be released afterward without
+rejecting those older unversioned requests.
+
 Marketplace business API responses use a standard envelope (health and
 readiness probes intentionally return a minimal status object):
 

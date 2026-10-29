@@ -27,14 +27,30 @@ type capabilityInstallationService interface {
 }
 
 type createInstallationRequest struct {
-	ResourceName string                          `json:"resource_name,omitempty" maxLength:"128"`
-	RuntimeID    string                          `json:"runtime_id" binding:"required" format:"uuid"`
-	CustomEnv    map[string]installationEnvValue `json:"custom_env,omitempty" swaggertype:"object,string"`
+	ResourceName        string                          `json:"resource_name,omitempty" maxLength:"128"`
+	RuntimeID           installationRuntimeID           `json:"runtime_id" swaggertype:"string" format:"uuid"`
+	CustomEnv           map[string]installationEnvValue `json:"custom_env,omitempty" swaggertype:"object,string"`
+	WorkspaceConnectors bool                            `json:"workspace_connectors,omitempty"`
+}
+
+type installationRuntimeID string
+
+// UnmarshalJSON runs only for a supplied field; reserve the zero value for omission.
+func (id *installationRuntimeID) UnmarshalJSON(raw []byte) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	if strings.TrimSpace(value) == "" {
+		return errors.New("runtime_id must be a non-empty string")
+	}
+	*id = installationRuntimeID(value)
+	return nil
 }
 
 // CreateInstallation godoc
 // @Summary Install a plugin through Fleet capability installation
-// @Description Resolves and installs the visible expert or expert_team graph atomically in Fleet; retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
+// @Description Resolves and installs the requested visible expert, expert_team, or connector graph atomically in Fleet. Set workspace_connectors to true to store MCP dependencies as Workspace connectors; expert and team installs still require a Runtime, while connector-only installs may omit it. Omitting or setting false keeps legacy MCP configuration behavior. Retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
 // @Tags plugin
 // @ID plugin.installation.create
 // @Accept json
@@ -43,7 +59,7 @@ type createInstallationRequest struct {
 // @Param plugin_id path string true "Marketplace plugin ID"
 // @Param X-Workspace-ID header string true "Target Workspace ID"
 // @Param Idempotency-Key header string true "Stable key for this installation; 1-200 visible ASCII characters"
-// @Param body body createInstallationRequest true "Resource name, local runtime, and environment bindings"
+// @Param body body createInstallationRequest true "Resource name, optional workspace connector mode, runtime, and environment bindings"
 // @Success 200 {object} apiresponse.Data[installResponse]
 // @Header 200 {string} Idempotency-Replayed "Only forwarded when Fleet explicitly marks a replay; absence does not prove a new installation"
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
@@ -99,7 +115,11 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 			customEnv[key] = string(value)
 		}
 	}
-	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{WorkspaceID: workspaceID, RuntimeID: req.RuntimeID, ResourceName: req.ResourceName, CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c)})
+	p, err := pluginsvc.NormalizeInstallationParams(pluginsvc.InstallationParams{
+		WorkspaceID: workspaceID, RuntimeID: string(req.RuntimeID), ResourceName: req.ResourceName,
+		CustomEnv: customEnv, IdempotencyKey: c.GetHeader("Idempotency-Key"), Token: marketmiddleware.Token(c),
+		WorkspaceConnectors: req.WorkspaceConnectors,
+	})
 	if err != nil {
 		writeInstallationError(c, err)
 		return
@@ -121,7 +141,11 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 	if out.Replayed {
 		c.Header("Idempotency-Replayed", "true")
 	}
-	apiresponse.OK(c, installResponse{AgentID: out.AgentID, SquadID: out.SquadID})
+	response := installResponse{AgentID: out.AgentID, SquadID: out.SquadID}
+	if p.WorkspaceConnectors {
+		response.Connectors = out.Connectors
+	}
+	apiresponse.OK(c, response)
 }
 
 func installationValidation(c *gin.Context, field string) {

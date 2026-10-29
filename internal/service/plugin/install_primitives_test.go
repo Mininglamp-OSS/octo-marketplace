@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -49,6 +50,39 @@ func TestPreparePinnedSkillsRejectsSameNameDifferentContent(t *testing.T) {
 	b.Files["refs/help.md"] = "new content"
 	if _, err := PreparePinnedSkills([]PinnedSkillFiles{a, b}); err == nil {
 		t.Fatal("same market name with different supporting content accepted")
+	}
+}
+
+func TestPreparePinnedSkillsKeepsVersionIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		left, right *string
+		wantShared  bool
+	}{
+		{name: "different_versions", left: pin("1.2.3"), right: pin("2.0.0")},
+		{name: "unversioned_and_versioned", right: pin("1.2.3")},
+		{name: "versioned_and_unversioned", left: pin("1.2.3")},
+		{name: "equivalent_sources_share_first_identity", left: pin("1.2.3"), right: pin("1.2.3"), wantShared: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, right := samplePinnedSkill("a", "v1"), samplePinnedSkill("b", "v1")
+			left.DeclaredVersion, right.DeclaredVersion = tc.left, tc.right
+			got, err := PreparePinnedSkills([]PinnedSkillFiles{right, left})
+			if !tc.wantShared {
+				var invalid *InstallationValidationError
+				if !errors.As(err, &invalid) || invalid.Field != "definition.skills" {
+					t.Fatalf("different version identities were merged: skills=%+v err=%v", got, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].Skill.Name != "Search" || got[0].Skill.MarketSkillID != "a" ||
+				got[0].Skill.Version == nil || *got[0].Skill.Version != "1.2.3" {
+				t.Fatalf("equivalent source identity was not retained: %+v", got)
+			}
+		})
 	}
 }
 

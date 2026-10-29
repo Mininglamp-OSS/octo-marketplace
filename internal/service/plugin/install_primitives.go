@@ -18,11 +18,12 @@ const SkillInstallAdapterVersion = "original-v1"
 // text files, including SKILL.md. Loading and digest verification belong to I1's
 // resolver; this offline adapter does not perform I/O or authorize references.
 type PinnedSkillFiles struct {
-	PluginID    string
-	VersionID   string
-	Name        string
-	Description string
-	Files       map[string]string
+	PluginID        string
+	VersionID       string
+	DeclaredVersion *string
+	Name            string
+	Description     string
+	Files           map[string]string
 }
 
 // PreparedSkill retains source identity for callers' bindings/result mapping.
@@ -54,6 +55,9 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 	seen := map[string]string{}
 	identities := map[string]string{}
 	for _, input := range inputs {
+		if input.DeclaredVersion != nil && (*input.DeclaredVersion == "" || strings.TrimSpace(*input.DeclaredVersion) != *input.DeclaredVersion) {
+			return nil, installationInvalid("definition.skills.version", "invalid_provided_version")
+		}
 		name, err := pinnedSkillName(input)
 		if err != nil {
 			return nil, err
@@ -68,9 +72,10 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 			continue
 		}
 		contentBytes, _ := json.Marshal(struct {
+			Version     *string
 			Description string
 			Files       map[string]string
-		}{input.Description, input.Files})
+		}{input.DeclaredVersion, input.Description, input.Files})
 		if previous, exists := seen[name]; exists {
 			if previous != string(contentBytes) {
 				return nil, installationInvalid("definition.skills", "same_install_identity_different_content")
@@ -85,7 +90,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 		if !exists || strings.TrimSpace(content) == "" {
 			return nil, installationInvalid("definition.skills.content", "required")
 		}
-		skill := fleet.CapabilitySkill{Name: name, Description: input.Description, Config: map[string]any{}}
+		skill := fleet.CapabilitySkill{Name: name, Version: input.DeclaredVersion, MarketSkillID: input.PluginID, Description: input.Description, Config: map[string]any{}}
 		if err := b.boundedText("definition.skills.description", input.Description, 512); err != nil {
 			return nil, err
 		}
