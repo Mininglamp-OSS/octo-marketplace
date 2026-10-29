@@ -37,35 +37,45 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		return InstallSquadResult{}, ErrInvalidRequest
 	}
 
-	budget := &fileBudget{remaining: maxSkillFilesPerInstall}
+	fileBudget := &fileBudget{remaining: maxSkillFilesPerInstall}
+	requestBudget := newCapabilityBudget("marketplace:" + m.ID)
 	seenSkillNames := make(map[string]struct{})
-	definition := fleet.CapabilityDefinition{
-		SchemaVersion: "1.0", Name: "marketplace:" + m.ID,
-		Experts: make([]fleet.CapabilityExpert, 0, len(m.Members)),
-	}
+	experts := make([]fleet.CapabilityExpert, len(m.Members))
 	bindings := fleet.CapabilityBindings{
 		Experts: make([]fleet.CapabilityExpertBinding, 0, len(m.Members)),
 	}
 	teamMembers := make([]fleet.CapabilityTeamMember, len(m.Members))
 	leaderIdx := squadLeaderIndex(m)
+	// Charge every member's non-Skill metadata and the team wiring before any
+	// object-storage read: oversized metadata must never be amplified by Skill
+	// content reads.
 	for i := range m.Members {
 		member := m.Members[i]
-		skillNames, skills, err := s.capabilitySkills(ctx, member.Skills, m.Summary, budget, seenSkillNames)
-		if err != nil {
-			return InstallSquadResult{}, err
-		}
 		mcpConfig, err := capabilityMCPConfig(member.MCPConfig)
 		if err != nil {
 			return InstallSquadResult{}, err
 		}
-		definition.Skills = append(definition.Skills, skills...)
-		definition.Experts = append(definition.Experts, fleet.CapabilityExpert{
+		expert := fleet.CapabilityExpert{
 			Name: member.Name, Version: nil, Description: m.Summary, Instructions: member.Instruction,
-			SkillNames: skillNames, CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
-		})
-		bindings.Experts = append(bindings.Experts, fleet.CapabilityExpertBinding{
+			CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
+		}
+		if err := requestBudget.beginExpert(); err != nil {
+			return InstallSquadResult{}, err
+		}
+		if err := requestBudget.addJSON(expert); err != nil {
+			return InstallSquadResult{}, err
+		}
+		experts[i] = expert
+		binding := fleet.CapabilityExpertBinding{
 			ExpertName: member.Name, RuntimeID: in.RuntimeID,
-		})
+		}
+		if err := requestBudget.beginBinding(); err != nil {
+			return InstallSquadResult{}, err
+		}
+		if err := requestBudget.addJSON(binding); err != nil {
+			return InstallSquadResult{}, err
+		}
+		bindings.Experts = append(bindings.Experts, binding)
 		role := strings.TrimSpace(member.Role)
 		if i == leaderIdx {
 			role = "leader"
@@ -76,9 +86,24 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 			ExpertName: member.Name, IsLeader: i == leaderIdx, Role: role,
 		}
 	}
-	definition.ExpertTeam = &fleet.CapabilityExpertTeam{
+	team := &fleet.CapabilityExpertTeam{
 		Name: m.Name, Version: nil, MarketExpertTeamID: m.ID, Members: teamMembers, Description: m.Summary,
 		Instructions: squadDispatchInstructions(m),
+	}
+	if err := requestBudget.addTeam(team); err != nil {
+		return InstallSquadResult{}, err
+	}
+	definition := fleet.CapabilityDefinition{
+		SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Experts: experts, ExpertTeam: team,
+	}
+	for i := range m.Members {
+		member := m.Members[i]
+		skillNames, skills, err := s.capabilitySkills(ctx, member.Skills, m.Summary, fileBudget, requestBudget, seenSkillNames)
+		if err != nil {
+			return InstallSquadResult{}, err
+		}
+		experts[i].SkillNames = skillNames
+		definition.Skills = append(definition.Skills, skills...)
 	}
 	result, err := s.installCapability(ctx, in, fleet.CapabilityInstallRequest{
 		Definition: definition, Bindings: bindings,

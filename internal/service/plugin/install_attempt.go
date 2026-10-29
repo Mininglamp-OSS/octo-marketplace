@@ -83,7 +83,7 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if err != nil {
 			return nil, ErrIntegrity
 		}
-		if len(body) > maxCapabilityBytes {
+		if len(body) > fleet.MaxCapabilityRequestBytes {
 			return nil, ErrTooLarge
 		}
 		fingerprint, err := s.installationHMAC(keyID, "request", json.RawMessage(body))
@@ -231,7 +231,7 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 			return nil, ErrConflict
 		}
 	}
-	if len(body) > maxCapabilityBytes {
+	if len(body) > fleet.MaxCapabilityRequestBytes {
 		return nil, ErrTooLarge
 	}
 	now := s.now()

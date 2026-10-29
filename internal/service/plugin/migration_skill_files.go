@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
@@ -138,7 +139,7 @@ func ResolveMigrationSkillFiles(ctx context.Context, reader storage.Storage, p *
 	clone.AttachmentKeys = sidecarRaw
 	clone.SpaceID = &virtualSpace
 	svc := New(nil, migrationSkillReader{Storage: reader, keys: resolvedKeys})
-	builder := capabilityBuilder{service: svc, remaining: maxCapabilityBytes}
+	builder := capabilityBuilder{service: svc, remaining: fleet.MaxCapabilityRequestBytes}
 	files, err := builder.skillFiles(ctx, &clone)
 	if err != nil {
 		return nil, err

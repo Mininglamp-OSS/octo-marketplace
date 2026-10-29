@@ -2,6 +2,9 @@ package fleet
 
 import "encoding/json"
 
+// MaxCapabilityRequestBytes bounds the assembled JSON sent to Fleet.
+const MaxCapabilityRequestBytes = 16 << 20
+
 // CapabilityInstallRequest is the versioned Skill installation contract with Fleet.
 type CapabilityInstallRequest struct {
 	Definition CapabilityDefinition `json:"definition"`

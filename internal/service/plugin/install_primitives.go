@@ -50,7 +50,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 		}
 		return inputs[i].VersionID < inputs[j].VersionID
 	})
-	b := capabilityBuilder{remaining: maxCapabilityBytes}
+	b := capabilityBuilder{remaining: fleet.MaxCapabilityRequestBytes}
 	out := make([]PreparedSkill, 0, len(inputs))
 	seen := map[string]string{}
 	identities := map[string]string{}
@@ -237,7 +237,7 @@ func MergeCurrentConnectorMCP(configs []CurrentConnectorMCP) (json.RawMessage, e
 	}
 	merged := map[string]json.RawMessage{}
 	seenConnectors := map[string]string{}
-	remaining := maxCapabilityBytes
+	remaining := fleet.MaxCapabilityRequestBytes
 	for _, input := range configs {
 		if input.ConnectorID == "" || strings.TrimSpace(input.ConnectorID) != input.ConnectorID || len(input.ConnectorID) > 128 || !utf8.ValidString(input.ConnectorID) || strings.ContainsRune(input.ConnectorID, 0) {
 			return nil, invalidCapabilityMCP("connector_identity_required")

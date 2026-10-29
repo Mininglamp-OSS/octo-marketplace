@@ -12,6 +12,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
@@ -39,7 +40,7 @@ func TestPlatformArtifactsDownloadHistoryAndInstall(t *testing.T) {
 			s := New(&fakeStore{}, &importStorage{objects: map[string][]byte{key: stored}})
 			v := &model.PluginVersion{Package: p.Package, AttachmentKeys: p.AttachmentKeys}
 			got, historyErr := s.versionFileBytes(ctx, p, v, "references/note.txt")
-			builder := capabilityBuilder{service: s, remaining: maxCapabilityBytes}
+			builder := capabilityBuilder{service: s, remaining: fleet.MaxCapabilityRequestBytes}
 			files, installErr := builder.skillFiles(ctx, p)
 			var out bytes.Buffer
 			zipErr := s.writeSkillZip(ctx, p, decodePackageAttachments(p.Package), &out)

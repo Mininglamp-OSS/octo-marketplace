@@ -504,6 +504,15 @@ does not issue separate agent/skill creation calls or compensating deletes. A
 rejected install leaves no separately created agent or Skill. Supporting-file
 fan-out remains capped across all Skills (a package exceeding it returns `400`).
 
+Expert and squad installs share the Plugin path's **16 MiB assembled Fleet JSON
+request limit**. The aggregate includes Skill bodies and supporting files, expert
+and team metadata, MCP/environment configuration, references, bindings, and JSON
+escaping/framing. Assembly charges metadata first and then each Skill/file before
+retaining it; an over-budget install stops subsequent asset reads and returns
+`400 VALIDATION_ERROR` without sending a Fleet request or counting an install.
+This is an aggregate limit, in addition to the existing per-Skill and file-count
+caps.
+
 **Request:**
 
 ```json
@@ -553,7 +562,8 @@ and `squad_id`:
   permissions. The legacy squad model has no source-version field, so expert
   and team versions are sent as JSON `null`. Fleet owns the transaction; there
   are no separate member-agent/Skill/squad create calls or compensating deletes.
-  Empty squads and resource-cap violations remain `400`. **Response (200):**
+  The shared 16 MiB assembled JSON budget applies to the entire squad, not to
+  each member separately. Empty squads and resource-cap violations remain `400`. **Response (200):**
   `{ "squad_id", "leader_agent_id" }`, unchanged from the legacy flow. **Errors:**
   400 (`invalid_request`) · 401 · 403 · 404 · 409 (Fleet resource conflict) · 500
   · 503 (`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).

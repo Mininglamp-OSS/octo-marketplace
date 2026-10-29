@@ -56,7 +56,7 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	if !ok {
 		return nil, ErrInvalidRequest
 	}
-	assets := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes)}
+	assets := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, fleet.MaxCapabilityRequestBytes)}
 	if workspaceConnectors {
 		assets.connectorsByID = map[string]fleet.CapabilityConnector{}
 		assets.connectorOwnerByName = map[string]string{}

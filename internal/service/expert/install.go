@@ -31,8 +31,8 @@ const maxSkillFilesPerInstall = 500
 // maps it to UPSTREAM_UNAVAILABLE.
 var ErrFleetNotConfigured = errors.New("fleet not configured")
 
-// ErrInstallTooLarge is returned when an install exceeds the aggregate Skill
-// file limit. The handler maps it to 400.
+// ErrInstallTooLarge is returned when an install exceeds the aggregate request
+// byte budget or the aggregate Skill file limit. The handler maps it to 400.
 var ErrInstallTooLarge = errors.New("install exceeds resource limits")
 
 // ErrFleetInstallUnavailable marks a capability request whose result could not
@@ -48,6 +48,119 @@ func (b *fileBudget) take() bool {
 	}
 	b.remaining--
 	return true
+}
+
+// capabilityBudget tracks the exact encoded size of a capability install
+// request while it is assembled. The initial size comes from marshalling a real
+// empty request, so root-level fields stay accounted automatically. Every
+// charge is taken before the next resource read, so an oversized definition
+// never materializes its remaining Skills.
+type capabilityBudget struct {
+	remaining    int64
+	skillCount   int
+	expertCount  int
+	bindingCount int
+}
+
+func newCapabilityBudget(name string) *capabilityBudget {
+	initial, _ := json.Marshal(fleet.CapabilityInstallRequest{
+		Definition: fleet.CapabilityDefinition{
+			SchemaVersion: "1.0",
+			Name:          name,
+			Experts:       []fleet.CapabilityExpert{},
+		},
+		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{}},
+	})
+	return &capabilityBudget{remaining: fleet.MaxCapabilityRequestBytes - int64(len(initial))}
+}
+
+func (b *capabilityBudget) take(n int64) error {
+	if n > b.remaining {
+		return ErrInstallTooLarge
+	}
+	b.remaining -= n
+	return nil
+}
+
+func (b *capabilityBudget) addJSON(value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return b.take(int64(len(encoded)))
+}
+
+// beginSkill charges the optional skills field and its empty array on the first
+// element, then one comma per subsequent element.
+func (b *capabilityBudget) beginSkill() error {
+	if b.skillCount == 0 {
+		if err := b.take(int64(len(`,"skills":[]`))); err != nil {
+			return err
+		}
+		b.skillCount = 1
+		return nil
+	}
+	if err := b.take(1); err != nil {
+		return err
+	}
+	b.skillCount++
+	return nil
+}
+
+// beginExpert charges only the comma for experts after the first; the initial
+// request already contains the empty experts array.
+func (b *capabilityBudget) beginExpert() error {
+	if b.expertCount > 0 {
+		if err := b.take(1); err != nil {
+			return err
+		}
+	}
+	b.expertCount++
+	return nil
+}
+
+// beginBinding charges only the comma for bindings after the first; the initial
+// request already contains the empty bindings array.
+func (b *capabilityBudget) beginBinding() error {
+	if b.bindingCount > 0 {
+		if err := b.take(1); err != nil {
+			return err
+		}
+	}
+	b.bindingCount++
+	return nil
+}
+
+// addTeam charges the optional expert_team field and its JSON payload.
+func (b *capabilityBudget) addTeam(team *fleet.CapabilityExpertTeam) error {
+	encoded, err := json.Marshal(team)
+	if err != nil {
+		return err
+	}
+	return b.take(int64(len(`,"expert_team":`)) + int64(len(encoded)))
+}
+
+// addSkillName charges one skill_names reference: the field and its empty array
+// on the first name, then one comma per subsequent name.
+func (b *capabilityBudget) addSkillName(first bool, name string) error {
+	encoded, _ := json.Marshal(name)
+	if first {
+		return b.take(int64(len(`,"skill_names":[]`)) + int64(len(encoded)))
+	}
+	return b.take(int64(len(encoded)) + 1)
+}
+
+// addSkillFile charges one supporting file: the files field and its empty array
+// on the first file, then one comma per subsequent file.
+func (b *capabilityBudget) addSkillFile(first bool, file fleet.CapabilitySkillFile) error {
+	encoded, err := json.Marshal(file)
+	if err != nil {
+		return err
+	}
+	if first {
+		return b.take(int64(len(`,"files":[]`)) + int64(len(encoded)))
+	}
+	return b.take(int64(len(encoded)) + 1)
 }
 
 // FleetProvisioner is the single atomic octo-fleet installation surface used by
@@ -134,26 +247,39 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	if err != nil {
 		return InstallResult{}, err
 	}
-	skillNames, skills, err := s.capabilitySkills(ctx, m.Skills, m.Summary, &fileBudget{remaining: maxSkillFilesPerInstall}, nil)
-	if err != nil {
-		return InstallResult{}, err
-	}
+	budget := newCapabilityBudget("marketplace:" + m.ID)
 	mcpConfig, err := capabilityMCPConfig(m.MCPConfig)
 	if err != nil {
 		return InstallResult{}, err
 	}
 	expert := fleet.CapabilityExpert{
 		Name: m.Name, Version: nil, MarketExpertID: m.ID, Description: m.Summary, Instructions: m.Instruction,
-		SkillNames: skillNames, CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
+		CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
 	}
+	if err := budget.beginExpert(); err != nil {
+		return InstallResult{}, err
+	}
+	if err := budget.addJSON(expert); err != nil {
+		return InstallResult{}, err
+	}
+	binding := fleet.CapabilityExpertBinding{ExpertName: m.Name, RuntimeID: in.RuntimeID}
+	if err := budget.beginBinding(); err != nil {
+		return InstallResult{}, err
+	}
+	if err := budget.addJSON(binding); err != nil {
+		return InstallResult{}, err
+	}
+	skillNames, skills, err := s.capabilitySkills(ctx, m.Skills, m.Summary, &fileBudget{remaining: maxSkillFilesPerInstall}, budget, nil)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	expert.SkillNames = skillNames
 	request := fleet.CapabilityInstallRequest{
 		Definition: fleet.CapabilityDefinition{
 			SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Skills: skills,
 			Experts: []fleet.CapabilityExpert{expert},
 		},
-		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{{
-			ExpertName: m.Name, RuntimeID: in.RuntimeID,
-		}}},
+		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{binding}},
 	}
 	result, err := s.installCapability(ctx, in, request)
 	if err != nil {
@@ -268,7 +394,7 @@ func capabilityMCPConfig(raw string) (json.RawMessage, error) {
 	return normalized, nil
 }
 
-func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, description string, budget *fileBudget, seen map[string]struct{}) ([]string, []fleet.CapabilitySkill, error) {
+func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, description string, budget *fileBudget, request *capabilityBudget, seen map[string]struct{}) ([]string, []fleet.CapabilitySkill, error) {
 	names := make([]string, 0, len(refs))
 	skills := make([]fleet.CapabilitySkill, 0, len(refs))
 	for i := range refs {
@@ -276,24 +402,35 @@ func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, d
 		if ref.ObjectKey == "" && ref.Markdown == "" {
 			continue
 		}
+		if err := request.addSkillName(len(names) == 0, ref.Name); err != nil {
+			return nil, nil, err
+		}
 		if seen != nil {
 			if _, exists := seen[ref.Name]; exists {
 				names = append(names, ref.Name)
 				continue
 			}
 		}
+		if err := request.beginSkill(); err != nil {
+			return nil, nil, err
+		}
 		content, err := s.readSkillContent(ctx, refs, i)
 		if err != nil {
 			return nil, nil, err
 		}
-		files, err := s.capabilitySkillFiles(ctx, ref, budget)
+		skill := fleet.CapabilitySkill{
+			Name: ref.Name, Version: nil, Description: description, Content: content,
+			Config: map[string]any{},
+		}
+		if err := request.addJSON(skill); err != nil {
+			return nil, nil, err
+		}
+		files, err := s.capabilitySkillFiles(ctx, ref, budget, request)
 		if err != nil {
 			return nil, nil, err
 		}
-		skills = append(skills, fleet.CapabilitySkill{
-			Name: ref.Name, Version: nil, Description: description, Content: content,
-			Config: map[string]any{}, Files: files,
-		})
+		skill.Files = files
+		skills = append(skills, skill)
 		names = append(names, ref.Name)
 		if seen != nil {
 			seen[ref.Name] = struct{}{}
@@ -302,16 +439,20 @@ func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, d
 	return names, skills, nil
 }
 
-func (s *Service) capabilitySkillFiles(ctx context.Context, ref model.SkillRef, budget *fileBudget) ([]fleet.CapabilitySkillFile, error) {
+func (s *Service) capabilitySkillFiles(ctx context.Context, ref model.SkillRef, budget *fileBudget, request *capabilityBudget) ([]fleet.CapabilitySkillFile, error) {
 	if ref.Markdown != "" {
 		files := make([]fleet.CapabilitySkillFile, 0, len(ref.SupportingFiles))
 		for _, file := range ref.SupportingFiles {
 			if !budget.take() {
 				return nil, ErrInstallTooLarge
 			}
-			files = append(files, fleet.CapabilitySkillFile{
+			capabilityFile := fleet.CapabilitySkillFile{
 				Path: file.Path, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: file.Content},
-			})
+			}
+			if err := request.addSkillFile(len(files) == 0, capabilityFile); err != nil {
+				return nil, err
+			}
+			files = append(files, capabilityFile)
 		}
 		return files, nil
 	}
@@ -333,9 +474,13 @@ func (s *Service) capabilitySkillFiles(ctx context.Context, ref model.SkillRef, 
 		if !budget.take() {
 			return nil, ErrInstallTooLarge
 		}
-		files = append(files, fleet.CapabilitySkillFile{
+		capabilityFile := fleet.CapabilitySkillFile{
 			Path: file.Path, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: file.Content},
-		})
+		}
+		if err := request.addSkillFile(len(files) == 0, capabilityFile); err != nil {
+			return nil, err
+		}
+		files = append(files, capabilityFile)
 	}
 	return files, nil
 }

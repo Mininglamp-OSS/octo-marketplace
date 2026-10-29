@@ -12,8 +12,6 @@ import (
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
 
-const maxCapabilityBytes = 16 << 20
-
 type capabilityConnectorAudience struct {
 	ownerUID   string
 	spaceID    *string
@@ -57,7 +55,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 	if root.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
-	b := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, maxCapabilityBytes), skillsByVersion: map[pluginrepo.InstallVersionKey]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
+	b := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, fleet.MaxCapabilityRequestBytes), skillsByVersion: map[pluginrepo.InstallVersionKey]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
 	if p.WorkspaceConnectors {
 		b.connectorsByID = map[string]fleet.CapabilityConnector{}
 		b.connectorOwnerByName = map[string]string{}
