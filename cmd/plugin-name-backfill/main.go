@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 
@@ -76,21 +77,23 @@ func run(args []string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	ctx := context.Background()
+	return runBackfill(context.Background(), db, *apply, os.Stdout)
+}
+
+func runBackfill(ctx context.Context, db *sql.DB, apply bool, output io.Writer) error {
 	rows, err := readRows(ctx, db)
 	if err != nil {
 		return err
 	}
 	out := analyzeRows(rows)
-	out.Applied = *apply
 	if len(out.Invalid) > 0 || len(out.DuplicateGroups) > 0 {
-		if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+		if err := json.NewEncoder(output).Encode(out); err != nil {
 			return err
 		}
 		return fmt.Errorf("backfill blocked: resolve invalid names and duplicate groups first")
 	}
-	if !*apply {
-		return json.NewEncoder(os.Stdout).Encode(out)
+	if !apply {
+		return json.NewEncoder(output).Encode(out)
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -127,7 +130,8 @@ func run(args []string) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	return json.NewEncoder(os.Stdout).Encode(out)
+	out.Applied = true
+	return json.NewEncoder(output).Encode(out)
 }
 
 // analyzeRows is the preview authority: it normalizes both the draft and the

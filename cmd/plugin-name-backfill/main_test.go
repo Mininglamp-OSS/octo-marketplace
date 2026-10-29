@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/DATA-DOG/go-sqlmock"
+	"testing"
+)
 
 func TestAnalyzeRowsReportsDraftPublishedCollision(t *testing.T) {
 	space := "space-a"
@@ -59,5 +66,66 @@ func TestAnalyzeRowsSkipsInvalidSoftDeletedNames(t *testing.T) {
 				t.Fatal("deleted row was prepared for backfill")
 			}
 		}
+	}
+}
+
+func TestRunBackfillReportsOnlyCommittedApply(t *testing.T) {
+	for _, mode := range []string{"invalid", "duplicate", "preview", "commit", "commit-failed"} {
+		t.Run(mode, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			rows := sqlmock.NewRows([]string{"plugin_id", "name", "type", "embedded", "space", "deleted", "published_name"})
+			switch mode {
+			case "invalid":
+				rows.AddRow("one", " ", "skill", false, "space-a", nil, "")
+			case "duplicate":
+				rows.AddRow("one", "Alpha", "skill", false, "space-a", nil, "").AddRow("two", "Ａlpha", "skill", false, "space-a", nil, "")
+			}
+			mock.ExpectQuery("SELECT p.plugin_id,p.plugin_name").WillReturnRows(rows)
+			if mode == "commit" || mode == "commit-failed" {
+				mock.ExpectBegin()
+				commit := mock.ExpectCommit()
+				if mode == "commit-failed" {
+					commit.WillReturnError(errors.New("commit failed"))
+				}
+			}
+			var output bytes.Buffer
+			err = runBackfill(context.Background(), db, mode != "preview", &output)
+			failed := mode == "invalid" || mode == "duplicate" || mode == "commit-failed"
+			if (err != nil) != failed {
+				t.Fatalf("error=%v output=%s", err, output.String())
+			}
+			if mode == "commit-failed" {
+				if output.Len() != 0 {
+					t.Fatalf("reported an uncommitted apply: %s", output.String())
+				}
+			} else {
+				var got report
+				if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Applied != (mode == "commit") {
+					t.Fatalf("report=%+v", got)
+				}
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAnalyzeRowsReservesReleasedNameAlongsideRenamedDraft(t *testing.T) {
+	space := "space-a"
+	rows := []row{
+		{ID: "renamed", Name: "Draft", PublishedName: "Official", Type: "skill", SpaceID: &space},
+		{ID: "new", Name: "ＯＦＦＩＣＩＡＬ", Type: "skill", SpaceID: &space},
+	}
+	out := analyzeRows(rows)
+	if len(out.Invalid) != 0 || len(out.DuplicateGroups) != 1 || out.DuplicateGroups[0].Key != "official" || rows[0].Key != "draft" || rows[0].PublishedKey != "official" {
+		t.Fatalf("released reservation missing: %+v rows=%+v", out, rows)
 	}
 }

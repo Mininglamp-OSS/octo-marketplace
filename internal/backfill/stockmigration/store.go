@@ -351,7 +351,7 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 			return 0, e
 		}
 	}
-	var after Resource
+	var after rollbackResource
 	for _, n := range unit.Nodes {
 		if n.TargetID == root {
 			after.Plugin = n.Plugin
@@ -362,6 +362,10 @@ func ApplyRootWithResolver(ctx context.Context, db *sql.DB, limit int, batch, ro
 				after.PublishedVersionID = &n.VersionID
 			}
 		}
+	}
+	after.Names, e = readRollbackNames(ctx, tx, root)
+	if e != nil {
+		return 0, ErrRead
 	}
 	prior, _ := json.Marshal(before)
 	next, _ := json.Marshal(after)
@@ -517,6 +521,25 @@ func published(n Node) any {
 	return n.PreviousPublished
 }
 
+// rollbackResource adds exact post-write name evidence to the existing after_json.
+// Older receipts have no such evidence and must fail closed rather than overwrite
+// a name reservation whose post-migration value cannot be established.
+type rollbackResource struct {
+	Resource
+	Names *rollbackNames `json:"name_state,omitempty"`
+}
+
+type rollbackNames struct {
+	Name                          string
+	DraftKey, PublishedKey, Scope sql.NullString
+}
+
+func readRollbackNames(ctx context.Context, tx *sql.Tx, id string) (*rollbackNames, error) {
+	var names rollbackNames
+	err := tx.QueryRowContext(ctx, `SELECT plugin_name,name_key,published_name_key,name_scope FROM plugins WHERE plugin_id=? FOR UPDATE`, id).Scan(&names.Name, &names.DraftKey, &names.PublishedKey, &names.Scope)
+	return &names, err
+}
+
 // Rollback restores root pointers and the original editable topology. New rows,
 // versions and files survive; extracted resources are unlisted. A retired batch
 // cannot apply again. Concurrent edits to the migrated root block the operation.
@@ -542,7 +565,7 @@ func Rollback(ctx context.Context, db *sql.DB, batch string) error {
 	}
 	type saved struct {
 		before   Resource
-		after    Resource
+		after    rollbackResource
 		mappings []Mapping
 		nodes    []nodeState
 	}
@@ -580,6 +603,13 @@ func Rollback(ctx context.Context, db *sql.DB, batch string) error {
 			expectedPub = *item.after.PublishedVersionID
 		}
 		if pub.String != expectedPub || status != 1 || deleted.Valid || visibility != string(item.after.Plugin.Visibility) || listing != string(item.after.Plugin.ListingState) || item.after.Plugin.CurrentVersionID == nil || current.String != *item.after.Plugin.CurrentVersionID || mh != item.after.Plugin.ManifestHash || ph != item.after.Plugin.PluginHash {
+			return ErrConflict
+		}
+		names, nameReadErr := readRollbackNames(ctx, tx, p.ID)
+		if nameReadErr != nil {
+			return ErrRead
+		}
+		if item.after.Names == nil || *names != *item.after.Names {
 			return ErrConflict
 		}
 		nameKey, publishedKey, nameScope, nameErr := rollbackNameColumns(item.before)

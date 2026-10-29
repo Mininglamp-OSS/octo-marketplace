@@ -513,3 +513,57 @@ func TestStockMigratedTeamReservesDraftAndPublishedNames(t *testing.T) {
 		t.Fatalf("normalized duplicate: %v", err)
 	}
 }
+
+func TestStockMigrationRollbackRejectsConcurrentNameChanges(t *testing.T) {
+	for _, field := range []string{"plugin_name", "name_key", "published_name_key", "name_scope", "legacy_receipt", "unchanged"} {
+		t.Run(field, func(t *testing.T) {
+			database := reviewDB(t)
+			ctx := context.Background()
+			seedStockRoot(t, database, "root", "private", "published")
+			d, err := stockmigration.Read(ctx, database, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := stockmigration.Build(d)
+			if _, err = stockmigration.ApplyRoot(ctx, database, 1000, "name-cas", "root", plan.Digest, true); err != nil {
+				t.Fatal(err)
+			}
+			switch field {
+			case "legacy_receipt":
+				_, err = database.Exec(`UPDATE plugin_stock_migration_roots SET after_json=JSON_REMOVE(after_json,'$.name_state') WHERE batch_id='name-cas'`)
+			case "unchanged":
+			default:
+				// Constant field allowlist above; simulate a metadata/index write without
+				// touching the content hashes or release pointers used by the old CAS.
+				_, err = database.Exec(`UPDATE plugins SET ` + field + `='changed' WHERE plugin_id='root'`)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var before string
+			if err = database.QueryRow(`SELECT JSON_ARRAY(plugin_name,name_key,published_name_key,name_scope,current_version_id,published_version_id,manifest_hash,plugin_hash) FROM plugins WHERE plugin_id='root'`).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			err = stockmigration.Rollback(ctx, database, "name-cas")
+			if field == "unchanged" {
+				if err != nil {
+					t.Fatalf("unchanged rollback: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, stockmigration.ErrConflict) {
+				t.Fatalf("concurrent %s edit: %v", field, err)
+			}
+			var after, state string
+			if err = database.QueryRow(`SELECT JSON_ARRAY(plugin_name,name_key,published_name_key,name_scope,current_version_id,published_version_id,manifest_hash,plugin_hash) FROM plugins WHERE plugin_id='root'`).Scan(&after); err != nil {
+				t.Fatal(err)
+			}
+			if before != after {
+				t.Fatalf("failed rollback mutated root: before=%s after=%s", before, after)
+			}
+			if err = database.QueryRow(`SELECT state FROM plugin_stock_migration_batches WHERE batch_id='name-cas'`).Scan(&state); err != nil || state != "active" {
+				t.Fatalf("batch unexpectedly retired: %s %v", state, err)
+			}
+		})
+	}
+}
