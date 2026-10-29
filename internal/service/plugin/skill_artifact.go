@@ -78,6 +78,8 @@ type skillRefDocument struct {
 	FileSize     int64  `json:"file_size"`
 	FileURL      string `json:"file_url"`
 	ObjectKey    string `json:"object_key"`
+	ObjectHash   string `json:"object_key_hash,omitempty"`
+	ObjectSize   *int64 `json:"object_key_size,omitempty"`
 	ZipObjectKey string `json:"zip_object_key"`
 }
 
@@ -138,21 +140,36 @@ func (s *Service) skillMarkdown(ctx context.Context, sc pluginrepo.Scope, plugin
 		return string(data), err
 	}
 	ref := s.skillRef(p)
-	if s.storage != nil && trustedArtifactKey(ref.ObjectKey, p.SpaceID) {
-		body, err := s.storage.GetObject(ctx, ref.ObjectKey)
-		if err == nil {
-			defer body.Close()
-			// Read limit+1 and fail on overflow rather than silently truncating an
-			// oversized object into a partial SKILL.md (B2).
-			data, err := io.ReadAll(io.LimitReader(body, s.maxAttachmentBytes+1))
-			if err != nil {
-				return "", fmt.Errorf("read skill markdown: %w", err)
-			}
-			if int64(len(data)) > s.maxAttachmentBytes {
-				return "", ErrTooLarge
-			}
-			return string(data), nil
+	if strings.HasPrefix(ref.ObjectKey, "platform/") || strings.HasPrefix(attachmentKeyMap(p.AttachmentKeys)["SKILL.md"], "platform/") {
+		data, err := s.versionFileBytes(ctx, p, &model.PluginVersion{Package: p.Package, AttachmentKeys: p.AttachmentKeys}, "SKILL.md")
+		return string(data), err
+	}
+	if trustedPluginArtifactKey(ref.ObjectKey, p) {
+		hash := strings.TrimPrefix(ref.ObjectHash, "sha256:")
+		decoded, err := hex.DecodeString(hash)
+		if s.storage == nil || err != nil || len(decoded) != sha256.Size || strings.ToLower(hash) != hash || ref.ObjectSize == nil || *ref.ObjectSize < 0 {
+			return "", ErrIntegrity
 		}
+		if *ref.ObjectSize > s.maxAttachmentBytes {
+			return "", ErrTooLarge
+		}
+		body, err := s.storage.GetObject(ctx, ref.ObjectKey)
+		if err != nil {
+			return "", fmt.Errorf("read skill markdown: %w", err)
+		}
+		defer body.Close()
+		data, err := io.ReadAll(io.LimitReader(body, s.maxAttachmentBytes+1))
+		if err != nil {
+			return "", fmt.Errorf("read skill markdown: %w", err)
+		}
+		if int64(len(data)) > s.maxAttachmentBytes {
+			return "", ErrTooLarge
+		}
+		sum := sha256.Sum256(data)
+		if int64(len(data)) != *ref.ObjectSize || hex.EncodeToString(sum[:]) != hash {
+			return "", ErrIntegrity
+		}
+		return string(data), nil
 	}
 	if raw, ok := rawAttachmentContent(p.Package, "SKILL.md"); ok {
 		return raw, nil
@@ -200,7 +217,7 @@ func (s *Service) openSkillPackage(ctx context.Context, sc pluginrepo.Scope, plu
 	if p.Type != model.PluginTypeSkill {
 		return nil, ErrInvalidRequest
 	}
-	if s.versionManagement && !sc.Admin {
+	if (s.versionManagement && !sc.Admin) || hasPlatformArtifacts(p) {
 		if err = s.verifyVersionFiles(ctx, p, &model.PluginVersion{Package: p.Package, AttachmentKeys: p.AttachmentKeys}); err != nil {
 			return nil, err
 		}
@@ -255,10 +272,10 @@ func (s *Service) openSkillPackage(ctx context.Context, sc pluginrepo.Scope, plu
 // skill/ref.json. Expanded and freshly imported skills carry neither and fall
 // through to attachment-tree reconstruction.
 func (s *Service) legacyZipKey(p *model.Plugin, ref skillRefDocument) (string, bool) {
-	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && p.SpaceID != nil && validReferencedObjectKey(managed, *p.SpaceID) {
+	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && trustedPluginArtifactKey(managed, p) {
 		return managed, true
 	}
-	if trustedArtifactKey(ref.zipKey(), p.SpaceID) {
+	if trustedPluginArtifactKey(ref.zipKey(), p) {
 		return ref.zipKey(), true
 	}
 	return "", false
@@ -268,10 +285,10 @@ func (s *Service) legacyZipKey(p *model.Plugin, ref skillRefDocument) (string, b
 // legacy roots. It is used ONLY by ExpandSkillPackage (the server-driven
 // expand-skills migration), never on a caller-facing request.
 func (s *Service) migrationZipKey(p *model.Plugin, ref skillRefDocument) (string, bool) {
-	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && p.SpaceID != nil && validReferencedObjectKey(managed, *p.SpaceID) {
+	if managed, ok := storageAttachmentKey(p, "skill/package.zip"); ok && trustedPluginArtifactKey(managed, p) {
 		return managed, true
 	}
-	if migrationArtifactKey(ref.zipKey(), p.SpaceID) {
+	if trustedPluginArtifactKey(ref.zipKey(), p) || migrationArtifactKey(ref.zipKey(), p.SpaceID) {
 		return ref.zipKey(), true
 	}
 	return "", false
@@ -307,7 +324,10 @@ func (s *Service) writeSkillZip(ctx context.Context, p *model.Plugin, attachment
 		// Validate a storage key BEFORE creating the entry (Q11'): an untrusted or
 		// cross-Space reference is skipped entirely rather than left as a silently
 		// empty file in the delivered archive.
-		if a.ContentType != "raw" && (p.SpaceID == nil || !validReferencedObjectKey(storageKey, *p.SpaceID)) {
+		if a.ContentType != "raw" && !trustedPluginArtifactKey(storageKey, p) {
+			if strings.HasPrefix(storageKey, "platform/") {
+				return ErrIntegrity
+			}
 			continue
 		}
 		if entries >= maxSkillZipEntries {
@@ -397,8 +417,8 @@ func artifactKeyShape(key string) bool {
 // caller-writable through upsert, so a pointer is honored only when it sits in
 // the plugin's OWN managed Space prefix — every other key, including another
 // Space's managed prefix and the shared legacy roots, fails closed. Legacy
-// backfilled skills are served only after `-phase=expand-skills` rewrites them
-// into own-Space attachment trees; until then their legacy-root pointer is not
+// backfilled skills require conversion into owned attachment trees; until
+// then their legacy-root pointer is not
 // trusted (skill_md falls back to the inline SKILL.md).
 func trustedArtifactKey(key string, spaceID *string) bool {
 	if !artifactKeyShape(key) {

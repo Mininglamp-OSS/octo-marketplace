@@ -291,3 +291,30 @@ func TestAdminImportReuploadSnapshotsAndAppliesVersion(t *testing.T) {
 		t.Fatalf("omitted version should keep the stored label %q, got %v", oldVer, detail2.Plugin.CurrentVersion)
 	}
 }
+
+func TestAdminReuploadRetainsPlatformArtifactResourceContext(t *testing.T) {
+	store, blobs, tasks, svc := adminImportFixtures(t)
+	const id = "system-skill"
+	data := "# original platform document"
+	sum := sha256.Sum256([]byte(data))
+	key := "platform/plugins/" + id + "/attachments/versions/" + hex.EncodeToString(sum[:])
+	ref := assertedMarkdownRef(`{"object_key":"`+key+`"}`, data)
+	upload := zipWith(t, map[string][]byte{"SKILL.md": []byte("---\nname: Admin Skill\ndescription: demo\nversion: 2.0.0\n---\n# stub"), "skill/ref.json": []byte(ref)})
+	h := sha256.Sum256(upload)
+	blobs.objects["tmp/admin.zip"] = upload
+	blobs.objects[key] = []byte(data)
+	tasks.task.FileSize = int64(len(upload))
+	tasks.task.FileSHA256 = hex.EncodeToString(h[:])
+	store.plugins[id] = &model.Plugin{ID: id, Name: "Admin Skill", Type: model.PluginTypeSkill, Visibility: model.PluginVisibilitySystem, OwnerUID: "owner", Tags: json.RawMessage(`[]`), Manifest: json.RawMessage(`{}`), Package: packageWith(rawAtt("SKILL.md", data), rawAtt("skill/ref.json", ref))}
+	detail, err := svc.AdminImport(context.Background(), adminCaller, ImportParams{ParseTaskID: "task-admin", PluginID: id, Version: "2.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Plugin.SpaceID != nil || detail.Plugin.Visibility != model.PluginVisibilitySystem {
+		t.Fatal("platform resource assigned a Space")
+	}
+	got, err := svc.versionFileBytes(context.Background(), detail.Plugin, &model.PluginVersion{Package: detail.Plugin.Package, AttachmentKeys: detail.Plugin.AttachmentKeys}, "SKILL.md")
+	if err != nil || string(got) != data {
+		t.Fatalf("platform attachment round trip: %q %v", got, err)
+	}
+}

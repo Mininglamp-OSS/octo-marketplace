@@ -354,7 +354,7 @@ func TestSkillMarkdownTrustsOnlyOwnSpaceRefObjects(t *testing.T) {
 	// Own-Space ref object is trusted and served over the inline stub.
 	ownPkg := packageWith(
 		rawAtt("SKILL.md", "# own stub"),
-		rawAtt("skill/ref.json", `{"object_key":"plugins/space-a/attachments/own.md","zip_object_key":"plugins/space-a/attachments/own.zip","file_name":"pack.zip"}`),
+		rawAtt("skill/ref.json", assertedMarkdownRef(`{"object_key":"plugins/space-a/attachments/own.md","zip_object_key":"plugins/space-a/attachments/own.zip","file_name":"pack.zip"}`, "# own doc")),
 	)
 	// Legacy-root ref object is NOT trusted on the caller path (served only after
 	// expand-skills rewrites it into an own-Space tree); the read must fall back
@@ -443,7 +443,7 @@ func TestSkillArtifactsRejectForgedCrossSpacePointers(t *testing.T) {
 
 func TestSkillArtifactsServeOwnSpaceManagedPointers(t *testing.T) {
 	space := "space-a"
-	pkg := packageWith(rawAtt("skill/ref.json", `{"file_name":"pack.zip","object_key":"plugins/space-a/attachments/doc.md","zip_object_key":"plugins/space-a/attachments/pack.zip"}`))
+	pkg := packageWith(rawAtt("skill/ref.json", assertedMarkdownRef(`{"file_name":"pack.zip","object_key":"plugins/space-a/attachments/doc.md","zip_object_key":"plugins/space-a/attachments/pack.zip"}`, "# own doc")))
 	store := &fakeStore{plugins: map[string]*model.Plugin{
 		"own-1": {ID: "own-1", Name: "Own", Type: model.PluginTypeSkill, SpaceID: &space, Package: pkg},
 	}}
@@ -523,7 +523,7 @@ func TestSkillMarkdownRefObjectWinsOverInlineStub(t *testing.T) {
 	// are no longer trusted on the caller path — see the own-Space rule.)
 	pkg := packageWith(
 		rawAtt("SKILL.md", "# stub"),
-		rawAtt("skill/ref.json", `{"object_key":"plugins/space-a/attachments/full.md"}`),
+		rawAtt("skill/ref.json", assertedMarkdownRef(`{"object_key":"plugins/space-a/attachments/full.md"}`, "# full doc")),
 	)
 	store := &fakeStore{plugins: map[string]*model.Plugin{
 		"snap-1": {ID: "snap-1", Name: "Snap", Type: model.PluginTypeSkill, SpaceID: &space, Package: pkg},
@@ -535,12 +535,11 @@ func TestSkillMarkdownRefObjectWinsOverInlineStub(t *testing.T) {
 	if err != nil || content != "# full doc" {
 		t.Fatalf("content=%q err=%v", content, err)
 	}
-	// A trusted pointer whose object is missing falls back to the inline text
-	// instead of failing the read.
+	// A trusted pointer must fail when missing, never expose the inline stub.
 	blobs.objects = map[string][]byte{}
 	content, err = New(store, blobs).SkillMarkdown(context.Background(), testCaller, "snap-1")
-	if err != nil || content != "# stub" {
-		t.Fatalf("fallback content=%q err=%v", content, err)
+	if err == nil || content != "" {
+		t.Fatalf("missing object returned fallback content=%q err=%v", content, err)
 	}
 }
 
@@ -687,5 +686,48 @@ func TestImportDuplicateNameCanBeRenamedAndRetried(t *testing.T) {
 	d, err := svc.Import(context.Background(), testCaller, ImportParams{ParseTaskID: "task-1", PluginName: "Renamed Skill"})
 	if err != nil || d.Plugin.Name != "Renamed Skill" {
 		t.Fatalf("retry with new name: %+v %v", d, err)
+	}
+}
+
+func assertedMarkdownRef(raw, body string) string {
+	var ref map[string]any
+	_ = json.Unmarshal([]byte(raw), &ref)
+	h := sha256.Sum256([]byte(body))
+	ref["object_key_hash"] = "sha256:" + hex.EncodeToString(h[:])
+	ref["object_key_size"] = len(body)
+	out, _ := json.Marshal(ref)
+	return string(out)
+}
+
+func TestTrustedLegacyMarkdownRequiresOriginalDigestAndNeverFallsBack(t *testing.T) {
+	for _, kind := range []string{"valid", "missing", "changed", "missing assertions", "wrong size"} {
+		t.Run(kind, func(t *testing.T) {
+			space := "space-a"
+			key := "plugins/space-a/attachments/doc.md"
+			data := "# original"
+			ref := assertedMarkdownRef(`{"object_key":"plugins/space-a/attachments/doc.md"}`, data)
+			if kind == "missing assertions" {
+				ref = `{"object_key":"plugins/space-a/attachments/doc.md"}`
+			}
+			if kind == "wrong size" {
+				ref = assertedMarkdownRef(`{"object_key":"plugins/space-a/attachments/doc.md"}`, data+"extra")
+			}
+			store := &fakeStore{plugins: map[string]*model.Plugin{"skill": {ID: "skill", Type: model.PluginTypeSkill, SpaceID: &space, Package: packageWith(rawAtt("SKILL.md", "# stub"), rawAtt("skill/ref.json", ref))}}}
+			blobs := &importStorage{objects: map[string][]byte{key: []byte(data)}}
+			if kind == "missing" {
+				delete(blobs.objects, key)
+			}
+			if kind == "changed" {
+				blobs.objects[key] = []byte("# replaced")
+			}
+			got, err := New(store, blobs).SkillMarkdown(context.Background(), testCaller, "skill")
+			if kind == "valid" {
+				if err != nil || got != data {
+					t.Fatal(got, err)
+				}
+			} else if err == nil || got != "" {
+				t.Fatal("trusted reference fell back or served corrupt data", got, err)
+			}
+		})
 	}
 }

@@ -1,4 +1,10 @@
-# PR126 review follow-up
+# PR126 review follow-up (historical)
+
+> Historical evidence for PR #126 only. The stock-migration command and its
+> exclusive packages described below have been removed. Do not use this record
+> as an operating or rollback guide. Use [the current single-database migration
+> guide](production-marketplace-migration.md), including its partial-commit
+> recovery procedure and environment backup requirements.
 
 Review target: `94de531`. This records the agent's code inspection and local
 regressions. It does not replace the additional human review requested in
@@ -13,8 +19,9 @@ and allow a later Up to collide with retained tables. An explicit refusal keeps
 both the audit data and receipt, and stops a full downgrade before any earlier
 destructive migration can run on the upgraded schema.
 
-Data rollback continues through `marketplace-stock-migration --rollback --batch-id <batch_id>`;
-it does not use schema Down. Isolated test databases are removed at database
+At the time of PR #126, data rollback used the retired stock-migration command,
+independently of schema Down. That command is no longer available; current
+recovery follows the guide linked above. Isolated test databases are removed at database
 cleanup. Historical reversible migrations keep real Up/Down tests on the
 pre-audit schema; full current-schema upgrades and audit refusal have separate
 tests. No test replaces or bypasses the production guard.
