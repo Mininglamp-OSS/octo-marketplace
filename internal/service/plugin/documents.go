@@ -90,7 +90,7 @@ func CanonicalizeMigratedDocuments(name string, typ model.PluginType, tags, mani
 	return canonicalizeDocuments(name, typ, tags, manifest, pkg, spaceID, true)
 }
 
-func canonicalizeDocuments(name string, typ model.PluginType, tags, manifest, pkg json.RawMessage, spaceID string, trustLegacyRefs bool) (*CanonicalDocuments, error) {
+func canonicalizeDocuments(name string, typ model.PluginType, tags, manifest, pkg json.RawMessage, spaceID string, trustLegacyRefs bool, resources ...*model.Plugin) (*CanonicalDocuments, error) {
 	m, t, err := CanonicalizeManifest(name, typ, tags, manifest)
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func canonicalizeDocuments(name string, typ model.PluginType, tags, manifest, pk
 	// object key out into the host-private sidecar map and strip it from the
 	// package BEFORE canonicalization/validation/hashing. The sidecar is never
 	// part of plugin_hash; the stored package stays a valid 2.0 document.
-	stripped, keys, err := splitStorageKeys(pkg, spaceID)
+	stripped, keys, err := splitStorageKeysScoped(pkg, artifactWriteScope(spaceID, resources...))
 	if err != nil {
 		return nil, ErrInvalidRequest
 	}
@@ -120,7 +120,7 @@ func canonicalizeDocuments(name string, typ model.PluginType, tags, manifest, pk
 	// forged legacy-root/cross-Space pointer for the expand-skills migration to
 	// later dereference with service credentials. The trusted backfill bypasses
 	// this gate (trustLegacyRefs) because it writes those pointers deliberately.
-	if !trustLegacyRefs && !skillRefKeysScoped(p, spaceID) {
+	if !trustLegacyRefs && !skillRefKeysAllowed(p, artifactWriteScope(spaceID, resources...)) {
 		return nil, ErrInvalidRequest
 	}
 	hash, err := libplugin.ComputePluginHash(m, p)
@@ -144,6 +144,25 @@ func canonicalizeDocuments(name string, typ model.PluginType, tags, manifest, pk
 // contract document. A package with no storage attachments returns (pkg, nil)
 // and the row's attachment_keys_json stays NULL.
 func splitStorageKeys(pkg json.RawMessage, spaceID string) (json.RawMessage, json.RawMessage, error) {
+	return splitStorageKeysScoped(pkg, artifactWriteScope(spaceID))
+}
+
+// artifactWriteScope accepts the authorized row's own objects and the caller's
+// controlled upload namespace. Resource context is internal and never request JSON.
+func artifactWriteScope(spaceID string, resources ...*model.Plugin) func(string) bool {
+	return func(key string) bool {
+		if len(resources) > 0 && resources[0] != nil && trustedPluginArtifactKey(key, resources[0]) {
+			return true
+		}
+		return safeObjectSegment.MatchString(spaceID) && validReferencedObjectKey(key, spaceID)
+	}
+}
+
+func canonicalizePluginDocuments(p *model.Plugin, name string, typ model.PluginType, tags, manifest, pkg json.RawMessage, uploadSpace string) (*CanonicalDocuments, error) {
+	return canonicalizeDocuments(name, typ, tags, manifest, pkg, uploadSpace, false, p)
+}
+
+func splitStorageKeysScoped(pkg json.RawMessage, allows func(string) bool) (json.RawMessage, json.RawMessage, error) {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(pkg, &doc); err != nil {
 		return nil, nil, err
@@ -169,7 +188,7 @@ func splitStorageKeys(pkg json.RawMessage, spaceID string) (json.RawMessage, jso
 		var path, key string
 		_ = json.Unmarshal(attachment["path"], &path)
 		_ = json.Unmarshal(attachment["storage_uri"], &key)
-		if !safeObjectSegment.MatchString(spaceID) || !validReferencedObjectKey(key, spaceID) {
+		if !allows(key) {
 			return nil, nil, ErrInvalidRequest
 		}
 		keys[path] = key
@@ -298,6 +317,10 @@ func reinjectUpdateStorageKeys(reqPkg, oldPkg, oldKeys json.RawMessage) json.Raw
 // legacy-root or cross-Space key fails closed. This is the provenance gate on
 // the caller write path — see canonicalizeDocuments.
 func skillRefKeysScoped(pkg json.RawMessage, spaceID string) bool {
+	return skillRefKeysAllowed(pkg, artifactWriteScope(spaceID))
+}
+
+func skillRefKeysAllowed(pkg json.RawMessage, allows func(string) bool) bool {
 	raw, ok := rawAttachmentContent(pkg, "skill/ref.json")
 	if !ok {
 		return true
@@ -306,12 +329,11 @@ func skillRefKeysScoped(pkg json.RawMessage, spaceID string) bool {
 	if json.Unmarshal([]byte(raw), &ref) != nil {
 		return false
 	}
-	sp := &spaceID
 	for _, key := range []string{ref.ObjectKey, ref.ZipObjectKey, ref.FileURL} {
 		if key == "" {
 			continue
 		}
-		if !trustedArtifactKey(key, sp) {
+		if !allows(key) {
 			return false
 		}
 	}

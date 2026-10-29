@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/artifactscope"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 	libplugin "github.com/Mininglamp-OSS/octo-plugin-lib/plugin"
@@ -21,7 +22,10 @@ import (
 // Caller-supplied mutable keys are retained unless the outer ingestion flow has
 // tracked their creation; same-Space access does not prove exclusive ownership.
 // Unreferenced objects can be audited later; this PR introduces no physical GC.
-func (s *Service) freezeVersionArtifacts(ctx context.Context, typ model.PluginType, docs *CanonicalDocuments, spaceID string) error {
+// The first optional resource is the already-authorized source row; when a
+// visibility change supplies a second resource, that row determines destination
+// ownership. Neither context is decoded from caller-provided JSON.
+func (s *Service) freezeVersionArtifacts(ctx context.Context, typ model.PluginType, docs *CanonicalDocuments, spaceID string, resources ...*model.Plugin) error {
 	if typ == model.PluginTypeConnector {
 		return nil
 	}
@@ -56,7 +60,7 @@ func (s *Service) freezeVersionArtifacts(ctx context.Context, typ model.PluginTy
 			if key == "" {
 				key = a.StorageURI
 			}
-			frozen, size, digest, err := s.freezeArtifact(ctx, spaceID, key, s.maxAttachmentBytes, &total)
+			frozen, size, digest, err := s.freezeArtifact(ctx, spaceID, key, s.maxAttachmentBytes, &total, resources...)
 			if err != nil {
 				return err
 			}
@@ -83,7 +87,7 @@ func (s *Service) freezeVersionArtifacts(ctx context.Context, typ model.PluginTy
 				if key == "" {
 					continue
 				}
-				frozen, size, digest, err := s.freezeArtifact(ctx, spaceID, key, s.maxArchiveBytes, &total)
+				frozen, size, digest, err := s.freezeArtifact(ctx, spaceID, key, s.maxArchiveBytes, &total, resources...)
 				if err != nil {
 					return err
 				}
@@ -139,8 +143,8 @@ func (s *Service) freezeVersionArtifacts(ctx context.Context, typ model.PluginTy
 	return nil
 }
 
-func (s *Service) freezeArtifact(ctx context.Context, spaceID, key string, limit int64, total *int64) (string, int64, string, error) {
-	if !safeObjectSegment.MatchString(spaceID) || !validReferencedObjectKey(key, spaceID) || s.storage == nil {
+func (s *Service) freezeArtifact(ctx context.Context, spaceID, key string, limit int64, total *int64, resources ...*model.Plugin) (string, int64, string, error) {
+	if !artifactWriteScope(spaceID, resources...)(key) || s.storage == nil {
 		return "", 0, "", ErrInvalidRequest
 	}
 	writer, ok := s.storage.(storage.ImmutableWriter)
@@ -193,7 +197,14 @@ func (s *Service) freezeArtifact(ctx context.Context, spaceID, key string, limit
 	*total += n
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	digest := "sha256:" + hash
-	frozen := approvedAttachmentPrefix(spaceID) + "versions/" + hash
+	prefix := approvedAttachmentPrefix(spaceID)
+	if len(resources) > 0 && resources[0] != nil {
+		prefix = artifactscope.Prefix(resources[len(resources)-1])
+	}
+	if prefix == "" {
+		return "", 0, "", ErrInvalidRequest
+	}
+	frozen := prefix + "versions/" + hash
 	if key == frozen {
 		return frozen, n, digest, nil
 	}

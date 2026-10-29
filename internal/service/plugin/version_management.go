@@ -280,7 +280,7 @@ func (s *Service) versionFileBytes(ctx context.Context, p *model.Plugin, v *mode
 	if key, size, digest, ok, err := legacyVersionPointer(v, filePath); err != nil {
 		return nil, err
 	} else if ok {
-		if s.storage == nil || !trustedArtifactKey(key, p.SpaceID) {
+		if s.storage == nil || !trustedPluginArtifactKey(key, p) {
 			return nil, ErrIntegrity
 		}
 		limit := s.maxAttachmentBytes
@@ -312,7 +312,7 @@ func (s *Service) versionFileBytes(ctx context.Context, p *model.Plugin, v *mode
 			return nil, ErrIntegrity
 		}
 		key := keys[filePath]
-		if !trustedArtifactKey(key, p.SpaceID) {
+		if !trustedPluginArtifactKey(key, p) {
 			return nil, ErrIntegrity
 		}
 		data, err := s.readArtifactBytes(ctx, key, s.maxAttachmentBytes)
