@@ -198,7 +198,7 @@ func pluginNameColumns(name string, typ model.PluginType, spaceID *string) (any,
 // can return a 409 instead of an opaque 500.
 func mapPluginNameTaken(err error) error {
 	var mysqlErr *mysql.MySQLError
-	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 && (strings.Contains(mysqlErr.Message, "uq_plugins_active_name") || strings.Contains(mysqlErr.Message, "uq_plugin_name_reservation")) {
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 && (strings.Contains(mysqlErr.Message, "uq_plugins_active_name") || strings.Contains(mysqlErr.Message, "uq_plugin_name_reservation") || strings.Contains(mysqlErr.Message, "uq_plugins_global_name")) {
 		return ErrNameTaken
 	}
 	return err

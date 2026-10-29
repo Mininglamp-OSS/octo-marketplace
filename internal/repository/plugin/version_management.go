@@ -230,7 +230,7 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET listing_state='published',updated_at=? WHERE plugin_id=?`, r.now(), current.ID); err != nil {
-		return nil, err
+		return nil, mapPluginNameTaken(err)
 	}
 	if err = ensureVisibleDefaultPlacement(ctx, tx, r.id, r.now(), current.ID, current.CategoryID); err != nil {
 		return nil, err

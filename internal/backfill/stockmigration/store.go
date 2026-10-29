@@ -526,6 +526,9 @@ func writeNode(ctx context.Context, tx *sql.Tx, n Node, root string, now time.Ti
 	if n.Release {
 		publishedKey := any(nil)
 		if reservesDisplayName(p.Type) {
+			// The planner validates p.Name against this new version's manifest,
+			// inserted above. The old Resource.PublishedName belongs to the
+			// superseded release and is retained separately for rollback.
 			key, err := model.NormalizePluginName(p.Name)
 			if err != nil {
 				return ErrWrite

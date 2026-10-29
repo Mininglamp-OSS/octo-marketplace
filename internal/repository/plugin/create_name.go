@@ -10,8 +10,8 @@ import (
 // rejectPluginNameCollision covers legacy rows whose normalized keys have not
 // been backfilled, and global listings outside a tenant's unique-index scope.
 // Tenant rows in other Spaces never participate. Locking reads serialize
-// against concurrent catalog changes; reservation indexes remain the final
-// guard for concurrent same-Space writes. Create, update and graph rebuilds
+// against concurrent catalog changes; the per-Space and global name indexes
+// provide the final concurrent-write guards. Create, update and graph rebuilds
 // use this inside their write transaction before writing a standalone name.
 func rejectPluginNameCollision(ctx context.Context, tx *sql.Tx, p model.Plugin, wanted, scope string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT p.plugin_name,
