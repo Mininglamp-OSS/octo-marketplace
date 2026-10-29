@@ -171,24 +171,31 @@ func validCapabilityResult(def CapabilityDefinition, out CapabilityInstallResult
 		}
 		skillsByID[skill.SkillID] = skill
 	}
-	for _, expert := range out.Experts {
-		seenSkills := make(map[string]bool, len(expert.SkillIDs))
+	// Every reported Skill and Connector must be bound by a returned expert,
+	// and one expert must not repeat a binding. The stored value is the last
+	// expert index plus one, so seeing the current index means that same expert
+	// already bound the resource.
+	skillRefs := make(map[string]int, len(out.Skills))
+	connectorRefs := make(map[string]int, len(out.Connectors))
+	for index, expert := range out.Experts {
 		for _, id := range expert.SkillIDs {
-			if _, exists := skillsByID[id]; !exists || seenSkills[id] {
+			if _, exists := skillsByID[id]; !exists || skillRefs[id] == index+1 {
 				return false
 			}
-			seenSkills[id] = true
+			skillRefs[id] = index + 1
 		}
-		seenConnectors := make(map[string]bool, len(expert.ConnectorIDs))
 		for _, id := range expert.ConnectorIDs {
-			if _, exists := connectorIDs[id]; !exists || seenConnectors[id] {
+			if _, exists := connectorIDs[id]; !exists || connectorRefs[id] == index+1 {
 				return false
 			}
-			seenConnectors[id] = true
+			connectorRefs[id] = index + 1
 		}
 	}
+	if len(skillRefs) != len(skillsByID) || len(connectorRefs) != len(connectorIDs) {
+		return false
+	}
 	if def.ExpertTeam == nil {
-		if out.Type != "expert" || len(def.Experts) != 1 || out.ExpertID == "" ||
+		if out.Type != "expert" || len(def.Experts) != 1 || len(out.Experts) != 1 || out.ExpertID == "" ||
 			out.ExpertTeamID != "" || out.LeaderExpertID != "" || out.ExpertTeam != nil {
 			return false
 		}

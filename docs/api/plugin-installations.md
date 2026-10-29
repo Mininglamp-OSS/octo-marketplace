@@ -278,17 +278,27 @@ must match the request's resource identities and point to returned IDs.
 Reused or restored Experts and Teams describe their actual local resources.
 Their existing Team members and leader, Expert bindings, and returned resource
 IDs may differ from the request graph; root identity still matches the requested
-version key, while first-persisted source metadata is retained. Every result
-keeps references closed: the Team leader ID points to a returned Expert, and
-each Expert's Skill and Connector IDs point to returned resources. Connector
-IDs are UUIDs with nullable `version` and `market_mcp_id`; Expert and Skill IDs
-remain opaque.
+version key, while first-persisted source metadata is retained. Locally removed
+market members stay removed. Locally deleted Skill/Connector bindings may leave
+both the returned binding list and the corresponding resource collection empty,
+even when the market request declares those dependencies. Local replacements
+and additions retain their actual names, versions and IDs.
+
+Expert/team results must close references in both directions: each Expert's
+Skill and Connector IDs point to returned resources, and every returned Skill
+or Connector is referenced by at least one returned Expert. Different Experts
+may share a resource; duplicate bindings within one Expert are invalid. A
+single-Expert result contains exactly its root Expert, and a Team's leader ID
+points to a returned Expert. An orphan resource is an inconsistent result, not
+a local graph change. Standalone Connector installation keeps its separate
+resource-identity rules. Connector IDs are UUIDs with nullable `version` and
+`market_mcp_id`; Expert and Skill IDs remain opaque.
 
 Historical pinned receipts replay in the matching authenticated wire shape.
 The oldest shape omits Skill, Expert and Team version/source metadata; the
 `3f04192` shape retains Skill metadata and omits Expert/Team metadata. Checks
 follow the fields present in the matched shape, while identity and reference
-closure still apply. Missing, duplicate, unknown, or
+closure still apply. Missing, duplicate, unknown, unreferenced, or
 identity-mismatched resources leave the Fleet outcome uncertain; retry only
 with the same key and input.
 Errors use the standard
