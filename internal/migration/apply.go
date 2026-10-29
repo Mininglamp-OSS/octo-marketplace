@@ -60,7 +60,7 @@ func applyIdentity(p Plan) string {
 	}{[]any{p.CategorySnapshotCaptured, p.CategorySnapshot}, p, func() []any {
 		a := []any{}
 		for _, n := range p.Nodes {
-			a = append(a, []any{n.Source, n.SourceRowHash, n.Evidence, n.SourcePublishedVersionID, n.SourceRelease, n.Plugin, n.Relations, n.Artifacts, n.Files, n.IconFile})
+			a = append(a, []any{n.Source, n.SourceRowHash, n.Evidence, n.SourcePublishedVersionID, n.SourceRelease, n.Plugin, n.Relations, n.Artifacts, n.Files, n.IconFile, n.MCPOriginal, n.MCPAliases, n.CatalogDescription})
 		}
 		return a
 	}()})
@@ -221,7 +221,7 @@ func Verify(ctx context.Context, db *sql.DB, p Plan, expected DatabaseIdentity) 
 	return r, nil
 }
 func nodeHash(n Node) string {
-	b, _ := json.Marshal([]any{n.SourceID, n.Source, n.SourceRowHash, n.Evidence, n.SourcePublishedVersionID, n.SourceRelease, n.Plugin, n.Relations, n.VersionID, n.VersionLabel, n.Artifacts, n.Release, n.Clone, n.Files, n.IconFile})
+	b, _ := json.Marshal([]any{n.SourceID, n.Source, n.SourceRowHash, n.Evidence, n.SourcePublishedVersionID, n.SourceRelease, n.Plugin, n.Relations, n.VersionID, n.VersionLabel, n.Artifacts, n.Release, n.Clone, n.Files, n.IconFile, n.MCPOriginal, n.MCPAliases, n.CatalogDescription})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }

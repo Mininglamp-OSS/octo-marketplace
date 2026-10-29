@@ -121,7 +121,7 @@ func TestApplyRejectsReplacedSourceObjectBeforeDestinationOrSQLWrites(t *testing
 			rowJSON, _ := json.Marshal(map[string][]byte{"plugin_id": []byte("source"), "icon": []byte("")})
 			rowHash := digest(rowJSON)
 			node := migration.Node{SourceID: "source", SourceRowHash: rowHash, Evidence: map[string]migration.SourceEvidence{"source": {RowHash: rowHash, Tables: tables, Objects: []migration.SourceObject{{Key: key, Hash: digest([]byte("original")), Size: 8}}}}}
-			state := runState{Version: 5, Database: migration.DatabaseIdentity{Name: "test", ServerUUID: "server"}, StorageID: storeID, PolicyID: digest(policy), Plan: migration.Plan{CategorySnapshotCaptured: true, ID: "run", SnapshotID: "snapshot", Nodes: []migration.Node{node}}}
+			state := runState{Version: checkpointVersion, Database: migration.DatabaseIdentity{Name: "test", ServerUUID: "server"}, StorageID: storeID, PolicyID: digest(policy), Plan: migration.Plan{CategorySnapshotCaptured: true, ID: "run", SnapshotID: "snapshot", Nodes: []migration.Node{node}}}
 			if err := saveState(stateFile, state); err != nil {
 				t.Fatal(err)
 			}
@@ -188,5 +188,77 @@ func TestLocalStorageMissingDirectoryFailsWithoutCreatingIt(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("preflight created source directory")
+	}
+}
+
+// The first invocation must persist its bindings even when no checkpoint exists.
+// Stop before any SQL writes; exercise the real command and reload its file.
+func TestFirstApplyCheckpointRetainsBindingsWhenFileDoesNotExist(t *testing.T) {
+	typed, m, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer typed.Close()
+	raw, r, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	m.ExpectQuery(`SELECT DATABASE\(\), @@server_uuid`).WillReturnRows(sqlmock.NewRows([]string{"db", "uuid"}).AddRow("production", "server"))
+	m.ExpectQuery(`SELECT GET_LOCK`).WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(1))
+	for i := 0; i < 9; i++ {
+		m.ExpectQuery(`SELECT .* LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"unused"}))
+	}
+	m.ExpectQuery(`SELECT DATABASE\(\),@@server_uuid`).WillReturnRows(sqlmock.NewRows([]string{"db", "uuid"}).AddRow("changed-database", "server"))
+	m.ExpectExec(`SELECT RELEASE_LOCK`).WillReturnResult(sqlmock.NewResult(0, 0))
+	r.ExpectBegin()
+	for i := 0; i < 9; i++ {
+		r.ExpectQuery(`SELECT .* LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"unused"}))
+	}
+	for _, table := range []string{"plugins", "plugin_relations", "plugin_versions", "plugin_version_releases", "plugin_review_requests"} {
+		r.ExpectQuery(`SELECT \* FROM ` + table + ` ORDER BY `).WillReturnRows(sqlmock.NewRows([]string{"unused"}))
+	}
+	r.ExpectQuery(regexp.QuoteMeta("SELECT * FROM plugin_category_placements ORDER BY placement_id")).WillReturnRows(sqlmock.NewRows([]string{"placement_id"}))
+	r.ExpectCommit()
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "new.state")
+	env := func(k string) string {
+		switch k {
+		case "MYSQL_DSN":
+			return "user@tcp(localhost)/production"
+		case "LOCAL_STORAGE_DIR":
+			return dir
+		}
+		return ""
+	}
+	_, storageID, err := loadStorage(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opens := 0
+	var out bytes.Buffer
+	code := runWithDatabase([]string{"--database", "production", "--apply", "--state-file", stateFile}, env, &out, func(*mysql.Config) (*sql.DB, error) {
+		opens++
+		if opens == 1 {
+			return typed, nil
+		}
+		return raw, nil
+	})
+	if code != 2 || !strings.Contains(out.String(), "source_state_changed") {
+		t.Fatalf("did not reach saved-checkpoint boundary: %d %s", code, out.String())
+	}
+	saved, err := loadState(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := json.Marshal(migration.Policy{})
+	if err = validateState(saved, migration.DatabaseIdentity{Name: "production", ServerUUID: "server"}, storageID, digest(policy)); err != nil {
+		t.Fatalf("first checkpoint lost bindings: version=%d database=%q error=%v", saved.Version, saved.Database.Name, err)
+	}
+	if err = m.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

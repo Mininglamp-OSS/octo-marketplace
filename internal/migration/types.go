@@ -43,7 +43,14 @@ type File struct {
 	Data       []byte `json:"-"`
 	ObjectKey  string
 }
-type Policy struct{ FrontendChineseSourceIDs []string }
+type CatalogDescription struct {
+	SourcePackageHash string
+	Description       string
+}
+type Policy struct {
+	FrontendChineseSourceIDs []string
+	CatalogDescriptions      map[string]CatalogDescription
+}
 type Plan struct {
 	CategorySnapshot         map[string]string `json:"-"`
 	CategorySnapshotCaptured bool              `json:"-"`
@@ -66,7 +73,10 @@ type Node struct {
 	VersionID, VersionLabel  string
 	Artifacts                json.RawMessage `json:"-"`
 	Release, Clone           bool
-	Files                    []File `json:"-"`
+	Files                    []File              `json:"-"`
+	CatalogDescription       *CatalogDescription `json:"-"`
+	MCPOriginal              []byte              `json:"-"`
+	MCPAliases               map[string]string   `json:"-"`
 }
 type Mapping struct{ SourceID, TargetID, VersionID, Disposition string }
 type Issue struct{ ResourceID, Code string }

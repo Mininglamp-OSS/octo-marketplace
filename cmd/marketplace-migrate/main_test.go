@@ -55,7 +55,9 @@ func TestRunNeverReadsSourceOrTargetConfiguration(t *testing.T) {
 func TestRunStateKeepsPrivateFileBytesAndBindings(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "run.state")
 	db := migration.DatabaseIdentity{Name: "production", ServerUUID: "server"}
-	s := runState{Version: 5, Database: db, StorageID: "store", PolicyID: "policy", Plan: migration.Plan{CategorySnapshotCaptured: true, ID: "plan", SnapshotID: "input", Nodes: []migration.Node{{IconFile: &migration.File{Data: []byte{1, 255, 0}}, Files: []migration.File{{Data: []byte{0, 255, 1}}}}}}}
+	s := runState{Version: checkpointVersion, Database: db, StorageID: "store", PolicyID: "policy", Plan: migration.Plan{CategorySnapshotCaptured: true, ID: "plan", SnapshotID: "input", Nodes: []migration.Node{{IconFile: &migration.File{Data: []byte{1, 255, 0}}, Files: []migration.File{{Data: []byte{0, 255, 1}}}}}}}
+	s.Plan.Nodes[0].MCPOriginal = []byte(`{"mcpServers":{"original":{"command":"fixture"}}}`)
+	s.Plan.Nodes[0].MCPAliases = map[string]string{"original": "original-source"}
 	if e := saveState(name, s); e != nil {
 		t.Fatal(e)
 	}
@@ -69,11 +71,14 @@ func TestRunStateKeepsPrivateFileBytesAndBindings(t *testing.T) {
 	if got.Plan.Nodes[0].IconFile == nil || !bytes.Equal(got.Plan.Nodes[0].IconFile.Data, []byte{1, 255, 0}) {
 		t.Fatal("private icon bytes lost")
 	}
-	for _, v := range []int{1, 2, 3, 4} {
+	if !bytes.Equal(got.Plan.Nodes[0].MCPOriginal, s.Plan.Nodes[0].MCPOriginal) || got.Plan.Nodes[0].MCPAliases["original"] != "original-source" {
+		t.Fatal("private MCP source or alias mapping lost")
+	}
+	for _, v := range []int{1, 2, 3, 4, 5, 6, 7} {
 		old := got
 		old.Version = v
 		if validateState(old, db, "store", "policy") == nil {
-			t.Fatal("old icon-incomplete format accepted")
+			t.Fatal("old incomplete evidence or connector-equivalence format accepted")
 		}
 	}
 	if validateState(got, db, "store", "policy") != nil {
@@ -133,7 +138,7 @@ func TestCheckpointIsDurableObjectInventoryAcrossInterruptedPublication(t *testi
 		t.Fatalf("build: %v %#v", err, plan.Issues)
 	}
 	stateFile := filepath.Join(t.TempDir(), "run.state")
-	if err = saveState(stateFile, runState{Version: 5, Plan: plan}); err != nil {
+	if err = saveState(stateFile, runState{Version: checkpointVersion, Plan: plan}); err != nil {
 		t.Fatal(err)
 	}
 	state, err := loadState(stateFile)

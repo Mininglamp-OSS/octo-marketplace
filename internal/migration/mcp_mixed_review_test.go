@@ -127,7 +127,7 @@ func TestBuildRemovesEmptyMCPFromAllCurrentRepresentations(t *testing.T) {
 	}
 }
 
-func TestBuildBlocksAmbiguousConnectorNamesOnlyWithinOneInstallation(t *testing.T) {
+func TestBuildNamesDistinctConnectorsAndStillRejectsAmbiguousSavedPlan(t *testing.T) {
 	for _, sharedTeam := range []bool{false, true} {
 		in := legacyReferenceInput(true)
 		expert := resource("second-expert", "second-expert", "", "unused")
@@ -147,14 +147,14 @@ func TestBuildBlocksAmbiguousConnectorNamesOnlyWithinOneInstallation(t *testing.
 			}
 			continue
 		}
-		found := false
-		for _, issue := range p.Issues {
-			if issue.Code == "connector_name_ambiguous" {
-				found = true
-			}
+		if err != nil || len(connectorNameIssues(p)) != 0 {
+			t.Fatalf("different MCPs not disambiguated: %v %+v", err, p.Issues)
 		}
-		if err != ErrIssues || !found {
-			t.Fatalf("ambiguous team accepted: %v %+v", err, p.Issues)
+		// A saved/caller-built graph with duplicate names must still fail closed.
+		for i := range p.Nodes {
+			if p.Nodes[i].Plugin.Type == model.PluginTypeConnector {
+				p.Nodes[i].Plugin.Name = "search"
+			}
 		}
 		// Resume/caller-built plans cannot bypass the same guard before writes.
 		p.Issues = nil

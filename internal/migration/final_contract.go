@@ -7,7 +7,6 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/artifactscope"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
-	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
 
 // Check again at the persistence boundary, even for caller-built or resumed plans.
@@ -18,7 +17,13 @@ func validateFinalContracts(p Plan) []Issue {
 		nodes[n.Plugin.ID] = n
 	}
 	for _, n := range p.Nodes {
-		if pluginrepo.ValidateReferenceMetadata(n.Plugin.Type, n.Relations) != nil {
+		if code := validateConnectorAliasProjection(n); code != "" {
+			issues = append(issues, Issue{n.SourceID, code})
+		}
+		if code := validateSkillDescriptionProjection(n); code != "" {
+			issues = append(issues, Issue{n.SourceID, code})
+		}
+		if validateNodeReferenceMetadata(n) != nil {
 			issues = append(issues, Issue{n.SourceID, "relation_metadata_invalid"})
 		}
 		for _, edge := range n.Relations {
@@ -77,13 +82,16 @@ func validateFinalContracts(p Plan) []Issue {
 			issues = append(issues, Issue{n.SourceID, "reserved_expert_context_path"})
 		}
 	}
-	return append(append(issues, connectorNameIssues(p)...), iconIssues(p)...)
+	issues = append(issues, connectorNameIssues(p)...)
+	issues = append(issues, connectorServerKeyIssues(p)...)
+	return append(issues, iconIssues(p)...)
 }
 
 // Fleet's connector map uses the trimmed display name, scoped to one expanded
 // installation. Different roots may legitimately have same-named connectors;
 // two distinct identities within the same expert/team closure are ambiguous.
-// Refuse the plan rather than rename any original MCP configuration implicitly.
+// Reject any remaining ambiguity, including caller-built/saved plans. Planned
+// source suffixes change display names only, never original MCP configuration.
 func connectorNameIssues(p Plan) []Issue {
 	nodes := make(map[string]Node, len(p.Nodes))
 	for _, n := range p.Nodes {

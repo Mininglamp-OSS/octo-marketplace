@@ -126,6 +126,9 @@ func (r *Repo) lockReferences(ctx context.Context, tx *sql.Tx, scope Scope, sour
 	if source.IsEmbedded {
 		return ErrInvalidRelation
 	}
+	if source.ListingState == model.PluginListingStateDraft && len(rels) == 0 {
+		return nil
+	}
 	existing := map[string]bool{}
 	rows, err := tx.QueryContext(ctx, `SELECT relation_type,target_plugin_id,target_version_id FROM plugin_relations WHERE source_plugin_id=? AND status=1 AND deleted_at IS NULL`, source.ID)
 	if err != nil {

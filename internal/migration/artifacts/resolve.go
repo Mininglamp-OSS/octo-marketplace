@@ -320,6 +320,21 @@ func resolve(ctx context.Context, p *model.Plugin, read Reader, l Limits, icon *
 		if code != "" {
 			return nil, fmt.Errorf("archive_%s", strings.ToLower(code))
 		}
+
+		// Windows ZIP entry separators are normalized before root/containment
+		// checks. Even byte-identical aliases are rejected, never overwritten.
+		normalized := make(map[string][]byte, len(entries))
+		for name, data := range entries {
+			name = strings.ReplaceAll(name, "\\", "/")
+			if !validPath(name) {
+				return nil, fmt.Errorf("unsafe_file_path")
+			}
+			if _, exists := normalized[name]; exists {
+				return nil, fmt.Errorf("duplicate_file_path")
+			}
+			normalized[name] = data
+		}
+		entries = normalized
 		root := ""
 		count := 0
 		for n := range entries {
