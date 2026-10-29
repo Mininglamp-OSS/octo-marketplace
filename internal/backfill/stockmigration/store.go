@@ -194,10 +194,12 @@ func read(ctx context.Context, tx *sql.Tx, limit int, lock bool) (Dataset, error
 // Expert/Skill display name. The check uses the caller's full bounded inventory,
 // not just the rows that happened to be cloned, so a name occupied by an
 // unrelated active plugin is caught too. Soft-deleted rows are ignored; delisted
-// rows still reserve the name.
+// rows still reserve the name within their own scope. Published public/system
+// names also reserve their released market name across scopes.
 func checkPlannedNames(unit *Unit, resources []Resource) error {
 	type key struct{ scope, typ, name string }
 	occupied := map[key]string{}
+	globalOccupied := map[key][]string{}
 	planned := map[key]string{}
 	for _, r := range resources {
 		if r.Plugin.DeletedAt != nil || r.Plugin.IsEmbedded {
@@ -221,6 +223,21 @@ func checkPlannedNames(unit *Unit, resources []Resource) error {
 			}
 			occupied[k] = r.Plugin.ID
 		}
+		// Match the normal write guard: only the effective market name is
+		// visible across scopes, never an unreleased global draft name.
+		if r.Plugin.Status == 1 && r.Plugin.ListingState == model.PluginListingStatePublished &&
+			(r.Plugin.Visibility == model.PluginVisibilityPublic || r.Plugin.Visibility == model.PluginVisibilitySystem) {
+			releasedName := r.PublishedName
+			if releasedName == "" {
+				releasedName = r.Plugin.Name // legacy published row
+			}
+			name, err := model.NormalizePluginName(releasedName)
+			if err != nil {
+				return ErrNameConflict
+			}
+			k := key{typ: string(r.Plugin.Type), name: name}
+			globalOccupied[k] = append(globalOccupied[k], r.Plugin.ID)
+		}
 	}
 	for _, n := range unit.Nodes {
 		if !n.Clone || !reservesDisplayName(n.Type) {
@@ -238,6 +255,11 @@ func checkPlannedNames(unit *Unit, resources []Resource) error {
 			k := key{scope, string(n.Type), name}
 			if existing := occupied[k]; existing != "" && existing != n.TargetID {
 				return fmt.Errorf("%w: %s %q already belongs to %s", ErrNameConflict, n.Type, n.Plugin.Name, existing)
+			}
+			for _, existing := range globalOccupied[key{typ: string(n.Type), name: name}] {
+				if existing != n.TargetID {
+					return fmt.Errorf("%w: %s %q already belongs to global market plugin %s", ErrNameConflict, n.Type, n.Plugin.Name, existing)
+				}
 			}
 			if previous := planned[k]; previous != "" && previous != n.TargetID {
 				return fmt.Errorf("%w: %s %q appears twice in this migration unit", ErrNameConflict, n.Type, n.Plugin.Name)

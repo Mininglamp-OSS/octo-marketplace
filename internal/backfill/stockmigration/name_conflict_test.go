@@ -73,3 +73,48 @@ func TestTeamPlannedNamesIncludeDraftAndPublishedReservations(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckPlannedNamesGlobalMarketReservation(t *testing.T) {
+	space, foreign := "space-a", "space-b"
+	for _, typ := range []model.PluginType{model.PluginTypeSkill, model.PluginTypeExpert, model.PluginTypeExpertTeam} {
+		for _, tc := range []struct {
+			name                                      string
+			visibility                                model.PluginVisibility
+			listing                                   model.PluginListingState
+			status                                    int
+			published, wanted                         string
+			foreignScope, deleted, embedded, conflict bool
+		}{
+			{name: "public release", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStatePublished, status: 1, published: "Official", wanted: " ＯＦＦＩＣＩＡＬ ", conflict: true},
+			{name: "system release", visibility: model.PluginVisibilitySystem, listing: model.PluginListingStatePublished, status: 1, published: "Official", wanted: "official", conflict: true},
+			{name: "public release in foreign space", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStatePublished, status: 1, published: "Official", wanted: "official", foreignScope: true, conflict: true},
+			{name: "legacy published name", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStatePublished, status: 1, wanted: "draft", conflict: true},
+			{name: "unreleased global rename is hidden", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStatePublished, status: 1, published: "Official", wanted: "draft"},
+			{name: "foreign private is hidden", visibility: model.PluginVisibilityPrivate, listing: model.PluginListingStatePublished, status: 1, published: "Official", wanted: "official", foreignScope: true},
+			{name: "global draft is hidden", visibility: model.PluginVisibilitySystem, listing: model.PluginListingStateDraft, status: 1, wanted: "draft"},
+			{name: "delisted global is hidden", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStateDelisted, status: 1, published: "Official", wanted: "official"},
+			{name: "inactive global is hidden", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStatePublished, published: "Official", wanted: "official"},
+			{name: "deleted global is hidden", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStatePublished, status: 1, published: "Official", wanted: "official", deleted: true},
+			{name: "embedded global does not reserve", visibility: model.PluginVisibilityPublic, listing: model.PluginListingStatePublished, status: 1, published: "Official", wanted: "official", embedded: true},
+		} {
+			t.Run(string(typ)+"/"+tc.name, func(t *testing.T) {
+				existing := Resource{Plugin: model.Plugin{ID: "global", Name: "Draft", Type: typ, Visibility: tc.visibility, ListingState: tc.listing, Status: tc.status, IsEmbedded: tc.embedded}, PublishedName: tc.published}
+				if tc.foreignScope {
+					existing.Plugin.SpaceID = &foreign
+				}
+				if tc.deleted {
+					existing.Plugin.DeletedAt = newTime()
+				}
+				node := Node{Clone: true, Mapping: Mapping{TargetID: "clone", Type: typ}, Plugin: model.Plugin{ID: "clone", Name: tc.wanted, Type: typ, SpaceID: &space}}
+				err := checkPlannedNames(&Unit{Nodes: []Node{node}}, []Resource{existing})
+				if tc.conflict {
+					if !errors.Is(err, ErrNameConflict) {
+						t.Fatalf("global name allowed: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("hidden name blocked clone: %v", err)
+				}
+			})
+		}
+	}
+}

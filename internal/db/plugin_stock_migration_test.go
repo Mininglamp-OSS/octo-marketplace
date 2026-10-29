@@ -567,3 +567,79 @@ func TestStockMigrationRollbackRejectsConcurrentNameChanges(t *testing.T) {
 		})
 	}
 }
+
+func TestStockMigrationRejectsGlobalPublishedNameCollision(t *testing.T) {
+	for _, tc := range []struct {
+		name, visibility, listing string
+		conflict                  bool
+	}{
+		{"public", "public", "published", true},
+		{"system", "system", "published", true},
+		{"foreign-private", "private", "published", false},
+		{"global-draft", "system", "draft", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := reviewDB(t)
+			ctx := context.Background()
+			seedStockRoot(t, database, "root", "private", "published")
+			seed(t, database, seedPlugin{id: "market-skill", typ: "skill", space: "space-b", visibility: tc.visibility, listingState: tc.listing, currentVersionID: "market-release", manifest: `{"plugin_name":" ＲＯＯＴ－ＳＫＩＬＬ "}`})
+			seedVersionRow(t, database, "market-release", "market-skill", "1")
+			if _, err := database.Exec(`UPDATE plugin_versions SET manifest_json=JSON_OBJECT('plugin_name',' ＲＯＯＴ－ＳＫＩＬＬ ') WHERE version_id='market-release'`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Exec(`UPDATE plugins SET plugin_name='Unreleased market draft' WHERE plugin_id='market-skill'`); err != nil {
+				t.Fatal(err)
+			}
+			if tc.listing == "draft" {
+				if _, err := database.Exec(`UPDATE plugins SET plugin_name=' ＲＯＯＴ－ＳＫＩＬＬ ' WHERE plugin_id='market-skill'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.visibility != "private" {
+				if _, err := database.Exec(`UPDATE plugins SET space_id=NULL WHERE plugin_id='market-skill'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.listing == "published" {
+				if _, err := database.Exec(`INSERT INTO plugin_version_releases(plugin_id,version_id,version_label,released_by,released_at) VALUES ('market-skill','market-release','1.0.0','test',NOW(3))`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := database.Exec(`UPDATE plugins SET published_version_id='market-release' WHERE plugin_id='market-skill'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d, err := stockmigration.Read(ctx, database, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range d.Resources {
+				if r.Plugin.ID == "market-skill" && tc.listing == "published" && r.PublishedName != " ＲＯＯＴ－ＳＫＩＬＬ " {
+					t.Fatalf("fixture has no released display name: %q", r.PublishedName)
+				}
+			}
+			plan := stockmigration.Build(d)
+			if len(plan.Exceptions) != 0 {
+				t.Fatalf("invalid fixture plan: %+v", plan.Exceptions)
+			}
+			inventory := func() string {
+				var value string
+				if err := database.QueryRow(`SELECT JSON_ARRAY((SELECT COUNT(*) FROM plugins),(SELECT COUNT(*) FROM plugin_versions),(SELECT COUNT(*) FROM plugin_version_releases),(SELECT COUNT(*) FROM plugin_relations),(SELECT COUNT(*) FROM plugin_stock_migration_batches),(SELECT COUNT(*) FROM plugin_stock_migration_roots),(SELECT current_version_id FROM plugins WHERE plugin_id='root'),(SELECT plugin_hash FROM plugins WHERE plugin_id='root'))`).Scan(&value); err != nil {
+					t.Fatal(err)
+				}
+				return value
+			}
+			before := inventory()
+			n, err := stockmigration.ApplyRoot(ctx, database, 1000, "global-name", "root", plan.Digest, true)
+			if tc.conflict {
+				if n != 0 || !errors.Is(err, stockmigration.ErrNameConflict) {
+					t.Fatalf("global collision allowed: nodes=%d err=%v", n, err)
+				}
+				if after := inventory(); before != after {
+					t.Fatalf("partial migration despite name conflict: before=%s after=%s", before, after)
+				}
+			} else if err != nil || n != 4 {
+				t.Fatalf("non-global name blocked: nodes=%d err=%v", n, err)
+			}
+		})
+	}
+}
