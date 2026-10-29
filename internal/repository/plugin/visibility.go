@@ -191,6 +191,9 @@ func (r *Repo) applyAudience(ctx context.Context, tx *sql.Tx, scope Scope, p *mo
 	if err = syncVisibilityEmbeddedAudience(ctx, tx, p, target, now); err != nil {
 		return err
 	}
+	if err = ensureVisibleDefaultPlacement(ctx, tx, r.id, now, p.ID, p.CategoryID); err != nil {
+		return err
+	}
 	remark := "visibility=" + string(p.Visibility) + "->" + string(target)
 	return insertAudit(ctx, tx, r.id(), now, *p, action, Mutation{OperatorID: uid, OperatorName: name, RequestID: requestID, Remark: &remark}, p.PluginHash, p.PluginHash)
 }
