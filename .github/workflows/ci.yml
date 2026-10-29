@@ -28,7 +28,10 @@ jobs:
           MYSQL_DATABASE: octo_marketplace
         ports:
           - 3306:3306
+        # Disposable schemas are replayed for each integration test. Avoid
+        # runner disk contention without weakening transaction flush settings.
         options: >-
+          --tmpfs /var/lib/mysql:rw
           --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
           --health-interval=5s
           --health-timeout=5s
@@ -47,8 +50,14 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Smoke test development Octo stub
         run: python3 scripts/dev-octo-stub-smoke.py
+      - name: Configure test MySQL redo capacity
+        # Both database suites replay the schema in isolated databases. Keep
+        # their DDL load from exhausting MySQL 8's default 100 MiB redo capacity.
+        run: >-
+          docker exec -e MYSQL_PWD=root "${{ job.services.mysql.id }}"
+          mysql -uroot -e "SET GLOBAL innodb_redo_log_capacity = 1073741824;"
       - name: Test
-        run: go test -race -shuffle=on -count=1 ./...
+        run: go test -v -race -shuffle=on -count=1 ./...
       - name: Vet
         run: go vet ./...
       - name: Build
