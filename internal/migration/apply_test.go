@@ -118,11 +118,21 @@ func TestApplyIssuesNeverWrites(t *testing.T) {
 func TestReceiptRejectsChangedNode(t *testing.T) {
 	db, m, _ := sqlmock.New()
 	defer db.Close()
+	m.ExpectBegin()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
 	p := Plan{CategorySnapshotCaptured: true, ID: "run"}
 	n := Node{SourceID: "source"}
 	m.ExpectQuery("SELECT node_hash,state_hash").WithArgs("run", "").WillReturnRows(sqlmock.NewRows([]string{"node_hash", "state_hash"}).AddRow("different", "same"))
-	if e := verifyReceipt(context.Background(), db, p, n); e == nil {
+	if e := verifyReceipt(context.Background(), tx, p, n); e == nil {
 		t.Fatal("changed node accepted")
+	}
+	m.ExpectRollback()
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
 	}
 	if e := m.ExpectationsWereMet(); e != nil {
 		t.Fatal(e)

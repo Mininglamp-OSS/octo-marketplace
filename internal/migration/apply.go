@@ -175,7 +175,7 @@ func Verify(ctx context.Context, db *sql.DB, p Plan, expected DatabaseIdentity) 
 		r.Verified++
 	}
 
-	rows, e := tx.QueryContext(ctx, `SELECT source_id,target_id,version_id,disposition FROM marketplace_conversion_mapping WHERE run_id=? ORDER BY source_id,target_id`, p.ID)
+	rows, e := tx.QueryContext(ctx, `SELECT source_id,target_id,version_id,disposition FROM marketplace_conversion_mapping WHERE run_id=? ORDER BY source_id,target_id FOR UPDATE`, p.ID)
 	if e != nil {
 		return r, errApply
 	}
@@ -225,9 +225,9 @@ func nodeHash(n Node) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
-func verifyReceipt(ctx context.Context, q applyQuery, p Plan, n Node) error {
+func verifyReceipt(ctx context.Context, q *sql.Tx, p Plan, n Node) error {
 	var nh, sh string
-	if e := q.QueryRowContext(ctx, `SELECT node_hash,state_hash FROM marketplace_conversion_receipt WHERE run_id=? AND target_id=?`, p.ID, n.Plugin.ID).Scan(&nh, &sh); e != nil {
+	if e := q.QueryRowContext(ctx, `SELECT node_hash,state_hash FROM marketplace_conversion_receipt WHERE run_id=? AND target_id=? FOR UPDATE`, p.ID, n.Plugin.ID).Scan(&nh, &sh); e != nil {
 		return errApply
 	}
 	if nh != nodeHash(n) {
@@ -242,7 +242,11 @@ func verifyReceipt(ctx context.Context, q applyQuery, p Plan, n Node) error {
 
 // Hash every column of owned rows, including immutable history, metadata, live
 // edges and provenance. This catches edits that retain a stale plugin_hash.
-func stateHash(ctx context.Context, q applyQuery, p Plan, n Node) (string, error) {
+// Use current locking reads in this fixed table/row order. In REPEATABLE READ,
+// ordinary reads may use an older snapshot and do not protect the verified state
+// until commit. Range locks also cover inserts into empty owned inventories.
+// Keep the original query text in the digest so existing receipts remain valid.
+func stateHash(ctx context.Context, q *sql.Tx, p Plan, n Node) (string, error) {
 	h := sha256.New()
 	queries := []struct {
 		q string
@@ -285,7 +289,7 @@ func stateHash(ctx context.Context, q applyQuery, p Plan, n Node) (string, error
 		}
 	}
 	for _, x := range queries {
-		rows, e := q.QueryContext(ctx, x.q, x.a...)
+		rows, e := q.QueryContext(ctx, x.q+" FOR UPDATE", x.a...)
 		if e != nil {
 			return "", e
 		}
