@@ -112,6 +112,14 @@ install request and its legacy `agent_id` / `squad_id` response shape are
 unchanged; this source metadata belongs to the complete Fleet capability
 request/result boundary.
 
+Expert-to-skill edges follow the same rule. A `TargetVersionID` selects that exact
+released Skill snapshot; an unpinned edge follows the normal published-detail
+resolution. The Skill name, declared version, content, and files are all taken
+from the selected snapshot, and the expert's `skill_names` refer to that name.
+Existing visibility, audience, and historical-dependency availability checks
+still apply; same-name snapshots with different definitions retain the existing
+explicit conflict behavior.
+
 
 ## Local acceptance
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
@@ -215,9 +216,75 @@ func TestPinnedExpertRootUsesItsSelectedSnapshotDeclaredVersion(t *testing.T) {
 	requireWireVersion(t, experts["expert-a"], stringPtr("expert-a-1.0"))
 }
 
-func TestCurrentTeamInstallUsesTheMemberRelationSnapshot(t *testing.T) {
-	svc, store := publishedGraphVersionsFixture(t, nil, nil)
+func setCapabilitySkillSnapshot(t *testing.T, store *publishedGraphVersionStore, versionID, name, declaredVersion, content, guide string) {
+	t.Helper()
+	key := pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: versionID}
+	version := store.versions[key]
+	if version == nil {
+		base := store.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}]
+		if base == nil {
+			t.Fatalf("missing base skill snapshot for %q", versionID)
+		}
+		copy := *base
+		copy.ID = versionID
+		copy.Version = versionID
+		copy.Release = &model.PluginVersionRelease{PluginID: "skill-a", VersionID: versionID}
+		version = &copy
+		store.versions[key] = version
+	}
+	manifest, err := json.Marshal(map[string]string{"plugin_name": name, "description": "description for " + name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version.Manifest = manifest
+	version.DeclaredVersion = stringPtr(declaredVersion)
+	version.Package = packageWith(rawAtt("SKILL.md", content), rawAtt("references/guide.md", guide))
+}
+
+func useCurrentPublishedSkillSnapshot(store *publishedGraphVersionStore, versionID string) {
+	store.published["skill-a"] = versionID
+	store.plugins["skill-a"].Name = "Draft renamed skill"
+	store.plugins["skill-a"].CurrentVersion = stringPtr("draft-skill-4.0")
+}
+
+func requireCapabilitySkill(t *testing.T, skills []fleet.CapabilitySkill, name, version, content, guide string) {
+	t.Helper()
+	for _, skill := range skills {
+		if skill.Name != name {
+			continue
+		}
+		if skill.MarketSkillID != "skill-a" || skill.Version == nil || *skill.Version != version || skill.Content != content {
+			t.Fatalf("skill %q has wrong source snapshot: %+v", name, skill)
+		}
+		if len(skill.Files) != 1 || skill.Files[0].Path != "references/guide.md" || skill.Files[0].Source.Type != "inline_text" || skill.Files[0].Source.Content != guide {
+			t.Fatalf("skill %q has wrong snapshot files: %+v", name, skill.Files)
+		}
+		return
+	}
+	t.Fatalf("missing skill %q in capability definition", name)
+}
+
+func requireExpertSkillName(t *testing.T, experts []fleet.CapabilityExpert, expertID, skillName string) {
+	t.Helper()
+	for _, expert := range experts {
+		if expert.MarketExpertID != expertID {
+			continue
+		}
+		if len(expert.SkillNames) != 1 || expert.SkillNames[0] != skillName {
+			t.Fatalf("expert %q references skills %v, want [%q]", expertID, expert.SkillNames, skillName)
+		}
+		return
+	}
+	t.Fatalf("missing expert %q in capability definition", expertID)
+}
+
+func TestCurrentTeamInstallUsesMemberAndSkillRelationSnapshots(t *testing.T) {
+	svc, store := publishedGraphVersionsFixture(t, pin("skill-v1"), nil)
 	svc.WithPinnedInstallation(false)
+	setCapabilitySkillSnapshot(t, store, "skill-v1", "Pinned skill v1", "skill-1.0", "body from skill v1", "guide from skill v1")
+	setCapabilitySkillSnapshot(t, store, "skill-v2", "Current published skill v2", "skill-2.0", "body from skill v2", "guide from skill v2")
+	useCurrentPublishedSkillSnapshot(store, "skill-v2")
+
 	selectedKey := pluginrepo.InstallVersionKey{PluginID: "expert-a", VersionID: "expert-v1"}
 	selected := store.versions[selectedKey]
 	selected.DeclaredVersion = stringPtr("expert-a-1.0")
@@ -262,4 +329,35 @@ func TestCurrentTeamInstallUsesTheMemberRelationSnapshot(t *testing.T) {
 	}
 	requireWireString(t, selectedExpert, "instructions", "old expert a")
 	requireWireVersion(t, selectedExpert, stringPtr("expert-a-1.0"))
+
+	capability := installer.in.Definition
+	if len(capability.Skills) != 2 {
+		t.Fatalf("definition has %d skills, want the pinned historical and current published snapshots: %+v", len(capability.Skills), capability.Skills)
+	}
+	requireCapabilitySkill(t, capability.Skills, "Pinned skill v1", "skill-1.0", "body from skill v1", "guide from skill v1")
+	requireCapabilitySkill(t, capability.Skills, "Current published skill v2", "skill-2.0", "body from skill v2", "guide from skill v2")
+	requireExpertSkillName(t, capability.Experts, "expert-a", "Pinned skill v1")
+	requireExpertSkillName(t, capability.Experts, "expert-b", "Current published skill v2")
+}
+
+func TestCurrentTeamKeepsDistinctHistoricalSkillSnapshotsForDifferentMembers(t *testing.T) {
+	svc, store := publishedGraphVersionsFixture(t, pin("skill-v1"), pin("skill-v2"))
+	svc.WithPinnedInstallation(false)
+	setCapabilitySkillSnapshot(t, store, "skill-v1", "Historical skill v1", "skill-1.0", "body from skill v1", "guide from skill v1")
+	setCapabilitySkillSnapshot(t, store, "skill-v2", "Historical skill v2", "skill-2.0", "body from skill v2", "guide from skill v2")
+	setCapabilitySkillSnapshot(t, store, "skill-v3", "Current published skill v3", "skill-3.0", "body from skill v3", "guide from skill v3")
+	useCurrentPublishedSkillSnapshot(store, "skill-v3")
+
+	if _, err := svc.CreateInstallation(context.Background(), testCaller, "team", installationParams()); err != nil {
+		t.Fatal(err)
+	}
+
+	capability := svc.capabilityInstaller.(*fakeCapabilityInstaller).in.Definition
+	if len(capability.Skills) != 2 {
+		t.Fatalf("definition has %d skills, want both historical snapshots of skill-a: %+v", len(capability.Skills), capability.Skills)
+	}
+	requireCapabilitySkill(t, capability.Skills, "Historical skill v1", "skill-1.0", "body from skill v1", "guide from skill v1")
+	requireCapabilitySkill(t, capability.Skills, "Historical skill v2", "skill-2.0", "body from skill v2", "guide from skill v2")
+	requireExpertSkillName(t, capability.Experts, "expert-a", "Historical skill v1")
+	requireExpertSkillName(t, capability.Experts, "expert-b", "Historical skill v2")
 }
