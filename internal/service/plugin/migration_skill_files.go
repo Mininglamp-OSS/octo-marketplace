@@ -58,7 +58,7 @@ func ResolveMigrationSkillFiles(ctx context.Context, reader storage.Storage, p *
 	virtualSpace := "migration-preview"
 	resolvedKeys := map[string]string{}
 	authorize := func(key string) (string, error) {
-		if !migrationArtifactKey(key, p.SpaceID) {
+		if !trustedPluginArtifactKey(key, p) && !migrationArtifactKey(key, p.SpaceID) {
 			return "", ErrInvalidRequest
 		}
 		sum := sha256.Sum256([]byte(key))

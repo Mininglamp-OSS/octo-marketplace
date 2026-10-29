@@ -35,6 +35,8 @@ jobs:
           --health-retries=20
     env:
       TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/octo_marketplace?parseTime=true&multiStatements=true
+      MIGRATION_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/octo_marketplace_rehearsal_ci?parseTime=true&multiStatements=true
+      MIGRATION_TEST_MYSQL_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

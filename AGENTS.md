@@ -121,7 +121,19 @@ When marketplace behavior is introduced:
 - Reject archive traversal, symlink escape, absolute paths, oversized payloads,
   and unsafe executable content at the ingestion boundary.
 - MCP manifests may describe required secret names, but must never persist or
-  log secret values.
+  log secret values, subject to the narrowly scoped legacy migration exception
+  below. Logging secret values remains prohibited without exception.
+- Legacy migration exception, explicitly requested for `marketplace-migrate`:
+  preserve the existing MCP endpoint, authentication, and extension configuration
+  when converting source records and extracting connectors. This includes literal
+  values already present in source `mcp.json`; the converted package and private
+  checkpoint can therefore contain those values. Do not redact or replace them
+  with unusable placeholders as part of this conversion. Preserve the source
+  owner, Space, visibility, and listing boundary; keep checkpoint files private
+  and omit configuration values from logs and public reports. This exception
+  does not authorize introducing new credentials, changing normal ingestion
+  policy, or claiming the resulting data is credential-free. See
+  `docs/production-marketplace-migration.md` for the operator contract.
 - The server resolves global, Space, user, and agent policy. CLI clients receive
   an effective plan and must not reproduce authorization logic.
 

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/artifactscope"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/storage"
 )
@@ -26,11 +27,8 @@ var ErrLegacySnapshotArtifacts = errors.New("legacy snapshot artifacts require r
 // version records must already live in the resource's own immutable namespace.
 // It is intentionally stricter than IsImmutableArtifactKey — a key from another
 // Space's versions prefix must not become historical content either.
-func frozenArtifactKey(key string, spaceID *string) bool {
-	if key == "" || spaceID == nil || *spaceID == "" {
-		return false
-	}
-	return strings.HasPrefix(key, "plugins/"+*spaceID+"/attachments/versions/") && storage.IsImmutableArtifactKey(key)
+func frozenArtifactKey(key string, p model.Plugin) bool {
+	return artifactscope.Allows(&p, key) && storage.IsImmutableArtifactKey(key)
 }
 
 // snapshotArtifacts describes bytes without copying inline content out of the
@@ -83,7 +81,10 @@ func snapshotArtifacts(p model.Plugin) (json.RawMessage, error) {
 					}
 					_ = json.Unmarshal(ref[field+"_size"], &size)
 					_ = json.Unmarshal(ref[field+"_hash"], &digest)
-					if !frozenArtifactKey(key, p.SpaceID) || size < 0 || len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") {
+					if !frozenArtifactKey(key, p) || size < 0 || len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") {
+						return nil, ErrLegacySnapshotArtifacts
+					}
+					if _, err := hex.DecodeString(strings.TrimPrefix(digest, "sha256:")); err != nil {
 						return nil, ErrLegacySnapshotArtifacts
 					}
 					out = append(out, model.PluginVersionArtifact{Path: a.Path + "/" + field, ContentType: "storage", ObjectKey: key, Size: size, Digest: digest})
@@ -91,7 +92,7 @@ func snapshotArtifacts(p model.Plugin) (json.RawMessage, error) {
 			}
 		case "storage":
 			f.ObjectKey = keys[a.Path]
-			if !frozenArtifactKey(f.ObjectKey, p.SpaceID) || f.Size < 0 || len(f.Digest) != 71 || !strings.HasPrefix(f.Digest, "sha256:") {
+			if !frozenArtifactKey(f.ObjectKey, p) || f.Size < 0 || len(f.Digest) != 71 || !strings.HasPrefix(f.Digest, "sha256:") {
 				return nil, ErrLegacySnapshotArtifacts
 			}
 			if _, err := hex.DecodeString(strings.TrimPrefix(f.Digest, "sha256:")); err != nil {

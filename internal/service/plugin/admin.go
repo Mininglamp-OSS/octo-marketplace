@@ -127,7 +127,7 @@ func conventionVisibility(typ model.PluginType) (model.PluginVisibility, bool) {
 // CanonicalizeDocuments rejects every storage attachment (safeObjectSegment
 // rejects the empty Space) and admins cannot edit any skill whose package spilled
 // a file to object storage (P1-1). Returns the built plugin + relations.
-func (s *Service) adminEffectiveWrite(ctx context.Context, caller Caller, pluginID string, req WriteRequest, visibility model.PluginVisibility, effectiveSpace string) (*model.Plugin, []model.PluginRelation, error) {
+func (s *Service) adminEffectiveWrite(ctx context.Context, caller Caller, pluginID string, req WriteRequest, visibility model.PluginVisibility, effectiveSpace string, resources ...*model.Plugin) (*model.Plugin, []model.PluginRelation, error) {
 	if !conventionType(req.Type) {
 		return nil, nil, ErrInvalidRequest
 	}
@@ -138,7 +138,7 @@ func (s *Service) adminEffectiveWrite(ctx context.Context, caller Caller, plugin
 	// global value so the write revalidates and the row stops carrying the retired
 	// value (validVisibility rejects `public`).
 	req.Visibility = model.NormalizeLegacyVisibility(visibility)
-	p, rels, err := s.buildWrite(ctx, eff, pluginID, req, s.now(), true)
+	p, rels, err := s.buildWrite(ctx, eff, pluginID, req, s.now(), true, resources...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -306,7 +306,7 @@ func (s *Service) AdminUpdate(ctx context.Context, caller Caller, pluginID strin
 	if err := applyStoredVersionRules(&req, old); err != nil {
 		return nil, err
 	}
-	p, rels, err := s.adminEffectiveWrite(ctx, caller, storageID, req, old.Visibility, effSpace)
+	p, rels, err := s.adminEffectiveWrite(ctx, caller, storageID, req, old.Visibility, effSpace, old)
 	if err != nil {
 		return nil, err
 	}

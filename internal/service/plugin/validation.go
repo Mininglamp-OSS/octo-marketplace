@@ -44,9 +44,6 @@ var (
 	// versionNotRegressed exempts an UNCHANGED label for exactly that reason.
 	versionPattern    = regexp.MustCompile(`^\d{1,9}\.\d{1,9}\.\d{1,9}$`)
 	relationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	// iconKeyPattern identifies storage-object-key shaped icons that the read
-	// path resolves to presigned URLs (legacy skill icons are object keys).
-	iconKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 	// iconSchemePattern matches any URI scheme prefix; only http(s) is allowed.
 	iconSchemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
 )

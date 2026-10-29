@@ -165,7 +165,7 @@ func (s *Service) adminImportConsumedTask(ctx context.Context, caller Caller, ta
 		s.deleteObjects(ctx, uploaded...)
 		return nil, err
 	}
-	p, rels, err := s.adminEffectiveWrite(ctx, caller, updateID, *req, oldPlugin.Visibility, effSpace)
+	p, rels, err := s.adminEffectiveWrite(ctx, caller, updateID, *req, oldPlugin.Visibility, effSpace, oldPlugin)
 	if err != nil {
 		s.deleteObjects(ctx, uploaded...)
 		return nil, err

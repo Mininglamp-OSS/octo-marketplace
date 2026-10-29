@@ -1,11 +1,43 @@
 package plugin
 
 import (
+	"encoding/json"
 	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/artifactscope"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
+
+func trustedPluginArtifactKey(key string, p *model.Plugin) bool {
+	return artifactscope.Allows(p, key)
+}
+
+func hasPlatformArtifacts(p *model.Plugin) bool {
+	for _, key := range attachmentKeyMap(p.AttachmentKeys) {
+		if strings.HasPrefix(key, "platform/") {
+			return true
+		}
+	}
+	for _, a := range decodePackageAttachments(p.Package) {
+		if strings.HasPrefix(a.StorageURI, "platform/") {
+			return true
+		}
+	}
+	if raw, ok := rawAttachmentContent(p.Package, "skill/ref.json"); ok {
+		var ref skillRefDocument
+		if json.Unmarshal([]byte(raw), &ref) == nil {
+			for _, key := range []string{ref.ObjectKey, ref.ZipObjectKey, ref.FileURL} {
+				if strings.HasPrefix(key, "platform/") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
 
 const (
 	defaultMaxAttachmentBytes = int64(20 << 20)
