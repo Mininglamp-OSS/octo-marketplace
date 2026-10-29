@@ -1002,7 +1002,7 @@ func writeInstallError(c *gin.Context, err error) {
 		return
 	}
 	if errors.Is(err, expertsvc.ErrFleetInstallUnavailable) {
-		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", nil, "")
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", installRecoveryDetails(err), "")
 		return
 	}
 	if errors.Is(err, expertsvc.ErrInstallTooLarge) {
@@ -1015,7 +1015,7 @@ func writeInstallError(c *gin.Context, err error) {
 			apiresponse.Fail(c, capabilityErr.Status, installErrCode(capabilityErr.Status), "loop service rejected the request", nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", nil, "")
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", installRecoveryDetails(err), "")
 		return
 	}
 	var apiErr *fleet.APIError
@@ -1024,11 +1024,23 @@ func writeInstallError(c *gin.Context, err error) {
 			apiresponse.Fail(c, apiErr.Status, installErrCode(apiErr.Status), fleetErrorMessage(apiErr), nil, "")
 			return
 		}
-		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", nil, "")
+		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", installRecoveryDetails(err), "")
 		return
 	}
 	// ErrNotFound / ErrInvalidRequest and local failures share catalog mapping.
 	writeServiceError(c, err, "expert.install")
+}
+
+// installRecoveryDetails exposes the idempotency key actually sent to Fleet on
+// upstream-unavailable responses, so a caller that supplied no key can retry
+// the same install instead of creating another one. Other error shapes stay
+// unchanged.
+func installRecoveryDetails(err error) map[string]any {
+	var dispatchErr *expertsvc.InstallDispatchError
+	if !errors.As(err, &dispatchErr) {
+		return nil
+	}
+	return map[string]any{"idempotency_key": dispatchErr.IdempotencyKey}
 }
 
 // installErrCode maps a fleet 4xx status to the marketplace wire error code.

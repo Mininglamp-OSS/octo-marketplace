@@ -39,6 +39,20 @@ var ErrInstallTooLarge = errors.New("install exceeds resource limits")
 // be determined from Fleet (for example, a transport failure).
 var ErrFleetInstallUnavailable = errors.New("fleet capability install unavailable")
 
+// InstallDispatchError wraps a capability install failure that was already
+// dispatched to Fleet and carries the idempotency key actually sent, so a
+// caller that supplied none can recover a 503 by retrying with that key.
+// Unwrap preserves the original classification (transport unavailability,
+// *fleet.CapabilityAPIError); handlers only expose the key on 503 responses.
+type InstallDispatchError struct {
+	IdempotencyKey string
+	Err            error
+}
+
+func (e *InstallDispatchError) Error() string { return e.Err.Error() }
+
+func (e *InstallDispatchError) Unwrap() error { return e.Err }
+
 // fileBudget caps supporting files across every Skill/member in one install.
 type fileBudget struct{ remaining int }
 
@@ -300,9 +314,9 @@ func (s *Service) installCapability(ctx context.Context, in InstallInput, reques
 	}
 	var apiErr *fleet.CapabilityAPIError
 	if errors.As(err, &apiErr) {
-		return nil, err
+		return nil, &InstallDispatchError{IdempotencyKey: key, Err: err}
 	}
-	return nil, fmt.Errorf("%w: %w", ErrFleetInstallUnavailable, err)
+	return nil, &InstallDispatchError{IdempotencyKey: key, Err: fmt.Errorf("%w: %w", ErrFleetInstallUnavailable, err)}
 }
 
 // capabilityMCPConfig translates only the legacy stdio discriminator to the
