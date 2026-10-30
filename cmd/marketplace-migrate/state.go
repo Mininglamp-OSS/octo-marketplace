@@ -14,6 +14,8 @@ import (
 
 // This private checkpoint retains the original plan for retries after heads change.
 // It is not a database backup and must never be committed or shared.
+const checkpointVersion = 8
+
 type runState struct {
 	Version             int
 	Database            migration.DatabaseIdentity
@@ -22,7 +24,7 @@ type runState struct {
 }
 
 func validateState(s runState, db migration.DatabaseIdentity, storageID, policyID string) error {
-	if s.Version != 5 || !s.Plan.CategorySnapshotCaptured || s.Database != db || s.StorageID != storageID || s.PolicyID != policyID || s.Plan.ID == "" || s.Plan.SnapshotID == "" {
+	if s.Version != checkpointVersion || !s.Plan.CategorySnapshotCaptured || s.Database != db || s.StorageID != storageID || s.PolicyID != policyID || s.Plan.ID == "" || s.Plan.SnapshotID == "" {
 		return fmt.Errorf("run_state_binding_mismatch")
 	}
 	return nil

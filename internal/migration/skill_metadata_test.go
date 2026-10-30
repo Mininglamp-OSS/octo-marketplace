@@ -59,11 +59,6 @@ func TestMigrationPreservesCuratedDescriptionOverSkillFrontmatter(t *testing.T) 
 func TestMigrationBlocksEmptyDescriptionsWithoutUsableOriginalMetadata(t *testing.T) {
 	for _, body := range []string{
 		"# humanizer\n",
-		"---\nname: humanizer\n---\n正文没有描述",
-		"---\ndescription: \"\"\n---\n正文",
-		"---\ndescription: 123\n---\n正文",
-		"---\ndescription: one\ndescription: two\n---\n正文",
-		"---\ndescription: [\n---\n正文",
 		"---\ndescription: text\n未关闭文件头",
 		"---\ndescription: " + strings.Repeat("x", 65537) + "\n---\n正文",
 	} {

@@ -60,6 +60,80 @@ func applyTestDB(t *testing.T) *sql.DB {
 	}
 	return db
 }
+
+func TestDistinctConnectorTreesAndSourceNamesPersistMySQL(t *testing.T) {
+	db := applyTestDB(t)
+	ctx := context.Background()
+	a, b := connectorFixture("first", "first implementation"), connectorFixture("second", "second implementation")
+	expert := snapshotExpert("expert", model.PluginTypeExpert, model.PluginListingStatePublished)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, r := range []Resource{a, b, expert} {
+		p := r.Plugin
+		if _, err := db.Exec(`INSERT INTO plugins (plugin_id,plugin_name,plugin_type,tags_json,owner_uid,space_id,visibility,listing_state,manifest_json,plugin_json,manifest_hash,plugin_hash,status,created_at,updated_at) VALUES (?,?,?,JSON_ARRAY(),?,'space','space','published',?,?,'','',1,?,?)`, p.ID, p.Name, p.Type, p.OwnerUID, string(p.Manifest), string(p.Package), now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{a.Plugin.ID, b.Plugin.ID} {
+		if _, err := db.Exec(`INSERT INTO plugin_relations (relation_id,source_plugin_id,target_plugin_id,relation_type,created_by,created_at,updated_at) VALUES (?,'expert',?,'expert_connector','owner',?,?)`, "edge-"+id, id, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := storage.NewLocal(t.TempDir(), "http://local")
+	read := artifacts.NewReader(store.GetObject)
+	in, issues, err := InputFromDatabase(ctx, db, read)
+	if err != nil || len(issues) != 0 {
+		t.Fatalf("input: %v %v", err, issues)
+	}
+	plan, err := Build(in, Policy{})
+	if err != nil || len(plan.Nodes) != 3 {
+		t.Fatalf("distinct trees lost: %v %+v", err, plan.Issues)
+	}
+	if err := PublishObjects(ctx, plan, store); err != nil {
+		t.Fatal(err)
+	}
+	var binding DatabaseIdentity
+	if err := db.QueryRow(`SELECT DATABASE(),@@server_uuid`).Scan(&binding.Name, &binding.ServerUUID); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if report, err := Apply(ctx, db, plan, binding, read); err != nil || !report.Complete {
+			t.Fatalf("apply/reapply: %v %+v", err, report)
+		}
+		if report, err := Verify(ctx, db, plan, binding); err != nil || !report.Complete {
+			t.Fatalf("verify: %v %+v", err, report)
+		}
+	}
+	for _, n := range plan.Nodes {
+		if n.Plugin.Type != model.PluginTypeConnector {
+			continue
+		}
+		var name string
+		var pkg []byte
+		if err := db.QueryRow(`SELECT plugin_name,plugin_json FROM plugins WHERE plugin_id=?`, n.Plugin.ID).Scan(&name, &pkg); err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Attachments []struct {
+				Path string `json:"path"`
+				Raw  string `json:"raw_content"`
+			} `json:"attachments"`
+		}
+		if json.Unmarshal(pkg, &doc) != nil || !strings.HasPrefix(name, "search-search") {
+			t.Fatal("source suffix/package not persisted")
+		}
+		found := false
+		for _, f := range doc.Attachments {
+			if f.Path == "scripts/client.py" {
+				found = f.Raw == n.SourceID+" implementation"
+			}
+		}
+		var references int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM plugin_relations WHERE source_plugin_id='expert' AND target_plugin_id=? AND relation_type='expert_connector' AND status=1 AND deleted_at IS NULL`, n.Plugin.ID).Scan(&references); err != nil || !found || references != 1 {
+			t.Fatal("supporting script or correct reference lost")
+		}
+	}
+}
+
 func TestApplyMySQLResumeAndDetectTampering(t *testing.T) {
 	db := applyTestDB(t)
 	ctx := context.Background()
@@ -68,7 +142,7 @@ func TestApplyMySQLResumeAndDetectTampering(t *testing.T) {
 		t.Fatal(e)
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	source := model.Plugin{ID: "source", Name: "source", Type: model.PluginTypeSkill, Tags: json.RawMessage(`[]`), OwnerUID: "owner", Visibility: model.PluginVisibilitySystem, ListingState: model.PluginListingStatePublished, Manifest: json.RawMessage(`{"name":"source"}`), Package: json.RawMessage(`{"body":"original"}`), ManifestHash: "sha256:manifest", PluginHash: "sha256:plugin", Status: 1, CreatedAt: now, UpdatedAt: now}
+	source := model.Plugin{ID: "source", Name: "source", Type: model.PluginTypeSkill, Tags: json.RawMessage(`[]`), OwnerUID: "owner", Visibility: model.PluginVisibilitySystem, ListingState: model.PluginListingStatePublished, Manifest: json.RawMessage(`{"name":"source","description":"Fixture for resume and tamper detection."}`), Package: json.RawMessage(`{"body":"original"}`), ManifestHash: "sha256:manifest", PluginHash: "sha256:plugin", Status: 1, CreatedAt: now, UpdatedAt: now}
 	_, e := db.Exec(`INSERT INTO plugins (plugin_id,plugin_name,plugin_type,tags_json,owner_uid,visibility,listing_state,manifest_json,plugin_json,manifest_hash,plugin_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, source.ID, source.Name, source.Type, string(source.Tags), source.OwnerUID, source.Visibility, source.ListingState, string(source.Manifest), string(source.Package), source.ManifestHash, source.PluginHash, 1, now, now)
 	if e != nil {
 		t.Fatal(e)

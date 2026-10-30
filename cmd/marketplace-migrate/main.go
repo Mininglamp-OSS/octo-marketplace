@@ -31,7 +31,7 @@ func parseOptions(args []string) (options, error) {
 	f := flag.NewFlagSet("marketplace-migrate", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.StringVar(&o.database, "database", "", "current database name")
-	f.StringVar(&o.policy, "policy", "", "Chinese frontend-dev source selection")
+	f.StringVar(&o.policy, "policy", "", "source selection and explicit hash-bound catalog descriptions")
 	f.StringVar(&o.stateFile, "state-file", "", "private resume file")
 	f.BoolVar(&o.apply, "apply", false, "apply conversion")
 	f.BoolVar(&o.verify, "verify", false, "verify a saved run without writes")
@@ -124,11 +124,13 @@ func runWithDatabase(args []string, env func(string) string, out io.Writer, conn
 	}
 	policyJSON, _ := json.Marshal(policy)
 	policyID := digest(policyJSON)
-	state := runState{Version: 5, Database: identity, StorageID: storageID, PolicyID: policyID}
+	state := runState{Version: checkpointVersion, Database: identity, StorageID: storageID, PolicyID: policyID}
 	loaded := false
 	if o.apply || o.verify {
-		state, e = loadState(o.stateFile)
+		var restored runState
+		restored, e = loadState(o.stateFile)
 		if e == nil {
+			state = restored
 			loaded = true
 			if validateState(state, identity, storageID, policyID) != nil {
 				return safeError(out, "run_state_binding_mismatch")
@@ -164,6 +166,13 @@ func runWithDatabase(args []string, env func(string) string, out io.Writer, conn
 		}
 		if saveState(o.stateFile, state) != nil {
 			return safeError(out, "run_state_save_failed")
+		}
+		// Gob normalizes empty slices and pointers to zero values. Use the
+		// durable representation from the first write onward so receipt and run
+		// identities are identical after a process restart.
+		state, e = loadState(o.stateFile)
+		if e != nil || validateState(state, identity, storageID, policyID) != nil {
+			return safeError(out, "run_state_invalid")
 		}
 	}
 	if o.apply {

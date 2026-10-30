@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	libplugin "github.com/Mininglamp-OSS/octo-plugin-lib/plugin"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +32,11 @@ func completeSkillDescription(n *Node) string {
 			continue
 		}
 		description := originalSkillDescription(string(f.Data))
+		if description == "" {
+			if approved := n.CatalogDescription; approved != nil && approved.SourcePackageHash != "" && approved.SourcePackageHash == sourceDescriptionHash(n.Source) {
+				description = strings.TrimSpace(approved.Description)
+			}
+		}
 		if description == "" {
 			return "skill_description_unavailable"
 		}
@@ -88,4 +94,42 @@ func originalSkillDescription(content string) string {
 		}
 	}
 	return description
+}
+
+// Recheck saved and caller-built plans as well as freshly built plans.
+// Operator descriptions are explicit catalog metadata bound to the source package.
+func validateSkillDescriptionProjection(n Node) string {
+	if n.Plugin.Type != model.PluginTypeSkill || n.Source.Type != model.PluginTypeSkill {
+		return ""
+	}
+	var original map[string]json.RawMessage
+	if json.Unmarshal(n.Source.Manifest, &original) != nil {
+		return "skill_description_unavailable"
+	}
+	var curated string
+	if json.Unmarshal(original["description"], &curated) == nil && strings.TrimSpace(curated) != "" {
+		return ""
+	}
+	expected := n
+	expected.Plugin.Manifest = append(json.RawMessage(nil), n.Source.Manifest...)
+	if code := completeSkillDescription(&expected); code != "" {
+		return code
+	}
+	var want, got map[string]json.RawMessage
+	if json.Unmarshal(expected.Plugin.Manifest, &want) != nil || json.Unmarshal(n.Plugin.Manifest, &got) != nil {
+		return "skill_description_unavailable"
+	}
+	var wantText, gotText string
+	if json.Unmarshal(want["description"], &wantText) != nil || json.Unmarshal(got["description"], &gotText) != nil || wantText != gotText {
+		return "skill_description_projection_mismatch"
+	}
+	return ""
+}
+
+func sourceDescriptionHash(source model.Plugin) string {
+	hash, err := libplugin.ComputePluginHash(source.Manifest, source.Package)
+	if err != nil {
+		return ""
+	}
+	return hash
 }

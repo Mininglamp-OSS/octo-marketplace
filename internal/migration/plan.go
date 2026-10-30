@@ -5,9 +5,9 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/artifactscope"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/migration/artifacts"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
-	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	libplugin "github.com/Mininglamp-OSS/octo-plugin-lib/plugin"
+	"mime"
 	"path"
 	"sort"
 	"strings"
@@ -153,11 +153,13 @@ func Build(in Input, policy Policy) (Plan, error) {
 		if !active[r.Plugin.ID] {
 			continue
 		}
-		if r.Plugin.Type != model.PluginTypeSkill && r.Plugin.Type != model.PluginTypeConnector {
+		// Connectors are compared after file normalization and MCP extraction,
+		// using their complete tree and explicit owner/lifecycle boundary.
+		if r.Plugin.Type != model.PluginTypeSkill {
 			continue
 		}
 		key := scope(r.Plugin) + ":" + string(r.Plugin.Type) + ":" + normalized(r.Plugin.Name)
-		if variant(normalized(r.Plugin.Name)) || r.Plugin.Type == model.PluginTypeConnector {
+		if variant(normalized(r.Plugin.Name)) {
 			key += ":" + fingerprint(r)
 		}
 		groups[key] = append(groups[key], r)
@@ -196,7 +198,7 @@ func Build(in Input, policy Policy) (Plan, error) {
 	// Reuse system content only when full trees and manifest semantics are identical.
 	for _, r := range rs {
 		c, ok := canonical[r.Plugin.ID]
-		if !ok || scope(r.Plugin) == "system" {
+		if !ok || r.Plugin.Type != model.PluginTypeSkill || scope(r.Plugin) == "system" {
 			continue
 		}
 		for _, s := range rs {
@@ -285,6 +287,10 @@ func Build(in Input, policy Policy) (Plan, error) {
 				}
 			}
 		}
+		if entry, ok := policy.CatalogDescriptions[id]; ok {
+			captured := entry
+			n.CatalogDescription = &captured
+		}
 		if code := completeSkillDescription(&n); code != "" {
 			issue(id, code)
 		}
@@ -304,6 +310,12 @@ func Build(in Input, policy Policy) (Plan, error) {
 	}
 	// Validate and rewrite every edge, keeping all member metadata and exact pins.
 	for key, n := range nodes {
+		// Unfinished drafts are saved independently. Their discarded old edges
+		// must not block the split on missing targets, stale pins or metadata.
+		// Original relations remain covered by the source evidence and history.
+		if !n.Release && n.Plugin.ListingState == model.PluginListingStateDraft {
+			continue
+		}
 		r := byID[n.SourceID]
 		memberKeys := map[string]bool{}
 		relationIDs := map[string]bool{}
@@ -373,10 +385,10 @@ func Build(in Input, policy Policy) (Plan, error) {
 			relationIDs[e.ID] = true
 			n.Relations = append(n.Relations, e)
 		}
-		if n.Plugin.Type == model.PluginTypeExpertTeam && (leaders != 1 || len(n.Relations) == 0) {
+		if n.Plugin.Type == model.PluginTypeExpertTeam && n.Release && (leaders != 1 || len(n.Relations) == 0) {
 			issue(n.SourceID, "team_leader_invalid")
 		}
-		if pluginrepo.ValidateReferenceMetadata(n.Plugin.Type, n.Relations) != nil {
+		if n.Release && validateNodeReferenceMetadata(n) != nil {
 			issue(n.SourceID, "relation_metadata_invalid")
 		}
 		sort.Slice(n.Relations, func(i, j int) bool {
@@ -408,6 +420,28 @@ func Build(in Input, policy Policy) (Plan, error) {
 			}
 		}
 	}
+	connectorRemap := canonicalizeConnectors(nodes)
+	for i := range p.Mappings {
+		if id, ok := connectorRemap[p.Mappings[i].TargetID]; ok {
+			p.Mappings[i].TargetID = id
+		}
+	}
+	dependencyOrder := map[string][]string{}
+	for id, n := range nodes {
+		for _, edge := range n.Relations {
+			dependencyOrder[id] = append(dependencyOrder[id], edge.TargetPluginID)
+		}
+	}
+	// Unfinished drafts are split into independent resources. Their original
+	// relationships remain in immutable history, never in executable references.
+	for id, n := range nodes {
+		if !n.Release && n.Plugin.ListingState == model.PluginListingStateDraft {
+			n.Relations = nil
+		}
+		nodes[id] = n
+	}
+	p.Issues = append(p.Issues, nameDistinctConnectors(nodes, in.SnapshotID)...)
+	p.Issues = append(p.Issues, aliasConnectorServerKeys(nodes, in.SnapshotID)...)
 	state := map[string]int{}
 	var visit func(string)
 	visit = func(id string) {
@@ -419,8 +453,8 @@ func Build(in Input, policy Policy) (Plan, error) {
 			return
 		}
 		state[id] = 1
-		for _, e := range nodes[id].Relations {
-			visit(e.TargetPluginID)
+		for _, dependency := range dependencyOrder[id] {
+			visit(dependency)
 		}
 		state[id] = 2
 		p.Nodes = append(p.Nodes, nodes[id])
@@ -437,7 +471,13 @@ func Build(in Input, policy Policy) (Plan, error) {
 	// Carry their original evidence without exposing inventories in public reports.
 	for i := range p.Nodes {
 		n := &p.Nodes[i]
-		n.Evidence = map[string]SourceEvidence{n.SourceID: byID[n.SourceID].Evidence}
+		if n.Evidence == nil {
+			n.Evidence = map[string]SourceEvidence{}
+		}
+		n.Evidence[n.SourceID] = byID[n.SourceID].Evidence
+		for id := range n.Evidence {
+			n.Evidence[id] = byID[id].Evidence
+		}
 		for _, mapping := range p.Mappings {
 			if mapping.TargetID == n.Plugin.ID {
 				n.Evidence[mapping.SourceID] = byID[mapping.SourceID].Evidence
@@ -446,6 +486,7 @@ func Build(in Input, policy Policy) (Plan, error) {
 	}
 	p.Issues = append(p.Issues, validateMigrationReleases(p)...)
 	p.Issues = append(p.Issues, connectorNameIssues(p)...)
+	p.Issues = append(p.Issues, connectorServerKeyIssues(p)...)
 	p.Issues = append(p.Issues, iconIssues(p)...)
 	sort.Slice(p.Mappings, func(i, j int) bool { return p.Mappings[i].SourceID < p.Mappings[j].SourceID })
 	sort.Slice(p.Issues, func(i, j int) bool {
@@ -473,7 +514,13 @@ func Build(in Input, policy Policy) (Plan, error) {
 		}
 		return rr[i].PluginID < rr[j].PluginID
 	})
-	pp := Policy{FrontendChineseSourceIDs: append([]string(nil), policy.FrontendChineseSourceIDs...)}
+	// Retain every policy field; JSON encoding sorts catalog map keys. Normalize
+	// empty maps so equivalent nil/empty policies retain one canonical identity.
+	pp := policy
+	pp.FrontendChineseSourceIDs = append([]string(nil), policy.FrontendChineseSourceIDs...)
+	if len(pp.CatalogDescriptions) == 0 {
+		pp.CatalogDescriptions = nil
+	}
 	sort.Strings(pp.FrontendChineseSourceIDs)
 	raw, _ := json.Marshal(struct {
 		Input  Input
@@ -572,8 +619,20 @@ func prepareFiles(n *Node, snapshot string) string {
 			return "file_path_invalid"
 		}
 		seen[f.Path] = true
+		if f.MIME == "" {
+			f.MIME = "application/octet-stream"
+			if utf8.Valid(f.Data) && strings.IndexByte(string(f.Data), 0) < 0 {
+				f.MIME = "text/plain"
+			}
+		}
+		mediaType, _, mimeErr := mime.ParseMediaType(f.MIME)
+		if mimeErr != nil {
+			return "file_mime_invalid"
+		}
+		f.MIME = mediaType
+		n.Files[i].MIME = mediaType
 		h := digest(f.Data)
-		a := map[string]any{"path": f.Path, "mime_type": f.MIME}
+		a := map[string]any{"path": f.Path, "mime_type": mediaType}
 		typ := "raw"
 		rawSize, _ := json.Marshal(string(f.Data))
 		spillAggregate := f.Path != entry && inlineUsed+len(rawSize)+512 > 768<<10

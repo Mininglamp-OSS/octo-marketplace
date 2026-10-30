@@ -48,7 +48,7 @@ func applyCurrentMigration(t *testing.T, database *sql.DB) {
 		t.Fatalf("migration plan: %v issues=%v", err, plan.Issues)
 	}
 	for _, n := range plan.Nodes {
-		if err := pluginrepo.ValidateReferenceMetadata(n.Plugin.Type, n.Relations); err != nil {
+		if err := pluginrepo.ValidateReferenceMetadata(n.Plugin.Type, n.Relations); err != nil && (n.Release || len(n.Relations) != 0) {
 			t.Fatalf("migrated %s reference metadata: %v", n.Plugin.Type, err)
 		}
 		if n.Plugin.Type == model.PluginTypeExpert {

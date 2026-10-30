@@ -54,7 +54,7 @@ func rejectInlineCapabilities(typ model.PluginType, raw json.RawMessage) error {
 // ValidateReferences is an explicit read-only preflight for API clients. The
 // repository still repeats all authorization under mutation locks.
 func (s *Service) validateReferenceShape(ctx context.Context, source *model.Plugin, rels []model.PluginRelation) error {
-	if !s.references {
+	if !s.references || source.ListingState == model.PluginListingStateDraft && len(rels) == 0 {
 		return nil
 	}
 	if err := pluginrepo.ValidateReferenceMetadata(source.Type, rels); err != nil {

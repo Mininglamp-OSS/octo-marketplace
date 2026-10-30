@@ -118,6 +118,44 @@ func fixturePinned() (*Service, *pinnedFixtureStore, *fakeCapabilityInstaller) {
 	return New(f).WithVersionManagement(true).WithPinnedInstallation(true).WithInstallationHMACKeys("test", map[string]string{"test": "synthetic-installation-test-key-32-bytes"}).WithCapabilityInstaller(installer), f, installer
 }
 
+func TestPinnedConnectorDisplaySuffixDoesNotHideDefaultServerKeyCollision(t *testing.T) {
+	for _, workspace := range []bool{false, true} {
+		svc, store, remote := fixturePinned()
+		first := store.plugins["connector"]
+		first.Name = "search-first"
+		first.Manifest = json.RawMessage(`{"description":"fixture"}`)
+		first.Tags = json.RawMessage(`[]`)
+		first.Package = packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"search-v1"}}}`), rawAtt("scripts/client.py", "first implementation"))
+		second := *first
+		second.ID, second.Name = "other-connector", "search-second"
+		second.Package = packageWith(rawAtt("mcp.json", `{"mcpServers":{"search":{"command":"search-v1"}}}`), rawAtt("scripts/client.py", "second implementation"))
+		store.plugins[second.ID] = &second
+		version := store.versions[pluginrepo.InstallVersionKey{PluginID: "expert-a", VersionID: "expert-v1"}]
+		relations, err := model.DecodeSnapshotRelations(version.Relations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		relations = append(relations, model.PluginRelation{ID: "extra-connector", SourcePluginID: "expert-a", SourcePluginType: model.PluginTypeExpert, TargetPluginID: second.ID, TargetPluginType: model.PluginTypeConnector, Type: "expert_connector", Status: 1})
+		version.Relations, err = model.EncodeSnapshotRelations(relations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		params := installationParams()
+		params.WorkspaceConnectors = workspace
+		_, err = svc.CreateInstallation(context.Background(), testCaller, "team", params)
+		if workspace {
+			if err != nil || remote.calls != 1 || len(remote.in.Definition.Connectors) != 2 {
+				t.Fatalf("distinct Workspace connectors rejected: err=%v calls=%d", err, remote.calls)
+			}
+		} else {
+			var invalid *InstallationValidationError
+			if !errors.As(err, &invalid) || invalid.Reason != "duplicate_server" || remote.calls != 0 {
+				t.Fatalf("default collision not rejected before Fleet: err=%v calls=%d", err, remote.calls)
+			}
+		}
+	}
+}
+
 func TestPinnedInstallationPreservesMarketNamesAndFrozenFiles(t *testing.T) {
 	s, f, remote := fixturePinned()
 	p := installationParams()
