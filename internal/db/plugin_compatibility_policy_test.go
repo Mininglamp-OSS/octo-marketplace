@@ -23,7 +23,7 @@ func TestCompatibilityPublishedReferenceSurvivesDraftRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: skill.Plugin.ID}); err != nil {
+	if _, err = s.Publish(ctx, owner, explicitTestPublication(t, database, skill.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	req := managedWrite("1.0.0", "released expert", model.PluginVisibilityPrivate)
@@ -32,7 +32,7 @@ func TestCompatibilityPublishedReferenceSurvivesDraftRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: expert.Plugin.ID}); err != nil {
+	if _, err = s.Publish(ctx, owner, explicitTestPublication(t, database, expert.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.Update(ctx, owner, expert.Plugin.ID, managedWrite("2.0.0", "unpublished draft without skill", model.PluginVisibilityPrivate)); err != nil {
@@ -47,7 +47,7 @@ func TestCompatibilityPublishedReferenceSurvivesDraftRemoval(t *testing.T) {
 	}
 	// Publishing the draft actually removes the protected edge; the old release
 	// remains history and must not turn into a permanent deletion lock.
-	if _, err = s.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: expert.Plugin.ID}); err != nil {
+	if _, err = s.Publish(ctx, owner, explicitTestPublication(t, database, expert.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Delete(ctx, owner, skill.Plugin.ID); err != nil {
@@ -78,7 +78,7 @@ func TestCompatibilityPrivateAudienceRecheckedAtPublication(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: target.Plugin.ID}); err != nil {
+				if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, target.Plugin.ID)); err != nil {
 					t.Fatal(err)
 				}
 				req := compatibilitySourceWrite(targetKind, "1.0.0")
@@ -93,7 +93,7 @@ func TestCompatibilityPrivateAudienceRecheckedAtPublication(t *testing.T) {
 				if _, err = repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
 					t.Fatal(err)
 				}
-				publication, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: source.Plugin.ID})
+				publication, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, source.Plugin.ID))
 				if err == nil {
 					if publication.Review == nil {
 						t.Fatal("invalid private graph published without review")

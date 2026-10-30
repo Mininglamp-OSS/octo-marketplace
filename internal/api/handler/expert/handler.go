@@ -139,6 +139,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 // @Summary Create expert
 // @Description Publish a new standalone expert owned by the authenticated caller in the current Space.
 // @Tags expert
+// @Description When version management is enabled, this legacy unversioned write returns 400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish with an explicit version; update octo-cli if needed.
 // @ID expert.create
 // @Accept json
 // @Produce json
@@ -522,6 +523,7 @@ func (h *Handler) GetSquadSkillDownload(c *gin.Context) {
 // @Summary Update expert
 // @Description Partially update an expert owned by the authenticated caller.
 // @Tags expert
+// @Description When version management is enabled, this legacy unversioned write returns 400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish with an explicit version; update octo-cli if needed.
 // @ID expert.update
 // @Accept json
 // @Produce json
@@ -588,6 +590,7 @@ func (h *Handler) DeleteExpert(c *gin.Context) {
 // @Summary Create squad
 // @Description Publish a new expert squad owned by the authenticated caller in the current Space.
 // @Tags expert_squad
+// @Description When version management is enabled, this legacy unversioned write returns 400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish with an explicit version; update octo-cli if needed.
 // @ID squad.create
 // @Accept json
 // @Produce json
@@ -721,6 +724,7 @@ func (h *Handler) GetSquad(c *gin.Context) {
 // @Summary Update squad
 // @Description Partially update a squad owned by the authenticated caller. Sending members replaces the whole array.
 // @Tags expert_squad
+// @Description When version management is enabled, this legacy unversioned write returns 400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish with an explicit version; update octo-cli if needed.
 // @ID squad.update
 // @Accept json
 // @Produce json
@@ -972,6 +976,8 @@ func validationError(c *gin.Context, message string) {
 // logged internal 500.
 func writeServiceError(c *gin.Context, err error, operation string) {
 	switch {
+	case errors.Is(err, expertsvc.ErrVersionedWriteRequired):
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "this unversioned write API is disabled", map[string]any{"reason": "versioned_api_required"}, "Update octo-cli. Save a draft through /plugins/upsert, then publish through /plugins/publish with an explicit version. Legacy Expert/Squad endpoints do not support versioned publication.")
 	case errors.Is(err, expertsvc.ErrNotFound):
 		apiresponse.Fail(c, http.StatusNotFound, errcode.NotFound, "not found", nil, "")
 	case errors.Is(err, expertsvc.ErrForbidden):

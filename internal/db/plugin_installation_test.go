@@ -125,7 +125,7 @@ func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, d.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	p := pluginsvc.InstallationParams{WorkspaceID: "workspace-a", RuntimeID: "7f63db70-6b66-4c2d-a52f-fb6de1d78ad9", IdempotencyKey: "fixture-operation", CustomEnv: map[string]string{"TEST_SECRET": "fixture-secret"}, Token: "fixture-token"}
@@ -138,7 +138,7 @@ func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.
 	if _, err = svc.Update(ctx, owner, d.Plugin.ID, managedWrite("2.0.0", "second released", model.PluginVisibilityPrivate)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, d.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	out, err := svc.CreateInstallation(ctx, owner, d.Plugin.ID, p)

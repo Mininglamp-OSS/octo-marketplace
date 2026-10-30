@@ -16,6 +16,9 @@ import (
 // and provenance, applies member defaults, and persists a new public squad
 // (doc §4.7).
 func (s *Service) CreateSquad(ctx context.Context, caller Caller, req model.SquadCreateRequest) (*model.ExpertSquadDetail, error) {
+	if s.legacyWritesDisabled {
+		return nil, ErrVersionedWriteRequired
+	}
 	name := strings.TrimSpace(req.Name)
 	summary := strings.TrimSpace(req.Summary)
 	if err := validateGeneric(name, summary, req.Publisher); err != nil {
@@ -128,6 +131,9 @@ func (s *Service) listSquads(ctx context.Context, caller Caller, p ListParams, m
 // PatchSquad applies a partial update; owner only. Sending members replaces the
 // whole array (full-replace, not merge — doc §4.10).
 func (s *Service) PatchSquad(ctx context.Context, caller Caller, id string, req model.SquadPatchRequest) (*model.ExpertSquadDetail, error) {
+	if s.legacyWritesDisabled {
+		return nil, ErrVersionedWriteRequired
+	}
 	m, err := s.loadVisibleSquad(ctx, caller, id)
 	if err != nil {
 		return nil, err

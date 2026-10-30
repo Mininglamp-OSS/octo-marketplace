@@ -44,7 +44,7 @@ func TestInstallRecoveryHTTPAcrossContentModes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = svc.Publish(ctx, managedOwner(), pluginsvc.PublishParams{PluginID: root.Plugin.ID}); err != nil {
+			if _, err = svc.Publish(ctx, managedOwner(), explicitTestPublication(t, database, root.Plugin.ID)); err != nil {
 				t.Fatal(err)
 			}
 			gin.SetMode(gin.TestMode)

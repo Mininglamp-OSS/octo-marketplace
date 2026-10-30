@@ -2,7 +2,10 @@ package plugin
 
 import (
 	"encoding/json"
+	"github.com/gin-gonic/gin"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -187,5 +190,16 @@ func TestListAcceptsAMissingPluginTypeOnlyForModeMine(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReleaseVersionValidationHintNamesCLIUpgrade(t *testing.T) {
+	for _, reason := range []string{"required", "invalid", "draft_version_mismatch"} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		writeServiceError(c, &pluginsvc.ReviewFieldError{Field: "version", Reason: reason}, "plugin.publish")
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "octo-cli") || !strings.Contains(w.Body.String(), `"field":"version"`) {
+			t.Fatalf("%s: %d %s", reason, w.Code, w.Body.String())
+		}
 	}
 }

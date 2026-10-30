@@ -39,7 +39,7 @@ func TestMigratedDraftsSaveIndependentlyAndCannotReferenceUnreleasedSkills(t *te
 	if len(updated.Relations) != 0 {
 		t.Fatal("draft relationships recreated")
 	}
-	if _, err = svc.Publish(ctx, managedOwner(), pluginsvc.PublishParams{PluginID: id}); err == nil {
+	if _, err = svc.Publish(ctx, managedOwner(), explicitTestPublication(t, database, id)); err == nil {
 		t.Fatal("incomplete team published")
 	}
 	var expertID, skillID, skillVersion string

@@ -144,7 +144,7 @@ func TestMixedRetainedReferencesPreserveLegacyPublication(t *testing.T) {
 			}
 			foreign := owner
 			foreign.SpaceID = "foreign-space"
-			if _, err := legacy.Publish(ctx, foreign, pluginsvc.PublishParams{PluginID: root.Plugin.ID}); !errors.Is(err, pluginsvc.ErrNotFound) {
+			if _, err := legacy.Publish(ctx, foreign, explicitTestPublication(t, database, root.Plugin.ID)); !errors.Is(err, pluginsvc.ErrNotFound) {
 				t.Fatalf("foreign Space published mixed graph: %v", err)
 			}
 			if tc.deletedHistoricalSkill {
@@ -152,7 +152,7 @@ func TestMixedRetainedReferencesPreserveLegacyPublication(t *testing.T) {
 					t.Fatalf("delete unused historical Skill: %v", err)
 				}
 			}
-			_, err = legacy.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: root.Plugin.ID})
+			_, err = legacy.Publish(ctx, owner, explicitTestPublication(t, database, root.Plugin.ID))
 			if tc.deletedHistoricalSkill {
 				if !errors.Is(err, pluginsvc.ErrNotFound) {
 					t.Fatalf("mixed graph bypassed historical dependency check: %v", err)

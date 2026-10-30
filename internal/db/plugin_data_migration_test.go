@@ -167,7 +167,7 @@ func TestSingleDatabaseMigrationRemainsEditableAndPublishable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("edit after migration: %v", err)
 			}
-			if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+			if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 				t.Fatalf("publish after migration: %v", err)
 			}
 			published, err := svc.ManagedVersion(ctx, owner, id, *updated.Plugin.CurrentVersionID, false)

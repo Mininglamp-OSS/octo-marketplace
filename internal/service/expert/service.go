@@ -48,14 +48,15 @@ const (
 // Sentinel errors returned to the handler, which maps each to a wire code:
 // NotFound→404, Forbidden→403, NameTaken→409, the rest→400 VALIDATION_ERROR.
 var (
-	ErrNotFound          = errors.New("expert not found")
-	ErrForbidden         = errors.New("forbidden")
-	ErrNameTaken         = errors.New("expert name taken")
-	ErrCategoryNotFound  = errors.New("category not found")
-	ErrInvalidVisibility = errors.New("invalid visibility")
-	ErrInvalidMCPConfig  = errors.New("invalid mcp_config")
-	ErrInvalidMembers    = errors.New("invalid members")
-	ErrInvalidRequest    = errors.New("invalid request")
+	ErrNotFound               = errors.New("expert not found")
+	ErrForbidden              = errors.New("forbidden")
+	ErrNameTaken              = errors.New("expert name taken")
+	ErrCategoryNotFound       = errors.New("category not found")
+	ErrInvalidVisibility      = errors.New("invalid visibility")
+	ErrInvalidMCPConfig       = errors.New("invalid mcp_config")
+	ErrInvalidMembers         = errors.New("invalid members")
+	ErrInvalidRequest         = errors.New("invalid request")
+	ErrVersionedWriteRequired = errors.New("use versioned plugin writes")
 )
 
 // Caller is the resolved identity + Space for a request, stamped server-side
@@ -102,10 +103,11 @@ type Store interface {
 
 // Service implements the expert + squad catalog operations.
 type Service struct {
-	repo  Store
-	store storage.Storage
-	idGen func() string
-	now   func() time.Time
+	legacyWritesDisabled bool
+	repo                 Store
+	store                storage.Storage
+	idGen                func() string
+	now                  func() time.Time
 	// fleet provisions agents/skills in octo-fleet for InstallExpert. Nil unless
 	// wired via WithFleet (see router); a nil fleet makes install a clean 503.
 	fleet FleetProvisioner
@@ -122,6 +124,13 @@ type Service struct {
 // and overridable in tests.
 func New(repo Store, store storage.Storage, idGen func() string) *Service {
 	return &Service{repo: repo, store: store, idGen: idGen, now: time.Now}
+}
+
+// WithLegacyWritesDisabled prevents the unversioned legacy create/patch APIs
+// from bypassing publication when version management is enabled.
+func (s *Service) WithLegacyWritesDisabled(disabled bool) *Service {
+	s.legacyWritesDisabled = disabled
+	return s
 }
 
 // ListParams carries the query parameters shared by the four list endpoints.
@@ -153,6 +162,9 @@ type SquadListResult struct {
 // CreateExpert validates + normalizes a flat create body, stamps identity and
 // provenance, and persists a new public expert (doc §4.1).
 func (s *Service) CreateExpert(ctx context.Context, caller Caller, req model.ExpertCreateRequest) (*model.ExpertAgentDetail, error) {
+	if s.legacyWritesDisabled {
+		return nil, ErrVersionedWriteRequired
+	}
 	name := strings.TrimSpace(req.Name)
 	summary := strings.TrimSpace(req.Summary)
 	if err := validateGeneric(name, summary, req.Publisher); err != nil {
@@ -265,6 +277,9 @@ func (s *Service) listExperts(ctx context.Context, caller Caller, p ListParams, 
 // another Space) is indistinguishable from not-found for reads, but a
 // visible-yet-not-owned record yields ErrForbidden (doc §4.5).
 func (s *Service) PatchExpert(ctx context.Context, caller Caller, id string, req model.ExpertPatchRequest) (*model.ExpertAgentDetail, error) {
+	if s.legacyWritesDisabled {
+		return nil, ErrVersionedWriteRequired
+	}
 	m, err := s.loadVisibleExpert(ctx, caller, id)
 	if err != nil {
 		return nil, err

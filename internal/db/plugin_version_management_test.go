@@ -47,7 +47,7 @@ func TestManagedVersionReadsSeparateDraftAndReleasedAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := created.Plugin.ID
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 		t.Fatal(err)
 	}
 	state, err := repo.GetVersionState(ctx, tenantScope(), id)
@@ -99,7 +99,7 @@ func TestManagedPrivateReleasePreservesDraft(t *testing.T) {
 	}
 	id := d.Plugin.ID
 	v1 := *d.Plugin.CurrentVersionID
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 		t.Fatal(err)
 	}
 	d, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "new draft", model.PluginVisibilityPrivate))
@@ -158,7 +158,7 @@ func TestManagedFrozenApprovalKeepsLaterDraft(t *testing.T) {
 				t.Fatal(err)
 			}
 			id := d.Plugin.ID
-			pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+			pub, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -211,7 +211,7 @@ func TestManagedFrozenApprovalKeepsLaterDraft(t *testing.T) {
 			if len(items) != 1 || !strings.Contains(string(items[0].Manifest), "Versioned Expert") || *items[0].CurrentVersion != "1.0.0" {
 				t.Fatalf("catalog not release: %+v", items)
 			}
-			upgrade, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+			upgrade, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -359,7 +359,7 @@ func TestManagedAdminTenantUpdateOnlySaves(t *testing.T) {
 	}
 	id := d.Plugin.ID
 	v1 := *d.Plugin.CurrentVersionID
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 		t.Fatal(err)
 	}
 	admin := pluginsvc.Caller{UID: "market-admin", Name: "Admin", IsSystemAdmin: true}
@@ -397,7 +397,7 @@ func TestManagedFirstListingPromotesEmbeddedChildren(t *testing.T) {
 	id := d.Plugin.ID
 	seed(t, database, seedPlugin{id: "child-1", typ: "skill", visibility: "private", listingState: "draft", embedded: true, owner: owner.UID})
 	seedRelation(t, database, "rel-child", id, "child-1", "expert_skill")
-	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+	pub, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestManagedLegacyPublishedBaselineAdoption(t *testing.T) {
 				t.Fatal(err)
 			}
 			id := d.Plugin.ID
-			pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+			pub, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -470,7 +470,7 @@ func TestManagedLegacyPublishedBaselineAdoption(t *testing.T) {
 			if _, err = database.Exec(`UPDATE plugins SET plugin_name='Draft Beta',name_key='draft beta',name_scope='space-a' WHERE plugin_id=?`, id); err != nil {
 				t.Fatal(err)
 			}
-			adopted, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+			adopted, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 			if err != nil {
 				t.Fatalf("adoption failed: %v", err)
 			}
@@ -548,7 +548,7 @@ func TestManagedLegacyAdoptionRequiresApprovalEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := d.Plugin.ID
-	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+	pub, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 	if err != nil || pub.Review == nil {
 		t.Fatalf("publish=%+v err=%v", pub, err)
 	}
@@ -564,7 +564,7 @@ func TestManagedLegacyAdoptionRequiresApprovalEvidence(t *testing.T) {
 	if _, err = database.Exec(`DELETE FROM plugin_review_requests WHERE plugin_id=?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
 		t.Fatalf("evidence-free adoption err=%v", err)
 	}
 }
@@ -581,7 +581,7 @@ func TestManagedPublicationUsesExpectedHeadAndRejectsLabelReuse(t *testing.T) {
 	}
 	id := d.Plugin.ID
 	v1 := *d.Plugin.CurrentVersionID
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = svc.Update(ctx, owner, id, managedWrite("1.0.0", "changed under same draft label", model.PluginVisibilityPrivate)); err != nil {
@@ -590,7 +590,7 @@ func TestManagedPublicationUsesExpectedHeadAndRejectsLabelReuse(t *testing.T) {
 	if _, err = repo.PublishManaged(ctx, tenantScope(), pluginrepo.PublishParams{PluginID: id, ExpectedVersionID: v1, OperatorID: owner.UID}); !errors.Is(err, pluginrepo.ErrConflict) {
 		t.Fatalf("stale head published: %v", err)
 	}
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); !errors.Is(err, pluginsvc.ErrLabelTaken) {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); !errors.Is(err, pluginsvc.ErrLabelTaken) {
 		t.Fatalf("reused published label: %v", err)
 	}
 	state, err := repo.GetVersionState(ctx, tenantScope(), id)
@@ -623,7 +623,7 @@ func TestManagedCatalogSearchAndTagsUseRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, d.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	req = managedWrite("2.0.0", "secret draft", model.PluginVisibilitySpace)
@@ -681,7 +681,7 @@ func TestManagedHistoricalBinaryRetainedAfterReplacement(t *testing.T) {
 	}
 	pid := d.Plugin.ID
 	v1 := *d.Plugin.CurrentVersionID
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: pid}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, pid)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = svc.Update(ctx, owner, pid, write("2.0.0", "replacement bytes")); err != nil {
@@ -702,7 +702,7 @@ func TestManagedLegacyPublicationNeedsVerifiedBaseline(t *testing.T) {
 	if _, err := svc.Update(ctx, owner, "legacy-managed", managedWrite("2.0.0", "new unapproved draft", model.PluginVisibilityPrivate)); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
 		t.Fatalf("legacy draft escaped compatibility guard: %v", err)
 	}
-	if _, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: "legacy-managed"}); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
+	if _, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, "legacy-managed")); !errors.Is(err, pluginsvc.ErrVersionBaselineUnavailable) {
 		t.Fatalf("legacy save fabricated publication: %v", err)
 	}
 	var n int
@@ -728,7 +728,16 @@ func managedSkillWrite(label, name string, visibility model.PluginVisibility) pl
 func publishManaged(t *testing.T, svc *pluginsvc.Service, owner pluginsvc.Caller, id string) {
 	t.Helper()
 	ctx := context.Background()
-	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+	// Fixture setup reads the saved label directly via the admin projection:
+	// legacy services have no editing read, and public detail hides drafts.
+	draft, err := svc.AdminDetail(ctx, owner, id, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Plugin.CurrentVersion == nil {
+		t.Fatal("missing fixture version")
+	}
+	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id, Version: *draft.Plugin.CurrentVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +812,7 @@ func TestManagedFirstApprovalKeepsLaterDraftRelations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: expert.Plugin.ID})
+	pub, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, expert.Plugin.ID))
 	if err != nil || pub.Review == nil {
 		t.Fatalf("publish=%+v err=%v", pub, err)
 	}
@@ -849,7 +858,7 @@ func TestManagedInstallStillRejectsHiddenReleasedDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: hidden.Plugin.ID}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, hidden.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	req := managedWrite("1.0.0", "expert", model.PluginVisibilityPrivate)
@@ -891,7 +900,7 @@ func TestManagedMissingReleaseLabelsNeverExposeDraftTags(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+			if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, d.Plugin.ID)); err != nil {
 				t.Fatal(err)
 			}
 			var published string
@@ -981,7 +990,7 @@ func TestManagedDraftChangelogRoundTripAndClear(t *testing.T) {
 	if _, err = svc.Update(ctx, owner, id, req); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 		t.Fatal(err)
 	}
 	check("") // A new editing session cannot copy the prior release explanation.
@@ -1021,7 +1030,7 @@ func TestLegacyReleaseRepairsNameScope(t *testing.T) {
 				if _, err = database.Exec(`UPDATE plugins SET name_key=NULL,published_name_key=NULL,name_scope='',published_version_id=NULL,listing_state=? WHERE plugin_id=?`, listing, d.Plugin.ID); err != nil {
 					t.Fatal(err)
 				}
-				if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+				if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, d.Plugin.ID)); err != nil {
 					t.Fatalf("space=%s adopt=%v: %v", space, adopt, err)
 				}
 				var gotScope, key string
@@ -1081,7 +1090,7 @@ func TestPublishedVisibilityChangesKeepSameReleaseAndDraft(t *testing.T) {
 				t.Fatal(err)
 			}
 			id := created.Plugin.ID
-			if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+			if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 				t.Fatal(err)
 			}
 			state, err := repo.GetVersionState(ctx, tenantScope(), id)
@@ -1183,7 +1192,7 @@ func TestVisibilityReviewCancelAndRejectPreserveAudience(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := created.Plugin.ID
-	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+	if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 		t.Fatal(err)
 	}
 	state, _ := repo.GetVersionState(ctx, tenantScope(), id)

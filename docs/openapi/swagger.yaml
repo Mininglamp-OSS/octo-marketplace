@@ -2235,7 +2235,8 @@ components:
 
             review; both are ignored for a 仅自己可见 Plugin, which lists immediately.
 
-            Version defaults to the draft''s current version.'
+            Version is required for managed Experts/Expert Teams. Other types retain
+            their existing default.'
           type: string
       type: object
     internal_api_handler_plugin.publishResponse:
@@ -5188,8 +5189,12 @@ paths:
       tags:
       - expert
     post:
-      description: Publish a new standalone expert owned by the authenticated caller
+      description: 'Publish a new standalone expert owned by the authenticated caller
         in the current Space.
+
+        When version management is enabled, this legacy unversioned write returns
+        400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish
+        with an explicit version; update octo-cli if needed.'
       operationId: expert.create
       requestBody:
         content:
@@ -5354,7 +5359,11 @@ paths:
       tags:
       - expert
     patch:
-      description: Partially update an expert owned by the authenticated caller.
+      description: 'Partially update an expert owned by the authenticated caller.
+
+        When version management is enabled, this legacy unversioned write returns
+        400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish
+        with an explicit version; update octo-cli if needed.'
       operationId: expert.update
       parameters:
       - description: Expert ID
@@ -7970,10 +7979,15 @@ paths:
       - plugin
   /plugins/publish:
     post:
-      description: Publish a caller-owned Plugin. A private Plugin is listed immediately.
+      description: 'Publish a caller-owned Plugin. A private Plugin is listed immediately.
         An organization-visible Plugin is approved immediately when the authenticated
-        Space's automatic-review policy is enabled (the default), or opens a pending
+        Space''s automatic-review policy is enabled (the default), or opens a pending
         review when the policy is disabled.
+
+        With version management enabled, Experts and Expert Teams require an explicit
+        MAJOR.MINOR.PATCH version. Private publication must match the saved draft
+        version. Missing or invalid labels return 400 with details.field=version and
+        an octo-cli upgrade hint.'
       operationId: plugin.publish
       requestBody:
         content:
@@ -9833,8 +9847,12 @@ paths:
       tags:
       - expert_squad
     post:
-      description: Publish a new expert squad owned by the authenticated caller in
+      description: 'Publish a new expert squad owned by the authenticated caller in
         the current Space.
+
+        When version management is enabled, this legacy unversioned write returns
+        400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish
+        with an explicit version; update octo-cli if needed.'
       operationId: squad.create
       requestBody:
         content:
@@ -9999,8 +10017,12 @@ paths:
       tags:
       - expert_squad
     patch:
-      description: Partially update a squad owned by the authenticated caller. Sending
+      description: 'Partially update a squad owned by the authenticated caller. Sending
         members replaces the whole array.
+
+        When version management is enabled, this legacy unversioned write returns
+        400 versioned_api_required. Use plugins/upsert to save a draft and plugins/publish
+        with an explicit version; update octo-cli if needed.'
       operationId: squad.update
       parameters:
       - description: Squad ID

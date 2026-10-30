@@ -139,3 +139,9 @@ python3 scripts/test-version-management.py --base-url http://127.0.0.1:32772
 The script prints the resource and version IDs for subsequent manual requests.
 Current sandbox identity is `user-1` in `space-a`; no production records are used.
 Web/Admin UI is outside this backend change.
+
+## Older CLI compatibility
+
+With `PLUGIN_VERSION_MANAGEMENT_ENABLED=true`, tenant Expert/Expert Team publication through `POST /plugins/publish` requires an explicit valid `version`. Private publication must match the saved draft label instead of ignoring the requested version. Missing/invalid versions return 400 VALIDATION_ERROR with `details.field=version` and an octo-cli upgrade hint. Draft creation still defaults to 1.0.0 when omitted; draft updates retain the saved label.
+
+Under the same flag, legacy `POST /experts`, `PATCH /experts/{id}`, `POST /squads` and `PATCH /squads/{id}` return 400 with `details.reason=versioned_api_required`. These APIs have no versioned release contract. Update the CLI to save through `/plugins/upsert` and publish through `/plugins/publish` with an explicit version. Feature-off legacy behavior, reads, installation and deletion are unchanged; Skill/Connector publication keeps its existing rules.

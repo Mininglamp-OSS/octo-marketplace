@@ -26,7 +26,7 @@ func TestVisibilityWideningRepairsDefaultPlacement(t *testing.T) {
 					t.Fatal(err)
 				}
 				id := created.Plugin.ID
-				if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id}); err != nil {
+				if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id)); err != nil {
 					t.Fatal(err)
 				}
 				state, err := repo.GetVersionState(ctx, tenantScope(), id)

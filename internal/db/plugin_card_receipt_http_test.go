@@ -77,7 +77,7 @@ func (f *cardHTTPFixture) pending(t *testing.T, name string) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publication, err := f.svc.Publish(context.Background(), managedOwner(), pluginsvc.PublishParams{PluginID: created.Plugin.ID})
+	publication, err := f.svc.Publish(context.Background(), managedOwner(), explicitTestPublication(t, f.db, created.Plugin.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
