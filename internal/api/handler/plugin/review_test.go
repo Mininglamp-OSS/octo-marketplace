@@ -330,6 +330,43 @@ func TestSubmitReviewForwardsContentAndRelations(t *testing.T) {
 	}
 }
 
+// The review boundary must preserve exact release pins just like ordinary
+// upsert. Connector edges intentionally have no version and must stay unpinned.
+func TestSubmitReviewPreservesRelationVersionPins(t *testing.T) {
+	for _, tc := range []struct {
+		name, relationType, versionField, wantVersion string
+	}{
+		{"skill", "expert_skill", `,"target_version_id":"01a182f0-5436-771c-8dc1-8408f3fa4d28"`, "01a182f0-5436-771c-8dc1-8408f3fa4d28"},
+		{"team member", "expert_team_expert", `,"target_version_id":"expert-release-1"`, "expert-release-1"},
+		{"connector", "expert_connector", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeService{}
+			f.review.request = reviewRequestFixture()
+			body := `{"plugin_id":"plugin-1","version":"2.0.0","changelog":"notes","relations":[{"relation_id":"rel-1","source_plugin_id":"plugin-1","target_plugin_id":"target-1","relation_type":"` + tc.relationType + `"` + tc.versionField + `,"sort_order":3,"data":{"role":"worker"}}]}`
+			rec := doReview(t, f, http.MethodPost, "/api/v1/plugins/review_requests", body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+			}
+			params := f.review.submitParams
+			if params.Relations == nil || len(*params.Relations) != 1 {
+				t.Fatalf("relations were dropped: %+v", params.Relations)
+			}
+			r := (*params.Relations)[0]
+			if tc.wantVersion == "" {
+				if r.TargetVersionID != nil {
+					t.Fatalf("unpinned connector got version %q", *r.TargetVersionID)
+				}
+			} else if r.TargetVersionID == nil || *r.TargetVersionID != tc.wantVersion {
+				t.Fatalf("target_version_id = %v, want %q", r.TargetVersionID, tc.wantVersion)
+			}
+			if r.ID != "rel-1" || r.SourcePluginID != "plugin-1" || r.TargetPluginID != "target-1" || r.Type != tc.relationType || r.SortOrder != 3 || string(r.Data) != `{"role":"worker"}` {
+				t.Fatalf("relation fields changed: %+v", r)
+			}
+		})
+	}
+}
+
 // Omitting `relations` must reach the service as a nil pointer (inherit the live
 // graph), while an explicit empty array must reach it as a non-nil empty slice
 // (clear the graph). Collapsing the two would let a document-only edit silently
