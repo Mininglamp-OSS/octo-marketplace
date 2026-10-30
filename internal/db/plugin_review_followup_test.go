@@ -45,7 +45,7 @@ func TestLegacyContainerReuploadPreservesOnlyEditableNote(t *testing.T) {
 					t.Fatal(err)
 				}
 				if released {
-					if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID, Changelog: note}); err != nil {
+					if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID, Version: "1.0.0", Changelog: note}); err != nil {
 						t.Fatal(err)
 					}
 					// Private publication releases the current snapshot. Widen

@@ -728,7 +728,9 @@ func managedSkillWrite(label, name string, visibility model.PluginVisibility) pl
 func publishManaged(t *testing.T, svc *pluginsvc.Service, owner pluginsvc.Caller, id string) {
 	t.Helper()
 	ctx := context.Background()
-	draft, err := svc.CurrentDetail(ctx, owner, id)
+	// Fixture setup reads the saved label directly via the admin projection:
+	// legacy services have no editing read, and public detail hides drafts.
+	draft, err := svc.AdminDetail(ctx, owner, id, false)
 	if err != nil {
 		t.Fatal(err)
 	}
