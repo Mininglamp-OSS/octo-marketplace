@@ -20,7 +20,7 @@ func TestUploadCreateNamesAcrossAllResourceTypes(t *testing.T) {
 	database := reviewDB(t)
 	ctx := context.Background()
 	repo := pluginrepo.New(database)
-	for _, kind := range []string{"skill", "expert", "expert_team"} {
+	for _, kind := range []string{"skill", "expert", "expert_team", "connector"} {
 		t.Run(kind, func(t *testing.T) {
 			sc := pluginrepo.Scope{CallerUID: "owner", SpaceID: "space-a"}
 			create := func(id, name string) error {
@@ -62,7 +62,7 @@ func TestUploadCreateRejectsGlobalMarketNames(t *testing.T) {
 	database := reviewDB(t)
 	ctx := context.Background()
 	repo := pluginrepo.New(database)
-	for _, kind := range []string{"skill", "expert", "expert_team"} {
+	for _, kind := range []string{"skill", "expert", "expert_team", "connector"} {
 		global := uploadNameMutation(kind+"-global", "Official", kind, "")
 		global.Plugin.SpaceID = nil
 		global.Plugin.Visibility = "system"
@@ -139,37 +139,41 @@ func TestCreateNameCheckDoesNotRevealGlobalDraftName(t *testing.T) {
 	}
 }
 
-func TestConcurrentTeamUploadsCannotCommitDuplicateNames(t *testing.T) {
-	database := reviewDB(t)
-	ctx := context.Background()
-	repo := pluginrepo.New(database)
-	sc := pluginrepo.Scope{CallerUID: "owner", SpaceID: "space-a"}
-	var wg sync.WaitGroup
-	results := make(chan error, 6)
-	for i := 0; i < 6; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, err := repo.Create(ctx, sc, uploadNameMutation(fmt.Sprintf("race-team-%d", i), "Concurrent Team", "expert_team", sc.SpaceID))
-			results <- err
-		}(i)
-	}
-	wg.Wait()
-	close(results)
-	success := 0
-	for err := range results {
-		if err == nil {
-			success++
-			continue
-		}
-		if !errors.Is(err, pluginrepo.ErrNameTaken) && !errors.Is(err, pluginrepo.ErrDeadlock) {
-			t.Fatalf("unexpected concurrent error: %v", err)
-		}
-	}
-	if success != 1 {
-		t.Fatalf("committed %d duplicates, want exactly one", success)
-	}
-	if _, err := repo.Create(ctx, sc, uploadNameMutation("race-retry", " concurrent team ", "expert_team", sc.SpaceID)); !errors.Is(err, pluginrepo.ErrNameTaken) {
-		t.Fatalf("retry must return rename error: %v", err)
+func TestConcurrentUploadsCannotCommitDuplicateNames(t *testing.T) {
+	for _, kind := range []string{"expert_team", "connector"} {
+		t.Run(kind, func(t *testing.T) {
+			database := reviewDB(t)
+			ctx := context.Background()
+			repo := pluginrepo.New(database)
+			sc := pluginrepo.Scope{CallerUID: "owner", SpaceID: "space-a"}
+			var wg sync.WaitGroup
+			results := make(chan error, 6)
+			for i := 0; i < 6; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					_, err := repo.Create(ctx, sc, uploadNameMutation(fmt.Sprintf("race-team-%d", i), "Concurrent Team", kind, sc.SpaceID))
+					results <- err
+				}(i)
+			}
+			wg.Wait()
+			close(results)
+			success := 0
+			for err := range results {
+				if err == nil {
+					success++
+					continue
+				}
+				if !errors.Is(err, pluginrepo.ErrNameTaken) && !errors.Is(err, pluginrepo.ErrDeadlock) {
+					t.Fatalf("unexpected concurrent error: %v", err)
+				}
+			}
+			if success != 1 {
+				t.Fatalf("committed %d duplicates, want exactly one", success)
+			}
+			if _, err := repo.Create(ctx, sc, uploadNameMutation("race-retry", " concurrent team ", kind, sc.SpaceID)); !errors.Is(err, pluginrepo.ErrNameTaken) {
+				t.Fatalf("retry must return rename error: %v", err)
+			}
+		})
 	}
 }

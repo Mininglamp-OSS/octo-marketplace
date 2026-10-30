@@ -168,19 +168,19 @@ func jsonColumn(raw []byte) any {
 }
 
 // pluginNameColumns returns the normalized name key and scope for the unique
-// active-name index. Skills, Experts and Expert Teams participate; Connectors
-// keep the historical duplicate-name behavior. The same normalization MUST be
+// active-name index. All standalone plugin types participate.
+// The same normalization MUST be
 // used by the backfill command and migration preflight.
 func pluginNameColumns(name string, typ model.PluginType, spaceID *string) (any, string, error) {
 	scope := ""
 	if spaceID != nil {
 		scope = *spaceID
 	}
-	if typ != model.PluginTypeExpert && typ != model.PluginTypeSkill && typ != model.PluginTypeExpertTeam {
+	if typ != model.PluginTypeExpert && typ != model.PluginTypeSkill && typ != model.PluginTypeExpertTeam && typ != model.PluginTypeConnector {
 		return nil, scope, nil
 	}
 	// Enforce the invariant at the repository boundary too: an admin/internal
-	// caller must not create a blank Expert/Skill that bypasses the unique index.
+	// caller must not create a blank plugin that bypasses the unique index.
 	// Historical malformed rows are normalized only by the explicit backfill
 	// command, which writes directly rather than through this path.
 	if strings.TrimSpace(name) == "" {
