@@ -66,7 +66,7 @@ func TestRetainedPinnedTeamPublicationChecksHistoricalDependencies(t *testing.T)
 					}
 				}
 				publisher := pluginsvc.New(pluginrepo.New(database)).WithVersionManagement(true).WithReferences(references)
-				_, err = publisher.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: team.Plugin.ID})
+				_, err = publisher.Publish(ctx, owner, explicitTestPublication(t, database, team.Plugin.ID))
 				if deletedSkill {
 					if !errors.Is(err, pluginsvc.ErrNotFound) {
 						t.Fatalf("retained pin published through deleted transitive Skill: %v", err)

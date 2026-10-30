@@ -122,7 +122,7 @@ func TestOmittedDraftNotePreservedOnlyFromUnreleasedSnapshot(t *testing.T) {
 					t.Fatal(err)
 				}
 				if released {
-					if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+					if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, d.Plugin.ID)); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -194,7 +194,7 @@ func TestSameAudienceHTTPDoesNotHidePendingReview(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: d.Plugin.ID}); err != nil {
+			if _, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, d.Plugin.ID)); err != nil {
 				t.Fatal(err)
 			}
 			state, err := repo.GetVersionState(ctx, tenantScope(), d.Plugin.ID)

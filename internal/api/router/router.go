@@ -230,7 +230,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		// Expert Marketplace (docs/api/expert-v1.md): experts + squads + tags +
 		// the dedicated expert_categories taxonomy. Reuses the shared id generator.
 		// A fleet client (when configured) powers POST /experts/{id}/install.
-		expertSvc := expertsvc.New(expertrepo.New(db), store, generateID).WithMetrics(mSvc)
+		expertSvc := expertsvc.New(expertrepo.New(db), store, generateID).WithMetrics(mSvc).WithLegacyWritesDisabled(storageCfg.PluginVersionManagementEnabled)
 		if fleetClient != nil {
 			expertSvc = expertSvc.WithFleet(fleetClient)
 		}

@@ -62,7 +62,7 @@ func installationHTTPFixture(t *testing.T, pinned bool, installer pluginsvc.Capa
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Publish(context.Background(), managedOwner(), pluginsvc.PublishParams{PluginID: root.Plugin.ID}); err != nil {
+	if _, err = svc.Publish(context.Background(), managedOwner(), explicitTestPublication(t, database, root.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	gin.SetMode(gin.TestMode)

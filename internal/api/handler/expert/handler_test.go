@@ -316,3 +316,24 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 		})
 	}
 }
+
+func TestLegacyVersionedWriteGuardPreservesAuthAndReturnsUpgradeHint(t *testing.T) {
+	svc := expertsvc.New(nil, nil, nil).WithLegacyWritesDisabled(true)
+	for _, path := range []struct{ method, url string }{{"POST", "/v1/experts"}, {"PATCH", "/v1/experts/id"}, {"POST", "/v1/squads"}, {"PATCH", "/v1/squads/id"}} {
+		r := legacyInstallRouter(svc)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(path.method, path.url, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "versioned_api_required") || !strings.Contains(w.Body.String(), "Update octo-cli") {
+			t.Fatalf("%s %s: %d %s", path.method, path.url, w.Code, w.Body.String())
+		}
+		unauth := gin.New()
+		New(svc).Register(unauth.Group("/v1"))
+		w = httptest.NewRecorder()
+		unauth.ServeHTTP(w, httptest.NewRequest(path.method, path.url, strings.NewReader(`{}`)))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated call: %d", w.Code)
+		}
+	}
+}

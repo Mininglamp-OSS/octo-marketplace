@@ -790,7 +790,11 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		// Structured field error from the review path: surface the exact field
 		// and reason so the browser can show the user which input to fix,
 		// instead of collapsing every cause into {"field":"body","reason":"invalid"}.
-		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, "Correct the request and try again.")
+		hint := "Correct the request and try again."
+		if fieldErr.Field == "version" {
+			hint = "Supply an explicit MAJOR.MINOR.PATCH version when publishing. Update octo-cli if it cannot send version; save the intended draft version before publishing a private resource."
+		}
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, hint)
 	case errors.Is(err, pluginsvc.ErrInvalidRequest):
 		validation(c, "body")
 	case errors.Is(err, pluginsvc.ErrReviewInvalid):

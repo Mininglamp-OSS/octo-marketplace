@@ -94,7 +94,7 @@ func TestManagedTeamApprovalRespectsStandalonePrivateExpertBoundary(t *testing.T
 			if _, err = database.Exec(`UPDATE plugins SET visibility='space' WHERE plugin_id=?`, team.Plugin.ID); err != nil {
 				t.Fatal(err)
 			}
-			pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: team.Plugin.ID})
+			pub, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, team.Plugin.ID))
 			if err == nil {
 				if pub.Review == nil {
 					t.Fatal("private member graph published without review")
@@ -180,7 +180,7 @@ func TestManagedTeamApprovalPromotesOwnEmbeddedMembers(t *testing.T) {
 	if _, err = repo.UpsertReviewPolicy(ctx, tenantScope(), false, "reviewer", "Reviewer"); err != nil {
 		t.Fatal(err)
 	}
-	pub, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: team.Plugin.ID})
+	pub, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, team.Plugin.ID))
 	if err != nil {
 		t.Fatal(err)
 	}

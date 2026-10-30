@@ -77,6 +77,20 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	if detail.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
+	// Old CLI payloads may omit labels when saving drafts, but a managed
+	// Expert/Team release must name the intended version explicitly.
+	if s.versionManagement && (detail.Plugin.Type == model.PluginTypeExpert || detail.Plugin.Type == model.PluginTypeExpertTeam) {
+		params.Version = strings.TrimSpace(params.Version)
+		if params.Version == "" {
+			return nil, &ReviewFieldError{Field: "version", Reason: "required"}
+		}
+		if !validVersion(params.Version) {
+			return nil, &ReviewFieldError{Field: "version", Reason: "invalid"}
+		}
+		if detail.Plugin.Visibility == model.PluginVisibilityPrivate && detail.Plugin.CurrentVersion != nil && *detail.Plugin.CurrentVersion != params.Version {
+			return nil, &ReviewFieldError{Field: "version", Reason: "draft_version_mismatch"}
+		}
+	}
 	if detail.Plugin.ListingState == model.PluginListingStatePublished && !(s.versionManagement && detail.Plugin.Type != model.PluginTypeConnector) {
 		return nil, ErrAlreadyPublished
 	}

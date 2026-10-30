@@ -12,7 +12,7 @@ type publishRequest struct {
 	PluginID string `json:"plugin_id"`
 	// Version and Changelog are used only when the publish needs organization
 	// review; both are ignored for a 仅自己可见 Plugin, which lists immediately.
-	// Version defaults to the draft's current version.
+	// Version is required for managed Experts/Expert Teams. Other types retain their existing default.
 	Version   string `json:"version"`
 	Changelog string `json:"changelog"`
 }
@@ -40,6 +40,7 @@ type delistResponse struct {
 // Publish godoc
 // @Summary Publish plugin
 // @Description Publish a caller-owned Plugin. A private Plugin is listed immediately. An organization-visible Plugin is approved immediately when the authenticated Space's automatic-review policy is enabled (the default), or opens a pending review when the policy is disabled.
+// @Description With version management enabled, Experts and Expert Teams require an explicit MAJOR.MINOR.PATCH version. Private publication must match the saved draft version. Missing or invalid labels return 400 with details.field=version and an octo-cli upgrade hint.
 // @Tags plugin
 // @ID plugin.publish
 // @Accept json

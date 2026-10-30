@@ -172,7 +172,7 @@ func TestPluginNamePublishedReservationThroughService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: created.Plugin.ID}); err != nil {
+	if _, err := svc.Publish(ctx, owner, explicitTestPublication(t, db, created.Plugin.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Update(ctx, owner, created.Plugin.ID, write("Beta", "2.0.0")); err != nil {
@@ -324,7 +324,7 @@ func TestManagedReleaseRejectsHistoricalNameCollision(t *testing.T) {
 			id := created.Plugin.ID
 			var reviewID string
 			if path != "publish" {
-				result, err := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+				result, err := svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -348,7 +348,7 @@ func TestManagedReleaseRejectsHistoricalNameCollision(t *testing.T) {
 			if path == "approval" {
 				_, err = svc.ApproveReview(ctx, managedReviewer(), reviewID)
 			} else {
-				_, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+				_, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 			}
 			if !errors.Is(err, pluginsvc.ErrNameTaken) {
 				t.Fatalf("%s collision: %v", path, err)
@@ -362,7 +362,7 @@ func TestManagedReleaseRejectsHistoricalNameCollision(t *testing.T) {
 			if path == "approval" {
 				_, err = svc.ApproveReview(ctx, managedReviewer(), reviewID)
 			} else {
-				_, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id})
+				_, err = svc.Publish(ctx, owner, explicitTestPublication(t, database, id))
 			}
 			if err != nil {
 				t.Fatalf("retry after removing collision: %v", err)

@@ -307,3 +307,57 @@ func TestDisplayStatusPrecedence(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedExpertPublishRequiresExplicitVersion(t *testing.T) {
+	for _, typ := range []model.PluginType{model.PluginTypeExpert, model.PluginTypeExpertTeam} {
+		for _, visibility := range []model.PluginVisibility{model.PluginVisibilityPrivate, model.PluginVisibilitySpace} {
+			for _, listing := range []model.PluginListingState{model.PluginListingStateDraft, model.PluginListingStatePublished, model.PluginListingStateDelisted} {
+				t.Run(string(typ)+"/"+string(visibility)+"/"+string(listing), func(t *testing.T) {
+					store, svc := listingFixture(t, visibility, listing)
+					store.plugins["plugin-1"].Type = typ
+					svc.WithVersionManagement(true)
+					for _, version := range []string{"", "  ", "bad"} {
+						_, err := svc.Publish(context.Background(), testCaller, PublishParams{PluginID: "plugin-1", Version: version})
+						var field *ReviewFieldError
+						if !errors.As(err, &field) || field.Field != "version" {
+							t.Fatalf("version %q: %v", version, err)
+						}
+						if store.review.insertReq != nil {
+							t.Fatal("invalid version opened a review")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestManagedExpertPublishAcceptsExplicitSpaceVersion(t *testing.T) {
+	store, svc := listingFixture(t, model.PluginVisibilitySpace, model.PluginListingStateDraft)
+	svc.WithVersionManagement(true)
+	if _, err := svc.Publish(context.Background(), testCaller, PublishParams{PluginID: "plugin-1", Version: "2.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.review.insertReq == nil || store.review.insertReq.Version != "2.0.0" {
+		t.Fatal("explicit version was lost")
+	}
+}
+
+func TestManagedPrivateExpertPublishCannotIgnoreRequestedVersion(t *testing.T) {
+	_, svc := listingFixture(t, model.PluginVisibilityPrivate, model.PluginListingStateDraft)
+	svc.WithVersionManagement(true)
+	_, err := svc.Publish(context.Background(), testCaller, PublishParams{PluginID: "plugin-1", Version: "2.0.0"})
+	var field *ReviewFieldError
+	if !errors.As(err, &field) || field.Reason != "draft_version_mismatch" {
+		t.Fatalf("mismatched version: %v", err)
+	}
+}
+
+func TestManagedExpertPublishChecksOwnerBeforeVersion(t *testing.T) {
+	store, svc := listingFixture(t, model.PluginVisibilitySpace, model.PluginListingStateDraft)
+	store.plugins["plugin-1"].OwnerUID = "other-owner"
+	svc.WithVersionManagement(true)
+	if _, err := svc.Publish(context.Background(), testCaller, PublishParams{PluginID: "plugin-1"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("non-owner learned version requirement: %v", err)
+	}
+}
