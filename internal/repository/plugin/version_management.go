@@ -154,7 +154,7 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 		if err != nil {
 			return err
 		}
-		if previous.Valid && !model.VersionNotRegressed(previous.String, label) {
+		if previous.Valid && !model.VersionAdvanced(previous.String, label) {
 			return ErrVersionRegressed
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO plugin_version_releases (plugin_id,version_id,version_label,released_by,released_at) VALUES (?,?,?,?,?)`, p.ID, versionID, label, actor, now)

@@ -195,11 +195,14 @@ type Plugin struct {
 	ManifestHash     string
 	PluginHash       string
 	CurrentVersionID *string
-	CurrentVersion   *string
-	Status           int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        *time.Time
+	// PublishedVersion is the formal release baseline, independent of the editable head.
+	PublishedVersionID *string
+	PublishedVersion   *string
+	CurrentVersion     *string
+	Status             int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	DeletedAt          *time.Time
 }
 
 // DependencyIssue explains why a listed expert or team is hidden from the

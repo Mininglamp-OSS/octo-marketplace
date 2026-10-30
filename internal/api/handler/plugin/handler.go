@@ -247,10 +247,14 @@ type listItemResponse struct {
 	ManifestHash     string                    `json:"manifest_hash"`
 	PluginHash       string                    `json:"plugin_hash"`
 	CurrentVersionID *string                   `json:"current_version_id,omitempty"`
-	CurrentVersion   *string                   `json:"current_version,omitempty"`
-	Status           int                       `json:"status"`
-	CreatedAt        time.Time                 `json:"created_at" swaggertype:"string,date-time"`
-	UpdatedAt        time.Time                 `json:"updated_at" swaggertype:"string,date-time"`
+	// Published fields are emitted on owner lists with version management enabled.
+	// current_version/current_version_id keep their editable-head semantics.
+	PublishedVersionID *string   `json:"published_version_id,omitempty"`
+	PublishedVersion   *string   `json:"published_version,omitempty"`
+	CurrentVersion     *string   `json:"current_version,omitempty"`
+	Status             int       `json:"status"`
+	CreatedAt          time.Time `json:"created_at" swaggertype:"string,date-time"`
+	UpdatedAt          time.Time `json:"updated_at" swaggertype:"string,date-time"`
 }
 
 type relationResponse struct {
@@ -897,7 +901,7 @@ func listItemDTO(p *model.Plugin) listItemResponse {
 	if p == nil {
 		return listItemResponse{}
 	}
-	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, PublishedVersionID: p.PublishedVersionID, PublishedVersion: p.PublishedVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 func nonNilStrings(values []string) []string {
