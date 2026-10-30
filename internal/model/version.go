@@ -63,3 +63,17 @@ func VersionNotRegressed(current, next string) bool {
 	}
 	return true
 }
+
+// VersionAdvanced is the content-publication rule. Draft saves keep using
+// VersionNotRegressed, which deliberately accepts an unchanged label.
+func VersionAdvanced(current, next string) bool {
+	if !VersionNotRegressed(current, next) {
+		return false
+	}
+	a, validCurrent := ParseVersion(current)
+	b, validNext := ParseVersion(next)
+	if !validNext {
+		return false
+	}
+	return !validCurrent || a != b
+}

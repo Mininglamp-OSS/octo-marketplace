@@ -41,7 +41,7 @@ WHERE p.plugin_id=? AND p.status=1 AND p.deleted_at IS NULL`
 		q += ` AND ` + visibilitySQL
 		args = append(args, scope.SpaceID, scope.CallerUID)
 	}
-	p, err := scanPluginRow(r.db.QueryRowContext(ctx, q, args...), true, true, true)
+	p, err := scanPluginRow(r.db.QueryRowContext(ctx, q, args...), true, true, true, false)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

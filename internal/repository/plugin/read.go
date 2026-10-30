@@ -93,6 +93,12 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 		project = publishedListProjection
 		where = project(where)
 	}
+	includePublished := r.versionManagement && f.Mine && !f.AllSpaces
+	publishedColumns := ""
+	if includePublished {
+		from += ` LEFT JOIN plugin_version_releases owner_release ON owner_release.plugin_id=p.plugin_id AND owner_release.version_id=p.published_version_id AND p.plugin_type<>'connector'`
+		publishedColumns = `,owner_release.version_id,owner_release.version_label`
+	}
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.plugin_id) `+from+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -116,7 +122,7 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	if f.IncludeReviewState {
 		reviewState = pluginReviewStateColumns
 	}
-	q := `SELECT ` + project(pluginSummaryColumns) + pluginMetricColumns + reviewState + from + where + group + project(listOrder(f)) + ` LIMIT ? OFFSET ?`
+	q := `SELECT ` + project(pluginSummaryColumns) + pluginMetricColumns + reviewState + publishedColumns + from + where + group + project(listOrder(f)) + ` LIMIT ? OFFSET ?`
 	rows, err := r.db.QueryContext(ctx, q, queryArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -124,7 +130,7 @@ func (r *Repo) List(ctx context.Context, scope Scope, f ListFilter) ([]model.Plu
 	defer rows.Close()
 	var out []model.Plugin
 	for rows.Next() {
-		p, err := scanPluginRow(rows, false, true, f.IncludeReviewState)
+		p, err := scanPluginRow(rows, false, true, f.IncludeReviewState, includePublished)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -551,7 +557,7 @@ WHERE p.status=1 AND p.deleted_at IS NULL AND p.plugin_id IN (` + placeholders(l
 	defer nRows.Close()
 	present := map[string]*model.Plugin{}
 	for nRows.Next() {
-		p, err := scanPluginRow(nRows, false, true, true)
+		p, err := scanPluginRow(nRows, false, true, true, false)
 		if err != nil {
 			return nil, nil, nil, wrapped("graph node scan", err)
 		}
@@ -645,20 +651,20 @@ WHERE r.source_plugin_id=? AND r.status=1 AND r.deleted_at IS NULL`, pluginID).S
 }
 
 func scanPlugin(s interface{ Scan(...any) error }) (*model.Plugin, error) {
-	return scanPluginRow(s, true, false, false)
+	return scanPluginRow(s, true, false, false, false)
 }
 
 // scanPluginWithMetrics scans a row selected with pluginColumns plus the
 // correlated metric counters appended by pluginMetricColumns.
 func scanPluginWithMetrics(s interface{ Scan(...any) error }) (*model.Plugin, error) {
-	return scanPluginRow(s, true, true, false)
+	return scanPluginRow(s, true, true, false, false)
 }
 
-func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMetrics, includeReviewState bool) (*model.Plugin, error) {
+func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMetrics, includeReviewState, includePublished bool) (*model.Plugin, error) {
 	var p model.Plugin
 	var category, space, botUID, botName, version, versionName sql.NullString
 	var rating sql.NullInt64
-	var reviewID, reviewStatus sql.NullString
+	var reviewID, reviewStatus, publishedID, publishedVersion sql.NullString
 	var tags, manifest, pkg, attachKeys []byte
 	var deleted sql.NullTime
 	dest := []any{&p.ID, &p.Name, &p.Type, &p.IsEmbedded, &category, &tags, &p.Publisher, &p.OwnerUID, &space, &p.Visibility, &p.ListingState, &p.CreatorName, &p.CreatedByType, &botUID, &botName, &p.Icon, &p.ToolCount, &rating, &manifest}
@@ -671,6 +677,9 @@ func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMet
 	}
 	if includeReviewState {
 		dest = append(dest, &p.HasPendingReview, &reviewID, &reviewStatus)
+	}
+	if includePublished {
+		dest = append(dest, &publishedID, &publishedVersion)
 	}
 	if err := s.Scan(dest...); err != nil {
 		return nil, err
@@ -687,6 +696,8 @@ func scanPluginRow(s interface{ Scan(...any) error }, includePackage, includeMet
 	p.CreatedByBotName = nullString(botName)
 	p.CurrentVersionID = nullString(version)
 	p.CurrentVersion = nullString(versionName)
+	p.PublishedVersionID = nullString(publishedID)
+	p.PublishedVersion = nullString(publishedVersion)
 	if rating.Valid {
 		value := int(rating.Int64)
 		p.Rating = &value
