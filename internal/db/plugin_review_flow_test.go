@@ -1508,7 +1508,7 @@ func TestConnectorApprovalStampsLabelWithoutVersionRow(t *testing.T) {
 	ctx := context.Background()
 	seed(t, database, seedPlugin{id: "connector-1", typ: "connector", visibility: "space", listingState: "draft", currentVersion: "1.0.0"})
 	req := newRequest("connector-1", "2.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{}`, `{"attachments":[]}`, nil)); err != nil {
+	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Fixture"}`, `{"attachments":[]}`, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{

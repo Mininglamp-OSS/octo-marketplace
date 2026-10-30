@@ -184,30 +184,34 @@ func TestPluginNamePublishedReservationThroughService(t *testing.T) {
 }
 
 func TestPluginNameApprovalConflictMapsToNameTaken(t *testing.T) {
-	db := reviewDB(t)
-	repo := pluginrepo.New(db)
-	ctx := context.Background()
-	seed(t, db, seedPlugin{id: "pending-name", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
-	if _, err := db.Exec(`UPDATE plugins SET plugin_name='Beta',name_key='beta',name_scope='space-a' WHERE plugin_id='pending-name'`); err != nil {
-		t.Fatal(err)
-	}
-	// The frozen submission is Alpha; a different active row already owns Alpha.
-	seed(t, db, seedPlugin{id: "active-alpha", visibility: "space", listingState: "draft", currentVersion: "1.0.0"})
-	if _, err := db.Exec(`UPDATE plugins SET plugin_name='Alpha',name_key='alpha',name_scope='space-a' WHERE plugin_id='active-alpha'`); err != nil {
-		t.Fatal(err)
-	}
-	req := newRequest("pending-name", "1.0.0")
-	if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Alpha"}`, `{"attachments":[]}`, nil)); err != nil {
-		t.Fatal(err)
-	}
-	_, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{ReviewID: req.ID, ReviewerUID: "admin-1", ReviewerName: "Adam"})
-	if !errors.Is(err, pluginrepo.ErrNameTaken) {
-		t.Fatalf("approval name conflict = %v, want ErrNameTaken", err)
-	}
-	// The service must map the repository sentinel, not leak a raw MySQL 1062.
-	svc := pluginsvc.New(repo)
-	if _, err := svc.ApproveReview(ctx, managedReviewer(), req.ID); !errors.Is(err, pluginsvc.ErrNameTaken) {
-		t.Fatalf("service approval name conflict = %v, want ErrNameTaken", err)
+	for _, kind := range []string{"skill", "connector"} {
+		t.Run(kind, func(t *testing.T) {
+			db := reviewDB(t)
+			repo := pluginrepo.New(db)
+			ctx := context.Background()
+			seed(t, db, seedPlugin{typ: kind, id: "pending-name", visibility: "space", listingState: "draft", currentVersion: "0.9.0"})
+			if _, err := db.Exec(`UPDATE plugins SET plugin_name='Beta',name_key='beta',name_scope='space-a' WHERE plugin_id='pending-name'`); err != nil {
+				t.Fatal(err)
+			}
+			// The frozen submission is Alpha; a different active row already owns Alpha.
+			seed(t, db, seedPlugin{typ: kind, id: "active-alpha", visibility: "space", listingState: "draft", currentVersion: "1.0.0"})
+			if _, err := db.Exec(`UPDATE plugins SET plugin_name='Alpha',name_key='alpha',name_scope='space-a' WHERE plugin_id='active-alpha'`); err != nil {
+				t.Fatal(err)
+			}
+			req := newRequest("pending-name", "1.0.0")
+			if err := repo.InsertReviewRequest(ctx, tenantScope(), req, snapshotOf(`{"plugin_name":"Alpha"}`, `{"attachments":[]}`, nil)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := repo.ApproveReview(ctx, reviewerScope(), pluginrepo.ApproveReviewParams{ReviewID: req.ID, ReviewerUID: "admin-1", ReviewerName: "Adam"})
+			if !errors.Is(err, pluginrepo.ErrNameTaken) {
+				t.Fatalf("approval name conflict = %v, want ErrNameTaken", err)
+			}
+			// The service must map the repository sentinel, not leak a raw MySQL 1062.
+			svc := pluginsvc.New(repo)
+			if _, err := svc.ApproveReview(ctx, managedReviewer(), req.ID); !errors.Is(err, pluginsvc.ErrNameTaken) {
+				t.Fatalf("service approval name conflict = %v, want ErrNameTaken", err)
+			}
+		})
 	}
 }
 
