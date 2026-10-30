@@ -3,9 +3,30 @@ package plugin
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
+
+// snapshotReviewPublication records formal Skill publication independently of
+// the read/edit rollout. Skills have no outgoing relations, so their approval
+// snapshots can also carry a complete reverse index before indexed reads start.
+// Legacy Expert/Team graphs can contain unpinned relations and retain their
+// compatibility semantics until converted; managed publication is unchanged.
+// Snapshot, release, published pointer and decision commit together, or roll back.
+func (r *Repo) snapshotReviewPublication(ctx context.Context, tx *sql.Tx, now time.Time, frozen model.Plugin, rels []model.PluginRelation, note *string, reviewer string) (string, error) {
+	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, reviewer, r.references || frozen.Type == model.PluginTypeSkill)
+	if err != nil {
+		return "", err
+	}
+	if !r.versionManagement && frozen.Type != model.PluginTypeSkill {
+		return id, nil
+	}
+	if err = r.recordRelease(ctx, tx, &frozen, id, *frozen.CurrentVersion, reviewer, now); err != nil {
+		return "", err
+	}
+	return id, nil
+}
 
 // approveManagedReview runs in the existing review transaction with both request
 // and resource locked. The frozen release is append-only; live draft rows and
@@ -42,11 +63,8 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if changelog.Valid {
 		note = &changelog.String
 	}
-	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, p.ReviewerUID, r.references)
+	id, err := r.snapshotReviewPublication(ctx, tx, now, frozen, rels, note, p.ReviewerUID)
 	if err != nil {
-		return nil, err
-	}
-	if err = r.recordRelease(ctx, tx, &frozen, id, version, p.ReviewerUID, now); err != nil {
 		return nil, err
 	}
 	// snapshotVersion supplies an immutable row, but its editable-head update is

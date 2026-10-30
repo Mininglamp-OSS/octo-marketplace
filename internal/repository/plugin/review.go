@@ -743,7 +743,8 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		}
 	}
 
-	// Mint the release snapshot through main's own helper: plugin_versions.version
+	// Mint the approved snapshot and, for Skills, its formal release even while
+	// managed reads/edits are disabled. plugin_versions.version
 	// stays the auto-increment counter, and current_version takes the applicant's
 	// label. The snapshot carries the FROZEN attachment sidecar (zip-submitted
 	// skill upgrades spill files at submit time whose keys only exist on the
@@ -763,7 +764,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		s := changelog.String
 		changelogPtr = &s
 	}
-	if _, err := snapshotVersion(ctx, tx, r.id, now, snapshotPlugin, frozen, changelogPtr, p.ReviewerUID, r.references); err != nil {
+	if _, err := r.snapshotReviewPublication(ctx, tx, now, snapshotPlugin, frozen, changelogPtr, p.ReviewerUID); err != nil {
 		return nil, err
 	}
 
