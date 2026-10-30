@@ -23,6 +23,8 @@ go build -o /tmp/marketplace-migrate ./cmd/marketplace-migrate
 
 使用 Marketplace 服务已有的环境变量：`MYSQL_DSN`、`STORAGE_DRIVER`；本地存储用 `LOCAL_STORAGE_DIR`，OSS/S3 用 `OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY`、`OSS_SECRET_KEY`，以及原有 `OSS_REGION`、`OSS_KEY_PREFIX`、`OSS_PATH_STYLE`。必须使用当前环境实际的对象存储配置。凭据通过环境安全注入，不放在命令参数、文档或 Git 中。
 
+腾讯云 COS：标准 `cos` / `cos-internal` 的 `*.myqcloud.com` API 地址自动使用原生 `x-cos-forbid-overwrite: true`，不混用 COS 上传可能忽略的 S3 `If-None-Match`。其他 S3 端点保留原条件写入行为。COS 自定义域名应在内部 `OSS_ENDPOINT` 配置为标准 COS API 地址，浏览器公共地址配置不变。首次不可变写入前读取桶版本状态；账号须有该桶的 `cos:GetBucketVersioning` 只读权限。已启用或暂停版本控制、读取权限不足或查询失败时，拒绝上传；不要为迁移擅自关闭线上桶的版本控制。COS 防覆盖头在开启版本控制时无效，参见[官方 PUT Object 文档](https://cloud.tencent.com/document/product/436/7749)。状态检查按存储实例缓存，执行期间不得修改桶版本配置；状态查询失败后应纠正权限/配置并重启迁移进程，继续使用同一断点。已有对象返回 `FileAlreadyExists` 时不覆盖，迁移仍必须读回并核对长度、SHA-256；不一致则停止，不降级为普通 PUT。
+
 本地模式要求 `LOCAL_STORAGE_DIR` 已存在（默认 `/tmp/marketplace-uploads`），且必须指向现有服务实际使用的附件目录。目录不存在会在读取数据库前报 `storage_configuration_failed`；命令不会自动创建空目录，以免把错误的存储配置误当成空库存。仅在准备全新空白演练环境时，由操作员事先创建目录；生产数据副本必须先同步真实附件。
 
 `--database` 必须与连接串及服务器返回的当前库名一致；首次执行还将实际数据库名、MySQL server UUID、存储位置和选择规则绑定到恢复文件，重试不能换库或存储。没有生产库名称限制，也没有所谓原库、目标库。连接强制使用 UTC 会话，禁止多语句等不必要的连接选项。

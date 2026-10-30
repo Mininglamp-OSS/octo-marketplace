@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,6 +28,9 @@ type OSSStorage struct {
 	publicPathStyle bool
 	signingHost     string
 	downloadSigned  bool
+	cosEndpoint     bool
+	cosVersionOnce  sync.Once
+	cosVersionErr   error
 }
 
 // OSSConfig holds the configuration for S3-compatible storage.
@@ -87,6 +91,7 @@ func NewOSS(cfg OSSConfig) (*OSSStorage, error) {
 		publicPathStyle: cfg.PublicPathStyle,
 		signingHost:     strings.TrimSpace(cfg.SigningHost),
 		downloadSigned:  cfg.DownloadSigned,
+		cosEndpoint:     isCOSEndpoint(cfg.Endpoint),
 	}, nil
 }
 
