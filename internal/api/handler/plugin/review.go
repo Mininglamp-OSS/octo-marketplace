@@ -346,12 +346,13 @@ func (h *Handler) SubmitReview(c *gin.Context) {
 		rels := make([]pluginsvc.RelationRequest, 0, len(*body.Relations))
 		for _, r := range *body.Relations {
 			rels = append(rels, pluginsvc.RelationRequest{
-				ID:             r.RelationID,
-				SourcePluginID: r.SourcePluginID,
-				TargetPluginID: r.TargetPluginID,
-				Type:           r.RelationType,
-				SortOrder:      r.SortOrder,
-				Data:           r.Data,
+				ID:              r.RelationID,
+				SourcePluginID:  r.SourcePluginID,
+				TargetPluginID:  r.TargetPluginID,
+				TargetVersionID: r.TargetVersionID,
+				Type:            r.RelationType,
+				SortOrder:       r.SortOrder,
+				Data:            r.Data,
 			})
 		}
 		params.Relations = &rels
