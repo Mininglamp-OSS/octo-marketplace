@@ -10,10 +10,11 @@ import (
 
 type publishRequest struct {
 	PluginID string `json:"plugin_id"`
-	// Version and Changelog are used only when the publish needs organization
-	// review; both are ignored for a 仅自己可见 Plugin, which lists immediately.
-	// Version is required for managed Experts/Expert Teams. Other types retain their existing default.
-	Version   string `json:"version"`
+	// Version is required for managed Skills, Experts and Expert Teams. A private
+	// release must match the saved draft label. Connectors and feature-off
+	// publication retain their existing defaults.
+	Version string `json:"version"`
+	// Changelog is used for organization review and ignored for private publish.
 	Changelog string `json:"changelog"`
 }
 
@@ -40,13 +41,13 @@ type delistResponse struct {
 // Publish godoc
 // @Summary Publish plugin
 // @Description Publish a caller-owned Plugin. A private Plugin is listed immediately. An organization-visible Plugin is approved immediately when the authenticated Space's automatic-review policy is enabled (the default), or opens a pending review when the policy is disabled.
-// @Description With version management enabled, Experts and Expert Teams require an explicit MAJOR.MINOR.PATCH version. Private publication must match the saved draft version. Missing or invalid labels return 400 with details.field=version and an octo-cli upgrade hint.
+// @Description With version management enabled, Skills, Experts and Expert Teams require an explicit MAJOR.MINOR.PATCH version. Private publication must match the saved draft version. Missing or invalid labels return 400 with details.field=version and an octo-cli upgrade hint.
 // @Tags plugin
 // @ID plugin.publish
 // @Accept json
 // @Produce json
 // @Security Bearer
-// @Param body body publishRequest true "Plugin ID, with an optional version label and changelog for the review branch"
+// @Param body body publishRequest true "Plugin ID and explicit version for managed Skills/Experts/Expert Teams; optional review changelog"
 // @Success 200 {object} apiresponse.Data[publishResponse]
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
 // @Failure 401 {object} apiresponse.Error "AUTH_REQUIRED"

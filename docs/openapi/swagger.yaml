@@ -2226,17 +2226,18 @@ components:
     internal_api_handler_plugin.publishRequest:
       properties:
         changelog:
+          description: Changelog is used for organization review and ignored for private
+            publish.
           type: string
         plugin_id:
           type: string
         version:
-          description: 'Version and Changelog are used only when the publish needs
-            organization
+          description: 'Version is required for managed Skills, Experts and Expert
+            Teams. A private
 
-            review; both are ignored for a 仅自己可见 Plugin, which lists immediately.
+            release must match the saved draft label. Connectors and feature-off
 
-            Version is required for managed Experts/Expert Teams. Other types retain
-            their existing default.'
+            publication retain their existing defaults.'
           type: string
       type: object
     internal_api_handler_plugin.publishResponse:
@@ -7989,10 +7990,10 @@ paths:
         Space''s automatic-review policy is enabled (the default), or opens a pending
         review when the policy is disabled.
 
-        With version management enabled, Experts and Expert Teams require an explicit
-        MAJOR.MINOR.PATCH version. Private publication must match the saved draft
-        version. Missing or invalid labels return 400 with details.field=version and
-        an octo-cli upgrade hint.'
+        With version management enabled, Skills, Experts and Expert Teams require
+        an explicit MAJOR.MINOR.PATCH version. Private publication must match the
+        saved draft version. Missing or invalid labels return 400 with details.field=version
+        and an octo-cli upgrade hint.'
       operationId: plugin.publish
       requestBody:
         content:
@@ -8001,11 +8002,11 @@ paths:
               oneOf:
               - type: object
               - $ref: '#/components/schemas/internal_api_handler_plugin.publishRequest'
-                description: Plugin ID, with an optional version label and changelog
-                  for the review branch
+                description: Plugin ID and explicit version for managed Skills/Experts/Expert
+                  Teams; optional review changelog
                 summary: body
-        description: Plugin ID, with an optional version label and changelog for the
-          review branch
+        description: Plugin ID and explicit version for managed Skills/Experts/Expert
+          Teams; optional review changelog
         required: true
       responses:
         '200':

@@ -78,8 +78,8 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		return nil, ErrNotFound
 	}
 	// Old CLI payloads may omit labels when saving drafts, but a managed
-	// Expert/Team release must name the intended version explicitly.
-	if s.versionManagement && (detail.Plugin.Type == model.PluginTypeExpert || detail.Plugin.Type == model.PluginTypeExpertTeam) {
+	// Skill/Expert/Team release must name the intended version explicitly.
+	if s.versionManagement && (detail.Plugin.Type == model.PluginTypeSkill || detail.Plugin.Type == model.PluginTypeExpert || detail.Plugin.Type == model.PluginTypeExpertTeam) {
 		params.Version = strings.TrimSpace(params.Version)
 		if params.Version == "" {
 			return nil, &ReviewFieldError{Field: "version", Reason: "required"}
