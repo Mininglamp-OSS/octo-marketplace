@@ -23,11 +23,12 @@ import (
 
 // Service handles business logic for skills.
 type Service struct {
-	repo            *skillrepo.Repo
-	catRepo         *categoryrepo.Repo
-	store           storage.Storage
-	idGen           func() string
-	maxArchiveBytes int64
+	legacyWritesDisabled bool
+	repo                 *skillrepo.Repo
+	catRepo              *categoryrepo.Repo
+	store                storage.Storage
+	idGen                func() string
+	maxArchiveBytes      int64
 }
 
 // New creates a skill service.
@@ -47,6 +48,25 @@ func (s *Service) SetMaxArchiveBytes(maxBytes int64) {
 		s.maxArchiveBytes = maxBytes
 	}
 }
+
+// WithLegacyWritesDisabled prevents writes to the old Skill catalog when
+// managed Plugin versions are enabled. Upload/parse and reads stay available.
+func (s *Service) WithLegacyWritesDisabled(disabled bool) *Service {
+	s.legacyWritesDisabled = disabled
+	return s
+}
+
+// CheckLegacyWrite is also checked before synchronous Bot parsing so a rejected
+// publication never starts or consumes an upload parse task.
+func (s *Service) CheckLegacyWrite() error {
+	if s.legacyWritesDisabled {
+		return ErrVersionedWriteRequired
+	}
+	return nil
+}
+
+// ErrVersionedWriteRequired directs legacy writers to the managed Plugin APIs.
+var ErrVersionedWriteRequired = errors.New("use versioned plugin writes")
 
 // ErrNotFound indicates the skill was not found or access denied.
 var ErrNotFound = errors.New("skill not found")
@@ -242,6 +262,9 @@ type CreateParams struct {
 
 // Create creates a new skill from a completed parse task.
 func (s *Service) Create(ctx context.Context, p CreateParams) (*SkillItem, error) {
+	if err := s.CheckLegacyWrite(); err != nil {
+		return nil, err
+	}
 	// Validate parse task
 	pt, err := s.repo.GetParseTask(ctx, p.ParseTaskID)
 	if err != nil {
@@ -452,6 +475,9 @@ type UpdateParams struct {
 
 // Update updates a skill. Only the owner within the same space can update.
 func (s *Service) Update(ctx context.Context, id, userID, spaceID string, p UpdateParams) (*SkillItem, error) {
+	if err := s.CheckLegacyWrite(); err != nil {
+		return nil, err
+	}
 	row, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err

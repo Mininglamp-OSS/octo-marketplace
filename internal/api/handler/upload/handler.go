@@ -129,6 +129,7 @@ func (h *Handler) RegisterLocalProxy(r *gin.Engine, authEnabled ...bool) {
 // BotPublishSkill godoc
 // @Summary Publish Skill as bot
 // @Description Parse an uploaded Skill archive synchronously through the bounded worker pool, then create a Skill owned by the bot owner.
+// @Description With version management enabled, this legacy publish returns 400 versioned_api_required before parsing. Update octo-cli and use /plugins/import or /plugins/upsert, followed by /plugins/publish or /plugins/review_requests with an explicit version.
 // @Tags skill_upload
 // @ID bot_skill.publish
 // @Accept json
@@ -157,6 +158,11 @@ func (h *Handler) BotPublishSkill(c *gin.Context) {
 	bot, ok := h.botIdentity(c, identity)
 	if !ok {
 		apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "bot token is required", nil, "")
+		return
+	}
+
+	if err := h.skillSvc.CheckLegacyWrite(); err != nil {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "this legacy Skill write API is disabled", map[string]any{"reason": "versioned_api_required"}, "Update octo-cli to a version supporting Plugin APIs. Upload and parse the Skill package, save the draft through /plugins/import (or /plugins/upsert), then submit it through /plugins/publish or /plugins/review_requests with an explicit version.")
 		return
 	}
 

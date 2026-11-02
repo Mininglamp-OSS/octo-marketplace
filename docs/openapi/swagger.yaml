@@ -4786,8 +4786,13 @@ paths:
       - admin_skill
   /bot/skills/publish:
     post:
-      description: Parse an uploaded Skill archive synchronously through the bounded
+      description: 'Parse an uploaded Skill archive synchronously through the bounded
         worker pool, then create a Skill owned by the bot owner.
+
+        With version management enabled, this legacy publish returns 400 versioned_api_required
+        before parsing. Update octo-cli and use /plugins/import or /plugins/upsert,
+        followed by /plugins/publish or /plugins/review_requests with an explicit
+        version.'
       operationId: bot_skill.publish
       requestBody:
         content:
@@ -9150,8 +9155,13 @@ paths:
       tags:
       - skill
     post:
-      description: Publish a parsed Skill archive for the authenticated user and current
-        Space.
+      description: 'Publish a parsed Skill archive for the authenticated user and
+        current Space.
+
+        With version management enabled, this legacy write (including /skill aliases)
+        returns 400 versioned_api_required. Update octo-cli and use /plugins/import
+        or /plugins/upsert, followed by /plugins/publish or /plugins/review_requests
+        with an explicit version.'
       operationId: skill.create
       requestBody:
         content:
@@ -9316,7 +9326,12 @@ paths:
       tags:
       - skill
     patch:
-      description: Partially update a Skill owned by the authenticated user.
+      description: 'Partially update a Skill owned by the authenticated user.
+
+        With version management enabled, this legacy write (including /skill aliases)
+        returns 400 versioned_api_required. Update octo-cli and use /plugins/import
+        or /plugins/upsert, followed by /plugins/publish or /plugins/review_requests
+        with an explicit version.'
       operationId: skill.update
       parameters:
       - description: Skill ID
