@@ -226,6 +226,31 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 	if pending != "" {
 		return nil, ErrReviewPending
 	}
+	// A release label belongs to publication, not to the editing session. Never
+	// mutate the selected immutable draft to relabel it: append a copy under the
+	// resource lock so files and pinned relations remain exactly as verified.
+	if label := strings.TrimSpace(p.Version); label != "" && label != *current.CurrentVersion {
+		if _, valid := model.ParseVersion(label); !valid {
+			return nil, ErrConflict
+		}
+		v, e := scanManagedVersion(tx.QueryRowContext(ctx, `SELECT `+managedVersionColumns+` FROM plugin_versions v JOIN plugins p ON p.plugin_id=v.plugin_id LEFT JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=?`, current.ID, p.ExpectedVersionID))
+		if e != nil {
+			return nil, e
+		}
+		rels, e := model.DecodeSnapshotRelations(v.Relations)
+		if e != nil {
+			return nil, e
+		}
+		frozen := *current
+		frozen.Manifest, frozen.Package, frozen.AttachmentKeys = v.Manifest, v.Package, v.AttachmentKeys
+		frozen.ManifestHash, frozen.PluginHash = v.ManifestHash, v.PluginHash
+		frozen.CurrentVersion = &label
+		id, e := snapshotVersion(ctx, tx, r.id, r.now(), frozen, rels, v.Changelog, p.OperatorID, r.references)
+		if e != nil {
+			return nil, e
+		}
+		current.CurrentVersionID, current.CurrentVersion = &id, &label
+	}
 	if err = r.recordRelease(ctx, tx, current, *current.CurrentVersionID, *current.CurrentVersion, p.OperatorID, r.now()); err != nil {
 		return nil, err
 	}

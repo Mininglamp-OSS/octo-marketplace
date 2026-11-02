@@ -208,10 +208,10 @@ func (s *Service) submitReview(ctx context.Context, caller Caller, params Review
 	if detail.Plugin.OwnerUID != caller.UID {
 		return nil, ErrNotFound
 	}
-	// A submission cannot carry a label older than what the plugin already shows.
-	// publishedVersionLabels separately refuses REUSING a label the org has seen,
-	// so together they force an upgrade strictly forward.
-	if detail.Plugin.CurrentVersion != nil &&
+	// Legacy/Connector writes retain their draft-label ordering. Managed releases
+	// select their label at publication; the repository compares actual released
+	// labels under lock instead of treating an editable draft label as official.
+	if !(s.versionManagement && detail.Plugin.Type != model.PluginTypeConnector) && detail.Plugin.CurrentVersion != nil &&
 		!versionNotRegressed(*detail.Plugin.CurrentVersion, params.Version) {
 		return nil, ErrVersionRegressed
 	}

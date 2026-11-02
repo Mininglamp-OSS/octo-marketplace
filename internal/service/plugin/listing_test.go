@@ -352,21 +352,6 @@ func TestManagedVersionedPublishAcceptsExplicitSpaceVersion(t *testing.T) {
 	}
 }
 
-func TestManagedPrivateVersionedPublishCannotIgnoreRequestedVersion(t *testing.T) {
-	for _, typ := range []model.PluginType{model.PluginTypeSkill, model.PluginTypeExpert, model.PluginTypeExpertTeam} {
-		t.Run(string(typ), func(t *testing.T) {
-			store, svc := listingFixture(t, model.PluginVisibilityPrivate, model.PluginListingStateDraft)
-			store.plugins["plugin-1"].Type = typ
-			svc.WithVersionManagement(true)
-			_, err := svc.Publish(context.Background(), testCaller, PublishParams{PluginID: "plugin-1", Version: "2.0.0"})
-			var field *ReviewFieldError
-			if !errors.As(err, &field) || field.Reason != "draft_version_mismatch" {
-				t.Fatalf("mismatched version: %v", err)
-			}
-		})
-	}
-}
-
 func TestManagedVersionedPublishChecksOwnerBeforeVersion(t *testing.T) {
 	for _, typ := range []model.PluginType{model.PluginTypeSkill, model.PluginTypeExpert, model.PluginTypeExpertTeam} {
 		t.Run(string(typ), func(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 
 type publishRequest struct {
 	PluginID string `json:"plugin_id"`
-	// Version is required for managed Skills, Experts and Expert Teams. A private
-	// release must match the saved draft label. Connectors and feature-off
+	// Version is required for managed Skills, Experts and Expert Teams. The requested
+	// label names the release independently of the draft. Connectors and feature-off
 	// publication retain their existing defaults.
 	Version string `json:"version"`
 	// Changelog is used for organization review and ignored for private publish.
@@ -41,7 +41,7 @@ type delistResponse struct {
 // Publish godoc
 // @Summary Publish plugin
 // @Description Publish a caller-owned Plugin. A private Plugin is listed immediately. An organization-visible Plugin is approved immediately when the authenticated Space's automatic-review policy is enabled (the default), or opens a pending review when the policy is disabled.
-// @Description With version management enabled, Skills, Experts and Expert Teams require an explicit MAJOR.MINOR.PATCH version. Private publication must match the saved draft version. Missing or invalid labels return 400 with details.field=version and an octo-cli upgrade hint.
+// @Description With version management enabled, Skills, Experts and Expert Teams require an explicit MAJOR.MINOR.PATCH version. The supplied version names the release and may differ from the saved draft label. Missing or invalid labels return 400 with details.field=version and an octo-cli upgrade hint.
 // @Tags plugin
 // @ID plugin.publish
 // @Accept json

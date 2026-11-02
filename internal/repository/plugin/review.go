@@ -212,7 +212,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	// passes and a later approval would stamp a LOWER label, regressing the
 	// plugin's public version. Same rule as the service pre-check
 	// (model.VersionNotRegressed), now enforced where it actually holds.
-	if current.CurrentVersion != nil &&
+	if !(r.versionManagement && versioned(current)) && current.CurrentVersion != nil &&
 		!model.VersionNotRegressed(*current.CurrentVersion, req.Version) {
 		return ErrVersionRegressed
 	}
@@ -227,6 +227,15 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	}
 	if _, taken := published[req.Version]; taken {
 		return ErrLabelTaken
+	}
+	if r.versionManagement && versioned(current) {
+		// A draft label is provisional; only an actual release constrains the
+		// version chosen for this submission. Repeat under the publication lock.
+		for label := range published {
+			if !model.VersionAdvanced(label, req.Version) {
+				return ErrVersionRegressed
+			}
+		}
 	}
 	// Take the single-pending lock in the same transaction as the label check so
 	// two concurrent submits cannot both pass. The UNIQUE index on the generated

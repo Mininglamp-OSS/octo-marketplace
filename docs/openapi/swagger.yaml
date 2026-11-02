@@ -2233,9 +2233,9 @@ components:
           type: string
         version:
           description: 'Version is required for managed Skills, Experts and Expert
-            Teams. A private
+            Teams. The requested
 
-            release must match the saved draft label. Connectors and feature-off
+            label names the release independently of the draft. Connectors and feature-off
 
             publication retain their existing defaults.'
           type: string
@@ -7991,9 +7991,9 @@ paths:
         review when the policy is disabled.
 
         With version management enabled, Skills, Experts and Expert Teams require
-        an explicit MAJOR.MINOR.PATCH version. Private publication must match the
-        saved draft version. Missing or invalid labels return 400 with details.field=version
-        and an octo-cli upgrade hint.'
+        an explicit MAJOR.MINOR.PATCH version. The supplied version names the release
+        and may differ from the saved draft label. Missing or invalid labels return
+        400 with details.field=version and an octo-cli upgrade hint.'
       operationId: plugin.publish
       requestBody:
         content:
