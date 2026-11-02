@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -50,7 +51,7 @@ func (id *installationRuntimeID) UnmarshalJSON(raw []byte) error {
 
 // CreateInstallation godoc
 // @Summary Install a plugin through Fleet capability installation
-// @Description Resolves and installs the requested visible expert, expert_team, or connector graph atomically in Fleet. Set workspace_connectors to true to store MCP dependencies as Workspace connectors; expert and team installs still require a Runtime, while connector-only installs may omit it. Omitting or setting false keeps legacy MCP configuration behavior. Retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
+// @Description Resolves and installs the requested visible expert, expert_team, or connector graph atomically in Fleet. Set workspace_connectors to true to store MCP dependencies as Workspace connectors; expert and team installs still require a Runtime, while connector-only installs may omit it. Omitting or setting false keeps legacy MCP configuration behavior. Retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. The assembled Fleet JSON is limited to 20,000,000 UTF-8 bytes including definition, bindings, content, metadata, JSON escaping and framing; this is independent of the 3 MiB Marketplace request-body limit. Supporting files have no separate count or per-text-item cap; the configured stored-ZIP transport limit remains separate. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
 // @Tags plugin
 // @ID plugin.installation.create
 // @Accept json
@@ -67,7 +68,7 @@ func (id *installationRuntimeID) UnmarshalJSON(raw []byte) error {
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT or DUPLICATE"
-// @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
+// @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE; install-wire details include limit_bytes=20000000, actual_bytes, field, and optional skill/path"
 // @Failure 415 {object} apiresponse.Error "UNSUPPORTED_MEDIA_TYPE"
 // @Failure 429 {object} apiresponse.Error "RATE_LIMITED"
 // @Header 429 {string} Retry-After "Delay in seconds before retrying"
@@ -179,6 +180,7 @@ func writeInstallationError(c *gin.Context, err error) {
 	var field *pluginsvc.InstallationValidationError
 	var upstream *fleet.CapabilityAPIError
 	var attempt *pluginsvc.InstallationAttemptError
+	var capacity installationCapacityDiagnostic
 	switch {
 	case errors.As(err, &attempt) && attempt.Unknown:
 		// Legacy-content attempts rely on Fleet receipts and have no local deadline.
@@ -192,6 +194,9 @@ func writeInstallationError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "安装名称或目标已存在但内容不同，不能覆盖。", map[string]any{"field": field.Field, "reason": field.Reason}, "请修改市场内容或使用不同的资源名称后重试。")
 	case errors.As(err, &field):
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "安装参数不正确。", map[string]any{"field": field.Field, "reason": field.Reason}, "请检查工作区、运行环境、名称和环境变量后重试。")
+	case errors.As(err, &capacity) && capacity.CapacityDetails() != nil:
+		details := capacity.CapacityDetails()
+		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, installationCapacityMessage(details), details, "请减少安装内容的字节数或 JSON 转义开销后重试。")
 	case errors.Is(err, expertsvc.ErrFleetNotConfigured):
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "安装服务尚未配置，请联系管理员。", map[string]any{"upstream": "fleet", "reason": "not_configured"}, installationRetryHint)
 	case errors.Is(err, pluginsvc.ErrAttemptExpired):
@@ -211,7 +216,7 @@ func writeInstallationError(c *gin.Context, err error) {
 	case errors.Is(err, pluginsvc.ErrDependencyHidden):
 		apiresponse.Fail(c, http.StatusForbidden, errcode.PermissionDenied, "没有权限访问插件所需的依赖。", nil, "请联系插件发布者检查依赖的访问权限。")
 	case errors.Is(err, pluginsvc.ErrTooLarge):
-		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "安装内容超出限制。", nil, "请减少插件文件大小或依赖数量后重试。")
+		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, "安装内容超出限制。", nil, "请减少插件文件大小后重试。")
 	case errors.Is(err, pluginsvc.ErrInvalidRequest):
 		installationValidation(c, "body")
 	case errors.As(err, &upstream):
@@ -270,8 +275,14 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 				message = "安装发生专家团资源冲突，请核对工作区已有资源。"
 			}
 		}
-	case 413:
-		code, message = errcode.FileTooLarge, "安装内容超出服务允许的大小或数量限制。"
+	case http.StatusRequestEntityTooLarge:
+		code, message = errcode.FileTooLarge, "安装内容超出 Fleet 接收限制，请核对安装内容。"
+		hint = "请核对插件内容及 Fleet 服务限制；如服务版本不一致，请联系管理员确认。"
+		if capacityDetails := err.CapacityDetails(); capacityDetails != nil {
+			details = capacityDetails
+			message = installationCapacityMessage(details)
+			hint = "请减少安装内容的字节数或 JSON 转义开销后重试。"
+		}
 	case 415:
 		code, message = "UNSUPPORTED_MEDIA_TYPE", "安装服务不支持当前请求格式。"
 	case 429:
@@ -285,4 +296,34 @@ func writeCapabilityUpstreamError(c *gin.Context, err *fleet.CapabilityAPIError)
 		logInstallationFailure(c, "fleet", "upstream_error", err.Status)
 	}
 	apiresponse.Fail(c, status, code, message, details, hint)
+}
+
+type installationCapacityDiagnostic interface {
+	CapacityDetails() map[string]any
+}
+
+func installationCapacityMessage(details map[string]any) string {
+	limit := details["limit_bytes"].(int64)
+	actual := details["actual_bytes"].(int64)
+	field := details["field"].(string)
+	message := fmt.Sprintf("安装请求超过%d字节上限，实际", limit)
+	if details["actual_bytes_lower_bound"] == true {
+		message += "至少"
+	}
+	message += fmt.Sprintf("%d字节；字段%s", actual, truncateCapacityPart(field, 48))
+	if skill, ok := details["skill"].(string); ok && skill != "" {
+		message += "；技能" + truncateCapacityPart(skill, 40)
+	}
+	if path, ok := details["path"].(string); ok && path != "" {
+		message += "；文件" + truncateCapacityPart(path, 48)
+	}
+	return message
+}
+
+func truncateCapacityPart(value string, maxRunes int) string {
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }

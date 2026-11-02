@@ -95,15 +95,9 @@ func TestPreparePinnedSkillsInvalid(t *testing.T) {
 		{"path traversal", func(s *PinnedSkillFiles) { s.Files["../bad"] = "bad" }},
 		{"reserved path", func(s *PinnedSkillFiles) { s.Files[".git/config"] = "bad" }},
 		{"binary", func(s *PinnedSkillFiles) { s.Files["refs/help.md"] = "\x00" }},
-		{"large file", func(s *PinnedSkillFiles) { s.Files["refs/help.md"] = strings.Repeat("a", (1<<20)+1) }},
 		{"invalid yaml", func(s *PinnedSkillFiles) { s.Files["SKILL.md"] = "---\nname: [\n---\nbody" }},
 		{"duplicate key", func(s *PinnedSkillFiles) { s.Files["SKILL.md"] = "---\nname: x\nname: y\n---\nbody" }},
 		{"anchor", func(s *PinnedSkillFiles) { s.Files["SKILL.md"] = "---\nname: &a x\ncopy: *a\n---\nbody" }},
-		{"too many files", func(s *PinnedSkillFiles) {
-			for i := 0; i < 51; i++ {
-				s.Files[fmt.Sprintf("file%d", i)] = "ok"
-			}
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := samplePinnedSkill("a", "v")
@@ -153,19 +147,40 @@ func TestMergeCurrentConnectorMCP(t *testing.T) {
 	}
 }
 
-func TestPreparePinnedSkillsAggregateBudget(t *testing.T) {
-	s := samplePinnedSkill("a", "v1")
-	for i := 0; i < 17; i++ {
-		s.Files[fmt.Sprintf("large%d", i)] = strings.Repeat("a", 1<<20)
+// Pinned preparation must carry the same content capacity as the live builder:
+// supporting-file count and per-text size are unbounded; only the aggregate
+// decimal-20 MB budget applies.
+func TestPreparePinnedSkillsKeepsFilesAboveLegacyCaps(t *testing.T) {
+	input := samplePinnedSkill("a", "v1")
+	large := strings.Repeat("b", (1<<20)+512)
+	input.Files["refs/big.md"] = large
+	for i := range 120 {
+		input.Files[fmt.Sprintf("refs/%03d.md", i)] = "ok"
 	}
-	if _, err := PreparePinnedSkills([]PinnedSkillFiles{s}); err == nil {
-		t.Fatal("aggregate text budget ignored")
+	got, err := PreparePinnedSkills([]PinnedSkillFiles{input})
+	if err != nil {
+		t.Fatalf("pinned preparation kept the retired caps: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Skill.Files) != 122 {
+		t.Fatalf("prepared files=%d", len(got[0].Skill.Files))
+	}
+	found := false
+	for _, file := range got[0].Skill.Files {
+		if file.Path == "refs/big.md" {
+			found = file.Source.Content == large
+		}
+	}
+	if !found {
+		t.Fatal("large pinned file was dropped or truncated")
 	}
 }
 
-func TestMergeCurrentConnectorMCPInputBudget(t *testing.T) {
-	large := "{\"mcpServers\":{}}" + strings.Repeat(" ", 16<<20)
-	if _, err := MergeCurrentConnectorMCP([]CurrentConnectorMCP{{"a", large}}); err == nil {
-		t.Fatal("raw input budget ignored")
+func TestPreparePinnedSkillsAggregateBudget(t *testing.T) {
+	s := samplePinnedSkill("a", "v1")
+	for i := range 20 {
+		s.Files[fmt.Sprintf("large%d", i)] = strings.Repeat("a", 1<<20)
+	}
+	if _, err := PreparePinnedSkills([]PinnedSkillFiles{s}); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("aggregate text budget ignored: %v", err)
 	}
 }

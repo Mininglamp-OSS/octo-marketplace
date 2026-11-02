@@ -14,9 +14,6 @@ const (
 	maxExtractedSize = 50 * 1024 * 1024 // 50MB total extracted size limit
 	maxSkillMDSize   = 1 * 1024 * 1024  // 1MB SKILL.md size limit
 	maxManifestFiles = 500              // cap on the number of paths recorded in Files
-	// maxSkillFileSize caps one supporting file read by ExtractSkillFiles. Files
-	// larger than this are skipped rather than truncated.
-	maxSkillFileSize = 1 * 1024 * 1024 // 1MB per supporting file
 )
 
 // ExtractResult holds the results of zip extraction.
@@ -111,69 +108,7 @@ func ExtractZip(zipPath string, maxZipSize int64) (*ExtractResult, string, strin
 	}, "", ""
 }
 
-// SkillFile is one supporting file (path + text content) extracted from a
-// skill package for provisioning into a downstream skill store.
-type SkillFile struct {
-	Path    string
-	Content string
-}
-
-// ExtractSkillFiles returns the UTF-8 text supporting files inside the package —
-// everything EXCEPT the SKILL.md itself — applying the same zip-slip/symlink
-// guards as ExtractZip. It reads on trusted, already-validated stored bytes; a
-// file is skipped (its path returned in `skipped`) when it exceeds
-// maxSkillFileSize or is not valid UTF-8 (binary, which downstream text-only
-// skill-file stores can't hold). `maxFiles` caps how many files are returned
-// (<=0 means maxManifestFiles). Directories and SKILL.md are excluded silently.
-func ExtractSkillFiles(zipPath string, maxZipSize int64, maxFiles int) (files []SkillFile, skipped []string, errCode, errMsg string) {
-	info, err := os.Stat(zipPath)
-	if err != nil {
-		return nil, nil, "INVALID_ZIP", "cannot stat zip file"
-	}
-	if info.Size() > maxZipSize {
-		return nil, nil, "FILE_TOO_LARGE", fmt.Sprintf("zip file exceeds %dMB limit", maxZipSize/(1024*1024))
-	}
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return nil, nil, "INVALID_ZIP", "cannot open zip file: " + err.Error()
-	}
-	defer r.Close()
-
-	if maxFiles <= 0 {
-		maxFiles = maxManifestFiles
-	}
-
-	for _, f := range r.File {
-		if errCode, errMsg := validateZipEntry(f); errCode != "" {
-			return nil, nil, errCode, errMsg
-		}
-		if f.FileInfo().IsDir() || isSkillMDCandidate(f.Name) {
-			continue
-		}
-		if len(files) >= maxFiles {
-			skipped = append(skipped, f.Name)
-			continue
-		}
-		if f.UncompressedSize64 > maxSkillFileSize {
-			skipped = append(skipped, f.Name)
-			continue
-		}
-		data, err := readZipFileLimited(f, maxSkillFileSize)
-		if err != nil || !utf8.Valid(data) {
-			// Unreadable or binary (non-UTF-8): text-only downstream stores
-			// can't represent it, so skip rather than corrupt it.
-			skipped = append(skipped, f.Name)
-			continue
-		}
-		files = append(files, SkillFile{Path: f.Name, Content: string(data)})
-	}
-	return files, skipped, "", ""
-}
-
-// SkillEntry is one regular-file entry of a skill package, carrying its raw
-// bytes and whether those bytes are valid UTF-8 text. Unlike ExtractSkillFiles
-// it retains binary entries (IsText=false) so a caller can materialize them as
-// object-storage attachments rather than silently dropping them.
+// SkillEntry carries a regular-file entry's original bytes and text encoding.
 type SkillEntry struct {
 	Path   string
 	Bytes  []byte
@@ -256,23 +191,23 @@ func ExtractSkillTree(ra io.ReaderAt, size, maxZipSize, maxFileSize int64, maxFi
 }
 
 // ExtractArchive reads every regular-file entry of an in-memory zip into a
-// path->bytes map, applying the same zip-slip/symlink guards and per-entry /
-// total size caps as ExtractSkillTree but WITHOUT the single-SKILL.md rule. It
-// backs the expert/expert_team container import, whose archive holds a root
-// manifest (expert.json/squad.json) plus bundled skill packages rather than a
-// single skill. Exceeding maxFileSize, maxTotal, or maxFiles is a hard error so
-// no entry is silently dropped. Directories are excluded; entry paths are
-// returned verbatim. A duplicate path is a hard error (a container must not ship
-// two files at one path).
-func ExtractArchive(ra io.ReaderAt, size, maxTotal, maxFileSize int64, maxFiles int) (map[string][]byte, string, string) {
-	if size > maxTotal {
-		return nil, "FILE_TOO_LARGE", fmt.Sprintf("archive exceeds %dMB limit", maxTotal/(1024*1024))
+// path->bytes map, applying the zip-slip/symlink guards and independent archive
+// transport, extracted-total, and per-entry byte limits. maxFiles==0 retains
+// the historical default cap; maxFiles<0 is unlimited. Exceeding any configured
+// limit is a hard error so no entry is silently dropped. Directories are
+// excluded; entry paths are returned verbatim. A duplicate path is a hard error.
+func ExtractArchive(ra io.ReaderAt, size, maxArchiveBytes, maxTotal, maxFileSize int64, maxFiles int) (map[string][]byte, string, string) {
+	if size > maxArchiveBytes {
+		return nil, "FILE_TOO_LARGE", fmt.Sprintf("archive exceeds %dMB transport limit", maxArchiveBytes/(1024*1024))
+	}
+	if maxTotal < 0 || maxFileSize < 0 {
+		return nil, "FILE_TOO_LARGE", "invalid archive content limit"
 	}
 	zr, err := zip.NewReader(ra, size)
 	if err != nil {
 		return nil, "INVALID_ZIP", "cannot open zip file: " + err.Error()
 	}
-	if maxFiles <= 0 {
+	if maxFiles == 0 {
 		maxFiles = maxManifestFiles
 	}
 	out := make(map[string][]byte)
@@ -284,23 +219,26 @@ func ExtractArchive(ra io.ReaderAt, size, maxTotal, maxFileSize int64, maxFiles 
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		if len(out) >= maxFiles {
+		if maxFiles > 0 && len(out) >= maxFiles {
 			return nil, "TOO_MANY_FILES", fmt.Sprintf("archive exceeds %d files", maxFiles)
 		}
-		if int64(f.UncompressedSize64) > maxFileSize {
+		if f.UncompressedSize64 > uint64(maxFileSize) {
 			return nil, "FILE_TOO_LARGE", fmt.Sprintf("entry %s exceeds %dMB limit", f.Name, maxFileSize/(1024*1024))
 		}
 		if _, dup := out[f.Name]; dup {
 			return nil, "DUPLICATE_ENTRY", "duplicate archive entry: " + f.Name
 		}
+		if f.UncompressedSize64 > uint64(maxTotal-actualSize) {
+			return nil, "FILE_TOO_LARGE", fmt.Sprintf("extracted content exceeds %dMB limit", maxTotal/(1024*1024))
+		}
 		data, err := readZipFileLimited(f, maxFileSize)
 		if err != nil {
 			return nil, "INVALID_ZIP", "cannot read entry " + f.Name + ": " + err.Error()
 		}
-		actualSize += int64(len(data))
-		if actualSize > maxTotal {
+		if int64(len(data)) > maxTotal-actualSize {
 			return nil, "FILE_TOO_LARGE", fmt.Sprintf("extracted content exceeds %dMB limit", maxTotal/(1024*1024))
 		}
+		actualSize += int64(len(data))
 		out[f.Name] = data
 	}
 	return out, "", ""

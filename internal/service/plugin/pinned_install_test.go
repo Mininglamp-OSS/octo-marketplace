@@ -556,3 +556,39 @@ func TestPinnedPlanRequestRejectsCloneFailure(t *testing.T) {
 		t.Fatalf("nil plan error=%v", err)
 	}
 }
+
+// The pinned adapter assembles Skills through the same primitives, so a frozen
+// release with more supporting files than the retired 50-file cap must install
+// without dropping any file.
+func TestPinnedInstallationKeepsManySupportingFiles(t *testing.T) {
+	s, f, remote := fixturePinned()
+	files := []string{rawAtt("SKILL.md", "---\nname: Search\ndescription: fixture\n---\nBody a")}
+	want := map[string]string{}
+	for i := range 60 {
+		path := "references/section-" + strconv.Itoa(i) + ".md"
+		body := "note " + strconv.Itoa(i)
+		want[path] = body
+		files = append(files, rawAtt(path, body))
+	}
+	f.versions[pluginrepo.InstallVersionKey{PluginID: "skill-a", VersionID: "skill-v1"}].Package = packageWith(files...)
+	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", installationParams()); err != nil {
+		t.Fatalf("pinned supporting files above the retired cap were rejected: %v", err)
+	}
+	if remote.calls != 1 {
+		t.Fatalf("Fleet calls=%d", remote.calls)
+	}
+	var pinned *fleet.CapabilitySkill
+	for i := range remote.in.Definition.Skills {
+		if remote.in.Definition.Skills[i].MarketSkillID == "skill-a" {
+			pinned = &remote.in.Definition.Skills[i]
+		}
+	}
+	if pinned == nil || len(pinned.Files) != len(want) {
+		t.Fatalf("pinned skill files=%d want=%d", len(pinned.Files), len(want))
+	}
+	for _, file := range pinned.Files {
+		if want[file.Path] != file.Source.Content {
+			t.Fatalf("path %q changed or was dropped", file.Path)
+		}
+	}
+}

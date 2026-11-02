@@ -528,6 +528,7 @@ func TestCapabilityInstallRejectsBadRepliesWithoutRetry(t *testing.T) {
 		{"wrong_type", strings.Replace(expertEnvelopeJSON, `"type":"expert"`, `"type":"expert_team"`, 1), 200},
 		{"oversized", strings.Repeat("x", maxRespBytes+1), 200},
 		{"conflict", `{"error":{"code":"DUPLICATE","message":"secret-value","details":{"resource":"idempotency_key","name":"private-key"}}}`, 409},
+		{"payload-too-large", `{"error":{"code":"PAYLOAD_TOO_LARGE"}}`, 413},
 		{"redirect", "", 302},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -553,6 +554,33 @@ func TestCapabilityInstallRejectsBadRepliesWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestCapabilityInstallRequiresReportedCapacityMeasurements(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"missing_details", `{"error":{"code":"PAYLOAD_TOO_LARGE"}}`},
+		{"legacy_file_limit", `{"error":{"code":"PAYLOAD_TOO_LARGE","details":{"field":"definition.skills","reason":"must contain at most 500 supporting files"}}}`},
+		{"invalid_measurement", `{"error":{"code":"PAYLOAD_TOO_LARGE","details":{"field":"definition","limit_bytes":20000000,"actual_bytes":"invalid"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			_, err := New(server.URL).InstallCapability(context.Background(), "token", "space", "ws", "key", capabilityRequest())
+			var apiErr *CapabilityAPIError
+			if !errors.As(err, &apiErr) || apiErr.Status != http.StatusRequestEntityTooLarge || apiErr.Code != "PAYLOAD_TOO_LARGE" {
+				t.Fatalf("upstream rejection changed: %v", err)
+			}
+			if details := apiErr.CapacityDetails(); details != nil {
+				t.Fatalf("unreported capacity measurement: %v", details)
+			}
+		})
+	}
+}
+
 func TestCapabilityInstallDiscardsUpstreamDisplayText(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
@@ -564,6 +592,7 @@ func TestCapabilityInstallDiscardsUpstreamDisplayText(t *testing.T) {
 		{"bad-request", `{"error":{"code":"VALIDATION_ERROR","message":"private-display-secret"}}`, 400},
 		{"rate-limit", `{"error":{"code":"RATE_LIMITED","message":"private-display-secret"}}`, 429},
 		{"server-error", `{"error":{"code":"INTERNAL_ERROR","message":"private-display-secret"}}`, 500},
+		{"capacity-details", `{"error":{"code":"PAYLOAD_TOO_LARGE","message":"private-display-secret","details":{"field":"definition.skills.files","limit_bytes":20000000,"actual_bytes":20000003,"actual_bytes_lower_bound":true,"skill":"skill-1","path":"references/large.md"}}}`, 413},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -586,6 +615,16 @@ func TestCapabilityInstallDiscardsUpstreamDisplayText(t *testing.T) {
 			}
 			if tc.name == "conflict-object" && apiErr.ConflictResource != "skill" {
 				t.Fatal("display text type affected safe metadata")
+			}
+			if tc.status == http.StatusRequestEntityTooLarge {
+				details := apiErr.CapacityDetails()
+				if details["field"] != "definition.skills.files" ||
+					details["limit_bytes"] != int64(MaxCapabilityRequestBytes) ||
+					details["actual_bytes"] != int64(MaxCapabilityRequestBytes+3) ||
+					details["actual_bytes_lower_bound"] != true ||
+					details["skill"] != "skill-1" || details["path"] != "references/large.md" {
+					t.Fatalf("capacity details=%v", details)
+				}
 			}
 		})
 	}

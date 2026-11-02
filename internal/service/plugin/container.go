@@ -778,7 +778,7 @@ func anySlice(in []string) []any {
 // ---- container parsing (hostile input) --------------------------------------
 
 func (s *Service) parseContainer(archive []byte) (*parsedContainer, error) {
-	files, code, _ := parse.ExtractArchive(bytes.NewReader(archive), int64(len(archive)), s.maxArchiveBytes, s.maxArchiveBytes, containerMaxArchiveFiles)
+	files, code, _ := parse.ExtractArchive(bytes.NewReader(archive), int64(len(archive)), s.maxArchiveBytes, s.maxArchiveBytes, s.maxArchiveBytes, containerMaxArchiveFiles)
 	if code != "" {
 		return nil, ErrInvalidContainer
 	}

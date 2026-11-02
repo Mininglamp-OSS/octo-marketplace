@@ -316,7 +316,7 @@ func resolve(ctx context.Context, p *model.Plugin, read Reader, l Limits, icon *
 		if e != nil {
 			return nil, e
 		}
-		entries, code, _ := parse.ExtractArchive(bytes.NewReader(data), int64(len(data)), l.MaxTotalBytes, l.MaxFileBytes, l.MaxFiles)
+		entries, code, _ := parse.ExtractArchive(bytes.NewReader(data), int64(len(data)), l.MaxArchiveBytes, l.MaxTotalBytes, l.MaxFileBytes, l.MaxFiles)
 		if code != "" {
 			return nil, fmt.Errorf("archive_%s", strings.ToLower(code))
 		}

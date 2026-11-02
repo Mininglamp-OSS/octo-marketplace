@@ -519,17 +519,21 @@ that failure must generate and retain a stable key before the first request.
 The legacy expert model has no source-version field, so the definition sends a
 nullable `version` as JSON `null`. Fleet owns the resource transaction: Marketplace
 does not issue separate agent/skill creation calls or compensating deletes. A
-rejected install leaves no separately created agent or Skill. Supporting-file
-fan-out remains capped across all Skills (a package exceeding it returns `400`).
+rejected install leaves no separately created agent or Skill. Every supporting
+file in a declared package is retained; an unreadable or invalid package fails
+preparation rather than producing a partial installation.
 
-Expert and squad installs share the Plugin path's **16 MiB assembled Fleet JSON
-request limit**. The aggregate includes Skill bodies and supporting files, expert
-and team metadata, MCP/environment configuration, references, bindings, and JSON
-escaping/framing. Assembly charges metadata first and then each Skill/file before
-retaining it; an over-budget install stops subsequent asset reads and returns
-`400 VALIDATION_ERROR` without sending a Fleet request or counting an install.
-This is an aggregate limit, in addition to the existing per-Skill and file-count
-caps.
+Expert and squad installs share the Plugin path's **20 MB (20,000,000 bytes)
+assembled Fleet JSON request limit**. The aggregate includes Skill bodies and
+supporting files, expert/team metadata, MCP/environment configuration,
+references, bindings, and JSON escaping/framing. Supporting-file counts and
+individual text bodies have no separate installation limits. Existing
+structure, safe-path, permission, and text-integrity checks remain.
+Assembly charges metadata and then each Skill/file; over-budget preparation
+returns `413 PAYLOAD_TOO_LARGE` without sending a Fleet request or counting an
+install. Error details contain `field`, `limit_bytes`, `actual_bytes` and
+available Skill/file identifiers. `actual_bytes_lower_bound: true` marks
+an incremental or bounded-read measurement rather than the full request size.
 
 **Request:**
 
@@ -580,11 +584,12 @@ and `squad_id`:
   permissions. The legacy squad model has no source-version field, so expert
   and team versions are sent as JSON `null`. Fleet owns the transaction; there
   are no separate member-agent/Skill/squad create calls or compensating deletes.
-  The shared 16 MiB assembled JSON budget applies to the entire squad, not to
-  each member separately. Empty squads and resource-cap violations remain `400`. **Response (200):**
+  The shared 20 MB (20,000,000-byte) assembled JSON budget applies to the entire
+  squad, not each member separately. Capacity violations return `413
+  PAYLOAD_TOO_LARGE`; empty squads remain `400`. **Response (200):**
   `{ "squad_id", "leader_agent_id" }`, unchanged from the legacy flow. **Errors:**
-  400 (`invalid_request`) · 401 · 403 · 404 · 409 (Fleet resource conflict) · 500
-  · 503 (`UPSTREAM_UNAVAILABLE` when octo-fleet is unconfigured or unavailable).
+  400 (`invalid_request`) · 401 · 403 · 404 · 409 (Fleet resource conflict) ·
+  413 (`PAYLOAD_TOO_LARGE`) · 500 · 503 (`UPSTREAM_UNAVAILABLE`).
 
   **Request:** `{ "workspace_id": "ws-123", "runtime_id": "rt-456" }` —
   **Response (200):** `{ "data": { "squad_id": "sq-1", "leader_agent_id": "agent-1" } }`.

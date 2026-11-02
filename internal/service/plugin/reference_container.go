@@ -37,7 +37,7 @@ func (s *Service) parseReferenceContainer(p ContainerImportParams) (WriteRequest
 	if p.SchemaVersion != "2" {
 		return WriteRequest{}, ErrInvalidContainer
 	}
-	files, code, _ := parse.ExtractArchive(bytes.NewReader(p.Archive), int64(len(p.Archive)), s.maxArchiveBytes, s.maxArchiveBytes, containerMaxArchiveFiles)
+	files, code, _ := parse.ExtractArchive(bytes.NewReader(p.Archive), int64(len(p.Archive)), s.maxArchiveBytes, s.maxArchiveBytes, s.maxArchiveBytes, containerMaxArchiveFiles)
 	if code != "" || len(files) != 1 {
 		return WriteRequest{}, ErrInvalidContainer
 	}

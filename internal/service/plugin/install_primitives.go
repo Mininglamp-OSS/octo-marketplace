@@ -35,6 +35,34 @@ type PreparedSkill struct {
 	Directory      string
 	Skill          fleet.CapabilitySkill
 }
+type pinnedSkillKey struct {
+	pluginID  string
+	versionID string
+}
+
+func samePinnedSkillContent(a, b PinnedSkillFiles) bool {
+	if a.Description != b.Description || len(a.Files) != len(b.Files) {
+		return false
+	}
+	if a.DeclaredVersion == nil || b.DeclaredVersion == nil {
+		if a.DeclaredVersion != nil || b.DeclaredVersion != nil {
+			return false
+		}
+	} else if *a.DeclaredVersion != *b.DeclaredVersion {
+		return false
+	}
+	for path, content := range a.Files {
+		other, exists := b.Files[path]
+		if !exists || other != content {
+			return false
+		}
+	}
+	return true
+}
+
+func samePinnedSkillIdentity(a, b PinnedSkillFiles) bool {
+	return a.Name == b.Name && samePinnedSkillContent(a, b)
+}
 
 // PreparePinnedSkills produces temporary installation copies, never mutating
 // input files. Repeat references to identical snapshots are deduplicated; an
@@ -52,8 +80,8 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 	})
 	b := capabilityBuilder{remaining: fleet.MaxCapabilityRequestBytes}
 	out := make([]PreparedSkill, 0, len(inputs))
-	seen := map[string]string{}
-	identities := map[string]string{}
+	seen := map[string]PinnedSkillFiles{}
+	identities := map[pinnedSkillKey]PinnedSkillFiles{}
 	for _, input := range inputs {
 		if input.DeclaredVersion != nil && (*input.DeclaredVersion == "" || strings.TrimSpace(*input.DeclaredVersion) != *input.DeclaredVersion) {
 			return nil, installationInvalid("definition.skills.version", "invalid_provided_version")
@@ -62,43 +90,44 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 		if err != nil {
 			return nil, err
 		}
-		identityBytes, _ := json.Marshal([2]string{input.PluginID, input.VersionID})
-		identity := string(identityBytes)
-		original, _ := json.Marshal(input)
+		paths := make([]string, 0, len(input.Files))
+		for p := range input.Files {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		var fileBytes int64
+		for _, p := range paths {
+			size := int64(len(input.Files[p]))
+			if size > int64(fleet.MaxCapabilityRequestBytes)-fileBytes {
+				return nil, installationContentTooLarge("definition.skills.files", input.PluginID, p)
+			}
+			fileBytes += size
+		}
+		identity := pinnedSkillKey{pluginID: input.PluginID, versionID: input.VersionID}
 		if previous, exists := identities[identity]; exists {
-			if previous != string(original) {
+			if !samePinnedSkillIdentity(previous, input) {
 				return nil, installationInvalid("definition.skills", "identity_content_conflict")
 			}
 			continue
 		}
-		contentBytes, _ := json.Marshal(struct {
-			Version     *string
-			Description string
-			Files       map[string]string
-		}{input.DeclaredVersion, input.Description, input.Files})
-		if previous, exists := seen[name]; exists {
-			if previous != string(contentBytes) {
-				return nil, installationInvalid("definition.skills", "same_install_identity_different_content")
-			}
-			identities[identity] = string(original)
-			continue
-		}
-		if len(input.Files) == 0 || len(input.Files) > 51 {
+		if len(input.Files) == 0 {
 			return nil, installationInvalid("definition.skills.files", "invalid_count")
 		}
 		content, exists := input.Files["SKILL.md"]
 		if !exists || strings.TrimSpace(content) == "" {
 			return nil, installationInvalid("definition.skills.content", "required")
 		}
+		if previous, exists := seen[name]; exists {
+			if !samePinnedSkillContent(previous, input) {
+				return nil, installationInvalid("definition.skills", "same_install_identity_different_content")
+			}
+			identities[identity] = input
+			continue
+		}
 		skill := fleet.CapabilitySkill{Name: name, Version: input.DeclaredVersion, MarketSkillID: input.PluginID, Description: input.Description, Config: map[string]any{}}
 		if err := b.boundedText("definition.skills.description", input.Description, 512); err != nil {
 			return nil, err
 		}
-		paths := make([]string, 0, len(input.Files))
-		for p := range input.Files {
-			paths = append(paths, p)
-		}
-		sort.Strings(paths)
 		for _, p := range paths {
 			if err := validateInstallFilePath(p); err != nil {
 				return nil, err
@@ -108,9 +137,6 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 			if !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
 				return nil, installationInvalid("definition.skills.files", "text_only")
 			}
-			if len(value) > 1<<20 {
-				return nil, ErrTooLarge
-			}
 			if p == "SKILL.md" {
 				err = validateInstallFrontmatter(value)
 				if err != nil {
@@ -118,17 +144,13 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 				}
 				skill.Content = value
 			} else {
-				b.totalFiles++
-				if b.totalFiles > 500 {
-					return nil, ErrTooLarge
-				}
 				skill.Files = append(skill.Files, fleet.CapabilitySkillFile{Path: p, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: value}})
 			}
-			if err := b.text(value); err != nil {
+			if err := b.textAt("definition.skills.files", input.PluginID, p, value); err != nil {
 				return nil, err
 			}
 		}
-		seen[name], identities[identity] = string(contentBytes), string(original)
+		seen[name], identities[identity] = input, input
 		out = append(out, PreparedSkill{PluginID: input.PluginID, VersionID: input.VersionID, AdapterVersion: SkillInstallAdapterVersion, Directory: name, Skill: skill})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Skill.Name < out[j].Skill.Name })

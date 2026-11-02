@@ -148,7 +148,7 @@ func TestResolveMigrationSkillFilesFailsClosedOnCorruptionAndBounds(t *testing.T
 		want               error
 	}{
 		{"missing object", "", string(packageWith(rawAtt("SKILL.md", "stub"), `{"path":"ref.txt","content_type":"storage","storage_uri":"`+key+`"}`)), ErrIntegrity},
-		{"oversized storage", strings.Repeat("x", 1<<20+200), string(packageWith(rawAtt("SKILL.md", "stub"), `{"path":"ref.txt","content_type":"storage","storage_uri":"`+key+`"}`)), ErrTooLarge},
+		{"malformed attachment", "", string(packageWith(rawAtt("SKILL.md", "stub"), `{"path":"ref.txt","content_type":"raw","raw_content":42}`)), ErrInvalidRequest},
 		{"binary text", "bad\x00text", string(packageWith(rawAtt("SKILL.md", "stub"), `{"path":"ref.txt","content_type":"storage","storage_uri":"`+key+`"}`)), nil},
 		{"unsafe path", "", string(packageWith(rawAtt("SKILL.md", "stub"), rawAtt("../outside.txt", "bad"))), nil},
 		{"duplicate path", "", string(packageWith(rawAtt("SKILL.md", "one"), rawAtt("SKILL.md", "two"))), nil},
@@ -166,9 +166,44 @@ func TestResolveMigrationSkillFilesFailsClosedOnCorruptionAndBounds(t *testing.T
 			if err == nil || (tt.want != nil && !errors.Is(err, tt.want)) {
 				t.Fatalf("unexpected error=%v want=%v", err, tt.want)
 			}
-			if tt.name == "oversized storage" && store.readBytes > 1<<20+1 {
-				t.Fatalf("unbounded object fetch: %d bytes", store.readBytes)
-			}
 		})
+	}
+}
+
+// The offline migration resolver feeds the same installation builder, so it must
+// not keep the retired 53-attachment and 1 MiB-per-text ceilings: otherwise a
+// package the installer now accepts could not be migrated without losing files.
+func TestResolveMigrationSkillFilesCarriesFilesAboveLegacyCaps(t *testing.T) {
+	attachments := []string{rawAtt("SKILL.md", "---\nname: migrated\n---\nbody")}
+	want := map[string]string{}
+	for i := range 60 {
+		path := fmt.Sprintf("references/section-%03d.md", i)
+		body := fmt.Sprintf("section %03d", i)
+		want[path] = body
+		attachments = append(attachments, rawAtt(path, body))
+	}
+	files, err := ResolveMigrationSkillFiles(context.Background(), migrationFileStore(t, nil), migrationSkill(string(packageWith(attachments...))))
+	if err != nil {
+		t.Fatalf("attachment count above the retired cap was rejected: %v", err)
+	}
+	if len(files) != len(want)+1 {
+		t.Fatalf("files=%d want=%d", len(files), len(want)+1)
+	}
+	for path, body := range want {
+		if files[path] != body {
+			t.Fatalf("path %q changed or was dropped", path)
+		}
+	}
+
+	key := "plugins/space-a/attachments/guide.md"
+	large := strings.Repeat("g", (1<<20)+512)
+	store := migrationFileStore(t, map[string]string{key: large})
+	p := migrationSkill(string(packageWith(rawAtt("SKILL.md", "---\nname: migrated\n---\nbody"), migrationStoredAttachment("references/guide.md", key, large))))
+	files, err = ResolveMigrationSkillFiles(context.Background(), store, p)
+	if err != nil {
+		t.Fatalf("text above the retired 1 MiB cap was rejected: %v", err)
+	}
+	if files["references/guide.md"] != large {
+		t.Fatal("migrated text was dropped or truncated")
 	}
 }

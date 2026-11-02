@@ -395,6 +395,160 @@ func TestInstallationErrorMappingAndSafeRetry(t *testing.T) {
 	}
 }
 
+func TestInstallationKeepsUnmeasuredFleetRejectionUnattributed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = w.Write([]byte(`{"error":{"code":"PAYLOAD_TOO_LARGE","message":"private-diagnostic","details":{"field":"definition.skills","reason":"must contain at most 500 supporting files"}}}`))
+	}))
+	defer upstream.Close()
+	_, err := fleet.New(upstream.URL).InstallCapability(context.Background(), "token", "space", "workspace", "key", fleet.CapabilityInstallRequest{})
+	if err == nil {
+		t.Fatal("upstream rejection was accepted")
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	writeInstallationError(c, err)
+	var out struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusRequestEntityTooLarge || out.Error.Code != "PAYLOAD_TOO_LARGE" || out.Error.Details["upstream"] != "fleet" {
+		t.Fatalf("upstream rejection classification changed: %s", rec.Body.String())
+	}
+	for _, field := range []string{"actual_bytes", "limit_bytes", "actual_bytes_lower_bound"} {
+		if _, exists := out.Error.Details[field]; exists {
+			t.Fatalf("unreported %s in response: %s", field, rec.Body.String())
+		}
+	}
+	if strings.Contains(rec.Body.String(), "private-diagnostic") {
+		t.Fatal("upstream diagnostic was exposed")
+	}
+}
+
+// octo-web surfaces an unknown-code message directly and truncates it to 200
+// characters, so the capacity limit, the actual wire size and the location must
+// survive inside the message itself. details may carry the full path.
+type capacityDiagnosticStub struct {
+	field         string
+	limit, actual int64
+	skill, path   string
+	lowerBound    bool
+}
+
+func (e *capacityDiagnosticStub) Error() string { return "capacity exceeded" }
+func (e *capacityDiagnosticStub) Unwrap() error { return pluginsvc.ErrTooLarge }
+func (e *capacityDiagnosticStub) CapacityDetails() map[string]any {
+	details := map[string]any{
+		"field": e.field, "limit_bytes": e.limit, "actual_bytes": e.actual,
+	}
+	if e.skill != "" {
+		details["skill"] = e.skill
+	}
+	if e.path != "" {
+		details["path"] = e.path
+	}
+	if e.lowerBound {
+		details["actual_bytes_lower_bound"] = true
+	}
+	return details
+}
+
+func TestInstallationPayloadTooLargeReportsCapacityAndLocation(t *testing.T) {
+	longPath := "references/" + strings.Repeat("a", 300) + "/guide.md"
+	for _, tc := range []struct {
+		name       string
+		err        error
+		field      string
+		limit      int64
+		actual     int64
+		skill      string
+		path       string
+		lowerBound bool
+		wantMsg    []string
+	}{
+		{
+			name:    "definition_json",
+			err:     &capacityDiagnosticStub{field: "definition", limit: 20_000_000, actual: 20_000_001},
+			field:   "definition",
+			limit:   20_000_000,
+			actual:  20_000_001,
+			wantMsg: []string{"20000000", "20000001", "definition"},
+		},
+		{
+			name:    "skill_file",
+			err:     &capacityDiagnosticStub{field: "definition.skills.files", limit: 20_000_000, actual: 20_000_003, skill: "skill-1", path: longPath},
+			field:   "definition.skills.files",
+			limit:   20_000_000,
+			actual:  20_000_003,
+			skill:   "skill-1",
+			path:    longPath,
+			wantMsg: []string{"20000000", "20000003", "skill-1", longPath[:40]},
+		},
+		{
+			name:       "unknown_object",
+			err:        &capacityDiagnosticStub{field: "definition.skills.files", limit: 20_000_000, actual: 20_000_001, skill: "skill-1", path: "references/large.md", lowerBound: true},
+			field:      "definition.skills.files",
+			limit:      20_000_000,
+			actual:     20_000_001,
+			skill:      "skill-1",
+			path:       "references/large.md",
+			lowerBound: true,
+			wantMsg:    []string{"20000000", "20000001", "skill-1", "references/large.md"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeInstallationService{fakeService: &fakeService{}, installationErr: tc.err}
+			rec := httptest.NewRecorder()
+			testEngine(f).ServeHTTP(rec, installationRequest(installationBody))
+			var out struct {
+				Error struct {
+					Code    string         `json:"code"`
+					Message string         `json:"message"`
+					Details map[string]any `json:"details"`
+					Hint    string         `json:"hint"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusRequestEntityTooLarge || out.Error.Code != "PAYLOAD_TOO_LARGE" {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if out.Error.Details["field"] != tc.field ||
+				out.Error.Details["limit_bytes"] != float64(tc.limit) ||
+				out.Error.Details["actual_bytes"] != float64(tc.actual) {
+				t.Fatalf("details=%v", out.Error.Details)
+			}
+			if tc.skill != "" && out.Error.Details["skill"] != tc.skill {
+				t.Fatalf("skill detail=%v", out.Error.Details["skill"])
+			}
+			if tc.path != "" && out.Error.Details["path"] != tc.path {
+				t.Fatalf("path detail=%v", out.Error.Details["path"])
+			}
+			if n := len([]rune(out.Error.Message)); n > 200 {
+				t.Fatalf("message is %d runes; clients truncate at 200: %q", n, out.Error.Message)
+			}
+			if tc.lowerBound && out.Error.Details["actual_bytes_lower_bound"] != true {
+				t.Fatalf("lower-bound detail=%v", out.Error.Details["actual_bytes_lower_bound"])
+			}
+			for _, want := range tc.wantMsg {
+				if !strings.Contains(out.Error.Message, want) {
+					t.Fatalf("message %q missing %q", out.Error.Message, want)
+				}
+			}
+			if strings.Contains(out.Error.Message, strings.Repeat("a", 100)) || strings.Contains(out.Error.Hint, strings.Repeat("a", 100)) {
+				t.Fatal("message leaked file content")
+			}
+		})
+	}
+}
+
 func TestInstallationConflictUsesSafeMessage(t *testing.T) {
 	for _, tc := range []struct {
 		err     fleet.CapabilityAPIError

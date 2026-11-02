@@ -97,8 +97,8 @@ func TestCapabilityLegacySkillReplacementChargesOnlyFinalContent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(files) != 2 || files["SKILL.md"] != content || files["ref.md"] != refContent || builder.remaining != int64(2700-size) || builder.totalFiles != 1 {
-				t.Fatalf("replacement accounting failed: remaining=%d files=%d", builder.remaining, builder.totalFiles)
+			if len(files) != 2 || files["SKILL.md"] != content || files["ref.md"] != refContent || builder.remaining != int64(2700-size) {
+				t.Fatalf("replacement accounting failed: remaining=%d files=%d", builder.remaining, len(files))
 			}
 		})
 	}

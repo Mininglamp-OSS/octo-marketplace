@@ -1,9 +1,9 @@
 # Offline installation primitives (I preparation)
 
-This unit adds pure Go functions in `internal/service/plugin/install_primitives.go`.
-No HTTP entrypoint uses them yet; no database, Fleet request, feature flag or MCP
-process is involved. Inputs must already have been authorized and verified by the
-future pinned-version resolver. This is not the complete I1/I2 installation chain.
+This unit provides pure Go helpers in `internal/service/plugin/install_primitives.go`.
+Pinned installation uses them to prepare authorized, verified snapshots and current
+connector configuration. The helpers do not authorize or load those inputs, start
+MCP processes, persist data, or call Fleet.
 
 ## Executable fixture cases
 
@@ -38,11 +38,13 @@ malformed/duplicate metadata, binary content, traversal and reserved paths fail.
 Input maps are never mutated. No filesystem directories are created here;
 `Directory` identifies the name downstream materialization must use.
 
-Limits reuse portable-install constraints: 600 input references, 51 files per
-skill including SKILL.md, 500 companion files total, 1 MiB per text file and
-16 MiB aggregate text budget. The final composed Fleet request must still pass
-its existing validation/serialized-payload budget, since JSON escaping and other
-expert fields add bytes. This helper alone cannot certify the whole request.
+Skill preparation retains the structural limit of 600 input references, but has
+no per-skill/supporting-file count limit or per-text-file size limit. Its aggregate
+raw text budget is 20,000,000 bytes. The complete Fleet request is independently
+limited to 20,000,000 UTF-8 bytes after JSON serialization, including definitions,
+bindings, metadata, escaping, and framing; preparation alone cannot certify the
+complete request. A stored archive's configured compressed-byte transport limit
+is separate and cannot reduce the installation content budget.
 
 ## MCP current configuration merge
 
@@ -58,11 +60,11 @@ overwrite nor implicit rename is allowed. Separate calls with an updated current
 configuration produce updated output. Object output is deterministic.
 
 Existing portable MCP validation runs on each input and on the merged result:
-transport/allowed fields, 100 servers and configured byte limit apply. Raw input
-has a 16 MiB aggregate budget and 600-reference cap. Command configuration omits
-`type`; explicit `stdio` stays rejected by the existing Fleet contract. Errors
-contain fixed reasons, never configuration values. This transient helper does not
-persist or log credentials, authenticate MCP, or test reachability.
+transport/allowed fields, 100 servers and configured byte limit apply. Raw inputs
+have a 20,000,000-byte aggregate budget and retain the 600-reference cap. Command
+configuration omits `type`; explicit `stdio` stays rejected by the existing Fleet
+contract. Errors contain fixed reasons, never configuration values. This transient
+helper does not persist or log credentials, authenticate MCP, or test reachability.
 
 ## Remaining integration
 

@@ -1,12 +1,17 @@
 package expert
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/logging"
@@ -19,20 +24,11 @@ import (
 // installation request.
 const installTimeout = 5 * time.Minute
 
-// maxSkillFilesPerSkill caps the UTF-8 supporting files extracted from one
-// packaged Skill. Oversized or unreadable archives contribute no supporting files.
-const maxSkillFilesPerSkill = 50
-
-// maxSkillFilesPerInstall caps supporting files across every Skill/member in
-// one install.
-const maxSkillFilesPerInstall = 500
-
 // ErrFleetNotConfigured is returned when no Fleet client is wired. The handler
 // maps it to UPSTREAM_UNAVAILABLE.
 var ErrFleetNotConfigured = errors.New("fleet not configured")
 
-// ErrInstallTooLarge is returned when an install exceeds the aggregate request
-// byte budget or the aggregate Skill file limit. The handler maps it to 400.
+// ErrInstallTooLarge marks an installation above the complete JSON byte budget.
 var ErrInstallTooLarge = errors.New("install exceeds resource limits")
 
 // ErrFleetInstallUnavailable marks a capability request whose result could not
@@ -53,17 +49,6 @@ func (e *InstallDispatchError) Error() string { return e.Err.Error() }
 
 func (e *InstallDispatchError) Unwrap() error { return e.Err }
 
-// fileBudget caps supporting files across every Skill/member in one install.
-type fileBudget struct{ remaining int }
-
-func (b *fileBudget) take() bool {
-	if b.remaining <= 0 {
-		return false
-	}
-	b.remaining--
-	return true
-}
-
 // capabilityBudget tracks the exact encoded size of a capability install
 // request while it is assembled. The initial size comes from marshalling a real
 // empty request, so root-level fields stay accounted automatically. Every
@@ -74,6 +59,8 @@ type capabilityBudget struct {
 	skillCount   int
 	expertCount  int
 	bindingCount int
+	skill        string
+	path         string
 }
 
 func newCapabilityBudget(name string) *capabilityBudget {
@@ -90,7 +77,7 @@ func newCapabilityBudget(name string) *capabilityBudget {
 
 func (b *capabilityBudget) take(n int64) error {
 	if n > b.remaining {
-		return ErrInstallTooLarge
+		return &installCapacityError{actualBytes: int64(fleet.MaxCapabilityRequestBytes) - b.remaining + n, skill: b.skill, path: b.path}
 	}
 	b.remaining -= n
 	return nil
@@ -283,7 +270,7 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	if err := budget.addJSON(binding); err != nil {
 		return InstallResult{}, err
 	}
-	skillNames, skills, err := s.capabilitySkills(ctx, m.Skills, m.Summary, &fileBudget{remaining: maxSkillFilesPerInstall}, budget, nil)
+	skillNames, skills, err := s.capabilitySkills(ctx, m.Skills, m.Summary, budget, nil)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -408,11 +395,12 @@ func capabilityMCPConfig(raw string) (json.RawMessage, error) {
 	return normalized, nil
 }
 
-func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, description string, budget *fileBudget, request *capabilityBudget, seen map[string]struct{}) ([]string, []fleet.CapabilitySkill, error) {
+func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, description string, request *capabilityBudget, seen map[string]struct{}) ([]string, []fleet.CapabilitySkill, error) {
 	names := make([]string, 0, len(refs))
 	skills := make([]fleet.CapabilitySkill, 0, len(refs))
 	for i := range refs {
 		ref := refs[i]
+		request.skill, request.path = ref.Name, "SKILL.md"
 		if ref.ObjectKey == "" && ref.Markdown == "" {
 			continue
 		}
@@ -428,7 +416,7 @@ func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, d
 		if err := request.beginSkill(); err != nil {
 			return nil, nil, err
 		}
-		content, err := s.readSkillContent(ctx, refs, i)
+		content, err := s.readCapabilitySkillContent(ctx, ref, request)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -439,7 +427,7 @@ func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, d
 		if err := request.addJSON(skill); err != nil {
 			return nil, nil, err
 		}
-		files, err := s.capabilitySkillFiles(ctx, ref, budget, request)
+		files, err := s.capabilitySkillFiles(ctx, ref, request)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -453,48 +441,78 @@ func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, d
 	return names, skills, nil
 }
 
-func (s *Service) capabilitySkillFiles(ctx context.Context, ref model.SkillRef, budget *fileBudget, request *capabilityBudget) ([]fleet.CapabilitySkillFile, error) {
-	if ref.Markdown != "" {
-		files := make([]fleet.CapabilitySkillFile, 0, len(ref.SupportingFiles))
-		for _, file := range ref.SupportingFiles {
-			if !budget.take() {
-				return nil, ErrInstallTooLarge
+func (s *Service) capabilitySkillFiles(ctx context.Context, ref model.SkillRef, request *capabilityBudget) ([]fleet.CapabilitySkillFile, error) {
+	files := make([]fleet.CapabilitySkillFile, 0, len(ref.SupportingFiles))
+	add := func(path, content string) error {
+		if !utf8.ValidString(content) || strings.ContainsRune(content, 0) {
+			return fmt.Errorf("%w: skill supporting files must be text", ErrInvalidRequest)
+		}
+		request.path = path
+		file := fleet.CapabilitySkillFile{Path: path, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: content}}
+		if err := request.addSkillFile(len(files) == 0, file); err != nil {
+			return err
+		}
+		files = append(files, file)
+		return nil
+	}
+	if ref.Markdown == "" && ref.ZipObjectKey != "" {
+		tmpPath, size, cleanup, err := s.downloadToTempFile(ctx, ref.ZipObjectKey)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+		archive, err := os.Open(tmpPath)
+		if err != nil {
+			return nil, err
+		}
+		defer archive.Close()
+		entries, code, message := parse.ExtractArchive(archive, size, maxSkillPackageBytes, fleet.MaxCapabilityRequestBytes, fleet.MaxCapabilityRequestBytes, -1)
+		if code == "FILE_TOO_LARGE" {
+			return nil, &installCapacityError{actualBytes: int64(fleet.MaxCapabilityRequestBytes) + 1, skill: ref.Name, path: "skill/package.zip"}
+		}
+		if code != "" {
+			return nil, fmt.Errorf("invalid skill package: %s", message)
+		}
+		paths := make([]string, 0, len(entries))
+		for name := range entries {
+			if !parse.IsSkillMDCandidate(name) {
+				paths = append(paths, name)
 			}
-			capabilityFile := fleet.CapabilitySkillFile{
-				Path: file.Path, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: file.Content},
-			}
-			if err := request.addSkillFile(len(files) == 0, capabilityFile); err != nil {
+		}
+		sort.Strings(paths)
+		for _, name := range paths {
+			if err := add(name, string(entries[name])); err != nil {
 				return nil, err
 			}
-			files = append(files, capabilityFile)
 		}
 		return files, nil
 	}
-	if ref.ZipObjectKey == "" || s.store == nil {
-		return nil, nil
-	}
-	tmpPath, _, cleanup, err := s.downloadToTempFile(ctx, ref.ZipObjectKey)
-	if err != nil {
-		return nil, nil
-	}
-	defer cleanup()
-
-	extracted, _, code, _ := parse.ExtractSkillFiles(tmpPath, maxSkillPackageBytes, maxSkillFilesPerSkill)
-	if code != "" {
-		return nil, nil
-	}
-	files := make([]fleet.CapabilitySkillFile, 0, len(extracted))
-	for _, file := range extracted {
-		if !budget.take() {
-			return nil, ErrInstallTooLarge
-		}
-		capabilityFile := fleet.CapabilitySkillFile{
-			Path: file.Path, Source: fleet.CapabilityInlineTextSource{Type: "inline_text", Content: file.Content},
-		}
-		if err := request.addSkillFile(len(files) == 0, capabilityFile); err != nil {
+	for _, file := range ref.SupportingFiles {
+		if err := add(file.Path, file.Content); err != nil {
 			return nil, err
 		}
-		files = append(files, capabilityFile)
 	}
 	return files, nil
+}
+
+func (s *Service) readCapabilitySkillContent(ctx context.Context, ref model.SkillRef, request *capabilityBudget) (string, error) {
+	if ref.Markdown != "" {
+		return ref.Markdown, nil
+	}
+	reader, err := s.store.GetObject(ctx, ref.ObjectKey)
+	if err != nil {
+		return "", fmt.Errorf("get skill content: %w", err)
+	}
+	defer reader.Close()
+	content, err := io.ReadAll(io.LimitReader(reader, request.remaining+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(content)) > request.remaining {
+		return "", request.take(int64(len(content)))
+	}
+	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		return "", fmt.Errorf("%w: skill content must be text", ErrInvalidRequest)
+	}
+	return string(content), nil
 }

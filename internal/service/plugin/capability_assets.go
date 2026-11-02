@@ -11,16 +11,21 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/service/parse"
 )
 
 func (b *capabilityBuilder) text(value string) error {
+	return b.textAt("definition", "", "", value)
+}
+
+func (b *capabilityBuilder) textAt(field, skillID, filePath, value string) error {
 	if !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
-		return installationInvalid("definition", "text_only")
+		return installationInvalid(field, "text_only")
 	}
-	if len(value) > 1<<20 || int64(len(value)) > b.remaining {
-		return ErrTooLarge
+	if int64(len(value)) > b.remaining {
+		return installationContentTooLarge(field, skillID, filePath)
 	}
 	b.remaining -= int64(len(value))
 	return nil
@@ -44,16 +49,7 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 		if _, exists := files[clean]; exists {
 			return installationInvalid("definition.skills.files", "duplicate_path")
 		}
-		if clean != "SKILL.md" {
-			b.totalFiles++
-			if b.totalFiles > 500 {
-				return ErrTooLarge
-			}
-		}
-		if len(files) >= 51 {
-			return ErrTooLarge
-		}
-		if err := b.text(content); err != nil {
+		if err := b.textAt("definition.skills.files", p.ID, clean, content); err != nil {
 			return err
 		}
 		files[clean] = content
@@ -71,16 +67,19 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 				}
 			}
 		}
-		data, err := b.object(ctx, p, key, b.remaining, wantSize, wantHash)
+		data, err := b.object(ctx, p, key, b.service.maxArchiveBytes, wantSize, wantHash)
 		if err != nil {
+			if err == ErrTooLarge {
+				return nil, ErrIntegrity
+			}
 			return nil, err
 		}
-		// Bound decompressed bytes while reading, not only after an entire ZIP
-		// has been materialized. ExtractSkillTree applies its supplied size
-		// limit only to compressed bytes, with a separate fixed expansion cap.
-		entries, code, _ := parse.ExtractArchive(bytes.NewReader(data), int64(len(data)), b.remaining, 1<<20, 51)
+		entries, code, _ := parse.ExtractArchive(
+			bytes.NewReader(data), int64(len(data)), b.service.maxArchiveBytes,
+			int64(fleet.MaxCapabilityRequestBytes), int64(fleet.MaxCapabilityRequestBytes), -1,
+		)
 		if code == "FILE_TOO_LARGE" {
-			return nil, ErrTooLarge
+			return nil, installationContentTooLarge("definition.skills.files", p.ID, "skill/package.zip")
 		}
 		if code != "" {
 			return nil, installationInvalid("definition.skills.files", "invalid_archive")
@@ -114,11 +113,14 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 			// The archive has already passed bounded extraction and validation.
 			// Replace the entry document's charge instead of counting both copies.
 			b.remaining += int64(len(files["SKILL.md"]))
-			data, err := b.object(ctx, p, ref.ObjectKey, min(b.remaining, 1<<20), 0, "")
+			data, err := b.object(ctx, p, ref.ObjectKey, b.remaining, 0, "")
 			if err != nil {
+				if err == ErrTooLarge {
+					return nil, installationContentTooLarge("definition.skills.files", p.ID, "SKILL.md")
+				}
 				return nil, err
 			}
-			if err := b.text(string(data)); err != nil {
+			if err := b.textAt("definition.skills.files", p.ID, "SKILL.md", string(data)); err != nil {
 				return nil, err
 			}
 			files["SKILL.md"] = string(data)
@@ -136,8 +138,11 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 		}
 	}
 	if ref.ObjectKey != "" {
-		data, err := b.object(ctx, p, ref.ObjectKey, min(b.remaining, 1<<20), 0, "")
+		data, err := b.object(ctx, p, ref.ObjectKey, b.remaining, 0, "")
 		if err != nil {
+			if err == ErrTooLarge {
+				return nil, installationContentTooLarge("definition.skills.files", p.ID, "SKILL.md")
+			}
 			return nil, err
 		}
 		if err := add("SKILL.md", string(data)); err != nil {
@@ -160,8 +165,11 @@ func (b *capabilityBuilder) skillFiles(ctx context.Context, p *model.Plugin) (ma
 			if key == "" {
 				key = attachment.StorageURI
 			}
-			data, err := b.object(ctx, p, key, min(b.remaining, 1<<20), attachment.ContentSize, attachment.ContentHash)
+			data, err := b.object(ctx, p, key, b.remaining, attachment.ContentSize, attachment.ContentHash)
 			if err != nil {
+				if err == ErrTooLarge {
+					return nil, installationContentTooLarge("definition.skills.files", p.ID, attachment.Path)
+				}
 				return nil, err
 			}
 			content = string(data)

@@ -56,7 +56,7 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 	if !ok {
 		return nil, ErrInvalidRequest
 	}
-	assets := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, fleet.MaxCapabilityRequestBytes)}
+	assets := capabilityBuilder{service: s, caller: caller, remaining: fleet.MaxCapabilityRequestBytes}
 	if workspaceConnectors {
 		assets.connectorsByID = map[string]fleet.CapabilityConnector{}
 		assets.connectorOwnerByName = map[string]string{}
@@ -155,7 +155,7 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 		if !ok || strings.TrimSpace(instructions) == "" {
 			return nil, installationInvalid("definition.experts.instructions", "required")
 		}
-		if err = r.assets.text(instructions); err != nil {
+		if err = r.assets.textAt("definition.experts.instructions", expert.Plugin.ID, "AGENTS.md", instructions); err != nil {
 			return nil, err
 		}
 		out := fleet.CapabilityExpert{
@@ -230,7 +230,7 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 				return nil, err
 			}
 			out.MCPConfig = config
-			if err = r.assets.text(string(config)); err != nil {
+			if err = r.assets.textAt("definition.experts.mcp_config", "", "mcp.json", string(config)); err != nil {
 				return nil, err
 			}
 		}
@@ -267,7 +267,7 @@ func (s *Service) resolvePinnedInstallation(ctx context.Context, caller Caller, 
 		if !ok {
 			return nil, installationInvalid("definition.expert_team.instructions", "required")
 		}
-		if err = r.assets.text(instructions); err != nil {
+		if err = r.assets.textAt("definition.expert_team.instructions", d.Plugin.ID, "AGENTS.md", instructions); err != nil {
 			return nil, err
 		}
 		team := &fleet.CapabilityExpertTeam{

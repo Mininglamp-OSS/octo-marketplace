@@ -30,7 +30,7 @@ type installResponse struct {
 
 // Install godoc
 // @Summary Install plugin to a Loop workspace/runtime
-// @Description Provision an expert or expert_team Plugin into the chosen Loop workspace/runtime, acting as the caller through the same atomic Fleet capability installation used by /plugins/{plugin_id}/installations. The original body and response are retained for older clients; Idempotency-Key is optional.
+// @Description Provision an expert or expert_team Plugin into the chosen Loop workspace/runtime, acting as the caller through the same atomic Fleet capability installation used by /plugins/{plugin_id}/installations. The original body and response are retained for older clients; Idempotency-Key is optional. The assembled Fleet JSON is limited to 20,000,000 UTF-8 bytes after serialization, including definition, bindings, content, metadata, escaping and framing; this is separate from the 3 MiB Marketplace request-body limit. Supporting files have no separate count or per-text-item cap; the configured stored-ZIP transport limit remains independent.
 // @Tags plugin
 // @ID plugin.install
 // @Accept json
@@ -44,7 +44,7 @@ type installResponse struct {
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
-// @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
+// @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE; install-wire details include limit_bytes=20000000, actual_bytes, field, and optional skill/path"
 // @Failure 415 {object} apiresponse.Error "UNSUPPORTED_MEDIA_TYPE"
 // @Failure 429 {object} apiresponse.Error "RATE_LIMITED"
 // @Header 429 {string} Retry-After "Delay in seconds before retrying"

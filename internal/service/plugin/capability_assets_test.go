@@ -62,25 +62,6 @@ func capabilityArchiveFixture(data []byte) (*Service, *fakeCapabilityInstaller) 
 	return svc, installer
 }
 
-func TestCapabilityLegacyArchiveEnforcesDecompressedBudgetBeforeTextValidation(t *testing.T) {
-	// Each entry fits the budget and the compressed ZIP is tiny, but their
-	// aggregate does not. NUL makes the old post-extraction check report
-	// text_only instead, proving that the extraction boundary rejects first.
-	data := zipWith(t, map[string][]byte{
-		"SKILL.md": []byte(strings.Repeat("\x00", 2048)),
-		"ref.md":   []byte(strings.Repeat("\x00", 2048)),
-	})
-	svc, installer := capabilityArchiveFixture(data)
-	svc.maxArchiveBytes = 3072
-	if len(data) >= 1024 {
-		t.Fatal("fixture must fit comfortably within the compressed-byte budget")
-	}
-	_, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams())
-	if !errors.Is(err, ErrTooLarge) || installer.calls != 0 {
-		t.Fatalf("err=%v calls=%d", err, installer.calls)
-	}
-}
-
 func TestCapabilityLegacyArchiveRejectsInvalidEntryStructure(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -121,29 +102,19 @@ func TestCapabilityLegacyArchiveSerializationIgnoresEntryOrder(t *testing.T) {
 	}
 }
 
+// Count and per-text ceilings are capacity decisions, not structural ones; the
+// capacity contract lives in capability_capacity_test.go. Here only path and
+// archive structure is rejected.
 func TestCapabilityAssetLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		attachments []string
-		budget      int64
 	}{
-		{"oversize_text", []string{rawAtt("SKILL.md", strings.Repeat("x", 1<<20+1))}, 0},
-		{"aggregate", []string{rawAtt("SKILL.md", strings.Repeat("x", 1024))}, 512},
-		{"too_many_files", func() []string {
-			out := []string{rawAtt("SKILL.md", "x")}
-			for i := range 51 {
-				out = append(out, rawAtt(fmt.Sprintf("ref/%d.md", i), "x"))
-			}
-			return out
-		}(), 0},
-		{"reserved_git", []string{rawAtt("SKILL.md", "x"), rawAtt(".git/config", "x")}, 0},
+		{"reserved_git", []string{rawAtt("SKILL.md", "x"), rawAtt(".git/config", "x")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, store, installer := capabilityFixture()
 			store.plugins["skill-1"].Package = packageWith(tc.attachments...)
-			if tc.budget > 0 {
-				svc.maxArchiveBytes = tc.budget
-			}
 			if _, err := svc.CreateInstallation(context.Background(), testCaller, "expert-1", installationParams()); err == nil || installer.calls != 0 {
 				t.Fatal("invalid assets reached Fleet")
 			}

@@ -84,7 +84,7 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 			return nil, ErrIntegrity
 		}
 		if len(body) > fleet.MaxCapabilityRequestBytes {
-			return nil, ErrTooLarge
+			return nil, installationRequestCapacityError(int64(len(body)), *request)
 		}
 		fingerprint, err := s.installationHMAC(keyID, "request", json.RawMessage(body))
 		if err != nil {
@@ -232,7 +232,7 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		}
 	}
 	if len(body) > fleet.MaxCapabilityRequestBytes {
-		return nil, ErrTooLarge
+		return nil, installationRequestCapacityError(int64(len(body)), *request)
 	}
 	now := s.now()
 	if attempt.RetryUntil == nil && attempt.Completed {
