@@ -198,7 +198,7 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 	if err != nil {
 		return wrapped("publish release", mapPluginNameTaken(err))
 	}
-	return clearRecoveredSuspension(ctx, tx, p.ID, versionID)
+	return clearRecoveredSuspension(ctx, tx, p, versionID, now)
 }
 
 // PublishManaged publishes the explicitly selected draft. ExpectedVersionID

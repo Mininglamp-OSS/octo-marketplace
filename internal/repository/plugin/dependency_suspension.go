@@ -3,6 +3,8 @@ package plugin
 import (
 	"context"
 	"database/sql"
+	"errors"
+
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
@@ -62,16 +64,38 @@ func (r *Repo) SuspensionDiagnostics(ctx context.Context, sc Scope, items []mode
 // Clear an existing marker only when the candidate snapshot would pass the
 // catalog availability check. The conditional write and publication share a
 // transaction, so a failed recovery cannot advance the release or relist it.
-func clearRecoveredSuspension(ctx context.Context, tx *sql.Tx, id, versionID string) error {
+//
+// The suspension cascade demoted the container's embedded children together with
+// the container itself (see demoteEmbeddedChildren), and the availability check
+// reads the candidate snapshot, where those children are still delisted. Every
+// recovery attempt would therefore fail with target_not_published and roll back,
+// and the children cannot be published on their own to break the loop. Restore
+// the embedded subtree the candidate release actually declares — only rows owned
+// by this container; promoteFrozenEmbeddedChildren never touches a standalone
+// target — before judging the release. Promotion shares this transaction, so a
+// genuinely unavailable independent dependency still fails the check and rolls
+// the promotion back with the rest of the publication.
+func clearRecoveredSuspension(ctx context.Context, tx *sql.Tx, p *model.Plugin, versionID string, now any) error {
 	var marker string
-	err := tx.QueryRowContext(ctx, `SELECT plugin_id FROM plugin_dependency_suspensions WHERE plugin_id=? LIMIT 1 FOR UPDATE`, id).Scan(&marker)
+	err := tx.QueryRowContext(ctx, `SELECT plugin_id FROM plugin_dependency_suspensions WHERE plugin_id=? LIMIT 1 FOR UPDATE`, p.ID).Scan(&marker)
 	if err == sql.ErrNoRows {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `DELETE s FROM plugin_dependency_suspensions s JOIN plugins p ON p.plugin_id=s.plugin_id WHERE s.plugin_id=? AND NOT `+unavailableSnapshotSQL("p.plugin_id", "?"), id, versionID)
+	rels, err := candidateReleaseRelations(ctx, tx, p.ID, versionID)
+	if err != nil {
+		return err
+	}
+	spaceID := ""
+	if p.SpaceID != nil {
+		spaceID = *p.SpaceID
+	}
+	if err = promoteFrozenEmbeddedChildren(ctx, tx, p.ID, p.Type, rels, spaceID, now); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE s FROM plugin_dependency_suspensions s JOIN plugins p ON p.plugin_id=s.plugin_id WHERE s.plugin_id=? AND NOT `+unavailableSnapshotSQL("p.plugin_id", "?"), p.ID, versionID)
 	if err != nil {
 		return err
 	}
@@ -83,6 +107,25 @@ func clearRecoveredSuspension(ctx context.Context, tx *sql.Tx, id, versionID str
 		return &ReferenceValidationError{Field: "relations", Reason: "target_not_published"}
 	}
 	return nil
+}
+
+// candidateReleaseRelations reads the immutable topology of the version being
+// released. recordRelease has already established that the row exists; an
+// absent or empty snapshot is treated as an empty topology so recovery stays a
+// no-op instead of failing on a second lookup.
+func candidateReleaseRelations(ctx context.Context, tx *sql.Tx, id, versionID string) ([]model.PluginRelation, error) {
+	var raw []byte
+	err := tx.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, id, versionID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	return model.DecodeSnapshotRelations(raw)
 }
 func usesTargetSnapshotSQL(sourceID, version string) string {
 	direct := `EXISTS(SELECT 1 FROM plugin_versions sv JOIN JSON_TABLE(sv.relations_json,'$[*]' COLUMNS (` + snapshotRelationColumns + `)) e WHERE sv.plugin_id=` + sourceID + ` AND sv.version_id=` + version + ` AND ` + snapshotField("e", "target_plugin_id") + `=? AND COALESCE(e.status,e.status_legacy,1)=1 AND COALESCE(e.deleted_at,e.deleted_at_legacy) IS NULL)`
