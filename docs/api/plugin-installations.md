@@ -130,7 +130,8 @@ is `/plugins/{plugin_id}/installations` relative to `/v1`.
   credentials and must not enter logs, events or Git.
 - Keys contain 1–200 visible ASCII characters without spaces. Unknown JSON
   fields, compressed bodies, and non-JSON requests are rejected. The HTTP body
-  limit is 3 MiB; the assembled Fleet request is limited to 16 MiB.
+  limit is 3 MiB. The complete assembled Fleet install JSON is independently
+  limited to 20,000,000 UTF-8 bytes after JSON serialization.
 
 ## Assembly and compatibility boundaries
 
@@ -232,14 +233,18 @@ closed on binary/non-UTF-8/NUL content, unsafe or duplicate paths, missing files
 untrusted object keys, and recorded size/checksum mismatches. Unlike the legacy
 best-effort reader, it never silently omits an unreadable supporting file. Binary
 asset support is out of scope for this draft. Managed legacy ZIPs are expanded
-under the same limits and rooted at SKILL.md; no artifacts are modified.
+and rooted at SKILL.md; their stored compressed object bytes retain the configured
+archive transport limit, independent of the install content budget.
 
-Limits include 30 experts, 20 Skill relations per expert, 600 unique source
-Skills, 50 supporting files per Skill, 500 supporting files per installation,
-and 1 MiB per text item. Names are at most 128 characters; Expert/Team descriptions
+The final Fleet request is limited to **20,000,000 UTF-8 bytes** after serialization,
+including the full definition and bindings, file contents, metadata, JSON escaping,
+and framing. Supporting-file count and per-text-item size are not separately
+limited; files are accepted in full while the complete request stays within that
+wire-byte limit. The archive transport limit never reduces this content budget.
+Structural limits remain: 30 experts, 20 Skill relations per expert, and 600
+unique source Skills. Names are at most 128 characters; Expert/Team descriptions
 255, Skill descriptions 512, and member roles 500. Overlong values are rejected,
-not truncated. Supporting files cannot alias SKILL.md by case. The configured archive limit may further reduce the
-16 MiB aggregate budget.
+not truncated. Supporting files cannot alias SKILL.md by case.
 
 ## Success and errors
 
@@ -308,6 +313,21 @@ envelope. By explicit product requirement, Marketplace-generated `message` and
 and `details` keys remain stable. This is a route-specific exception to the
 default API convention of English messages. Authentication failures on this
 route also use Chinese; existing routes keep their original text.
+
+Install-capacity 413 `PAYLOAD_TOO_LARGE` responses include `details.limit_bytes`
+(`20000000`), `actual_bytes`, and `field` (`definition` or a `definition.*`
+location). Asset-related failures may also include the Skill identifier and full
+content path. Exact serialized sizes are reported when available; bounded asset
+reads report `actual_bytes = limit_bytes + 1` with
+`actual_bytes_lower_bound = true`. The short Chinese `message` repeats the limit,
+actual size, and field or location for clients that only show messages. It never
+includes file contents or secrets. This install-wire limit is distinct from the
+3 MiB Marketplace HTTP request-body guard.
+
+Fleet 413 responses retain HTTP 413 and `PAYLOAD_TOO_LARGE`. Capacity fields
+are exposed only when Fleet supplies valid, recognized measurements. Responses
+without those measurements use a general upstream-rejection message and retain
+`details.upstream = "fleet"` and `details.phase = "fleet"`.
 
 Recognized Fleet `DUPLICATE`, legacy `IDEMPOTENCY_KEY_REUSED`, and `CONFLICT`
 identifying a Skill/Expert/Team resource collision return HTTP **409 with fixed

@@ -44,7 +44,6 @@ type capabilityBuilder struct {
 	connectorsByID        map[string]fleet.CapabilityConnector
 	connectorAudienceByID map[string]capabilityConnectorAudience
 	connectorOwnerByName  map[string]string
-	totalFiles            int
 }
 
 func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, pluginID string, p InstallationParams) (*fleet.CapabilityInstallRequest, error) {
@@ -55,7 +54,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 	if root.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
-	b := capabilityBuilder{service: s, caller: caller, remaining: min(s.maxArchiveBytes, fleet.MaxCapabilityRequestBytes), skillsByVersion: map[pluginrepo.InstallVersionKey]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
+	b := capabilityBuilder{service: s, caller: caller, remaining: fleet.MaxCapabilityRequestBytes, skillsByVersion: map[pluginrepo.InstallVersionKey]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
 	if p.WorkspaceConnectors {
 		b.connectorsByID = map[string]fleet.CapabilityConnector{}
 		b.connectorOwnerByName = map[string]string{}
@@ -103,7 +102,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 		if !ok {
 			return nil, installationInvalid("definition.expert_team.instructions", "required")
 		}
-		if err := b.text(instructions); err != nil {
+		if err := b.textAt("definition.expert_team.instructions", root.Plugin.ID, "AGENTS.md", instructions); err != nil {
 			return nil, err
 		}
 		if err := b.boundedText("definition.expert_team.description", summary, 255); err != nil {
@@ -235,7 +234,7 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 	if !ok || strings.TrimSpace(instructions) == "" {
 		return nil, installationInvalid("definition.experts.instructions", "required")
 	}
-	if err := b.text(instructions); err != nil {
+	if err := b.textAt("definition.experts.instructions", detail.Plugin.ID, "AGENTS.md", instructions); err != nil {
 		return nil, err
 	}
 	if err := b.boundedText("definition.experts.description", summary, 255); err != nil {
@@ -308,7 +307,7 @@ func (b *capabilityBuilder) expert(ctx context.Context, detail *Detail, name, su
 			if err != nil {
 				return nil, err
 			}
-			if err := b.text(string(config)); err != nil {
+			if err := b.textAt("definition.experts.mcp_config", detail.Plugin.ID, "mcp.json", string(config)); err != nil {
 				return nil, err
 			}
 			out.MCPConfig = config
@@ -400,5 +399,5 @@ func (b *capabilityBuilder) boundedText(field, value string, maxRunes int) error
 	if utf8.RuneCountInString(value) > maxRunes {
 		return installationInvalid(field, "too_long")
 	}
-	return b.text(value)
+	return b.textAt(field, "", "", value)
 }

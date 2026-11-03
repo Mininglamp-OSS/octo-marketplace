@@ -10,13 +10,15 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // CapabilityInstallTimeout bounds the new installation operation without
 // changing the shared legacy client's 30-second timeout.
 const CapabilityInstallTimeout = 2 * time.Minute
 
-// CapabilityAPIError retains only status and structured conflict metadata.
+// CapabilityAPIError retains only status and whitelisted structured metadata.
 // Upstream display text is never retained: it may contain diagnostics or secrets.
 type CapabilityAPIError struct {
 	Status               int
@@ -24,9 +26,81 @@ type CapabilityAPIError struct {
 	RetryAfter           string
 	IdempotencyKeyReused bool
 	ConflictResource     string // Only a recognized conflicting Skill/Expert/Team resource kind.
+	capacity             *capabilityCapacityDetails
+}
+
+type capabilityCapacityDetails struct {
+	Field                 string
+	LimitBytes            int64
+	ActualBytes           int64
+	ActualBytesLowerBound bool
+	Skill                 string
+	Path                  string
 }
 
 func (e *CapabilityAPIError) Error() string { return "Fleet capability installation failed" }
+
+func (e *CapabilityAPIError) CapacityDetails() map[string]any {
+	if e.capacity == nil {
+		return nil
+	}
+	details := map[string]any{
+		"field": e.capacity.Field, "limit_bytes": e.capacity.LimitBytes, "actual_bytes": e.capacity.ActualBytes,
+	}
+	if e.capacity.ActualBytesLowerBound {
+		details["actual_bytes_lower_bound"] = true
+	}
+	if e.capacity.Skill != "" {
+		details["skill"] = e.capacity.Skill
+	}
+	if e.capacity.Path != "" {
+		details["path"] = e.capacity.Path
+	}
+	return details
+}
+
+func parseCapabilityCapacityDetails(raw []byte) *capabilityCapacityDetails {
+	var envelope struct {
+		Error struct {
+			Details json.RawMessage `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return nil
+	}
+	var details struct {
+		Field                 string `json:"field"`
+		LimitBytes            int64  `json:"limit_bytes"`
+		ActualBytes           int64  `json:"actual_bytes"`
+		ActualBytesLowerBound bool   `json:"actual_bytes_lower_bound"`
+		Skill                 string `json:"skill"`
+		Path                  string `json:"path"`
+	}
+	if json.Unmarshal(envelope.Error.Details, &details) != nil ||
+		(details.Field != "definition" && !strings.HasPrefix(details.Field, "definition.")) ||
+		!safeCapacityLabel(details.Field, 128) ||
+		details.LimitBytes != MaxCapabilityRequestBytes || details.ActualBytes <= details.LimitBytes ||
+		(details.Skill != "" && !safeCapacityLabel(details.Skill, 128)) ||
+		(details.Path != "" && !safeCapacityLabel(details.Path, 512)) {
+		return nil
+	}
+	return &capabilityCapacityDetails{
+		Field: details.Field, LimitBytes: details.LimitBytes, ActualBytes: details.ActualBytes,
+		ActualBytesLowerBound: details.ActualBytesLowerBound, Skill: details.Skill, Path: details.Path,
+	}
+}
+
+func safeCapacityLabel(value string, maxBytes int) bool {
+	if len(value) == 0 || len(value) > maxBytes || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
 
 // InstallCapability makes exactly one mutation. The caller must reuse the key
 // and identical assembled bytes on retry; an uncertain result never falls back
@@ -77,6 +151,9 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 		}
 		_ = json.Unmarshal(raw, &envelope)
 		apiErr := &CapabilityAPIError{Status: resp.StatusCode, Code: envelope.Error.Code, RetryAfter: resp.Header.Get("Retry-After")}
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			apiErr.capacity = parseCapabilityCapacityDetails(raw)
+		}
 		if resp.StatusCode == http.StatusConflict {
 			var conflict struct {
 				Error struct {

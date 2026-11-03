@@ -8,6 +8,7 @@ package expert
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -272,6 +273,7 @@ func (h *Handler) GetExpert(c *gin.Context) {
 // InstallExpert godoc
 // @Summary Install expert to a Loop workspace/runtime
 // @Description Installs the expert and its packaged Skills in one atomic Fleet capability operation.
+// @Description The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8 bytes), with no supporting-file count or per-text installation cap.
 // @Tags expert
 // @ID expert.install
 // @Accept json
@@ -286,6 +288,7 @@ func (h *Handler) GetExpert(c *gin.Context) {
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Failure 503 {object} apiresponse.Error "UPSTREAM_UNAVAILABLE"
 // @Router /experts/{expert_id}/install [post]
@@ -317,6 +320,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 // InstallSquad godoc
 // @Summary Install squad to a Loop workspace/runtime
 // @Description Installs the squad, member experts, Skills, runtime bindings, and dispatch instructions in one atomic Fleet capability operation.
+// @Description The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8 bytes), with no supporting-file count or per-text installation cap.
 // @Tags expert
 // @ID squad.install
 // @Accept json
@@ -331,6 +335,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 // @Failure 403 {object} apiresponse.Error "FORBIDDEN"
 // @Failure 404 {object} apiresponse.Error "NOT_FOUND"
 // @Failure 409 {object} apiresponse.Error "CONFLICT"
+// @Failure 413 {object} apiresponse.Error "PAYLOAD_TOO_LARGE"
 // @Failure 500 {object} apiresponse.Error "INTERNAL_ERROR"
 // @Failure 503 {object} apiresponse.Error "UPSTREAM_UNAVAILABLE"
 // @Router /squads/{squad_id}/install [post]
@@ -1011,8 +1016,11 @@ func writeInstallError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", installRecoveryDetails(err), "")
 		return
 	}
-	if errors.Is(err, expertsvc.ErrInstallTooLarge) {
-		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "install exceeds resource limits", nil, "")
+	var capacity interface{ CapacityDetails() map[string]any }
+	if errors.As(err, &capacity) && capacity.CapacityDetails() != nil {
+		details := capacity.CapacityDetails()
+		message := fmt.Sprintf("安装请求超过%d字节上限，实际至少%d字节；字段%s", details["limit_bytes"], details["actual_bytes"], details["field"])
+		apiresponse.Fail(c, http.StatusRequestEntityTooLarge, errcode.FileTooLarge, message, details, "请减少安装内容的字节数后重试。")
 		return
 	}
 	var capabilityErr *fleet.CapabilityAPIError

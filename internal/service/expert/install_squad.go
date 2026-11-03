@@ -37,7 +37,6 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		return InstallSquadResult{}, ErrInvalidRequest
 	}
 
-	fileBudget := &fileBudget{remaining: maxSkillFilesPerInstall}
 	requestBudget := newCapabilityBudget("marketplace:" + m.ID)
 	seenSkillNames := make(map[string]struct{})
 	experts := make([]fleet.CapabilityExpert, len(m.Members))
@@ -98,7 +97,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	}
 	for i := range m.Members {
 		member := m.Members[i]
-		skillNames, skills, err := s.capabilitySkills(ctx, member.Skills, m.Summary, fileBudget, requestBudget, seenSkillNames)
+		skillNames, skills, err := s.capabilitySkills(ctx, member.Skills, m.Summary, requestBudget, seenSkillNames)
 		if err != nil {
 			return InstallSquadResult{}, err
 		}

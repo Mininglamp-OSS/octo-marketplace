@@ -150,9 +150,12 @@ func TestLegacyInstallPreservesExistingIdentityAdmission(t *testing.T) {
 
 func TestPinnedOversizedSerializedPlanIsNotPersisted(t *testing.T) {
 	svc, f, remote := fixturePinned()
+	// JSON escaping of a control character expands each byte to six on the wire;
+	// three instruction bodies of this size exceed the decimal-20 MB request
+	// while each remains below the content budget.
 	for key, v := range f.versions {
 		if key.PluginID == "team" || key.PluginID == "expert-a" || key.PluginID == "expert-b" {
-			v.Package = packageWith(rawAtt("AGENTS.md", strings.Repeat("\x01", 1<<20)))
+			v.Package = packageWith(rawAtt("AGENTS.md", strings.Repeat("\x01", 1<<20+200_000)))
 		}
 	}
 	if _, err := svc.CreateInstallation(context.Background(), testCaller, "team", installationParams()); !errors.Is(err, ErrTooLarge) {

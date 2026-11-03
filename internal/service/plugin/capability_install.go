@@ -161,7 +161,7 @@ func (s *Service) createInstallation(ctx context.Context, caller Caller, pluginI
 		return nil, installationInvalid("definition", "invalid_json")
 	}
 	if len(body) > fleet.MaxCapabilityRequestBytes {
-		return nil, ErrTooLarge
+		return nil, installationRequestCapacityError(int64(len(body)), *in)
 	}
 	result, err := s.capabilityInstaller.InstallCapability(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey, *in)
 	if err != nil {

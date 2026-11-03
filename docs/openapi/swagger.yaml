@@ -5433,8 +5433,11 @@ paths:
       - expert
   /experts/{expert_id}/install:
     post:
-      description: Installs the expert and its packaged Skills in one atomic Fleet
+      description: 'Installs the expert and its packaged Skills in one atomic Fleet
         capability operation.
+
+        The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8
+        bytes), with no supporting-file count or per-text installation cap.'
       operationId: expert.install
       parameters:
       - description: Expert ID
@@ -5496,6 +5499,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: CONFLICT
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
         '500':
           content:
             application/json:
@@ -7043,8 +7052,13 @@ paths:
         require a Runtime, while connector-only installs may omit it. Omitting or
         setting false keeps legacy MCP configuration behavior. Retry uncertain outcomes
         with the same Idempotency-Key and input within Fleet's 24-hour retention window.
-        Uses the configured Fleet service; the legacy /plugins/install remains available.
-        Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
+        The assembled Fleet JSON is limited to 20,000,000 UTF-8 bytes including definition,
+        bindings, content, metadata, JSON escaping and framing; this is independent
+        of the 3 MiB Marketplace request-body limit. Supporting files have no separate
+        count or per-text-item cap; the configured stored-ZIP transport limit remains
+        separate. Uses the configured Fleet service; the legacy /plugins/install remains
+        available. Generated error text is Chinese; recognized 409 conflicts use fixed
+        safe messages.
       operationId: plugin.installation.create
       parameters:
       - description: Marketplace plugin ID
@@ -7121,7 +7135,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: PAYLOAD_TOO_LARGE
+          description: PAYLOAD_TOO_LARGE; install-wire details include limit_bytes=20000000,
+            actual_bytes, field, and optional skill/path
         '415':
           content:
             application/json:
@@ -7886,6 +7901,11 @@ paths:
         workspace/runtime, acting as the caller through the same atomic Fleet capability
         installation used by /plugins/{plugin_id}/installations. The original body
         and response are retained for older clients; Idempotency-Key is optional.
+        The assembled Fleet JSON is limited to 20,000,000 UTF-8 bytes after serialization,
+        including definition, bindings, content, metadata, escaping and framing; this
+        is separate from the 3 MiB Marketplace request-body limit. Supporting files
+        have no separate count or per-text-item cap; the configured stored-ZIP transport
+        limit remains independent.
       operationId: plugin.install
       parameters:
       - description: Optional stable installation key; omission starts a new operation
@@ -7942,7 +7962,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
-          description: PAYLOAD_TOO_LARGE
+          description: PAYLOAD_TOO_LARGE; install-wire details include limit_bytes=20000000,
+            actual_bytes, field, and optional skill/path
         '415':
           content:
             application/json:
@@ -10092,8 +10113,11 @@ paths:
       - expert_squad
   /squads/{squad_id}/install:
     post:
-      description: Installs the squad, member experts, Skills, runtime bindings, and
-        dispatch instructions in one atomic Fleet capability operation.
+      description: 'Installs the squad, member experts, Skills, runtime bindings,
+        and dispatch instructions in one atomic Fleet capability operation.
+
+        The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8
+        bytes), with no supporting-file count or per-text installation cap.'
       operationId: squad.install
       parameters:
       - description: Squad ID
@@ -10155,6 +10179,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
           description: CONFLICT
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
         '500':
           content:
             application/json:

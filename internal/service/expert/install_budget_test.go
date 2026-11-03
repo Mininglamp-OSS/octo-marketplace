@@ -60,15 +60,14 @@ func maxSquadSkills() []model.SquadMember {
 }
 
 // A max-sized squad must stop reading before the aggregate request can exceed
-// its byte budget; the ninth 2 MiB read is already over budget once JSON
-// metadata is included.
-func TestInstallSquadRejectsOverBudgetRequestBeforeNinthSkillRead(t *testing.T) {
+// its byte budget; the eleventh 2 MiB object must never be read.
+func TestInstallSquadRejectsOverBudgetRequestBeforeUnreadSkillRead(t *testing.T) {
 	ff := &fakeFleet{}
 	svc, caller, id := installSquadFixture(t, ff, maxSquadSkills())
 	guard := &guardedReadStore{
 		memObjectStore: svc.store.(*memObjectStore),
 		content:        []byte(strings.Repeat("a", int(maxSkillReadBytes))),
-		limit:          8,
+		limit:          10,
 	}
 	svc.store = guard
 	tracker := &recordingTracker{}
@@ -79,10 +78,10 @@ func TestInstallSquadRejectsOverBudgetRequestBeforeNinthSkillRead(t *testing.T) 
 		t.Fatalf("InstallSquad error = %v, want ErrInstallTooLarge", err)
 	}
 	if errors.Is(err, errBudgetReadGuard) {
-		t.Fatal("InstallSquad reached the ninth skill read instead of rejecting on the aggregate budget")
+		t.Fatal("InstallSquad reached the over-budget skill read instead of rejecting on the aggregate budget")
 	}
-	if guard.reads > 8 {
-		t.Fatalf("skill reads = %d, want at most 8 before rejecting", guard.reads)
+	if guard.reads > 10 {
+		t.Fatalf("skill reads = %d, want at most 10 before rejecting", guard.reads)
 	}
 	if ff.capabilityCalls != 0 {
 		t.Fatalf("Fleet capability calls = %d, want no request for an oversized install", ff.capabilityCalls)
@@ -123,8 +122,8 @@ func TestInstallExpertRejectsOverBudgetJSONEscaping(t *testing.T) {
 
 // Supporting files are part of the same aggregate request budget.
 func TestInstallExpertRejectsOverBudgetSupportingFiles(t *testing.T) {
-	files := make([]model.SkillFile, 0, 17)
-	for i := range 17 {
+	files := make([]model.SkillFile, 0, 20)
+	for i := range 20 {
 		files = append(files, model.SkillFile{
 			Path:    fmt.Sprintf("references/%02d.md", i),
 			Content: strings.Repeat("a", model.MaxSkillContentBytes),
@@ -179,8 +178,8 @@ func TestInstallExpertAllowsValidCapabilityRequestBelowLimit(t *testing.T) {
 // rejected from the encoded size, not the raw text size.
 func TestInstallExpertRejectsOverBudgetMetadataEscaping(t *testing.T) {
 	const objectKey = "shared/metadata-skill"
-	skills := make([]model.SkillRef, 0, 14)
-	for i := range 14 {
+	skills := make([]model.SkillRef, 0, 18)
+	for i := range 18 {
 		skills = append(skills, model.SkillRef{
 			Name:      fmt.Sprintf("Metadata %d", i),
 			ObjectKey: objectKey,
@@ -206,11 +205,11 @@ func TestInstallExpertRejectsOverBudgetMetadataEscaping(t *testing.T) {
 }
 
 // Member metadata counts toward the same budget as Skill bodies: 30 legal
-// 40 KiB instructions plus the first member's seven 2 MiB ASCII Skills fit raw
-// but exceed the encoded request limit.
+// 100 KiB instructions plus the first member's seven 2 MiB ASCII Skills fit
+// below 20,000,000 raw bytes but exceed the encoded request limit.
 func TestInstallSquadMemberMetadataCountsTowardBudget(t *testing.T) {
 	const objectKey = "shared/member-skill"
-	instruction := strings.Repeat("\"", 40<<10)
+	instruction := strings.Repeat("\"", 100<<10)
 	members := make([]model.SquadMember, 0, model.MaxSquadMembers)
 	for i := range model.MaxSquadMembers {
 		member := model.SquadMember{
@@ -335,14 +334,14 @@ func assertOneByteOverBudget(t *testing.T, install budgetAttempt, boundaryBody i
 // The final serialized request is the contract, including the expert's
 // skill_names list filled in after its metadata was charged. Twenty escaped
 // Skill names — the per-expert maximum — plus their bodies must be accepted at
-// exactly the 16 MiB limit, and one further body byte, exactly one wire byte,
+// exactly the decimal 20,000,000-byte limit, and one further body byte,
 // must be rejected before dispatch. Accepting the exact limit fails a meter
 // that charges skill_names twice; rejecting the next byte fails a meter that
 // under-counts their encoded length.
 func TestInstallExpertEscapedSkillsExactBudgetBoundary(t *testing.T) {
 	const (
 		skillCount = 20
-		sharedBody = 838_000
+		sharedBody = 1_000_000
 		probeBody  = 512_000
 		sharedKey  = "shared/budget-body"
 		soloKey    = "shared/budget-boundary-body"
@@ -442,7 +441,7 @@ func TestInstallExpertEscapedSkillsExactBudgetBoundary(t *testing.T) {
 func TestInstallSquadSharedEscapedSkillsExactBudgetBoundary(t *testing.T) {
 	const (
 		skillCount = 20
-		sharedBody = 838_000
+		sharedBody = 1_000_000
 		probeBody  = 512_000
 		sharedKey  = "shared/squad-budget-body"
 		soloKey    = "shared/squad-boundary-body"
@@ -537,4 +536,153 @@ func TestInstallSquadSharedEscapedSkillsExactBudgetBoundary(t *testing.T) {
 	}
 
 	assertOneByteOverBudget(t, install, boundaryBody)
+}
+
+// directZipSkillFixtures builds packaged Skills with unique UTF-8 supporting
+// files and a matching object for each SKILL.md.
+func directZipSkillFixtures(t *testing.T, skillCount, filesPerSkill int) ([]model.SkillRef, map[string][]byte, map[string]map[string]string) {
+	t.Helper()
+	refs := make([]model.SkillRef, 0, skillCount)
+	packages := make(map[string][]byte, skillCount)
+	want := make(map[string]map[string]string, skillCount)
+	for skillIndex := range skillCount {
+		name := fmt.Sprintf("Direct Skill %02d", skillIndex)
+		objectKey := fmt.Sprintf("shared/direct-skill-%02d.md", skillIndex)
+		zipKey := fmt.Sprintf("shared/direct-skill-%02d.zip", skillIndex)
+		entries := map[string][]byte{"SKILL.md": []byte("# " + name)}
+		want[name] = make(map[string]string, filesPerSkill)
+		for fileIndex := range filesPerSkill {
+			path := fmt.Sprintf("references/file-%03d.md", fileIndex)
+			content := fmt.Sprintf("skill %02d file %03d", skillIndex, fileIndex)
+			entries[path] = []byte(content)
+			want[name][path] = content
+		}
+		refs = append(refs, model.SkillRef{Name: name, ObjectKey: objectKey, ZipObjectKey: zipKey})
+		packages[zipKey] = makeSkillZip(t, entries)
+	}
+	return refs, packages, want
+}
+
+// Direct expert installation must preserve every valid supporting file across
+// Skills, rather than applying the old 50-per-Skill and 500-per-install caps.
+func TestInstallExpertKeepsAllPackagedFilesBeyondLegacyCaps(t *testing.T) {
+	const (
+		skillCount    = 11
+		filesPerSkill = 51
+		wantFileCount = skillCount * filesPerSkill
+	)
+	refs, packages, want := directZipSkillFixtures(t, skillCount, filesPerSkill)
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
+	svc, caller, id := installFixture(t, ff, refs)
+	for key, data := range packages {
+		svc.store.(*memObjectStore).objects[key] = data
+	}
+
+	if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallExpert rejected valid packaged files beyond the legacy caps: %v", err)
+	}
+	assertOnlyCapabilityInstall(t, ff)
+	if len(ff.capabilityInput.Definition.Skills) != skillCount {
+		t.Fatalf("installed skills=%d want=%d", len(ff.capabilityInput.Definition.Skills), skillCount)
+	}
+	total := 0
+	for _, skill := range ff.capabilityInput.Definition.Skills {
+		wantFiles, ok := want[skill.Name]
+		if !ok {
+			t.Fatalf("unexpected Skill %q", skill.Name)
+		}
+		if len(skill.Files) != filesPerSkill {
+			t.Fatalf("Skill %q files=%d want=%d", skill.Name, len(skill.Files), filesPerSkill)
+		}
+		for _, file := range skill.Files {
+			if wantFiles[file.Path] != file.Source.Content {
+				t.Fatalf("Skill %q file %q was dropped or changed", skill.Name, file.Path)
+			}
+		}
+		total += len(skill.Files)
+	}
+	if total != wantFileCount {
+		t.Fatalf("supporting files=%d want=%d", total, wantFileCount)
+	}
+}
+
+// Direct squad installation shares one file budget across members; it must not
+// reject the request or omit ZIP entries after reaching the old 500-file cap.
+func TestInstallSquadKeepsAllPackagedFilesBeyondLegacyCaps(t *testing.T) {
+	const (
+		memberCount   = 11
+		filesPerSkill = 51
+		wantFileCount = memberCount * filesPerSkill
+	)
+	refs, packages, want := directZipSkillFixtures(t, memberCount, filesPerSkill)
+	members := make([]model.SquadMember, memberCount)
+	for i := range memberCount {
+		members[i] = model.SquadMember{
+			MemberKey: fmt.Sprintf("member_%02d", i), Name: fmt.Sprintf("Member %02d", i),
+			Role: "worker", Instruction: "complete assigned work", Skills: []model.SkillRef{refs[i]},
+		}
+	}
+	members[0].IsLeader = true
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{
+		Type: "expert_team", ExpertTeamID: "squad-x", LeaderExpertID: "leader-x",
+	}}
+	svc, caller, id := installSquadFixture(t, ff, members)
+	for key, data := range packages {
+		svc.store.(*memObjectStore).objects[key] = data
+	}
+
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallSquad rejected valid packaged files beyond the legacy caps: %v", err)
+	}
+	assertOnlyCapabilityInstall(t, ff)
+	if len(ff.capabilityInput.Definition.Skills) != memberCount {
+		t.Fatalf("installed skills=%d want=%d", len(ff.capabilityInput.Definition.Skills), memberCount)
+	}
+	total := 0
+	for _, skill := range ff.capabilityInput.Definition.Skills {
+		wantFiles, ok := want[skill.Name]
+		if !ok {
+			t.Fatalf("unexpected Skill %q", skill.Name)
+		}
+		if len(skill.Files) != filesPerSkill {
+			t.Fatalf("Skill %q files=%d want=%d", skill.Name, len(skill.Files), filesPerSkill)
+		}
+		for _, file := range skill.Files {
+			if wantFiles[file.Path] != file.Source.Content {
+				t.Fatalf("Skill %q file %q was dropped or changed", skill.Name, file.Path)
+			}
+		}
+		total += len(skill.Files)
+	}
+	if total != wantFileCount {
+		t.Fatalf("supporting files=%d want=%d", total, wantFileCount)
+	}
+}
+
+// Direct installation must not silently omit a valid UTF-8 ZIP entry just
+// because one supporting file exceeds the retired 1 MiB parser limit.
+func TestInstallExpertKeepsPackagedFileAboveLegacyOneMiBLimit(t *testing.T) {
+	const (
+		objectKey = "shared/large-direct-skill.md"
+		zipKey    = "shared/large-direct-skill.zip"
+		filePath  = "references/large.md"
+	)
+	content := strings.Repeat("z", (1<<20)+512)
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
+	svc, caller, id := installFixture(t, ff, []model.SkillRef{{
+		Name: "Large direct Skill", ObjectKey: objectKey, ZipObjectKey: zipKey,
+	}})
+	svc.store.(*memObjectStore).objects[zipKey] = makeSkillZip(t, map[string][]byte{
+		"SKILL.md": []byte("# Large direct Skill"), filePath: []byte(content),
+	})
+
+	if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallExpert rejected a valid supporting file above 1 MiB: %v", err)
+	}
+	assertOnlyCapabilityInstall(t, ff)
+	skills := ff.capabilityInput.Definition.Skills
+	if len(skills) != 1 || len(skills[0].Files) != 1 ||
+		skills[0].Files[0].Path != filePath || skills[0].Files[0].Source.Content != content {
+		t.Fatal("large packaged supporting file was dropped or altered")
+	}
 }

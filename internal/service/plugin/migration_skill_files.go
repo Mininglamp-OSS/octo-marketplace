@@ -34,9 +34,10 @@ func (r migrationSkillReader) GetObject(ctx context.Context, key string) (io.Rea
 //
 // Managed keys must belong to the original Space. Only the existing trusted
 // offline legacy roots (skills/, experts/, squads/) may additionally be read.
-// URLs are never followed. Files use the exact installation path, UTF-8, digest,
-// entry-count and size checks: <=51 files, <=1 MiB each, <=16 MiB total. Missing
-// or corrupt sources fail closed instead of silently retaining a stub SKILL.md.
+// URLs are never followed. Exact paths, UTF-8, digest and integrity checks remain
+// mandatory, but there is no attachment-count or per-text-size limit. Content
+// shares the 20,000,000-byte installation budget; ZIP transport bytes remain a
+// separate configured limit. Missing or corrupt sources fail closed.
 func ResolveMigrationSkillFiles(ctx context.Context, reader storage.Storage, p *model.Plugin) (map[string]string, error) {
 	if p == nil || p.Type != model.PluginTypeSkill || len(p.Package) == 0 || len(p.Package) > maxJSONBytes || model.ValidateUniqueJSONFields(p.Package) != nil {
 		return nil, ErrInvalidRequest
@@ -44,7 +45,7 @@ func ResolveMigrationSkillFiles(ctx context.Context, reader storage.Storage, p *
 	var doc struct {
 		Attachments []attachmentView `json:"attachments"`
 	}
-	if json.Unmarshal(p.Package, &doc) != nil || len(doc.Attachments) == 0 || len(doc.Attachments) > 53 {
+	if json.Unmarshal(p.Package, &doc) != nil || len(doc.Attachments) == 0 {
 		return nil, ErrInvalidRequest
 	}
 	var sidecar map[string]string
