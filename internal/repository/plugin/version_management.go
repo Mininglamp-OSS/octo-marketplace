@@ -193,7 +193,8 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 	if err != nil {
 		return wrapped("publish release", mapPluginNameTaken(err))
 	}
-	return nil
+	_, err = tx.ExecContext(ctx, `DELETE FROM plugin_dependency_suspensions WHERE plugin_id=?`, p.ID)
+	return err
 }
 
 // PublishManaged publishes the explicitly selected draft. ExpectedVersionID

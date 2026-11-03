@@ -431,6 +431,26 @@ func (s *Service) approveWithVersionFiles(ctx context.Context, sc pluginrepo.Sco
 		if err != nil {
 			return nil, err
 		}
+		// A visibility decision approves the whole batch; validate every frozen
+		// member's original files before any audience can become effective.
+		for _, member := range rr.AudienceMembers {
+			if member.ReviewID == rr.ID {
+				continue
+			}
+			childReview, e := s.repo.LoadReviewSnapshot(ctx, sc, member.ReviewID, true)
+			if e != nil {
+				return nil, e
+			}
+			child, _, e := s.repo.GetWithRelations(ctx, pluginrepo.Scope{CallerUID: childReview.ApplicantUID, SpaceID: childReview.SpaceID}, childReview.PluginID)
+			if e != nil {
+				return nil, e
+			}
+			if child.Type != model.PluginTypeConnector {
+				if e = s.verifyVersionFiles(ctx, child, &model.PluginVersion{Package: childReview.PluginJSON, AttachmentKeys: childReview.AttachmentKeys}); e != nil {
+					return nil, e
+				}
+			}
+		}
 		p, _, err := s.repo.GetWithRelations(ctx, pluginrepo.Scope{CallerUID: rr.ApplicantUID, SpaceID: rr.SpaceID}, rr.PluginID)
 		if err != nil {
 			return nil, err

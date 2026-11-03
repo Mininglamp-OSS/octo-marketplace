@@ -96,6 +96,7 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	plugins.GET("/versions", h.ListVersions)
 	plugins.GET("/:plugin_id/draft", h.GetDraft)
 	plugins.PATCH("/:plugin_id/visibility", h.ChangeVisibility)
+	plugins.GET("/:plugin_id/visibility_preview", h.PreviewVisibility)
 	plugins.GET("/:plugin_id/versions/:version_id", h.GetVersion)
 	plugins.GET("/:plugin_id/versions/:version_id/file", h.DownloadVersionFile)
 	plugins.POST("/install", h.Install)
@@ -169,17 +170,18 @@ type deleteResponse struct {
 }
 
 type pluginResponse struct {
-	PluginID     string                   `json:"plugin_id"`
-	PluginName   string                   `json:"plugin_name"`
-	PluginType   model.PluginType         `json:"plugin_type"`
-	IsEmbedded   bool                     `json:"is_embedded"`
-	CategoryID   *string                  `json:"category_id,omitempty"`
-	Tags         []string                 `json:"tags"`
-	Publisher    string                   `json:"publisher,omitempty"`
-	OwnerID      string                   `json:"owner_id"`
-	SpaceID      *string                  `json:"space_id,omitempty"`
-	Visibility   model.PluginVisibility   `json:"visibility"`
-	ListingState model.PluginListingState `json:"listing_state"`
+	DependencyStatus string                   `json:"dependency_status,omitempty" enums:"unavailable,restored"`
+	PluginID         string                   `json:"plugin_id"`
+	PluginName       string                   `json:"plugin_name"`
+	PluginType       model.PluginType         `json:"plugin_type"`
+	IsEmbedded       bool                     `json:"is_embedded"`
+	CategoryID       *string                  `json:"category_id,omitempty"`
+	Tags             []string                 `json:"tags"`
+	Publisher        string                   `json:"publisher,omitempty"`
+	OwnerID          string                   `json:"owner_id"`
+	SpaceID          *string                  `json:"space_id,omitempty"`
+	Visibility       model.PluginVisibility   `json:"visibility"`
+	ListingState     model.PluginListingState `json:"listing_state"`
 	// DisplayStatus is the single DERIVED status a client shows: draft /
 	// pending_review / published / rejected / delisted. It folds the listing axis
 	// together with the review axis so clients do not have to fetch the review list
@@ -213,13 +215,14 @@ type pluginResponse struct {
 // listItemResponse is the list-page projection: it carries the manifest for
 // display but never the full plugin_json package.
 type listItemResponse struct {
-	PluginID   string           `json:"plugin_id"`
-	PluginName string           `json:"plugin_name"`
-	PluginType model.PluginType `json:"plugin_type"`
-	IsEmbedded bool             `json:"is_embedded"`
-	CategoryID *string          `json:"category_id,omitempty"`
-	Tags       []string         `json:"tags"`
-	Publisher  string           `json:"publisher,omitempty"`
+	DependencyStatus string           `json:"dependency_status,omitempty" enums:"unavailable,restored"`
+	PluginID         string           `json:"plugin_id"`
+	PluginName       string           `json:"plugin_name"`
+	PluginType       model.PluginType `json:"plugin_type"`
+	IsEmbedded       bool             `json:"is_embedded"`
+	CategoryID       *string          `json:"category_id,omitempty"`
+	Tags             []string         `json:"tags"`
+	Publisher        string           `json:"publisher,omitempty"`
 	// ListingState / Status / ReviewID are populated for mode=mine only. On the
 	// marketplace grid every row is published by construction, so the status would
 	// be a constant and the extra per-row lookups buy nothing.
@@ -795,6 +798,9 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		// and reason so the browser can show the user which input to fix,
 		// instead of collapsing every cause into {"field":"body","reason":"invalid"}.
 		hint := "Correct the request and try again."
+		if fieldErr.Field == "plan_revision" {
+			hint = "Preview the audience change, show its dependency/impact list, and resubmit its plan_revision with is_confirmed=true."
+		}
 		if fieldErr.Field == "version" {
 			hint = "Supply an explicit MAJOR.MINOR.PATCH version when publishing. Update octo-cli if it cannot send version; choose an unused release label newer than the previously published version."
 		}
@@ -899,13 +905,13 @@ func pluginDTO(p *model.Plugin) pluginResponse {
 	if p == nil {
 		return pluginResponse{}
 	}
-	return pluginResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return pluginResponse{DependencyStatus: p.DependencyStatus, PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, ManifestJSON: normalizedObjectRaw(p.Manifest), PluginJSON: normalizedObjectRaw(p.Package), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 func listItemDTO(p *model.Plugin) listItemResponse {
 	if p == nil {
 		return listItemResponse{}
 	}
-	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, PublishedVersionID: p.PublishedVersionID, PublishedVersion: p.PublishedVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return listItemResponse{DependencyStatus: p.DependencyStatus, PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, PublishedVersionID: p.PublishedVersionID, PublishedVersion: p.PublishedVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 func nonNilStrings(values []string) []string {

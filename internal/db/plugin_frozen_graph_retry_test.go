@@ -125,6 +125,11 @@ func TestFrozenInstallHTTPPreservesReleasedGraphAcrossLaterEdits(t *testing.T) {
 					t.Fatal(err)
 				}
 				publishManaged(t, svc, managedOwner(), skill.Plugin.ID)
+				// Dependency recovery alone cannot resume the suspended resource.
+				checkBlocked(own, 403)
+				if _, err = svc.Publish(ctx, managedOwner(), pluginsvc.PublishParams{PluginID: root.Plugin.ID, Version: "1.0.1"}); err != nil {
+					t.Fatal(err)
+				}
 				remote.err = nil
 				checkRetry := func() {
 					t.Helper()

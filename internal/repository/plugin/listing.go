@@ -246,7 +246,7 @@ func (r *Repo) DelistPlugin(ctx context.Context, scope Scope, p DelistParams) (_
 	if reason == "" {
 		reason = reasonCanceledOnDelist
 	}
-	if err := cancelPendingReviewFor(ctx, tx, now, p.PluginID, p.OperatorID, p.OperatorName, reason); err != nil {
+	if err := cancelPendingReviewFor(ctx, tx, now, p.PluginID, p.OperatorID, p.OperatorName, reason, r.versionManagement); err != nil {
 		return nil, err
 	}
 
@@ -286,6 +286,11 @@ func (r *Repo) DelistPlugin(ctx context.Context, scope Scope, p DelistParams) (_
 	refreshed, err := getReviewedPluginForUpdate(ctx, tx, scope.SpaceID, p.PluginID)
 	if err != nil {
 		return nil, err
+	}
+	if r.versionManagement {
+		if err := r.suspendIncomingDependents(ctx, tx, scope.SpaceID, p.PluginID, p.OperatorID, p.OperatorName, p.RequestID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

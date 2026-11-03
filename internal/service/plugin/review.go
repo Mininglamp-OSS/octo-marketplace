@@ -646,6 +646,13 @@ func (s *Service) dispatchReviewCard(caller Caller, stored *model.PluginReviewRe
 			Data:        map[string]string{"review_id": stored.ID, "plugin_id": stored.PluginID},
 		},
 	}
+	if len(stored.AudienceMembers) > 1 {
+		names := make([]string, 0, len(stored.AudienceMembers))
+		for _, member := range stored.AudienceMembers {
+			names = append(names, member.Name)
+		}
+		req.ApprovalCard.Description += "；本次将一并调整以下资源的可见范围：" + strings.Join(names, "、") + "。批准或驳回对整批生效。"
+	}
 	reviewID := stored.ID
 	n := s.notify
 	s.bestEffort("review.submit", func(ctx context.Context) error {

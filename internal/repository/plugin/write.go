@@ -43,12 +43,9 @@ type Mutation struct {
 	ResetListingToDraft bool
 	// RefusePendingReview aborts the update with ErrReviewPending if an open
 	// review request exists on the plugin, checked under the plugin row's lock.
-	// Set by Service.update for a non-admin visibility CHANGE: the service already
-	// refuses that case from an UNLOCKED HasPendingReview, but a concurrent
-	// SubmitReview can land between that read and this transaction, after which
-	// ApproveReview would stamp visibility=space against the author's since-changed
-	// intent (or, on a private target, strand the row). Re-checking under lock here
-	// closes the window in the same idiom PublishPlugin uses.
+	// Set by Service.update for version-managed tenant edits, and for legacy
+	// visibility changes. The unlocked service precheck is insufficient when a
+	// concurrent SubmitReview commits before this transaction acquires its lock.
 	RefusePendingReview bool
 	// EnforceListingGate makes Repo.Update re-derive the two listing decisions
 	// from the plugin row it LOCKS rather than trusting the service's unlocked
@@ -648,7 +645,7 @@ WHERE source_plugin_id=? AND deleted_at IS NULL`, now, now, id); err != nil {
 	// practice this matches zero rows — that is the point. Placing the cascade at
 	// the soft-delete itself rather than at the two callers also covers RebuildGraph,
 	// whose replaced children are removed exactly as permanently.
-	if err = cancelPendingReviewFor(ctx, tx, now, id, top.OperatorID, top.OperatorName, reasonCanceledOnDelete); err != nil {
+	if err = cancelPendingReviewFor(ctx, tx, now, id, top.OperatorID, top.OperatorName, reasonCanceledOnDelete, false); err != nil {
 		return err
 	}
 	m := Mutation{OperatorID: top.OperatorID, OperatorName: top.OperatorName, RequestID: top.RequestID, Remark: top.Remark}
@@ -699,8 +696,8 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	// from an UNLOCKED read. Re-check under the plugin row lock this transaction now
 	// holds so a SubmitReview that committed after the service's read cannot slip a
 	// pending request past the guard and have ApproveReview publish against the
-	// author's since-changed intent. The service passes this only for the
-	// visibility-change case; a content-only save leaves it false.
+	// author's since-changed intent. Version management also applies this guard
+	// to content-only tenant edits; legacy mode keeps its narrower guard.
 	if m.RefusePendingReview {
 		var pendingID string
 		if err := tx.QueryRowContext(ctx,
@@ -1022,7 +1019,7 @@ WHERE source_plugin_id=? AND deleted_at IS NULL`, now, now, pluginID)
 	// do the plugin's own. Reclaiming them is one deliberate decision about
 	// plugin-delete object GC — live sidecar, version sidecars and any frozen
 	// submission together — not a fragment of it bolted onto this cascade.
-	if err = cancelPendingReviewFor(ctx, tx, now, pluginID, operatorID, operatorName, reasonCanceledOnDelete); err != nil {
+	if err = cancelPendingReviewFor(ctx, tx, now, pluginID, operatorID, operatorName, reasonCanceledOnDelete, r.versionManagement); err != nil {
 		return err
 	}
 	m := Mutation{OperatorID: operatorID, OperatorName: operatorName, RequestID: requestID, Remark: remark}
@@ -1093,7 +1090,7 @@ WHERE source_plugin_id=? AND deleted_at IS NULL`, now, now, topID); err != nil {
 	// is written out there. Each embedded child gets its own inside
 	// softDeleteRebuiltChild, so no plugins row this transaction soft-deletes is
 	// left with a pending request pointing at it.
-	if err = cancelPendingReviewFor(ctx, tx, now, topID, operatorID, operatorName, reasonCanceledOnDelete); err != nil {
+	if err = cancelPendingReviewFor(ctx, tx, now, topID, operatorID, operatorName, reasonCanceledOnDelete, r.versionManagement); err != nil {
 		return err
 	}
 	if err = insertAudit(ctx, tx, r.id(), now, *before, "delete", m, before.PluginHash, ""); err != nil {

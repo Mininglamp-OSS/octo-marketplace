@@ -53,15 +53,23 @@ const DefaultIMDenyReason = "管理员在消息卡片中拒绝,未填写原因"
 // PluginReviewRequest is a frozen-snapshot submission waiting for Space
 // owner/admin approval (or its terminal outcome). Status lives on this entity,
 // not on the plugin, so a listed v1 can coexist with an in-review v2.
+type AudienceReviewMember struct {
+	ReviewID string `json:"review_id"`
+	PluginID string `json:"plugin_id"`
+	Name     string `json:"name"`
+}
+
 type PluginReviewRequest struct {
-	ID          string       `json:"review_id"`
-	PluginID    string       `json:"plugin_id"`
-	SpaceID     string       `json:"space_id"`
-	TargetScope string       `json:"target_scope"` // "space" now; "system" reserved
-	Status      ReviewStatus `json:"status"`
-	Kind        ReviewKind   `json:"kind"`
-	Version     string       `json:"version"`
-	Changelog   *string      `json:"changelog,omitempty"`
+	ReviewGroupID   string                 `json:"review_group_id,omitempty"`
+	AudienceMembers []AudienceReviewMember `json:"audience_members,omitempty"`
+	ID              string                 `json:"review_id"`
+	PluginID        string                 `json:"plugin_id"`
+	SpaceID         string                 `json:"space_id"`
+	TargetScope     string                 `json:"target_scope"` // "space" now; "system" reserved
+	Status          ReviewStatus           `json:"status"`
+	Kind            ReviewKind             `json:"kind"`
+	Version         string                 `json:"version"`
+	Changelog       *string                `json:"changelog,omitempty"`
 	// Frozen snapshot bytes. Loaded only by the detail read (LoadReviewSnapshot);
 	// the list query deliberately does not select these columns.
 	ManifestJSON  json.RawMessage `json:"-"`

@@ -402,7 +402,11 @@ func (r *Repo) GetReviewRequest(ctx context.Context, scope Scope, reviewID strin
 	q := reviewSelectBase + ` FROM plugin_review_requests rr JOIN plugins p ON p.plugin_id=rr.plugin_id WHERE rr.review_id=? AND rr.deleted_at IS NULL AND p.deleted_at IS NULL AND ` + where
 	args = append([]any{reviewID}, args...)
 	row := r.db.QueryRowContext(ctx, q, args...)
-	return scanReviewRequest(row.Scan, false)
+	rr, err := scanReviewRequest(row.Scan, false)
+	if err == nil {
+		err = r.fillAudienceReview(ctx, rr)
+	}
+	return rr, err
 }
 
 // LoadReviewSnapshot is the detail read: same scoping as GetReviewRequest plus
@@ -412,7 +416,11 @@ func (r *Repo) LoadReviewSnapshot(ctx context.Context, scope Scope, reviewID str
 	q := reviewSelectSnapshot + ` FROM plugin_review_requests rr JOIN plugins p ON p.plugin_id=rr.plugin_id WHERE rr.review_id=? AND rr.deleted_at IS NULL AND p.deleted_at IS NULL AND ` + where
 	args = append([]any{reviewID}, args...)
 	row := r.db.QueryRowContext(ctx, q, args...)
-	return scanReviewRequest(row.Scan, true)
+	rr, err := scanReviewRequest(row.Scan, true)
+	if err == nil {
+		err = r.fillAudienceReview(ctx, rr)
+	}
+	return rr, err
 }
 
 // GetReviewRequestAnySpace loads a request without a tenant scope predicate.
@@ -424,7 +432,11 @@ func (r *Repo) LoadReviewSnapshot(ctx context.Context, scope Scope, reviewID str
 func (r *Repo) GetReviewRequestAnySpace(ctx context.Context, reviewID string) (*model.PluginReviewRequest, error) {
 	q := reviewSelectBase + ` FROM plugin_review_requests rr JOIN plugins p ON p.plugin_id=rr.plugin_id WHERE rr.review_id=? AND rr.deleted_at IS NULL AND p.deleted_at IS NULL`
 	row := r.db.QueryRowContext(ctx, q, reviewID)
-	return scanReviewRequest(row.Scan, false)
+	rr, err := scanReviewRequest(row.Scan, false)
+	if err == nil {
+		err = r.fillAudienceReview(ctx, rr)
+	}
+	return rr, err
 }
 
 // HasPendingReview reports whether an open review request exists for a plugin the
@@ -504,7 +516,16 @@ func (r *Repo) ListReviewRequests(ctx context.Context, scope Scope, f ReviewList
 		}
 		out = append(out, rr)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	rows.Close()
+	for _, rr := range out {
+		if err := r.fillAudienceReview(ctx, rr); err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // ApproveReview applies the frozen snapshot to the live plugin and settles the
@@ -1082,6 +1103,13 @@ func (r *Repo) RejectReview(ctx context.Context, scope Scope, p RejectReviewPara
 	if err != nil {
 		return nil, nil, err
 	}
+	if handled, e := r.settleAudienceGroup(ctx, tx, scope.SpaceID, p.ReviewID, "rejected", p.ReviewerUID, p.ReviewerName, p.Reason, p.RequestID, p.DecisionSource, r.now()); handled || e != nil {
+		if e != nil {
+			return nil, nil, e
+		}
+		return nil, nil, tx.Commit()
+	}
+
 	now := p.Now
 	if now.IsZero() {
 		now = r.now()
@@ -1205,6 +1233,13 @@ func (r *Repo) CancelReview(ctx context.Context, scope Scope, reviewID, callerUI
 	if err != nil {
 		return nil, nil, err
 	}
+	if handled, e := r.settleAudienceGroup(ctx, tx, scope.SpaceID, reviewID, "canceled", callerUID, "", "", "", model.ReviewDecisionSourceWeb, r.now()); handled || e != nil {
+		if e != nil {
+			return nil, nil, e
+		}
+		return nil, nil, tx.Commit()
+	}
+
 	now := r.now()
 	res, err := tx.ExecContext(ctx,
 		`UPDATE plugin_review_requests SET status='canceled',reviewed_at=?,updated_at=?
@@ -1252,7 +1287,34 @@ const (
 // transaction just approved or rejected keeps the decision it actually got.
 // Zero rows is the ordinary case (most plugins have no open request) and is
 // deliberately not an error.
-func cancelPendingReviewFor(ctx context.Context, tx *sql.Tx, now any, pluginID, operatorID, operatorName, reason string) error {
+func cancelPendingReviewFor(ctx context.Context, tx *sql.Tx, now any, pluginID, operatorID, operatorName, reason string, audienceGroups bool) error {
+	if audienceGroups {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT vr.group_id,rr.space_id FROM plugin_review_requests rr JOIN plugin_visibility_reviews vr ON vr.review_id=rr.review_id WHERE rr.plugin_id=? AND rr.status='pending' AND rr.deleted_at IS NULL AND vr.group_id IS NOT NULL`, pluginID)
+		if err != nil {
+			return err
+		}
+		var groups [][2]string
+		for rows.Next() {
+			var g [2]string
+			if err := rows.Scan(&g[0], &g[1]); err != nil {
+				rows.Close()
+				return err
+			}
+			groups = append(groups, g)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, g := range groups {
+			if _, err := tx.ExecContext(ctx, `UPDATE plugin_review_requests rr JOIN plugin_visibility_reviews vr ON vr.review_id=rr.review_id SET rr.status='canceled',rr.reviewer_uid=?,rr.reviewer_name=?,rr.reason=?,rr.reviewed_at=?,rr.updated_at=? WHERE vr.group_id=? AND rr.space_id=? AND rr.status='pending'`, operatorID, operatorName, reason, now, now, g[0], g[1]); err != nil {
+				return err
+			}
+		}
+
+	}
+
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE plugin_review_requests SET status='canceled',reviewer_uid=?,reviewer_name=?,reason=?,reviewed_at=?,updated_at=?
 		  WHERE plugin_id=? AND status='pending' AND deleted_at IS NULL`,

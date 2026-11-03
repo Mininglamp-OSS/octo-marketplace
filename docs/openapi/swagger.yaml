@@ -67,6 +67,11 @@ components:
         data:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Detail'
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_VisibilityPlan
+    : properties:
+        data:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.VisibilityPlan'
+      type: object
     ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_service_IconResult
     : properties:
         data:
@@ -402,6 +407,15 @@ components:
           type:
           - string
           - 'null'
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.AudienceReviewMember:
+      properties:
+        name:
+          type: string
+        plugin_id:
+          type: string
+        review_id:
+          type: string
       type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.CategoryFilter:
       properties:
@@ -1206,6 +1220,21 @@ components:
       - VisibilityPrivate
       - VisibilitySystem
       - VisibilitySpace
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.AudienceResource:
+      properties:
+        name:
+          type: string
+        plugin_id:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        published_version_id:
+          type: string
+        revision:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.ReferenceCandidate:
       properties:
         already_bound:
@@ -1237,6 +1266,25 @@ components:
           type: string
         version_id:
           type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.VisibilityPlan:
+      properties:
+        affected_resources:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.AudienceResource'
+          type: array
+          uniqueItems: false
+        dependencies:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.AudienceResource'
+          type: array
+          uniqueItems: false
+        plan_revision:
+          type: string
+        resource:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.AudienceResource'
+        target_visibility:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
       type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_service.IconResult:
       properties:
@@ -1914,6 +1962,11 @@ components:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue'
           type: array
           uniqueItems: false
+        dependency_status:
+          enum:
+          - unavailable
+          - restored
+          type: string
         display_status:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
         download_count:
@@ -2082,6 +2135,11 @@ components:
         current_version:
           type: string
         current_version_id:
+          type: string
+        dependency_status:
+          enum:
+          - unavailable
+          - restored
           type: string
         display_status:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
@@ -2377,6 +2435,11 @@ components:
           type: string
         applicant_name:
           type: string
+        audience_members:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.AudienceReviewMember'
+          type: array
+          uniqueItems: false
         changelog:
           type: string
         current_version:
@@ -2455,6 +2518,8 @@ components:
             on the detail read only.'
           type: string
         reason:
+          type: string
+        review_group_id:
           type: string
         review_id:
           type: string
@@ -2574,22 +2639,31 @@ components:
       properties:
         expected_published_version_id:
           type: string
+        expected_revision:
+          type: string
+        is_confirmed:
+          type: boolean
+        plan_revision:
+          type: string
         visibility:
           enum:
           - private
           - space
           type: string
       required:
-      - expected_published_version_id
       - visibility
       type: object
     internal_api_handler_plugin.visibilityResponse:
       properties:
         display_status:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
+        plan_revision:
+          type: string
         plugin_id:
           type: string
         published_version_id:
+          type: string
+        review_group_id:
           type: string
         review_id:
           type: string
@@ -7421,12 +7495,15 @@ paths:
       - plugin
   /plugins/{plugin_id}/visibility:
     patch:
-      description: Owner-only for published tenant Skills, Experts and Expert Teams.
-        Keeps immutable content, version labels, release count and editable drafts
-        unchanged. Widening to Space follows its review policy and keeps the previous
-        effective audience until approval. Narrowing validates published references.
-        Concurrent content/review changes are checked under a resource lock. Non-owners
-        and other Spaces receive an opaque 404.
+      description: Owner-only for published tenant Skills, Connectors, Experts and
+        Expert Teams. Keeps immutable content, version labels, release count and editable
+        drafts unchanged. Widening to Space follows its review policy and keeps the
+        previous effective audience until approval. Preview impacts first. Confirmed
+        narrowing suspends affected published dependents. Widening batches owned private
+        dependencies in one atomic review decision. Connectors use expected_revision;
+        versioned types use expected_published_version_id. A changed or missing impact
+        confirmation is refused. Concurrent content/review changes are checked under
+        a resource lock. Non-owners and other Spaces receive an opaque 404.
       operationId: plugin.visibility.update
       parameters:
       - description: Plugin ID
@@ -7492,6 +7569,89 @@ paths:
       security:
       - Bearer: []
       summary: Change a published plugin audience without a content release
+      tags:
+      - plugin
+  /plugins/{plugin_id}/visibility_preview:
+    get:
+      description: Owner-only scoped preview over released and pinned dependency graphs.
+        Returns owned private dependencies to widen and readable affected resources
+        to suspend. No content, files, versions or audience is changed. Submit plan_revision
+        with is_confirmed=true when the plan includes dependencies or impacts. A refreshed
+        plan is required after intervening resource changes.
+      operationId: plugin.visibility.preview
+      parameters:
+      - description: Plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      - description: Target resource audience
+        in: query
+        name: visibility
+        required: true
+        schema:
+          enum:
+          - private
+          - space
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_VisibilityPlan'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Preview a resource audience change and dependency impacts
       tags:
       - plugin
   /plugins/delete:

@@ -9,7 +9,12 @@ import (
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
 
+var ErrAudienceConfirmation = errors.New("visibility impact confirmation required")
+
 type VisibilityParams struct {
+	ExpectedRevision                    string
+	PlanRevision                        string
+	Confirm                             bool
 	PluginID                            string
 	ExpectedPublishedVersionID          string
 	Visibility                          model.PluginVisibility
@@ -17,6 +22,8 @@ type VisibilityParams struct {
 }
 
 type VisibilityResult struct {
+	GroupID            string
+	PlanRevision       string
 	Plugin             *model.Plugin
 	PublishedVersionID string
 	ReviewID           string
@@ -37,96 +44,142 @@ func (r *Repo) ChangeVisibility(ctx context.Context, scope Scope, p VisibilityPa
 		return nil, err
 	}
 	defer tx.Rollback()
-	current, err := getOwnedForUpdate(ctx, tx, scope, p.PluginID)
+	root, err := getOwnedForUpdate(ctx, tx, scope, p.PluginID)
 	if err != nil {
 		return nil, err
 	}
-	if !versioned(current) || current.IsEmbedded || (current.Visibility != model.PluginVisibilityPrivate && current.Visibility != model.PluginVisibilitySpace) {
-		return nil, ErrNotFound
-	}
-	if current.ListingState != model.PluginListingStatePublished {
-		return nil, ErrConflict
-	}
-	var published sql.NullString
-	if err = tx.QueryRowContext(ctx, `SELECT published_version_id FROM plugins WHERE plugin_id=? AND space_id=?`, current.ID, scope.SpaceID).Scan(&published); err != nil {
+	plan, err := r.buildVisibilityPlan(ctx, tx, scope, root, p.Visibility)
+	if err != nil {
 		return nil, err
 	}
-	if !published.Valid {
-		return nil, ErrVersionBaselineUnavailable
-	}
-	if published.String != p.ExpectedPublishedVersionID {
+	if versioned(root) {
+		if p.ExpectedPublishedVersionID != publishedID(root) {
+			return nil, ErrConflict
+		}
+	} else if p.ExpectedRevision == "" || p.ExpectedRevision != model.PluginDraftRevision(root) {
 		return nil, ErrConflict
 	}
-	out := &VisibilityResult{Plugin: current, PublishedVersionID: published.String}
-	if p.Visibility != model.PluginVisibilityPrivate && p.Visibility != model.PluginVisibilitySpace {
-		return nil, ErrConflict
-	}
+	out := &VisibilityResult{Plugin: root, PublishedVersionID: publishedID(root), PlanRevision: plan.PlanRevision}
 	var pending string
-	err = tx.QueryRowContext(ctx, `SELECT review_id FROM plugin_review_requests WHERE plugin_id=? AND status='pending' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`, current.ID).Scan(&pending)
+	err = tx.QueryRowContext(ctx, `SELECT review_id FROM plugin_review_requests WHERE plugin_id=? AND status='pending' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`, root.ID).Scan(&pending)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	if pending != "" {
-		var versionID, from, to string
-		e := tx.QueryRowContext(ctx, `SELECT published_version_id,source_visibility,target_visibility FROM plugin_visibility_reviews WHERE review_id=?`, pending).Scan(&versionID, &from, &to)
-		if e != nil && !errors.Is(e, sql.ErrNoRows) {
-			return nil, e
-		}
-		if e == nil && versionID == published.String && from == string(current.Visibility) && to == string(p.Visibility) {
+		var to string
+		var version, revision string
+		if e := tx.QueryRowContext(ctx, `SELECT target_visibility,published_version_id,COALESCE(expected_revision,'') FROM plugin_visibility_reviews WHERE review_id=?`, pending).Scan(&to, &version, &revision); e == nil && to == string(p.Visibility) && version == publishedID(root) && (revision == "" || revision == model.PluginDraftRevision(root)) {
 			out.ReviewID = pending
+			out.GroupID, err = audienceGroupID(ctx, tx, pending)
+			if err != nil {
+				return nil, err
+			}
 			out.Pending = true
 			return out, tx.Commit()
 		}
 		return nil, ErrReviewPending
 	}
-	// A same-scope retry is a no-op only when no review is pending. It must
-	// neither hide an open review nor implicitly cancel it.
-	if current.Visibility == p.Visibility {
+	if root.Visibility == p.Visibility {
 		return out, tx.Commit()
+	}
+	if p.PlanRevision != "" && p.PlanRevision != plan.PlanRevision {
+		return nil, ErrConflict
+	}
+	if len(plan.members) > 1 || len(plan.impacts) > 0 {
+		if !p.Confirm || p.PlanRevision == "" {
+			return nil, ErrAudienceConfirmation
+		}
+	}
+	// Lock/recheck every resource selected by the preview before applying changes.
+	// Existing write paths also lock resources; deadlock victims are safely retried.
+	for _, member := range plan.members {
+		locked, e := getOwnedForUpdate(ctx, tx, scope, member.ID)
+		if e != nil {
+			return nil, e
+		}
+		if e = verifyAudienceBaseline(ctx, tx, locked, member); e != nil {
+			return nil, e
+		}
+		if model.PluginDraftRevision(locked) != model.PluginDraftRevision(member) {
+			return nil, ErrConflict
+		}
+		if member.ID != root.ID {
+			var n int
+			if e = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugin_review_requests WHERE plugin_id=? AND status='pending' AND deleted_at IS NULL`, member.ID).Scan(&n); e != nil {
+				return nil, e
+			}
+			if n > 0 {
+				return nil, ErrReviewPending
+			}
+		}
 	}
 	if p.Visibility == model.PluginVisibilityPrivate {
-		if err = r.rejectPublishedIncomingRelations(ctx, tx, current.ID); err != nil {
+		if err = r.applyAudience(ctx, tx, scope, root, p.Visibility, p.OperatorID, p.OperatorName, p.RequestID, "visibility_change", r.now()); err != nil {
 			return nil, err
 		}
-		if err = r.applyAudience(ctx, tx, scope, current, p.Visibility, p.OperatorID, p.OperatorName, p.RequestID, "visibility_change", r.now()); err != nil {
-			return nil, err
+		for _, source := range plan.impacts {
+			locked, e := getReviewedPluginForUpdate(ctx, tx, scope.SpaceID, source.ID)
+			if e != nil {
+				return nil, e
+			}
+			if e = verifyAudienceBaseline(ctx, tx, locked, source); e != nil {
+				return nil, e
+			}
+			if model.PluginDraftRevision(locked) != model.PluginDraftRevision(source) {
+				return nil, ErrConflict
+			}
+			if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_dependency_suspensions(plugin_id,space_id,published_version_id,suspended_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE published_version_id=VALUES(published_version_id),suspended_at=VALUES(suspended_at)`, source.ID, scope.SpaceID, source.PublishedVersionID, r.now()); e != nil {
+				return nil, e
+			}
+			if _, e = tx.ExecContext(ctx, `UPDATE plugins SET listing_state='delisted',updated_at=? WHERE plugin_id=? AND space_id=?`, r.now(), source.ID, scope.SpaceID); e != nil {
+				return nil, e
+			}
+			if e = demoteEmbeddedChildren(ctx, tx, source.ID, source.Type, scope.SpaceID, r.now()); e != nil {
+				return nil, e
+			}
+			m := Mutation{OperatorID: p.OperatorID, OperatorName: p.OperatorName, RequestID: p.RequestID, Remark: strPtr("dependency_visibility_changed")}
+			if e = insertAudit(ctx, tx, r.id(), r.now(), *source, "dependency_suspend", m, source.PluginHash, source.PluginHash); e != nil {
+				return nil, e
+			}
 		}
-		current.Visibility = p.Visibility
+		root.Visibility = p.Visibility
 		return out, tx.Commit()
-	}
-	frozen, err := loadVisibilityRelease(ctx, tx, current, published.String)
-	if err != nil {
-		return nil, err
-	}
-	frozen.Visibility = model.PluginVisibilitySpace
-	if err = r.validateVisibilityGraph(ctx, tx, frozen); err != nil {
-		return nil, err
 	}
 	auto := true
 	err = tx.QueryRowContext(ctx, `SELECT is_auto_approve_enabled FROM plugin_review_policies WHERE space_id=? FOR UPDATE`, scope.SpaceID).Scan(&auto)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	now, id := r.now(), r.id()
-	// Snapshot only the existing released content; editable draft is never reviewed.
-	_, err = tx.ExecContext(ctx, `INSERT INTO plugin_review_requests (review_id,plugin_id,space_id,target_scope,status,kind,version,changelog,manifest_json,plugin_json,attachment_keys_json,relations_json,manifest_hash,plugin_hash,applicant_uid,applicant_name,submitted_at,created_at,updated_at) VALUES (?,?,?,'space','pending','visibility',?,NULL,?,?,?,?,?,?,?,?,?,?,?)`, id, current.ID, scope.SpaceID, *frozen.CurrentVersion, string(frozen.Manifest), string(frozen.Package), jsonColumn(frozen.AttachmentKeys), string(frozen.Relations), frozen.ManifestHash, frozen.PluginHash, p.OperatorID, p.OperatorName, now, now, now)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO plugin_visibility_reviews (review_id,published_version_id,source_visibility,target_visibility) VALUES (?,?,?,?)`, id, published.String, current.Visibility, p.Visibility); err != nil {
-		return nil, err
-	}
-	out.ReviewCreated = true
-	out.ReviewID = id
+	group := r.id()
+	out.GroupID = group
 	out.Pending = !auto
+	out.ReviewCreated = true
+	for _, member := range plan.members {
+		frozen, e := loadAudienceRelease(ctx, tx, member)
+		if e != nil {
+			return nil, e
+		}
+		id := r.id()
+		if member.ID == root.ID {
+			out.ReviewID = id
+		}
+		now := r.now()
+		label := "1.0.0"
+		if frozen.CurrentVersion != nil {
+			label = *frozen.CurrentVersion
+		}
+		if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_review_requests (review_id,plugin_id,space_id,target_scope,status,kind,version,manifest_json,plugin_json,attachment_keys_json,relations_json,manifest_hash,plugin_hash,applicant_uid,applicant_name,submitted_at,created_at,updated_at) VALUES(?,?,?,'space','pending','visibility',?,?,?,?,?,?,?,?,?,?,?,?)`, id, member.ID, scope.SpaceID, label, string(frozen.Manifest), string(frozen.Package), jsonColumn(frozen.AttachmentKeys), string(frozen.Relations), frozen.ManifestHash, frozen.PluginHash, p.OperatorID, p.OperatorName, now, now, now); e != nil {
+			return nil, e
+		}
+		if _, e = tx.ExecContext(ctx, `INSERT INTO plugin_visibility_reviews(review_id,published_version_id,source_visibility,target_visibility,group_id,expected_revision) VALUES(?,?,'private','space',?,?)`, id, publishedID(member), group, model.PluginDraftRevision(member)); e != nil {
+			return nil, e
+		}
+	}
 	if auto {
-		if err = r.applyAudience(ctx, tx, scope, current, p.Visibility, p.OperatorID, p.OperatorName, p.RequestID, "visibility_change", now); err != nil {
+		if _, err = r.applyAudienceGroup(ctx, tx, scope, out.ReviewID, p.OperatorID, p.OperatorName, p.RequestID, model.ReviewDecisionSourcePolicy, r.now()); err != nil {
 			return nil, err
 		}
-		if err = settleVisibilityReview(ctx, tx, id, p.OperatorID, p.OperatorName, model.ReviewDecisionSourcePolicy, now); err != nil {
-			return nil, err
-		}
-		current.Visibility = p.Visibility
+		root.Visibility = model.PluginVisibilitySpace
 	}
 	return out, tx.Commit()
 }
@@ -205,6 +258,21 @@ func settleVisibilityReview(ctx context.Context, tx *sql.Tx, id, uid, name strin
 	return mustAffect(res)
 }
 func (r *Repo) approveVisibilityReview(ctx context.Context, tx *sql.Tx, scope Scope, p ApproveReviewParams, current *model.Plugin) (*model.Plugin, error) {
+	group, err := audienceGroupID(ctx, tx, p.ReviewID)
+	if err != nil {
+		return nil, err
+	}
+	if group != "" {
+		now := p.Now
+		if now.IsZero() {
+			now = r.now()
+		}
+		selected, err := r.applyAudienceGroup(ctx, tx, scope, p.ReviewID, p.ReviewerUID, p.ReviewerName, p.RequestID, p.DecisionSource, now)
+		if err != nil {
+			return nil, err
+		}
+		return selected, tx.Commit()
+	}
 	var versionID string
 	var from, to model.PluginVisibility
 	if err := tx.QueryRowContext(ctx, `SELECT published_version_id,source_visibility,target_visibility FROM plugin_visibility_reviews WHERE review_id=?`, p.ReviewID).Scan(&versionID, &from, &to); err != nil {
@@ -244,4 +312,13 @@ func (r *Repo) approveVisibilityReview(ctx context.Context, tx *sql.Tx, scope Sc
 	}
 	current.Visibility = to
 	return current, nil
+}
+
+// Connector audience changes freeze current configuration metadata for review,
+// without inventing an immutable Connector version.
+func loadAudienceRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin) (*visibilityRelease, error) {
+	if !versioned(p) {
+		return &visibilityRelease{Plugin: *p, Relations: []byte(`[]`)}, nil
+	}
+	return loadVisibilityRelease(ctx, tx, p, publishedID(p))
 }

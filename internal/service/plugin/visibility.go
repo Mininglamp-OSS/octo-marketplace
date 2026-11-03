@@ -9,6 +9,9 @@ import (
 )
 
 type VisibilityParams struct {
+	ExpectedRevision           string
+	PlanRevision               string
+	Confirm                    bool
 	PluginID                   string
 	ExpectedPublishedVersionID string
 	Visibility                 model.PluginVisibility
@@ -26,9 +29,6 @@ func (s *Service) ChangeVisibility(ctx context.Context, caller Caller, p Visibil
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(p.ExpectedPublishedVersionID) == "" {
-		return nil, &ReviewFieldError{Field: "expected_published_version_id", Reason: "required"}
-	}
 	if p.Visibility != model.PluginVisibilityPrivate && p.Visibility != model.PluginVisibilitySpace {
 		return nil, &ReviewFieldError{Field: "visibility", Reason: "invalid"}
 	}
@@ -41,16 +41,54 @@ func (s *Service) ChangeVisibility(ctx context.Context, caller Caller, p Visibil
 	if detail.Plugin.OwnerUID != caller.UID || detail.Plugin.SpaceID == nil || *detail.Plugin.SpaceID != caller.SpaceID || detail.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
+	if detail.Plugin.Type == model.PluginTypeConnector {
+		if strings.TrimSpace(p.ExpectedRevision) == "" {
+			return nil, &ReviewFieldError{Field: "expected_revision", Reason: "required"}
+		}
+	} else if strings.TrimSpace(p.ExpectedPublishedVersionID) == "" {
+		return nil, &ReviewFieldError{Field: "expected_published_version_id", Reason: "required"}
+	}
 	if p.Visibility == model.PluginVisibilitySpace && detail.Plugin.Visibility != p.Visibility {
-		v, err := s.ManagedVersion(ctx, caller, id, p.ExpectedPublishedVersionID, false)
-		if err != nil {
-			return nil, err
-		}
-		if v.Release == nil {
-			return nil, ErrVersionBaselineUnavailable
-		}
-		if err = s.verifyVersionFiles(ctx, detail.Plugin, v); err != nil {
-			return nil, err
+		if previewer, ok := s.repo.(interface {
+			PreviewVisibility(context.Context, pluginrepo.Scope, string, model.PluginVisibility) (*pluginrepo.VisibilityPlan, error)
+		}); ok {
+			plan, e := previewer.PreviewVisibility(ctx, scope(caller), id, p.Visibility)
+			if e != nil {
+				return nil, mapStoreError(e)
+			}
+			if p.PlanRevision != "" && p.PlanRevision != plan.PlanRevision {
+				return nil, ErrConflict
+			}
+			for _, item := range append([]pluginrepo.AudienceResource{plan.Resource}, plan.Dependencies...) {
+				if item.Type == model.PluginTypeConnector {
+					continue
+				}
+				if item.PublishedVersionID == nil {
+					return nil, ErrVersionBaselineUnavailable
+				}
+				d, e := s.currentDetail(ctx, caller, item.PluginID, false)
+				if e != nil {
+					return nil, e
+				}
+				v, e := s.ManagedVersion(ctx, caller, item.PluginID, *item.PublishedVersionID, false)
+				if e != nil {
+					return nil, e
+				}
+				if e = s.verifyVersionFiles(ctx, d.Plugin, v); e != nil {
+					return nil, e
+				}
+			}
+		} else if detail.Plugin.Type != model.PluginTypeConnector {
+			v, e := s.ManagedVersion(ctx, caller, id, p.ExpectedPublishedVersionID, false)
+			if e != nil {
+				return nil, e
+			}
+			if v.Release == nil {
+				return nil, ErrVersionBaselineUnavailable
+			}
+			if e = s.verifyVersionFiles(ctx, detail.Plugin, v); e != nil {
+				return nil, e
+			}
 		}
 	}
 	store, ok := s.repo.(interface {
@@ -59,7 +97,7 @@ func (s *Service) ChangeVisibility(ctx context.Context, caller Caller, p Visibil
 	if !ok {
 		return nil, ErrInvalidRequest
 	}
-	out, err := store.ChangeVisibility(ctx, scope(caller), pluginrepo.VisibilityParams{PluginID: id, ExpectedPublishedVersionID: p.ExpectedPublishedVersionID, Visibility: p.Visibility, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
+	out, err := store.ChangeVisibility(ctx, scope(caller), pluginrepo.VisibilityParams{ExpectedRevision: p.ExpectedRevision, PlanRevision: p.PlanRevision, Confirm: p.Confirm, PluginID: id, ExpectedPublishedVersionID: p.ExpectedPublishedVersionID, Visibility: p.Visibility, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -70,4 +108,28 @@ func (s *Service) ChangeVisibility(ctx context.Context, caller Caller, p Visibil
 		}
 	}
 	return out, nil
+}
+
+func (s *Service) PreviewVisibility(ctx context.Context, caller Caller, id string, target model.PluginVisibility) (*pluginrepo.VisibilityPlan, error) {
+	if validateCaller(caller) != nil {
+		return nil, ErrInvalidRequest
+	}
+	if _, err := s.versionStore(); err != nil {
+		return nil, err
+	}
+	id, err := parseStorageID(id)
+	if err != nil {
+		return nil, err
+	}
+	if target != model.PluginVisibilityPrivate && target != model.PluginVisibilitySpace {
+		return nil, &ReviewFieldError{Field: "visibility", Reason: "invalid"}
+	}
+	store, ok := s.repo.(interface {
+		PreviewVisibility(context.Context, pluginrepo.Scope, string, model.PluginVisibility) (*pluginrepo.VisibilityPlan, error)
+	})
+	if !ok {
+		return nil, ErrInvalidRequest
+	}
+	plan, err := store.PreviewVisibility(ctx, scope(caller), id, target)
+	return plan, mapStoreError(err)
 }

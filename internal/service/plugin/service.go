@@ -363,6 +363,9 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) ([]mode
 		for i := range items {
 			items[i].DependencyIssues = issues[items[i].ID]
 		}
+		if err := s.fillDependencyStatuses(ctx, caller, items); err != nil {
+			return nil, 0, err
+		}
 	}
 	for i := range items {
 		items[i].IconURL = s.resolveIcon(ctx, items[i].Icon)
@@ -557,6 +560,11 @@ func (s *Service) currentDetail(ctx context.Context, caller Caller, pluginID str
 			rels[i].SourcePluginType = p.Type
 		}
 	}
+	items := []model.Plugin{*p}
+	if err := s.fillDependencyStatuses(ctx, caller, items); err != nil {
+		return nil, err
+	}
+	p.DependencyStatus = items[0].DependencyStatus
 	return &Detail{Plugin: p, Relations: rels}, nil
 }
 
@@ -771,12 +779,10 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 		if old.ListingState == model.PluginListingStatePublished && old.Visibility == model.PluginVisibilitySpace && !(s.versionManagement && old.Type != model.PluginTypeConnector) {
 			return nil, ErrListedRequiresReview
 		}
-		// While a review is pending, the frozen snapshot is what the reviewer will
-		// act on, so content edits stay allowed (that is the whole point of freezing
-		// it). Changing VISIBILITY is different: ApproveReview stamps
-		// visibility=space, so approving a request whose author has since switched to
-		// 仅自己可见 would publish a row against the author's last stated intent.
-		if req.Visibility != old.Visibility {
+		// Version-managed reviews block tenant draft edits until the request is
+		// settled. Legacy mode keeps its content-edit behavior but still refuses
+		// visibility changes that would contradict the pending audience decision.
+		if s.versionManagement || req.Visibility != old.Visibility {
 			pending, err := s.repo.HasPendingReview(ctx, scope(caller), old.ID)
 			if err != nil {
 				return nil, mapStoreError(err)
@@ -830,11 +836,9 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	// advance current_version between that read and the write, after which this save
 	// would snapshot a label the row has already moved past.
 	m.EnforceForwardOnlyVersion = true
-	// The unlocked pending guard above (non-admin visibility change) is a fast
-	// pre-check; make it authoritative by re-checking under the plugin row lock in
-	// the write transaction. Same condition as that guard so a content-only save
-	// and the exempt system admin skip the extra read.
-	if !caller.IsSystemAdmin && req.Visibility != old.Visibility {
+	// Recheck the pending guard under the plugin lock so an intervening review
+	// submission cannot race a tenant save. System administrators stay exempt.
+	if !caller.IsSystemAdmin && (s.versionManagement || req.Visibility != old.Visibility) {
 		m.RefusePendingReview = true
 	}
 	// The listed_requires_review gate and the un-list-on-widen decision above were
@@ -1144,6 +1148,9 @@ func mapStoreError(err error) error {
 		return ErrInvalidRequest
 	case errors.Is(err, pluginrepo.ErrRelationInUse):
 		return ErrRelationInUse
+	case errors.Is(err, pluginrepo.ErrAudienceConfirmation):
+		return &ReviewFieldError{Field: "plan_revision", Reason: "confirmation_required"}
+
 	case errors.Is(err, pluginrepo.ErrGraphTooLarge):
 		return ErrGraphTooLarge
 	case errors.Is(err, pluginrepo.ErrDeadlock):
@@ -1192,4 +1199,21 @@ func trimOptional(v *string) *string {
 		return nil
 	}
 	return &x
+}
+
+func (s *Service) fillDependencyStatuses(ctx context.Context, caller Caller, items []model.Plugin) error {
+	store, ok := s.repo.(interface {
+		DependencyStatuses(context.Context, pluginrepo.Scope, []model.Plugin) (map[string]string, error)
+	})
+	if !ok || !s.versionManagement {
+		return nil
+	}
+	states, err := store.DependencyStatuses(ctx, scope(caller), items)
+	if err != nil {
+		return mapStoreError(err)
+	}
+	for i := range items {
+		items[i].DependencyStatus = states[items[i].ID]
+	}
+	return nil
 }

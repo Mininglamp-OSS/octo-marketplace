@@ -77,18 +77,20 @@ const (
 // the detail read and is parsed defensively: a missing or malformed snapshot
 // degrades to an empty array rather than 500ing the endpoint.
 type reviewRequestResponse struct {
-	ReviewID      string             `json:"review_id"`
-	PluginID      string             `json:"plugin_id"`
-	SpaceID       string             `json:"space_id"`
-	TargetScope   string             `json:"target_scope"`
-	Status        model.ReviewStatus `json:"status"`
-	Kind          model.ReviewKind   `json:"kind"`
-	Version       string             `json:"version"`
-	Changelog     *string            `json:"changelog,omitempty"`
-	ManifestHash  string             `json:"manifest_hash"`
-	PluginHash    string             `json:"plugin_hash"`
-	ApplicantID   string             `json:"applicant_id"`
-	ApplicantName string             `json:"applicant_name"`
+	ReviewGroupID   string                       `json:"review_group_id,omitempty"`
+	AudienceMembers []model.AudienceReviewMember `json:"audience_members,omitempty"`
+	ReviewID        string                       `json:"review_id"`
+	PluginID        string                       `json:"plugin_id"`
+	SpaceID         string                       `json:"space_id"`
+	TargetScope     string                       `json:"target_scope"`
+	Status          model.ReviewStatus           `json:"status"`
+	Kind            model.ReviewKind             `json:"kind"`
+	Version         string                       `json:"version"`
+	Changelog       *string                      `json:"changelog,omitempty"`
+	ManifestHash    string                       `json:"manifest_hash"`
+	PluginHash      string                       `json:"plugin_hash"`
+	ApplicantID     string                       `json:"applicant_id"`
+	ApplicantName   string                       `json:"applicant_name"`
 	// ReviewerID and ReviewerName identify a human reviewer and are omitted for policy decisions.
 	ReviewerID   *string `json:"reviewer_id,omitempty"`
 	ReviewerName *string `json:"reviewer_name,omitempty"`
@@ -246,6 +248,8 @@ func reviewDTO(r *model.PluginReviewRequest) reviewRequestResponse {
 		return reviewRequestResponse{FrozenRelations: &empty}
 	}
 	out := reviewRequestResponse{
+		ReviewGroupID:      r.ReviewGroupID,
+		AudienceMembers:    r.AudienceMembers,
 		ReviewID:           r.ID,
 		PluginID:           r.PluginID,
 		SpaceID:            r.SpaceID,

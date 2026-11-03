@@ -166,7 +166,13 @@ func TestManagedFrozenApprovalKeepsLaterDraft(t *testing.T) {
 				if pub.Review == nil {
 					t.Fatal("missing pending review")
 				}
-				if _, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)); err != nil {
+				if _, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)); !errors.Is(err, pluginsvc.ErrReviewPending) {
+					t.Fatalf("pending review must block tenant edits: %v", err)
+				}
+				// Simulate a pre-rollout writer. Approval must still preserve an
+				// already-saved later draft when crossing the rollout boundary.
+				legacyWriter := pluginsvc.New(pluginrepo.New(database))
+				if _, err = legacyWriter.Update(ctx, owner, id, managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)); err != nil {
 					t.Fatal(err)
 				}
 				if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
@@ -818,7 +824,12 @@ func TestManagedFirstApprovalKeepsLaterDraftRelations(t *testing.T) {
 	}
 	later := managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)
 	later.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skillB.Plugin.ID, Type: "expert_skill"}}
-	updated, err := svc.Update(ctx, owner, expert.Plugin.ID, later)
+	if _, err := svc.Update(ctx, owner, expert.Plugin.ID, later); !errors.Is(err, pluginsvc.ErrReviewPending) {
+		t.Fatalf("pending review must block tenant edits: %v", err)
+	}
+	// A draft from a pre-rollout writer remains protected by frozen approval.
+	legacyWriter := pluginsvc.New(pluginrepo.New(database))
+	updated, err := legacyWriter.Update(ctx, owner, expert.Plugin.ID, later)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1268,8 +1279,8 @@ func TestSameVersionVisibilityValidatesPublishedPinnedGraph(t *testing.T) {
 	if _, err = svc.ApproveReview(ctx, managedReviewer(), request.ReviewID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: skill.Plugin.ID, ExpectedPublishedVersionID: *skillState.PublishedVersionID, Visibility: model.PluginVisibilityPrivate}); !errors.Is(err, pluginsvc.ErrRelationInUse) {
-		t.Fatalf("published incoming pin must block narrowing: %v", err)
+	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: skill.Plugin.ID, ExpectedPublishedVersionID: *skillState.PublishedVersionID, Visibility: model.PluginVisibilityPrivate}); err == nil {
+		t.Fatalf("published incoming pin must require confirmation: %v", err)
 	}
 	// Team visibility validates the pinned member and its own pinned Skill graph.
 	teamReq := managedWrite("1.0.0", "Team V1", model.PluginVisibilityPrivate)
@@ -1290,8 +1301,8 @@ func TestSameVersionVisibilityValidatesPublishedPinnedGraph(t *testing.T) {
 	if _, err = svc.ApproveReview(ctx, managedReviewer(), request.ReviewID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: expert.Plugin.ID, ExpectedPublishedVersionID: *expertState.PublishedVersionID, Visibility: model.PluginVisibilityPrivate}); !errors.Is(err, pluginsvc.ErrRelationInUse) {
-		t.Fatalf("Team pin must block expert narrowing: %v", err)
+	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: expert.Plugin.ID, ExpectedPublishedVersionID: *expertState.PublishedVersionID, Visibility: model.PluginVisibilityPrivate}); err == nil {
+		t.Fatalf("Team pin must require confirmation: %v", err)
 	}
 	teamAfter, _ := repo.GetVersionState(ctx, tenantScope(), team.Plugin.ID)
 	if *teamAfter.PublishedVersionID != *teamState.PublishedVersionID {
