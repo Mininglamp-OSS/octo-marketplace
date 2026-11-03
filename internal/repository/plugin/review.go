@@ -758,7 +758,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		// declared relation count exceeds the targets the caller can see. The child
 		// set is derived AFTER the relations are synced so it reflects the frozen
 		// topology, and under the same transaction's locks.
-		if err := promoteEmbeddedChildren(ctx, tx, pluginID, current.Type, scope.SpaceID, now); err != nil {
+		if err := promoteEmbeddedChildren(ctx, tx, pluginID, current.Type, scope.SpaceID, current.Visibility, now); err != nil {
 			return nil, err
 		}
 	}
@@ -907,12 +907,15 @@ func manifestNameAndTags(manifest json.RawMessage) (string, json.RawMessage) {
 // resolves fewer visible relation targets than CountDeclaredRelations and every
 // non-owner install of the container fails with ErrDependencyHidden — silent until
 // somebody other than the author tries to install it.
-func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, spaceID string, now interface{}) error {
+// audience carries the container's effective visibility into the promotion: a
+// private container's bundled rows must stay private, or restoring them would
+// widen the audience its owner deliberately withdrew.
+func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, spaceID string, audience model.PluginVisibility, now interface{}) error {
 	childIDs, err := collectEmbeddedChildren(ctx, tx, topID, topType)
 	if err != nil {
 		return err
 	}
-	return promoteEmbeddedIDs(ctx, tx, childIDs, spaceID, now)
+	return promoteEmbeddedIDs(ctx, tx, childIDs, spaceID, audience, now)
 }
 
 // promoteFrozenEmbeddedChildren lists the embedded targets declared by an
@@ -921,7 +924,7 @@ func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topT
 // not the draft's. A team may also reference standalone experts; their private
 // children remain inside their own publication boundary and must not be traversed.
 // Only a live embedded member in the container's owner/Space can contribute skills.
-func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, frozen []model.PluginRelation, spaceID string, now interface{}) error {
+func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, frozen []model.PluginRelation, spaceID string, audience model.PluginVisibility, now interface{}) error {
 	var ids []string
 	switch topType {
 	case model.PluginTypeExpert:
@@ -960,15 +963,15 @@ AND p.status=1 AND p.deleted_at IS NULL FOR UPDATE`, rel.TargetPluginID, spaceID
 			ids = append(ids, skills...)
 		}
 	}
-	return promoteEmbeddedIDs(ctx, tx, ids, spaceID, now)
+	return promoteEmbeddedIDs(ctx, tx, ids, spaceID, audience, now)
 }
 
-func promoteEmbeddedIDs(ctx context.Context, tx *sql.Tx, childIDs []string, spaceID string, now interface{}) error {
+func promoteEmbeddedIDs(ctx context.Context, tx *sql.Tx, childIDs []string, spaceID string, audience model.PluginVisibility, now interface{}) error {
 	for _, id := range childIDs {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE plugins SET visibility=?,listing_state=?,updated_at=?
 			  WHERE plugin_id=? AND space_id=? AND is_embedded=1 AND listing_state<>? AND deleted_at IS NULL`,
-			string(model.PluginVisibilitySpace), string(model.PluginListingStatePublished), now,
+			string(audience), string(model.PluginListingStatePublished), now,
 			id, spaceID, string(model.PluginListingStatePublished)); err != nil {
 			return wrapped("promote embedded child", err)
 		}

@@ -92,7 +92,7 @@ func clearRecoveredSuspension(ctx context.Context, tx *sql.Tx, p *model.Plugin, 
 	if p.SpaceID != nil {
 		spaceID = *p.SpaceID
 	}
-	if err = promoteFrozenEmbeddedChildren(ctx, tx, p.ID, p.Type, rels, spaceID, now); err != nil {
+	if err = promoteFrozenEmbeddedChildren(ctx, tx, p.ID, p.Type, rels, spaceID, p.Visibility, now); err != nil {
 		return err
 	}
 	res, err := tx.ExecContext(ctx, `DELETE s FROM plugin_dependency_suspensions s JOIN plugins p ON p.plugin_id=s.plugin_id WHERE s.plugin_id=? AND NOT `+unavailableSnapshotSQL("p.plugin_id", "?", "p"), p.ID, versionID)

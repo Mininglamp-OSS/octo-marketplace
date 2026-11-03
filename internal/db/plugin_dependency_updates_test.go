@@ -14,13 +14,17 @@ func TestDependencyAdoptionAtomicityAndDurableSkip(t *testing.T) {
 		name       string
 		visibility model.PluginVisibility
 		auto       bool
+		version    string
 	}{
-		{"private", model.PluginVisibilityPrivate, true}, {"organization-auto", model.PluginVisibilitySpace, true}, {"organization-manual", model.PluginVisibilitySpace, false},
+		{"private", model.PluginVisibilityPrivate, true, "1.1.0"},
+		{"private-padded-version", model.PluginVisibilityPrivate, true, " 1.1.0 "},
+		{"organization-auto", model.PluginVisibilitySpace, true, "1.1.0"},
+		{"organization-manual", model.PluginVisibilitySpace, false, "1.1.0"},
 	} {
-		t.Run(tc.name, func(t *testing.T) { testDependencyAdoption(t, tc.visibility, tc.auto) })
+		t.Run(tc.name, func(t *testing.T) { testDependencyAdoption(t, tc.visibility, tc.auto, tc.version) })
 	}
 }
-func testDependencyAdoption(t *testing.T, visibility model.PluginVisibility, auto bool) {
+func testDependencyAdoption(t *testing.T, visibility model.PluginVisibility, auto bool, version string) {
 	database := reviewDB(t)
 	ctx := context.Background()
 	owner := managedOwner()
@@ -66,7 +70,7 @@ func testDependencyAdoption(t *testing.T, visibility model.PluginVisibility, aut
 	}
 	draft = managedWrite("1.1.0", "edited and adopted", visibility)
 	draft.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skill.Plugin.ID, TargetVersionID: &target.TargetVersionID, Type: "expert_skill"}}
-	params := pluginsvc.DependencyUpdateSubmitParams{ExpectedPublishedVersionID: updates.PublishedVersionID, ExpectedDraftRevision: "stale", Targets: targets, Draft: draft, Version: "1.1.0", Changelog: "adopt skill"}
+	params := pluginsvc.DependencyUpdateSubmitParams{ExpectedPublishedVersionID: updates.PublishedVersionID, ExpectedDraftRevision: "stale", Targets: targets, Draft: draft, Version: version, Changelog: "adopt skill"}
 	var before int
 	if err = database.QueryRow(`SELECT COUNT(*) FROM plugin_versions WHERE plugin_id=?`, expert.Plugin.ID).Scan(&before); err != nil {
 		t.Fatal(err)

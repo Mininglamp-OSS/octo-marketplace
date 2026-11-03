@@ -29,7 +29,11 @@ func (s *Service) SubmitDependencyUpdates(ctx context.Context, caller Caller, id
 	if params.ExpectedPublishedVersionID == "" || params.ExpectedDraftRevision == "" || len(params.Targets) == 0 {
 		return nil, ErrInvalidRequest
 	}
-	if !validVersion(params.Version) || strings.TrimSpace(params.Changelog) == "" {
+	// Normalize once here: buildWrite trims the label into the snapshot while
+	// recordRelease compares the declared label byte-for-byte, so forwarding the
+	// raw request would reject an otherwise valid padded version at release time.
+	version := strings.TrimSpace(params.Version)
+	if !validVersion(version) || strings.TrimSpace(params.Changelog) == "" {
 		return nil, &ReviewFieldError{Field: "version", Reason: "version_and_changelog_required"}
 	}
 	detail, err := s.currentDetail(ctx, caller, id, true)
@@ -44,7 +48,7 @@ func (s *Service) SubmitDependencyUpdates(ctx context.Context, caller Caller, id
 		return nil, ErrInvalidRequest
 	}
 	req := params.Draft
-	req.Version = params.Version
+	req.Version = version
 	req.Changelog = &params.Changelog
 	req.Package = reinjectUpdateStorageKeys(req.Package, old.Package, old.AttachmentKeys)
 	p, rels, err := s.buildWrite(ctx, caller, id, req, s.now(), false, old)
@@ -71,7 +75,7 @@ func (s *Service) SubmitDependencyUpdates(ctx context.Context, caller Caller, id
 	if !ok {
 		return nil, ErrInvalidRequest
 	}
-	out, err := store.SubmitDependencyUpdates(ctx, scope(caller), pluginrepo.DependencyUpdatePublishParams{Mutation: m, ExpectedPublishedVersionID: params.ExpectedPublishedVersionID, ExpectedDraftRevision: params.ExpectedDraftRevision, Targets: params.Targets, Version: params.Version, Changelog: params.Changelog})
+	out, err := store.SubmitDependencyUpdates(ctx, scope(caller), pluginrepo.DependencyUpdatePublishParams{Mutation: m, ExpectedPublishedVersionID: params.ExpectedPublishedVersionID, ExpectedDraftRevision: params.ExpectedDraftRevision, Targets: params.Targets, Version: version, Changelog: params.Changelog})
 	if err != nil {
 		return nil, mapStoreError(err)
 	}

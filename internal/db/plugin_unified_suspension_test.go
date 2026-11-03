@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
@@ -293,5 +294,126 @@ func TestSuspendedUploadedContainerRepublishRestoresEmbeddedChildren(t *testing.
 			}
 			available("after recovery")
 		})
+	}
+}
+
+// A private container must recover its bundled rows at the audience its owner
+// chose. The suspension cascade demotes the container and its embedded children
+// together; the recovery promotion used to hardcode Space visibility (it was
+// written for Space review approval), so republishing a private container made
+// its bundled Skill org-readable while the Expert stayed private.
+func TestSuspendedPrivateContainerRepublishKeepsEmbeddedAudience(t *testing.T) {
+	ctx, owner := context.Background(), managedOwner()
+	db := reviewDB(t)
+	repo := pluginrepo.New(db)
+	svc := pluginsvc.New(repo, storage.NewLocal(t.TempDir(), "http://localhost")).WithVersionManagement(true)
+	if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), true, "reviewer", "Reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	const connector = "private-suspension-connector"
+	seed(t, db, seedPlugin{id: connector, typ: "connector", visibility: "space", listingState: "published"})
+	expert, err := svc.Create(ctx, owner, managedWrite("1.0.0", "container instructions", model.PluginVisibilitySpace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := expert.Plugin.ID
+	admin := owner
+	admin.IsSystemAdmin = true
+	expert, err = svc.ReuploadContainer(ctx, admin, id, pluginsvc.ContainerImportParams{Archive: containerUploadArchive(t)})
+	if err != nil {
+		t.Fatalf("reupload: %v", err)
+	}
+	var child string
+	for _, rel := range expert.Relations {
+		if rel.Type == "expert_skill" {
+			child = rel.TargetPluginID
+		}
+	}
+	if child == "" {
+		t.Fatal("uploaded container has no bundled skill")
+	}
+	req := managedWrite("1.0.1", "container instructions v2", model.PluginVisibilitySpace)
+	req.Relations = []pluginsvc.RelationRequest{
+		{Type: "expert_connector", TargetPluginID: connector},
+		{Type: "expert_skill", TargetPluginID: child},
+	}
+	if _, err = svc.Update(ctx, owner, id, req); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	publishSpace := func(version string) error {
+		p, e := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id, Version: version})
+		if e != nil {
+			return e
+		}
+		if p.Review != nil {
+			_, e = svc.ApproveReview(ctx, managedReviewer(), p.Review.ID)
+		}
+		return e
+	}
+	if err = publishSpace("1.0.1"); err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+	// Space publication first, then narrow the whole graph to private.
+	plan, err := svc.VisibilityPlan(ctx, owner, id, model.PluginVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("visibility plan: %v", err)
+	}
+	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: id, Visibility: model.PluginVisibilityPrivate, ExpectedPlanRevision: plan.Revision}); err != nil {
+		t.Fatalf("narrow to private: %v", err)
+	}
+	audience := func(step string) (rootVis, childVis, rootListing, childListing string, marker bool) {
+		t.Helper()
+		if err := db.QueryRow(`SELECT p.visibility,c.visibility,p.listing_state,c.listing_state,
+ EXISTS(SELECT 1 FROM plugin_dependency_suspensions s WHERE s.plugin_id=p.plugin_id)
+ FROM plugins p JOIN plugins c ON c.plugin_id=? WHERE p.plugin_id=?`, child, id).Scan(&rootVis, &childVis, &rootListing, &childListing, &marker); err != nil {
+			t.Fatal(err)
+		}
+		return rootVis, childVis, rootListing, childListing, marker
+	}
+	rootVis, childVis, rootListing, childListing, marker := audience("narrowed")
+	if rootVis != "private" || childVis != "private" || rootListing != "published" || childListing != "published" || marker {
+		t.Fatalf("narrowed: root=%s/%s child=%s/%s marker=%t", rootVis, rootListing, childVis, childListing, marker)
+	}
+	teammate := pluginsvc.Caller{UID: "teammate", SpaceID: owner.SpaceID}
+	if _, err = svc.Detail(ctx, teammate, child, false); !errors.Is(err, pluginsvc.ErrNotFound) {
+		t.Fatalf("private bundled child readable after narrowing: %v", err)
+	}
+	if _, err = svc.Delist(ctx, managedReviewer(), pluginsvc.DelistParams{PluginID: connector}); err != nil {
+		t.Fatal(err)
+	}
+	rootVis, childVis, rootListing, childListing, marker = audience("suspended")
+	if rootVis != "private" || childVis != "private" || rootListing != "delisted" || childListing != "delisted" || !marker {
+		t.Fatalf("suspended: root=%s/%s child=%s/%s marker=%t", rootVis, rootListing, childVis, childListing, marker)
+	}
+	// The dependency is still unavailable: publication must roll back and leave
+	// the private audience and the demoted child untouched.
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id, Version: "1.0.2"}); err == nil {
+		t.Fatal("published while the dependency was still delisted")
+	}
+	rootVis, childVis, rootListing, childListing, marker = audience("rollback")
+	if rootVis != "private" || childVis != "private" || rootListing != "delisted" || childListing != "delisted" || !marker {
+		t.Fatalf("rollback: root=%s/%s child=%s/%s marker=%t", rootVis, rootListing, childVis, childListing, marker)
+	}
+	if _, err = db.Exec(`UPDATE plugins SET listing_state='published' WHERE plugin_id=?`, connector); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id, Version: "1.0.2"}); err != nil {
+		t.Fatalf("republish after recovery: %v", err)
+	}
+	rootVis, childVis, rootListing, childListing, marker = audience("recovered")
+	if rootVis != "private" || childVis != "private" {
+		t.Fatalf("private audience widened on recovery: root=%s child=%s", rootVis, childVis)
+	}
+	if rootListing != "published" || childListing != "published" || marker {
+		t.Fatalf("recovered: root=%s child=%s marker=%t", rootListing, childListing, marker)
+	}
+	if _, err = svc.Detail(ctx, teammate, child, false); !errors.Is(err, pluginsvc.ErrNotFound) {
+		t.Fatalf("private bundled child readable after recovery: %v", err)
+	}
+	if _, err = svc.Detail(ctx, teammate, id, false); !errors.Is(err, pluginsvc.ErrNotFound) {
+		t.Fatalf("private container readable by teammate: %v", err)
+	}
+	if _, err = svc.Detail(ctx, owner, child, false); err != nil {
+		t.Fatalf("owner cannot read own bundled child: %v", err)
 	}
 }

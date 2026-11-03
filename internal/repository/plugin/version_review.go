@@ -79,7 +79,7 @@ func (r *Repo) approveManagedReviewInTx(ctx context.Context, tx *sql.Tx, scope S
 	// row already carries the frozen topology the market and install read, so only
 	// the embedded children of the frozen targets need to be listed alongside it.
 	if current.ListingState != model.PluginListingStatePublished {
-		if err = promoteFrozenEmbeddedChildren(ctx, tx, current.ID, current.Type, rels, scope.SpaceID, now); err != nil {
+		if err = promoteFrozenEmbeddedChildren(ctx, tx, current.ID, current.Type, rels, scope.SpaceID, current.Visibility, now); err != nil {
 			return nil, err
 		}
 	}
