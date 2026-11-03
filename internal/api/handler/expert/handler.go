@@ -272,7 +272,7 @@ func (h *Handler) GetExpert(c *gin.Context) {
 
 // InstallExpert godoc
 // @Summary Install expert to a Loop workspace/runtime
-// @Description Installs the expert and its packaged Skills in one atomic Fleet capability operation.
+// @Description Installs the expert, any MCP Workspace connector and its binding, and packaged Skills in one atomic Fleet capability operation.
 // @Description The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8 bytes), with no supporting-file count or per-text installation cap.
 // @Tags expert
 // @ID expert.install
@@ -319,7 +319,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 
 // InstallSquad godoc
 // @Summary Install squad to a Loop workspace/runtime
-// @Description Installs the squad, member experts, Skills, runtime bindings, and dispatch instructions in one atomic Fleet capability operation.
+// @Description Installs the squad, member experts, any MCP Workspace connectors and bindings, Skills, runtime bindings, and dispatch instructions in one atomic Fleet capability operation.
 // @Description The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8 bytes), with no supporting-file count or per-text installation cap.
 // @Tags expert
 // @ID squad.install

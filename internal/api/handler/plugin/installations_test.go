@@ -83,7 +83,7 @@ func TestInstallationAndLegacyAdaptersKeepTheirWireContracts(t *testing.T) {
 	if rec.Code != 200 || f.calls != 1 || f.installID != "" || rec.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("code=%d calls=%d body=%s", rec.Code, f.calls, rec.Body.String())
 	}
-	if f.id != "expert-1" || f.params.Token != "end-user-token" || f.params.WorkspaceID != "workspace-1" || f.params.IdempotencyKey != "operation-key" || f.params.ResourceName != "My reviewer" || f.params.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider" {
+	if f.id != "expert-1" || f.params.Token != "end-user-token" || f.params.WorkspaceID != "workspace-1" || f.params.IdempotencyKey != "operation-key" || f.params.ResourceName != "My reviewer" || f.params.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider" || !f.params.WorkspaceConnectors {
 		t.Fatal("new installation arguments were not forwarded")
 	}
 	if f.caller.UID != "user-1" || f.caller.SpaceID != "space-a" {
@@ -101,43 +101,54 @@ func TestInstallationAndLegacyAdaptersKeepTheirWireContracts(t *testing.T) {
 	}
 }
 
-func TestLegacyInstallationOmitsWorkspaceConnectorResponseFields(t *testing.T) {
+func TestInstallationDefaultsWorkspaceConnectorsWhenOmitted(t *testing.T) {
 	version := "1.8.0"
 	marketID := "market-calendar"
-	for _, tc := range []struct {
-		name string
-		body string
-	}{
-		{name: "parameter_omitted", body: installationBody},
-		{name: "parameter_false", body: strings.TrimSuffix(installationBody, "}") + `,"workspace_connectors":false}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeInstallationService{
-				fakeService: &fakeService{},
-				out: &pluginsvc.InstallationOutcome{
-					AgentID: "expert-1",
-					Connectors: []fleet.CapabilityConnectorResult{{
-						ConnectorID: "connector-calendar",
-						Name:        "Calendar",
-						Version:     &version,
-						MarketMCPID: &marketID,
-						Created:     true,
-					}},
-				},
-			}
-			rec := httptest.NewRecorder()
-			testEngine(f).ServeHTTP(rec, installationRequest(tc.body))
-			if rec.Code != http.StatusOK {
-				t.Fatalf("code=%d calls=%d", rec.Code, f.calls)
-			}
-			data := decodeData(t, rec.Body.Bytes())
-			if data["agent_id"] != "expert-1" {
-				t.Fatal("legacy installation response lost its expert id")
-			}
-			if _, exists := data["connectors"]; exists {
-				t.Fatal("legacy installation response gained connector fields")
-			}
-		})
+	f := &fakeInstallationService{
+		fakeService: &fakeService{},
+		out: &pluginsvc.InstallationOutcome{
+			AgentID: "expert-1",
+			Connectors: []fleet.CapabilityConnectorResult{{
+				ConnectorID: "connector-calendar", Name: "Calendar", Version: &version,
+				MarketMCPID: &marketID, Created: true,
+			}},
+		},
+	}
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, installationRequest(installationBody))
+	if rec.Code != http.StatusOK || f.calls != 1 || !f.params.WorkspaceConnectors {
+		t.Fatalf("omitted selector did not default to connectors: code=%d calls=%d params=%+v", rec.Code, f.calls, f.params)
+	}
+	if connectors, ok := decodeData(t, rec.Body.Bytes())["connectors"].([]any); !ok || len(connectors) != 1 {
+		t.Fatal("default connector installation response omitted connector results")
+	}
+}
+
+func TestExplicitFalseInstallationKeepsLegacyResponseShape(t *testing.T) {
+	version := "1.8.0"
+	marketID := "market-calendar"
+	f := &fakeInstallationService{
+		fakeService: &fakeService{},
+		out: &pluginsvc.InstallationOutcome{
+			AgentID: "expert-1",
+			Connectors: []fleet.CapabilityConnectorResult{{
+				ConnectorID: "connector-calendar", Name: "Calendar", Version: &version,
+				MarketMCPID: &marketID, Created: true,
+			}},
+		},
+	}
+	body := strings.TrimSuffix(installationBody, "}") + `,"workspace_connectors":false}`
+	rec := httptest.NewRecorder()
+	testEngine(f).ServeHTTP(rec, installationRequest(body))
+	if rec.Code != http.StatusOK || f.calls != 1 || f.params.WorkspaceConnectors {
+		t.Fatalf("false selector did not preserve legacy behavior: code=%d calls=%d params=%+v", rec.Code, f.calls, f.params)
+	}
+	data := decodeData(t, rec.Body.Bytes())
+	if data["agent_id"] != "expert-1" {
+		t.Fatal("legacy installation response lost its expert id")
+	}
+	if _, exists := data["connectors"]; exists {
+		t.Fatal("explicit false response gained connector fields")
 	}
 }
 
@@ -195,13 +206,13 @@ func TestWorkspaceConnectorInstallationRejectsInvalidProvidedRuntime(t *testing.
 	}
 }
 
-func TestLegacyInstallationStillRequiresRuntime(t *testing.T) {
+func TestExplicitFalseInstallationStillRequiresRuntime(t *testing.T) {
 	f := &fakeInstallationService{fakeService: &fakeService{}}
-	req := installationRequest(`{"resource_name":"My reviewer"}`)
+	req := installationRequest(`{"resource_name":"My reviewer","workspace_connectors":false}`)
 	rec := httptest.NewRecorder()
 	testEngine(f).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || f.calls != 0 {
-		t.Fatalf("legacy installation accepted a missing runtime: code=%d calls=%d", rec.Code, f.calls)
+		t.Fatalf("explicit-false installation accepted a missing runtime: code=%d calls=%d", rec.Code, f.calls)
 	}
 }
 
@@ -219,6 +230,7 @@ func TestInstallationRejectsInvalidRequestsBeforeService(t *testing.T) {
 		{name: "duplicate_key", mutate: func(r *http.Request) { r.Header.Add("Idempotency-Key", "other") }, status: 400},
 		{name: "invalid_key", mutate: func(r *http.Request) { r.Header.Set("Idempotency-Key", strings.Repeat("x", 201)) }, status: 400},
 		{name: "invalid_runtime", body: `{"runtime_id":"rt"}`, status: 400},
+		{name: "invalid_runtime_false_mode", body: `{"runtime_id":"rt","workspace_connectors":false}`, status: 400},
 		{name: "invalid_runtime_with_workspace_connectors", body: `{"runtime_id":"rt","workspace_connectors":true}`, status: 400},
 		{name: "forged_identity", body: strings.TrimSuffix(installationBody, "}") + `,"uid":"other"}`, status: 400},
 		{name: "body_workspace", body: strings.TrimSuffix(installationBody, "}") + `,"workspace_id":"other"}`, status: 400},

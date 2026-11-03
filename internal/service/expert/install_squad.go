@@ -45,18 +45,29 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	}
 	teamMembers := make([]fleet.CapabilityTeamMember, len(m.Members))
 	leaderIdx := squadLeaderIndex(m)
-	// Charge every member's non-Skill metadata and the team wiring before any
-	// object-storage read: oversized metadata must never be amplified by Skill
-	// content reads.
+	// Charge every member's non-Skill metadata, MCP connectors, and the team
+	// wiring before any object-storage read: oversized metadata must never be
+	// amplified by Skill content reads.
+	connectors := make([]fleet.CapabilityConnector, 0, len(m.Members))
 	for i := range m.Members {
 		member := m.Members[i]
-		mcpConfig, err := capabilityMCPConfig(member.MCPConfig)
+		expert := fleet.CapabilityExpert{
+			Name: member.Name, Version: nil, Description: m.Summary, Instructions: member.Instruction,
+			CustomEnv: in.CustomEnv,
+		}
+		connector, hasConnector, err := capabilityMCPConnector(member.MCPConfig, member.Name)
 		if err != nil {
 			return InstallSquadResult{}, err
 		}
-		expert := fleet.CapabilityExpert{
-			Name: member.Name, Version: nil, Description: m.Summary, Instructions: member.Instruction,
-			CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
+		if hasConnector {
+			expert.ConnectorNames = []string{connector.Name}
+			if err := requestBudget.beginConnector(); err != nil {
+				return InstallSquadResult{}, err
+			}
+			if err := requestBudget.addJSON(connector); err != nil {
+				return InstallSquadResult{}, err
+			}
+			connectors = append(connectors, connector)
 		}
 		if err := requestBudget.beginExpert(); err != nil {
 			return InstallSquadResult{}, err
@@ -93,7 +104,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		return InstallSquadResult{}, err
 	}
 	definition := fleet.CapabilityDefinition{
-		SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Experts: experts, ExpertTeam: team,
+		SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Experts: experts, Connectors: connectors, ExpertTeam: team,
 	}
 	for i := range m.Members {
 		member := m.Members[i]

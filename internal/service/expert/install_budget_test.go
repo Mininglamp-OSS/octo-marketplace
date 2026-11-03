@@ -273,7 +273,8 @@ type wireCapabilityNames struct {
 			Name    string `json:"name"`
 			Content string `json:"content"`
 		} `json:"skills"`
-		Experts []struct {
+		Connectors []fleet.CapabilityConnector `json:"connectors"`
+		Experts    []struct {
 			SkillNames []string `json:"skill_names"`
 		} `json:"experts"`
 	} `json:"definition"`
@@ -364,6 +365,7 @@ func TestInstallExpertEscapedSkillsExactBudgetBoundary(t *testing.T) {
 		refs = append(refs, model.SkillRef{Name: escapedBudgetSkillName(i), ObjectKey: key})
 	}
 	svc, caller, id := installFixture(t, &fakeFleet{}, refs)
+	svc.repo.(*fakeStore).experts[id].MCPConfig = `{"mcpServers":{"local":{"command":"node","args":["worker.js"]}}}`
 	objects := svc.store.(*memObjectStore).objects
 	objects[sharedKey] = []byte(strings.Repeat("a", sharedBody))
 	install := func(bodyLen int) (*fakeFleet, int, wireCapabilityNames, error) {
@@ -395,11 +397,11 @@ func TestInstallExpertEscapedSkillsExactBudgetBoundary(t *testing.T) {
 		t.Fatalf("payload grew %d bytes for %d body bytes, want 1:1 ASCII encoding", growth, boundaryBody-probeBody)
 	}
 
-	if got := len(wire.Definition.Skills); got != skillCount {
-		t.Fatalf("wire skills = %d, want %d", got, skillCount)
-	}
 	if got := len(wire.Definition.Experts); got != 1 {
 		t.Fatalf("wire experts = %d, want 1", got)
+	}
+	if got := len(wire.Definition.Connectors); got != 1 {
+		t.Fatalf("wire connectors = %d, want one budgeted MCP connector", got)
 	}
 	if got := len(wire.Definition.Experts[0].SkillNames); got != skillCount {
 		t.Fatalf("expert skill_names = %d entries, want %d", got, skillCount)
@@ -464,6 +466,7 @@ func TestInstallSquadSharedEscapedSkillsExactBudgetBoundary(t *testing.T) {
 		members = append(members, member)
 	}
 	members[0].IsLeader = true
+	members[0].MCPConfig = `{"mcpServers":{"local":{"url":"https://mcp.example.test"}}}`
 
 	svc, caller, id := installSquadFixture(t, &fakeFleet{}, members)
 	objects := svc.store.(*memObjectStore).objects
@@ -504,6 +507,9 @@ func TestInstallSquadSharedEscapedSkillsExactBudgetBoundary(t *testing.T) {
 	}
 	if got := len(wire.Definition.Experts); got != model.MaxSquadMembers {
 		t.Fatalf("wire experts = %d, want %d members", got, model.MaxSquadMembers)
+	}
+	if got := len(wire.Definition.Connectors); got != 1 {
+		t.Fatalf("wire connectors = %d, want one budgeted MCP connector", got)
 	}
 	defined := make(map[string]int, skillCount)
 	bodies := make(map[string]int, skillCount)

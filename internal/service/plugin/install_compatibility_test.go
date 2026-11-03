@@ -34,6 +34,7 @@ func TestInstallAdaptersSendIdenticalContent(t *testing.T) {
 					root = map[bool]string{false: "expert-1", true: "team-1"}[team]
 				}
 				p := installationParams()
+				p.WorkspaceConnectors = true
 				p.ResourceName = ""
 				modern, err := svc.CreateInstallation(context.Background(), testCaller, root, p)
 				if err != nil {
@@ -220,6 +221,7 @@ func TestFrozenRetryRequiresCurrentListingAndEveryPersistedEdge(t *testing.T) {
 			t.Run(adapter+"/"+mutation, func(t *testing.T) {
 				svc, f, remote := fixturePinned()
 				p := installationParams()
+				p.WorkspaceConnectors = true
 				remote.err = errors.New("response lost")
 				if err := invokeIntegrityInstall(svc, adapter, p); err == nil || remote.calls != 1 {
 					t.Fatalf("initial: %v calls=%d", err, remote.calls)

@@ -94,6 +94,8 @@ func fixturePinned() (*Service, *pinnedFixtureStore, *fakeCapabilityInstaller) {
 		f.plugins[id] = p
 		if kind == model.PluginTypeConnector {
 			p.Package = pkg
+			p.Manifest = json.RawMessage(`{"description":"fixture connector","documentation":"https://docs.example.test/connector"}`)
+			p.Tags = json.RawMessage(`[]`)
 			return
 		}
 		raw, _ := model.EncodeSnapshotRelations(rels)

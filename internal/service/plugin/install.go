@@ -39,7 +39,7 @@ func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p
 	if key == "" {
 		key = s.id()
 	}
-	in := InstallationParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv, IdempotencyKey: key, Token: p.Token}
+	in := InstallationParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv, IdempotencyKey: key, Token: p.Token, WorkspaceConnectors: true}
 	normalized, err := normalizeInstallationParams(in, false)
 	if err != nil {
 		return nil, err

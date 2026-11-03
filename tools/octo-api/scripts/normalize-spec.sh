@@ -86,15 +86,17 @@ if os.path.exists(yaml_path):
             }
 
     # Only the new installation schema: the handler rejects unknown fields.
+    # Omission defaults to connector mode; explicit false retains the legacy
+    # MCP path and therefore still requires a runtime.
     installation_schema = spec.get('components', {}).get('schemas', {}).get(
         'internal_api_handler_plugin.createInstallationRequest')
     if installation_schema is not None:
         installation_schema['additionalProperties'] = False
         installation_schema['if'] = {
-            'properties': {'workspace_connectors': {'const': True}},
+            'properties': {'workspace_connectors': {'const': False}},
             'required': ['workspace_connectors'],
         }
-        installation_schema['else'] = {'required': ['runtime_id']}
+        installation_schema['then'] = {'required': ['runtime_id']}
 
     # OpenAPI 3.1 uses JSON Schema nullability. swag emits the legacy vendor
     # extension for pointer scalars, which strict clients ignore. Convert every

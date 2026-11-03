@@ -10,6 +10,7 @@ import (
 )
 
 func invokeIntegrityInstall(s *Service, adapter string, p InstallationParams) error {
+	p.WorkspaceConnectors = true
 	if adapter == "legacy" {
 		_, err := s.Install(context.Background(), testCaller, "team", InstallParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv, Token: p.Token, IdempotencyKey: p.IdempotencyKey})
 		return err

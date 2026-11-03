@@ -3,20 +3,141 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
+	pluginhandler "github.com/Mininglamp-OSS/octo-marketplace/internal/api/handler/plugin"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/middleware"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 	libplugin "github.com/Mininglamp-OSS/octo-plugin-lib/plugin"
+	"github.com/gin-gonic/gin"
 )
 
 type migratedGraphInstaller struct {
 	request fleet.CapabilityInstallRequest
 	calls   int
+}
+
+// Exercise request defaults through the real handlers, repository, and Fleet client.
+func TestMarketplaceInstallationRoutesDefaultToWorkspaceConnectorsMySQL(t *testing.T) {
+	database := reviewDB(t)
+	seedMigrationRoot(t, database, "market-http-team", "private", "published")
+	applyCurrentMigration(t, database)
+
+	var captured [][]byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/capabilities/install" {
+			t.Errorf("unexpected Fleet request: %s %s", r.Method, r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read Fleet request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		captured = append(captured, append([]byte(nil), body...))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":{"code":"UPSTREAM_UNAVAILABLE","message":"fixture"}}`)
+	}))
+	defer upstream.Close()
+
+	assertMCPStorage := func(body []byte, connectorMode bool) {
+		t.Helper()
+		var request fleet.CapabilityInstallRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("decode captured Fleet request: %v", err)
+		}
+		if len(request.Definition.Experts) != len(request.Bindings.Experts) {
+			t.Fatalf("captured HTTP request lost expert runtime bindings: %#v", request)
+		}
+		if connectorMode && len(request.Definition.Connectors) == 0 {
+			t.Fatalf("connector-default Fleet request omitted connector resources: %s", body)
+		}
+		for _, expert := range request.Definition.Experts {
+			if connectorMode {
+				if len(expert.ConnectorNames) == 0 || len(expert.MCPConfig) != 0 {
+					t.Fatalf("connector-default Fleet request lost expert bindings: %s", body)
+				}
+			} else if len(request.Definition.Connectors) != 0 || len(expert.ConnectorNames) != 0 || len(expert.MCPConfig) == 0 {
+				t.Fatalf("explicit-false Fleet request did not preserve legacy MCP storage: %s", body)
+			}
+		}
+	}
+	newService := func(pinned bool) *pluginsvc.Service {
+		svc := pluginsvc.New(pluginrepo.New(database)).
+			WithVersionManagement(true).
+			WithReferences(true).
+			WithPinnedInstallation(pinned).
+			WithCapabilityInstaller(fleet.New(upstream.URL))
+		if pinned {
+			svc = svc.WithInstallationHMACKeys("test", map[string]string{
+				"test": "synthetic-installation-test-key-32-bytes",
+			})
+		}
+		return svc
+	}
+	newEngine := func(svc *pluginsvc.Service) *gin.Engine {
+		engine := gin.New()
+		auth := middleware.NewAuthenticator(false, nil, model.Identity{UID: "user-1", Name: "Owner"}, "space-a")
+		pluginhandler.New(svc).Register(engine.Group("/api/v1", auth.Handler()))
+		return engine
+	}
+	send := func(engine *gin.Engine, path, body, key string) []byte {
+		t.Helper()
+		before := len(captured)
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Token", "fixture-token")
+		req.Header.Set("Idempotency-Key", key)
+		req.Header.Set("X-Workspace-ID", "fixture-workspace")
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || len(captured) != before+1 {
+			t.Fatalf("%s returned status=%d and captured requests=%d, want 503 and one Fleet call; response=%s",
+				path, rec.Code, len(captured)-before, rec.Body.String())
+		}
+		return captured[len(captured)-1]
+	}
+
+	const newPath = "/api/v1/plugins/market-http-team/installations"
+	regular := newEngine(newService(false))
+	const runtimeBody = `{"runtime_id":"7f63db70-6b66-4d2c-a52f-fb6de1d78ad9"}`
+	defaultBody := send(regular, newPath, runtimeBody, "market-http-default")
+	assertMCPStorage(defaultBody, true)
+	explicitTrue := send(regular, newPath, `{"runtime_id":"7f63db70-6b66-4d2c-a52f-fb6de1d78ad9","workspace_connectors":true}`, "market-http-default")
+	if string(explicitTrue) != string(defaultBody) {
+		t.Fatal("omitted and explicit-true selector spellings changed the Fleet request")
+	}
+	pinned := newEngine(newService(true))
+	falseBody := `{"runtime_id":"7f63db70-6b66-4d2c-a52f-fb6de1d78ad9","workspace_connectors":false}`
+	falseRequest := send(pinned, newPath, falseBody, "market-http-legacy-mode")
+	assertMCPStorage(falseRequest, false)
+
+	pinnedBody := send(pinned, newPath, runtimeBody, "market-http-pinned-default")
+	assertMCPStorage(pinnedBody, true)
+
+	legacy := newEngine(newService(false))
+	legacyBody := `{"plugin_id":"market-http-team","workspace_id":"fixture-workspace","runtime_id":"7f63db70-6b66-4d2c-a52f-fb6de1d78ad9"}`
+	oldRouteBody := send(legacy, "/api/v1/plugins/install", legacyBody, "market-http-install")
+	assertMCPStorage(oldRouteBody, true)
+
+	var teamRequest fleet.CapabilityInstallRequest
+	if err := json.Unmarshal(defaultBody, &teamRequest); err != nil {
+		t.Fatal(err)
+	}
+	expertPath := "/api/v1/plugins/" + teamRequest.Definition.Experts[0].MarketExpertID + "/installations"
+	assertMCPStorage(send(regular, expertPath, runtimeBody, "market-http-expert"), true)
+	connectorPath := "/api/v1/plugins/" + teamRequest.Definition.Connectors[0].MarketMCPID + "/installations"
+	assertMCPStorage(send(regular, connectorPath, `{}`, "market-http-connector"), true)
+	assertMCPStorage(send(pinned, connectorPath, `{}`, "market-http-pinned-connector"), true)
 }
 
 func TestMigratedSameExpertMCPAliasesFeedBothInstallationModesMySQL(t *testing.T) {

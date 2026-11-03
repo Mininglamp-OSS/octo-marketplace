@@ -28,10 +28,11 @@ type capabilityInstallationService interface {
 }
 
 type createInstallationRequest struct {
-	ResourceName        string                          `json:"resource_name,omitempty" maxLength:"128"`
-	RuntimeID           installationRuntimeID           `json:"runtime_id" swaggertype:"string" format:"uuid"`
-	CustomEnv           map[string]installationEnvValue `json:"custom_env,omitempty" swaggertype:"object,string"`
-	WorkspaceConnectors bool                            `json:"workspace_connectors,omitempty"`
+	ResourceName string                          `json:"resource_name,omitempty" maxLength:"128"`
+	RuntimeID    installationRuntimeID           `json:"runtime_id" swaggertype:"string" format:"uuid"`
+	CustomEnv    map[string]installationEnvValue `json:"custom_env,omitempty" swaggertype:"object,string"`
+	// WorkspaceConnectors defaults to true; false preserves legacy MCP storage.
+	WorkspaceConnectors bool `json:"workspace_connectors,omitempty" default:"true"`
 }
 
 type installationRuntimeID string
@@ -51,7 +52,7 @@ func (id *installationRuntimeID) UnmarshalJSON(raw []byte) error {
 
 // CreateInstallation godoc
 // @Summary Install a plugin through Fleet capability installation
-// @Description Resolves and installs the requested visible expert, expert_team, or connector graph atomically in Fleet. Set workspace_connectors to true to store MCP dependencies as Workspace connectors; expert and team installs still require a Runtime, while connector-only installs may omit it. Omitting or setting false keeps legacy MCP configuration behavior. Retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. The assembled Fleet JSON is limited to 20,000,000 UTF-8 bytes including definition, bindings, content, metadata, JSON escaping and framing; this is independent of the 3 MiB Marketplace request-body limit. Supporting files have no separate count or per-text-item cap; the configured stored-ZIP transport limit remains separate. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
+// @Description Resolves and installs the requested visible expert, expert_team, or connector graph atomically in Fleet. Omitting workspace_connectors defaults to Workspace connector snapshots; explicit false retains the existing legacy MCP configuration behavior. Expert and team installs require a Runtime; connector-only installs may omit it only with connector mode enabled. Retry uncertain outcomes with the same Idempotency-Key and input within Fleet's 24-hour retention window. The assembled Fleet JSON is limited to 20,000,000 UTF-8 bytes including definition, bindings, content, metadata, JSON escaping and framing; this is independent of the 3 MiB Marketplace request-body limit. Supporting files have no separate count or per-text-item cap; the configured stored-ZIP transport limit remains separate. Uses the configured Fleet service; the legacy /plugins/install remains available. Generated error text is Chinese; recognized 409 conflicts use fixed safe messages.
 // @Tags plugin
 // @ID plugin.installation.create
 // @Accept json
@@ -60,7 +61,7 @@ func (id *installationRuntimeID) UnmarshalJSON(raw []byte) error {
 // @Param plugin_id path string true "Marketplace plugin ID"
 // @Param X-Workspace-ID header string true "Target Workspace ID"
 // @Param Idempotency-Key header string true "Stable key for this installation; 1-200 visible ASCII characters"
-// @Param body body createInstallationRequest true "Resource name, optional workspace connector mode, runtime, and environment bindings"
+// @Param body body createInstallationRequest true "Resource name, runtime, environment bindings; workspace_connectors defaults true and false retains legacy MCP behavior"
 // @Success 200 {object} apiresponse.Data[installResponse]
 // @Header 200 {string} Idempotency-Replayed "Only forwarded when Fleet explicitly marks a replay; absence does not prove a new installation"
 // @Failure 400 {object} apiresponse.Error "VALIDATION_ERROR"
@@ -104,7 +105,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 		installationValidation(c, "headers")
 		return
 	}
-	var req createInstallationRequest
+	req := createInstallationRequest{WorkspaceConnectors: true}
 	if !decodeInstallation(c, &req) {
 		return
 	}
@@ -143,7 +144,7 @@ func (h *Handler) CreateInstallation(c *gin.Context) {
 		c.Header("Idempotency-Replayed", "true")
 	}
 	response := installResponse{AgentID: out.AgentID, SquadID: out.SquadID}
-	if p.WorkspaceConnectors {
+	if req.WorkspaceConnectors {
 		response.Connectors = out.Connectors
 	}
 	apiresponse.OK(c, response)
@@ -183,8 +184,8 @@ func writeInstallationError(c *gin.Context, err error) {
 	var capacity installationCapacityDiagnostic
 	switch {
 	case errors.As(err, &attempt) && attempt.Unknown:
-		// Legacy-content attempts rely on Fleet receipts and have no local deadline.
-		// The keyless adapter overrides this advice because its key was never returned.
+		// Current-state installs rely on Fleet's receipt window; pinned attempts
+		// supply their local same-key retry deadline when available.
 		details := map[string]any{"reason": "installation_result_unknown", "attempt_id": attempt.AttemptID, "can_retry_same_key": attempt.RetryUntil == nil || time.Now().Before(*attempt.RetryUntil)}
 		if attempt != nil && attempt.RetryUntil != nil {
 			details["retry_until"] = attempt.RetryUntil.UTC().Format(time.RFC3339)

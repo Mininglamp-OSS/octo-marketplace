@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/fleet"
@@ -172,7 +173,7 @@ func requireNullVersion(t *testing.T, object map[string]json.RawMessage) {
 	}
 }
 
-func capabilityMCPConfigForExpert(t *testing.T, in fleet.CapabilityInstallRequest, name string) json.RawMessage {
+func capabilityWireExpert(t *testing.T, in fleet.CapabilityInstallRequest, name string) map[string]json.RawMessage {
 	t.Helper()
 	definition := capabilityWireDefinition(t, in)
 	var experts []json.RawMessage
@@ -186,48 +187,114 @@ func capabilityMCPConfigForExpert(t *testing.T, in fleet.CapabilityInstallReques
 			t.Fatalf("decode expert name: %v", err)
 		}
 		if gotName == name {
-			return expert["mcp_config"]
+			return expert
 		}
 	}
 	t.Fatalf("capability definition has no expert %q", name)
 	return nil
 }
 
-func capabilityMCPServers(t *testing.T, raw json.RawMessage) map[string]json.RawMessage {
+func capabilityConnectorForExpert(t *testing.T, in fleet.CapabilityInstallRequest, expertName string) map[string]json.RawMessage {
 	t.Helper()
-	var config struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	definition := capabilityWireDefinition(t, in)
+	expert := capabilityWireExpert(t, in, expertName)
+	var connectorNames []string
+	if err := json.Unmarshal(expert["connector_names"], &connectorNames); err != nil {
+		t.Fatalf("decode %s connector names: %v", expertName, err)
 	}
-	if err := json.Unmarshal(raw, &config); err != nil {
-		t.Fatalf("decode MCP config: %v (%s)", err, raw)
+	if len(connectorNames) != 1 || connectorNames[0] == "" {
+		t.Fatalf("%s connector names = %q, want one bound MCP connector", expertName, connectorNames)
 	}
-	return config.MCPServers
+	var connectors []json.RawMessage
+	if err := json.Unmarshal(definition["connectors"], &connectors); err != nil {
+		t.Fatalf("decode wire connectors: %v (%s)", err, definition["connectors"])
+	}
+	if len(connectors) != 1 {
+		t.Fatalf("capability connectors = %s, want one connector", definition["connectors"])
+	}
+	connector := capabilityWireObject(t, connectors[0])
+	var connectorName string
+	if err := json.Unmarshal(connector["name"], &connectorName); err != nil {
+		t.Fatalf("decode connector name: %v", err)
+	}
+	if connectorName != connectorNames[0] {
+		t.Fatalf("%s connector name = %q, binding = %q", expertName, connectorName, connectorNames[0])
+	}
+	return connector
 }
 
-func requireLegacyStdioMCPServer(t *testing.T, raw json.RawMessage) {
+func requireJSONValue(t *testing.T, got, want json.RawMessage) {
 	t.Helper()
-	servers := capabilityMCPServers(t, raw)
-	var server map[string]json.RawMessage
-	if err := json.Unmarshal(servers["local"], &server); err != nil {
-		t.Fatalf("decode local MCP server: %v (%s)", err, servers["local"])
+	var gotValue, wantValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("decode actual JSON value: %v (%s)", err, got)
 	}
-	if _, ok := server["type"]; ok {
-		t.Fatalf("stdio capability server still has legacy type field: %s", servers["local"])
+	if err := json.Unmarshal(want, &wantValue); err != nil {
+		t.Fatalf("decode expected JSON value: %v (%s)", err, want)
 	}
-	var command string
-	var args []string
-	var env map[string]string
-	if err := json.Unmarshal(server["command"], &command); err != nil {
-		t.Fatalf("decode stdio command: %v", err)
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("JSON value = %s, want complete value %s", got, want)
 	}
-	if err := json.Unmarshal(server["args"], &args); err != nil {
-		t.Fatalf("decode stdio args: %v", err)
+}
+
+func TestInstallExpertUsesWorkspaceConnectorForMCPConfig(t *testing.T) {
+	const config = `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"},"x-server":{"mode":"strict"}}},"x-vendor":{"enabled":true,"labels":["one","two"]}}`
+	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
+	svc, caller, id := installFixture(t, ff, nil)
+	svc.repo.(*fakeStore).experts[id].MCPConfig = config
+
+	if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
+		t.Fatalf("InstallExpert: %v", err)
 	}
-	if err := json.Unmarshal(server["env"], &env); err != nil {
-		t.Fatalf("decode stdio env: %v", err)
+	expert := capabilityWireExpert(t, ff.capabilityInput, "Code Helper")
+	if _, ok := expert["mcp_config"]; ok {
+		t.Fatalf("expert still carries legacy mcp_config: %s", expert["mcp_config"])
 	}
-	if command != "npx" || len(args) != 1 || args[0] != "tool" || len(env) != 1 || env["X"] != "fixture" {
-		t.Fatalf("stdio capability config = %s, want command npx, args [tool], env {X:fixture}", servers["local"])
+	requireNullVersion(t, expert)
+	connector := capabilityConnectorForExpert(t, ff.capabilityInput, "Code Helper")
+	requireNullVersion(t, connector)
+	if _, ok := connector["market_mcp_id"]; ok {
+		t.Fatalf("config without marketplace source identity gained market_mcp_id: %s", connector["market_mcp_id"])
+	}
+	requireJSONValue(t, connector["config"], json.RawMessage(config))
+}
+
+func TestInstallExpertWithoutMCPConfigDoesNotCreateConnector(t *testing.T) {
+	for _, raw := range []string{"", `{}`, `{"mcpServers":{}}`} {
+		t.Run(fmt.Sprintf("config_%q", raw), func(t *testing.T) {
+			ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
+			svc, caller, id := installFixture(t, ff, nil)
+			svc.repo.(*fakeStore).experts[id].MCPConfig = raw
+
+			if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
+				t.Fatalf("InstallExpert: %v", err)
+			}
+			definition := capabilityWireDefinition(t, ff.capabilityInput)
+			if _, ok := definition["connectors"]; ok {
+				t.Fatalf("expert without MCP emitted connectors: %s", definition["connectors"])
+			}
+			expert := capabilityWireExpert(t, ff.capabilityInput, "Code Helper")
+			requireNullVersion(t, expert)
+			if _, ok := expert["connector_names"]; ok {
+				t.Fatalf("expert without MCP emitted connector_names: %s", expert["connector_names"])
+			}
+			if _, ok := expert["mcp_config"]; ok {
+				t.Fatalf("expert without MCP emitted mcp_config: %s", expert["mcp_config"])
+			}
+		})
+	}
+}
+
+func TestInstallExpertRejectsMalformedMCPConnectorBeforeFleet(t *testing.T) {
+	ff := &fakeFleet{}
+	svc, caller, id := installFixture(t, ff, nil)
+	svc.repo.(*fakeStore).experts[id].MCPConfig = `{"mcpServers":{"local":"not-a-server-object"}}`
+
+	if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err == nil {
+		t.Fatal("InstallExpert accepted malformed MCP server configuration")
+	}
+	if ff.capabilityCalls != 0 {
+		t.Fatalf("Fleet capability calls = %d, want no remote install for malformed MCP", ff.capabilityCalls)
 	}
 }
 
@@ -289,87 +356,6 @@ func TestInstallExpertGeneratesFreshKeysWhenIdempotencyKeyIsAbsent(t *testing.T)
 	assertCapabilityKeys(t, ff, "generated-1", "generated-2")
 }
 
-func TestInstallExpertNormalizesLegacyStdioMCPConfig(t *testing.T) {
-	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
-	svc, caller, id := installFixture(t, ff, nil)
-	svc.repo.(*fakeStore).experts[id].MCPConfig = `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}}}}`
-
-	if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
-		t.Fatalf("InstallExpert: %v", err)
-	}
-	requireLegacyStdioMCPServer(t, capabilityMCPConfigForExpert(t, ff.capabilityInput, "Code Helper"))
-}
-
-func TestInstallExpertPreservesLegacyMCPConfigOverridesAndRemoteServers(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		raw  string
-	}{
-		{name: "explicit empty", raw: `{}`},
-		{name: "wrapped empty", raw: `{"mcpServers":{}}`},
-		{name: "remote servers", raw: `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}},"http":{"type":"http","url":"https://mcp.example.test/mcp","headers":{"X-Fixture":"header"}},"url_only":{"url":"https://mcp.example.test/events"}}}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{Type: "expert", ExpertID: "agent-1"}}
-			svc, caller, id := installFixture(t, ff, nil)
-			svc.repo.(*fakeStore).experts[id].MCPConfig = tc.raw
-
-			if _, err := svc.InstallExpert(context.Background(), caller, id, baseInput()); err != nil {
-				t.Fatalf("InstallExpert: %v", err)
-			}
-			got := capabilityMCPConfigForExpert(t, ff.capabilityInput, "Code Helper")
-			if len(got) == 0 {
-				t.Fatal("explicit legacy MCP config was omitted from capability definition")
-			}
-			switch tc.name {
-			case "explicit empty":
-				var object map[string]json.RawMessage
-				if err := json.Unmarshal(got, &object); err != nil || len(object) != 0 {
-					t.Fatalf("explicit empty config = %s, want {}", got)
-				}
-			case "wrapped empty":
-				if servers := capabilityMCPServers(t, got); servers == nil || len(servers) != 0 {
-					t.Fatalf("wrapped empty config = %s, want an explicit empty mcpServers object", got)
-				}
-			case "remote servers":
-				requireLegacyStdioMCPServer(t, got)
-				servers := capabilityMCPServers(t, got)
-				for name, want := range map[string]struct {
-					typeName string
-					url      string
-				}{
-					"http":     {typeName: "http", url: "https://mcp.example.test/mcp"},
-					"url_only": {url: "https://mcp.example.test/events"},
-				} {
-					var server map[string]json.RawMessage
-					if err := json.Unmarshal(servers[name], &server); err != nil {
-						t.Fatalf("decode %s server: %v", name, err)
-					}
-					if want.typeName == "" {
-						if _, ok := server["type"]; ok {
-							t.Fatalf("remote MCP server %q gained type: %s", name, servers[name])
-						}
-					} else {
-						var gotType string
-						if err := json.Unmarshal(server["type"], &gotType); err != nil || gotType != want.typeName {
-							t.Fatalf("remote MCP server %q type = %q, want %q", name, gotType, want.typeName)
-						}
-					}
-					var gotURL string
-					if err := json.Unmarshal(server["url"], &gotURL); err != nil || gotURL != want.url {
-						t.Fatalf("remote MCP server %q URL = %q, want %q", name, gotURL, want.url)
-					}
-					if name == "http" {
-						var headers map[string]string
-						if err := json.Unmarshal(server["headers"], &headers); err != nil || headers["X-Fixture"] != "header" {
-							t.Fatalf("remote MCP server headers = %s, want X-Fixture=header", server["headers"])
-						}
-					}
-				}
-			}
-		})
-	}
-}
 func baseInput() InstallInput {
 	return InstallInput{WorkspaceID: "ws-1", RuntimeID: "rt-1", SpaceID: "space-1", Token: "tok"}
 }
@@ -434,7 +420,7 @@ func TestInstallExpertHappyPathWithSkills(t *testing.T) {
 	assertOnlyCapabilityInstall(t, ff)
 	expert := ff.capabilityInput.Definition.Experts[0]
 	if expert.Name != "Code Helper" || expert.MarketExpertID != id || expert.Description != "helps with code" ||
-		expert.Instructions != "You are a coding expert." || string(expert.MCPConfig) != `{"mcpServers":{}}` ||
+		expert.Instructions != "You are a coding expert." ||
 		expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" ||
 		len(expert.SkillNames) != 2 || expert.SkillNames[0] != "Research" || expert.SkillNames[1] != "Format" {
 		t.Fatalf("capability expert = %+v", expert)
@@ -564,7 +550,7 @@ func TestInstallExpertUsesSingleCapabilityTransaction(t *testing.T) {
 	}
 	expert := ff.capabilityInput.Definition.Experts[0]
 	if expert.Name != "Code Helper" || expert.Description != "helps with code" || expert.Instructions != "You are a coding expert." ||
-		string(expert.MCPConfig) != `{"mcpServers":{}}` || expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" ||
+		expert.CustomEnv["OCTOBUDDY_PROVIDER_ID"] != "provider-1" ||
 		len(expert.SkillNames) != 1 || expert.SkillNames[0] != "Research" {
 		t.Fatalf("legacy expert content changed in capability definition: %+v", expert)
 	}

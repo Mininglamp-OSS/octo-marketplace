@@ -55,12 +55,13 @@ func (e *InstallDispatchError) Unwrap() error { return e.Err }
 // charge is taken before the next resource read, so an oversized definition
 // never materializes its remaining Skills.
 type capabilityBudget struct {
-	remaining    int64
-	skillCount   int
-	expertCount  int
-	bindingCount int
-	skill        string
-	path         string
+	remaining      int64
+	skillCount     int
+	expertCount    int
+	connectorCount int
+	bindingCount   int
+	skill          string
+	path           string
 }
 
 func newCapabilityBudget(name string) *capabilityBudget {
@@ -129,6 +130,23 @@ func (b *capabilityBudget) beginBinding() error {
 		}
 	}
 	b.bindingCount++
+	return nil
+}
+
+// beginConnector charges the optional connectors field and its empty array on
+// the first connector, then one comma per subsequent connector.
+func (b *capabilityBudget) beginConnector() error {
+	if b.connectorCount == 0 {
+		if err := b.take(int64(len(`,"connectors":[]`))); err != nil {
+			return err
+		}
+		b.connectorCount = 1
+		return nil
+	}
+	if err := b.take(1); err != nil {
+		return err
+	}
+	b.connectorCount++
 	return nil
 }
 
@@ -249,13 +267,24 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		return InstallResult{}, err
 	}
 	budget := newCapabilityBudget("marketplace:" + m.ID)
-	mcpConfig, err := capabilityMCPConfig(m.MCPConfig)
+	expert := fleet.CapabilityExpert{
+		Name: m.Name, Version: nil, MarketExpertID: m.ID, Description: m.Summary, Instructions: m.Instruction,
+		CustomEnv: in.CustomEnv,
+	}
+	connector, hasConnector, err := capabilityMCPConnector(m.MCPConfig, m.Name)
 	if err != nil {
 		return InstallResult{}, err
 	}
-	expert := fleet.CapabilityExpert{
-		Name: m.Name, Version: nil, MarketExpertID: m.ID, Description: m.Summary, Instructions: m.Instruction,
-		CustomEnv: in.CustomEnv, MCPConfig: mcpConfig,
+	var connectors []fleet.CapabilityConnector
+	if hasConnector {
+		expert.ConnectorNames = []string{connector.Name}
+		if err := budget.beginConnector(); err != nil {
+			return InstallResult{}, err
+		}
+		if err := budget.addJSON(connector); err != nil {
+			return InstallResult{}, err
+		}
+		connectors = append(connectors, connector)
 	}
 	if err := budget.beginExpert(); err != nil {
 		return InstallResult{}, err
@@ -277,7 +306,7 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	expert.SkillNames = skillNames
 	request := fleet.CapabilityInstallRequest{
 		Definition: fleet.CapabilityDefinition{
-			SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Skills: skills,
+			SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Skills: skills, Connectors: connectors,
 			Experts: []fleet.CapabilityExpert{expert},
 		},
 		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{binding}},
@@ -306,93 +335,47 @@ func (s *Service) installCapability(ctx context.Context, in InstallInput, reques
 	return nil, &InstallDispatchError{IdempotencyKey: key, Err: fmt.Errorf("%w: %w", ErrFleetInstallUnavailable, err)}
 }
 
-// capabilityMCPConfig translates only the legacy stdio discriminator to the
-// command-only stdio shape required by Fleet. Stored source configuration is
-// not changed; empty and remote configurations remain untouched.
-func capabilityMCPConfig(raw string) (json.RawMessage, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
+// capabilityMCPConnector validates the stored config at the Fleet boundary and
+// creates a source-less Workspace connector snapshot without rewriting it.
+func capabilityMCPConnector(raw, name string) (fleet.CapabilityConnector, bool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return fleet.CapabilityConnector{}, false, nil
 	}
-
-	config := make(map[string]json.RawMessage)
-	if err := json.Unmarshal([]byte(raw), &config); err != nil {
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) {
-			return json.RawMessage(raw), nil
-		}
-		return nil, err
+	if len(raw) > model.MaxMCPConfigBytes {
+		return fleet.CapabilityConnector{}, false, fmt.Errorf("%w: mcp_config exceeds %d bytes", ErrInvalidRequest, model.MaxMCPConfigBytes)
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	var config map[string]json.RawMessage
+	if decoder.Decode(&config) != nil || config == nil || decoder.Decode(new(any)) != io.EOF {
+		return fleet.CapabilityConnector{}, false, invalidCapabilityMCPConfig()
+	}
+	if len(config) == 0 {
+		return fleet.CapabilityConnector{}, false, nil
 	}
 	serversRaw, ok := config["mcpServers"]
 	if !ok {
-		return json.RawMessage(raw), nil
+		return fleet.CapabilityConnector{}, false, invalidCapabilityMCPConfig()
 	}
-	servers := make(map[string]json.RawMessage)
-	if err := json.Unmarshal(serversRaw, &servers); err != nil {
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) {
-			return json.RawMessage(raw), nil
-		}
-		return nil, err
+	var servers map[string]json.RawMessage
+	if json.Unmarshal(serversRaw, &servers) != nil || servers == nil {
+		return fleet.CapabilityConnector{}, false, invalidCapabilityMCPConfig()
 	}
-
-	changed := false
-	for name, serverRaw := range servers {
+	for _, serverRaw := range servers {
 		var server map[string]json.RawMessage
-		if err := json.Unmarshal(serverRaw, &server); err != nil {
-			var typeErr *json.UnmarshalTypeError
-			if errors.As(err, &typeErr) {
-				return json.RawMessage(raw), nil
-			}
-			return nil, err
-		}
-		typeRaw, hasType := server["type"]
-		if hasType {
-			var serverType string
-			if err := json.Unmarshal(typeRaw, &serverType); err != nil {
-				var typeErr *json.UnmarshalTypeError
-				if errors.As(err, &typeErr) {
-					return json.RawMessage(raw), nil
-				}
-				return nil, err
-			}
-			if serverType == "stdio" {
-				commandRaw, hasCommand := server["command"]
-				if hasCommand {
-					var command string
-					if err := json.Unmarshal(commandRaw, &command); err != nil {
-						var typeErr *json.UnmarshalTypeError
-						if errors.As(err, &typeErr) {
-							return json.RawMessage(raw), nil
-						}
-						return nil, err
-					}
-					if command != "" {
-						delete(server, "type")
-						normalizedServer, err := json.Marshal(server)
-						if err != nil {
-							return nil, err
-						}
-						servers[name] = normalizedServer
-						changed = true
-					}
-				}
-			}
+		if json.Unmarshal(serverRaw, &server) != nil || server == nil {
+			return fleet.CapabilityConnector{}, false, invalidCapabilityMCPConfig()
 		}
 	}
-	if !changed {
-		return json.RawMessage(raw), nil
+	if len(servers) == 0 {
+		return fleet.CapabilityConnector{}, false, nil
 	}
-	normalizedServers, err := json.Marshal(servers)
-	if err != nil {
-		return nil, err
-	}
-	config["mcpServers"] = normalizedServers
-	normalized, err := json.Marshal(config)
-	if err != nil {
-		return nil, err
-	}
-	return normalized, nil
+	return fleet.CapabilityConnector{
+		Name: name, Config: json.RawMessage(raw), Version: nil,
+	}, true, nil
+}
+
+func invalidCapabilityMCPConfig() error {
+	return fmt.Errorf("%w: invalid MCP connector configuration", ErrInvalidRequest)
 }
 
 func (s *Service) capabilitySkills(ctx context.Context, refs []model.SkillRef, description string, request *capabilityBudget, seen map[string]struct{}) ([]string, []fleet.CapabilitySkill, error) {
