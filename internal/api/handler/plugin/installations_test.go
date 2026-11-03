@@ -394,14 +394,14 @@ func TestInstallationErrorMappingAndSafeRetry(t *testing.T) {
 			if tc.name == "rate_limit" && rec.Header().Get("Retry-After") != "3" {
 				t.Fatal("retry delay lost")
 			}
-			if (tc.name == "timeout" || tc.name == "nil_result") && (!strings.Contains(out.Error.Hint, "不要切换安装接口") || out.Error.Details["phase"] != "fleet") {
-				t.Fatal("unsafe retry guidance")
+			if (tc.name == "timeout" || tc.name == "nil_result") && out.Error.Details["phase"] != "fleet" {
+				t.Fatal("uncertain result lost its Fleet phase")
 			}
 			if (tc.name == "preparation" || tc.name == "integrity") && out.Error.Details["phase"] != "preparation" {
 				t.Fatal("preparation failure mislabeled as an uncertain Fleet result")
 			}
-			if tc.name == "not_configured" && (out.Error.Details["reason"] != "not_configured" || !strings.Contains(out.Error.Hint, "不要切换安装接口")) {
-				t.Fatal("missing configuration must retain safe same-key retry guidance")
+			if tc.name == "not_configured" && out.Error.Details["reason"] != "not_configured" {
+				t.Fatal("missing configuration lost its reason")
 			}
 		})
 	}

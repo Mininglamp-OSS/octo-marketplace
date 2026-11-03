@@ -24,13 +24,14 @@ func (s *Service) WithCapabilityInstaller(installer CapabilityInstaller) *Servic
 }
 
 type InstallationParams struct {
-	WorkspaceID         string
-	RuntimeID           string
-	ResourceName        string
-	CustomEnv           map[string]string
-	IdempotencyKey      string
-	Token               string
-	WorkspaceConnectors bool
+	WorkspaceID                  string
+	RuntimeID                    string
+	ResourceName                 string
+	CustomEnv                    map[string]string
+	IdempotencyKey               string
+	Token                        string
+	WorkspaceConnectors          bool
+	WorkspaceConnectorsDefaulted bool
 	// The original installation route accepts expert and expert-team roots only.
 	expertRootsOnly bool
 }

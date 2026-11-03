@@ -2,9 +2,9 @@
 
 This is an additive Marketplace endpoint for Workspace recruitment. The existing
 `POST /api/v1/plugins/install` remains available with its original request and
-response shape; because it has no selector, its adapter defaults to Workspace
-connector recruitment. The new endpoint also defaults `workspace_connectors` to
-`true`; clients need no new parameter to use connector-backed recruitment.
+response shape; because it has no selector, new operations through its adapter
+default to Workspace connector recruitment. New operations through the new
+endpoint also default `workspace_connectors` to `true`.
 
 ## Availability / verified source contract
 
@@ -29,8 +29,8 @@ the wire implementation lives in Fleet's `pkg/capability` and installation handl
 
 | Marketplace behavior | Fleet wire field |
 | --- | --- |
-| Default new route and legacy `/plugins/install` adapter | `definition.connectors[]` plus each Expert's `connector_names` |
-| New-route request with `workspace_connectors: false` | Existing `definition.experts[].mcp_config` behavior |
+| New operations on the new route or legacy `/plugins/install` adapter | `definition.connectors[]` plus each Expert's `connector_names`; selector-omitted retries of eligible pinned plans may resume their frozen mode |
+| New operation with explicit `workspace_connectors: false` | Existing `definition.experts[].mcp_config` behavior |
 | Team summary and collaboration instructions | `definition.expert_team.description` / `instructions` |
 | Runtime-specific environment values, including provider selection | `definition.experts[].custom_env` (string map) |
 
@@ -48,11 +48,12 @@ disposition:
 
 | Schema change | Consumer impact |
 | --- | --- |
-| New `/plugins/{plugin_id}/installations` body: `workspace_connectors` default | Omission defaults to `true` and uses Workspace connectors. Explicit `false` preserves the existing legacy MCP storage path and requires a Runtime. Expert/team installs require Runtime in both modes; connector roots are available only in connector mode and may omit Runtime. |
+| New `/plugins/{plugin_id}/installations` body: `workspace_connectors` default | New operations default to `true` and use Workspace connectors. An eligible selector-omitted retry of an existing pinned frozen plan resumes its original mode; see the retry boundary below. Explicit `false` on a new operation preserves the legacy MCP storage path and requires a Runtime. Expert/team installs require Runtime in both modes; connector roots are available only in connector mode and may omit Runtime. |
 
-Existing legacy callers keep their current request bodies. The new endpoint's
-`workspace_connectors` field is optional and defaults to `true`; `false` retains
-the previous behavior. Any supplied `runtime_id` must be a UUID string.
+Existing legacy callers keep their current request bodies. For a new operation,
+the new endpoint's optional `workspace_connectors` field defaults to `true`;
+`false` retains the previous behavior. Any supplied `runtime_id` must be a UUID
+string. A selector-omitted pinned retry follows the frozen-plan rule below.
 
 ## Request
 
@@ -73,7 +74,7 @@ Content-Type: application/json
 }
 ```
 
-`workspace_connectors` is an optional boolean that defaults to `true`:
+`workspace_connectors` is an optional boolean that defaults to `true` for new operations:
 
 - Expert and expert-team installations use Workspace connector snapshots by
   default. Explicit `false` retains the existing `mcp_config` path. Both paths
@@ -84,11 +85,12 @@ Content-Type: application/json
 - For expert/team installs, `resource_name` retains its existing expert/team
   naming behavior and `custom_env` remains the expert execution environment.
 
-Because `/plugins/install` has no selector, its adapter explicitly enables
-connector mode for expert/team dependencies. It accepts only expert and
-expert-team roots; independent connectors must use
-`/plugins/{plugin_id}/installations`, which returns their resource identities.
-The original route's request and response fields remain unchanged.
+For new operations, `/plugins/install` has no selector and defaults to connector
+mode for expert/team dependencies. On an eligible pinned frozen-plan retry, it
+may instead resume the original mode. It accepts only expert and expert-team
+roots; independent connectors must use `/plugins/{plugin_id}/installations`,
+which returns their resource identities. The original route's request and
+response fields remain unchanged.
 
 Connector mode includes explicit market connector dependencies where present
 and the Expert package's own non-empty `mcp.json`. Shared dependencies are sent
@@ -182,8 +184,8 @@ When `PLUGIN_PINNED_INSTALLATION_ENABLED` is enabled, the pinned path keeps the
 existing version-management, published-root, and dependency-audience rules.
 Skills come from the selected immutable release, including its nullable
 `DeclaredVersion` and real plugin ID; a later draft does not change the selected
-release, Skill name or original file bytes. Connector mode is the default on
-this path; explicit `workspace_connectors: false` retains the legacy MCP path.
+release, Skill name or original file bytes. New operations on this path default
+to connector mode; explicit `workspace_connectors: false` selects the legacy MCP path.
 Authorized current connector snapshots are frozen with the first plan, so later
 edits do not change an existing operation. Connectors do not acquire fabricated
 immutable release IDs. The pinned path's existing inline-dependency rejection
@@ -196,12 +198,25 @@ earliest shape omits Skill and Expert/Team version/source metadata; the
 `3f04192` shape retains Skill version/source metadata but predates Expert/Team
 version/source metadata; current requests include all metadata. The same
 fingerprint selection applies to default/true connector requests. New attempts
-always use the current shape. Recovery still requires the original adapter,
-valid eligibility HMAC, available key-ring entry and current authorization.
+always use the current shape. Recovery requires the stored serialization
+adapter version, valid eligibility HMAC, available key-ring entry and current authorization.
+
+**Pinned frozen-plan retry mode.** A selector-omitted retry can resume the
+original mode only when the same key resolves to an existing pinned attempt with
+a frozen plan, the rest of the install intent matches, and the request is within
+that attempt's original retry window. The frozen plan, request/input
+fingerprints, Fleet idempotency key and retry deadline remain unchanged.
+Eligibility and HMAC checks, current authorization, and lease/window checks
+still apply. Explicit `true` or `false` remains a mode selection; if it differs
+from the frozen mode, the same-key request conflicts. This compatibility applies
+only to existing pinned frozen plans; non-pinned operations have no such
+recovery guarantee. New operations continue to default to connector mode.
 
 Each expert uses its own manifest description, including team members; the
 team itself uses the team manifest description. The legacy route keeps its
-public request/response shape while using the connector-default service adapter.
+public request/response shape; new operations use the connector-default
+service adapter, while retries of existing pinned frozen plans follow the
+original mode described above.
 
 The adapter preserves expert AGENTS.md/MCP and team AGENTS.md. Instructions
 must be inline (`content_type: raw`). Explicit-false legacy MCP must also be
@@ -213,8 +228,14 @@ configuration, and complete file tree match. Skill descriptions come from the
 Skill manifest rather than the installing expert/team, so shared content has a
 stable fingerprint. Conflicting content is rejected, not overwritten.
 
-Only requests with `workspace_connectors: false` use the legacy MCP path. Known
-empty MCP defaults (`{}` or `{"mcpServers":{}}`) are omitted. Non-empty legacy
+For new operations, an explicit `workspace_connectors: false` selects the legacy
+MCP path. A selector-omitted retry may use that path only to resume an existing
+pinned operation whose frozen plan selected legacy mode, with the same key and
+within its original retry window. Explicit `true` or `false` does not switch a
+frozen operation to another mode; a mismatch conflicts. See the pinned
+frozen-plan retry rule above.
+
+Known empty MCP defaults (`{}` or `{"mcpServers":{}}`) are omitted. Non-empty legacy
 `mcp_config` uses Fleet's closed stdio/remote structure: command or HTTP(S) URL,
 never both; unknown fields, invalid transports and explicit null values are
 rejected. Command/URL/type are normalized as Fleet does, while environment,
@@ -224,12 +245,14 @@ For stdio, `command` selects the transport: a non-empty `type` (including
 `VALIDATION_ERROR` before Fleet. Marketplace does not strip those fields or
 reinterpret them as environment variables.
 
-Omitting `workspace_connectors` or setting it to `true` uses Workspace
-connector snapshots for MCP dependencies instead of legacy `mcp_config`. Their
-complete `mcp.json` configuration is retained, including actual server keys,
-headers, environment, arguments, and service extension fields; it is not
-narrowed through the legacy MCP normalizer. No MCP process is started and no
-MCP URL is fetched by Marketplace.
+For new operations, omitting `workspace_connectors` or setting it to `true`
+uses Workspace connector snapshots for MCP dependencies instead of legacy
+`mcp_config`. On retry, omission may resume the original mode only under the
+pinned frozen-plan rule above; explicit `true` does not recover a legacy-mode
+operation. Connector snapshots' complete `mcp.json` configuration is retained,
+including actual server keys, headers, environment, arguments, and service
+extension fields; it is not narrowed through the legacy MCP normalizer. No MCP
+process is started and no MCP URL is fetched by Marketplace.
 
 Team leadership uses the first explicitly flagged leader, otherwise the first
 member, matching the legacy selection rule. Tied display orders are resolved by
@@ -380,14 +403,18 @@ key/input and reconcile that earlier outcome before starting a new operation.
 
 ## Retry / coexistence rules
 
-The connector default applies to newly initiated operations. Requests initiated
-before this default change with an omitted selector used legacy MCP storage.
-Replaying those requests after deployment can return an intent/fingerprint
-conflict because their installation mode or assembled request changed; this
-rollout does not infer or restore the previous mode. Existing experts and
-receipts are not rewritten. Reconcile any uncertain pre-deployment operation
-against its original Workspace resources; never automatically replace its
-idempotency key and resubmit it.
+The connector default applies to newly initiated operations. For an existing
+signed pinned frozen plan, an unchanged same-key request with no explicit
+selector resumes the original mode and Fleet request through either plugin
+installation URL, within the original retry deadline. An explicit mode must
+match the frozen operation; changing other installation parameters still
+conflicts. Recovery does not extend Fleet receipt retention or rewrite existing
+experts and receipts.
+
+Operations without a frozen plan have no mode-recovery guarantee and may still
+conflict after a default change. Reconcile any uncertain operation against its
+original Workspace resources; never automatically replace its idempotency key
+and resubmit it.
 
 - Select **one** installation route for an operation; parallel availability
   does not mean dual-writing to both routes.
