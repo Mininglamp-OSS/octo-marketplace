@@ -175,7 +175,9 @@ type Plugin struct {
 	SceneCodes []string
 	// DependencyIssues is derived from the released dependency graph for owner
 	// and admin reads. It is never stored or exposed on the public catalog.
-	DependencyIssues []DependencyIssue
+	DependencyIssues    []DependencyIssue
+	DependencyUpdates   []DependencyUpdate
+	DependencySuspended bool
 	// HasPendingReview / LatestReviewID / LatestReviewStatus are the review half of
 	// the displayed status. They are DERIVED at read time and never persisted on
 	// this row — review state lives on plugin_review_requests so a listed v1 and an

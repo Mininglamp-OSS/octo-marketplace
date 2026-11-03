@@ -435,7 +435,7 @@ func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.
 	result := make(map[string][]model.DependencyIssue, len(roots))
 	ids := make([]string, 0, len(roots))
 	for _, p := range roots {
-		if p.ListingState != model.PluginListingStatePublished || (p.Type != model.PluginTypeExpert && p.Type != model.PluginTypeExpertTeam) {
+		if p.ListingState == model.PluginListingStateDraft || (p.Type != model.PluginTypeExpert && p.Type != model.PluginTypeExpertTeam) {
 			continue
 		}
 		ids = append(ids, p.ID)
@@ -459,7 +459,7 @@ func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.
 	}
 	var edges []*dependencyEdge
 	for _, root := range roots {
-		if root.ListingState != model.PluginListingStatePublished || (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) {
+		if root.ListingState == model.PluginListingStateDraft || (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) {
 			continue
 		}
 		rootEdges, err := r.loadDependencyEdges(ctx, root.ID)

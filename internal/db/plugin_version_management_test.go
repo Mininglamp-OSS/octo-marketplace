@@ -166,7 +166,15 @@ func TestManagedFrozenApprovalKeepsLaterDraft(t *testing.T) {
 				if pub.Review == nil {
 					t.Fatal("missing pending review")
 				}
-				if _, err = svc.Update(ctx, owner, id, managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)); err != nil {
+				later := managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)
+				if _, err = svc.Update(ctx, owner, id, later); !errors.Is(err, pluginsvc.ErrReviewPending) {
+					t.Fatalf("pending tenant edit: %v", err)
+				}
+				// Operator repairs remain possible; approval must still use the
+				// immutable submission rather than such a repaired current draft.
+				operator := owner
+				operator.IsSystemAdmin = true
+				if _, err = svc.Update(ctx, operator, id, later); err != nil {
 					t.Fatal(err)
 				}
 				if _, err = svc.ApproveReview(ctx, managedReviewer(), pub.Review.ID); err != nil {
@@ -818,7 +826,12 @@ func TestManagedFirstApprovalKeepsLaterDraftRelations(t *testing.T) {
 	}
 	later := managedWrite("2.0.0", "later draft", model.PluginVisibilitySpace)
 	later.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skillB.Plugin.ID, Type: "expert_skill"}}
-	updated, err := svc.Update(ctx, owner, expert.Plugin.ID, later)
+	if _, err = svc.Update(ctx, owner, expert.Plugin.ID, later); !errors.Is(err, pluginsvc.ErrReviewPending) {
+		t.Fatalf("pending tenant edit: %v", err)
+	}
+	operator := owner
+	operator.IsSystemAdmin = true
+	updated, err := svc.Update(ctx, operator, expert.Plugin.ID, later)
 	if err != nil {
 		t.Fatal(err)
 	}

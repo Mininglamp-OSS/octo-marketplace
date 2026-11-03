@@ -11,6 +11,17 @@ import (
 // and resource locked. The frozen release is append-only; live draft rows and
 // draft relations are preserved even when the author saved again after submit.
 func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope, p ApproveReviewParams, current *model.Plugin, version string, changelog sql.NullString, manifest, pkg, keys, relationBytes []byte, manifestHash, pluginHash string) (*model.Plugin, error) {
+	out, err := r.approveManagedReviewInTx(ctx, tx, scope, p, current, version, changelog, manifest, pkg, keys, relationBytes, manifestHash, pluginHash)
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *Repo) approveManagedReviewInTx(ctx context.Context, tx *sql.Tx, scope Scope, p ApproveReviewParams, current *model.Plugin, version string, changelog sql.NullString, manifest, pkg, keys, relationBytes []byte, manifestHash, pluginHash string) (*model.Plugin, error) {
 	if current.Visibility != model.PluginVisibilitySpace {
 		return nil, ErrConflict
 	}
@@ -54,6 +65,9 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,listing_state='published',updated_at=? WHERE plugin_id=? AND space_id=? AND deleted_at IS NULL`, current.CurrentVersionID, current.CurrentVersion, now, current.ID, scope.SpaceID); err != nil {
 		return nil, err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM plugin_dependency_suspensions WHERE plugin_id=?`, current.ID); err != nil {
+		return nil, err
+	}
 	if err = ensureVisibleDefaultPlacement(ctx, tx, r.id, now, current.ID, current.CategoryID); err != nil {
 		return nil, err
 	}
@@ -82,9 +96,6 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	}
 	m := Mutation{OperatorID: p.ReviewerUID, OperatorName: p.ReviewerName, RequestID: p.RequestID}
 	if err = insertAudit(ctx, tx, r.id(), now, frozen, "review_approve", m, current.PluginHash, pluginHash); err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	frozen.CurrentVersionID = &id

@@ -29,7 +29,8 @@ var (
 // rather than in the client is the point — a browser that guesses wrong either
 // lists something unreviewed or strands a plugin in draft forever.
 type PublishParams struct {
-	PluginID string
+	ExpectedDraftRevision string
+	PluginID              string
 	// Version selects the managed release label at publication time. It is
 	// independent of the draft label. Feature-off/Connector defaults stay intact.
 	Version   string
@@ -71,6 +72,9 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	if detail.Plugin.OwnerUID != caller.UID {
 		// Not a 403: a non-owner must not learn that this plugin exists.
 		return nil, ErrNotFound
+	}
+	if params.ExpectedDraftRevision != "" && model.PluginDraftRevision(detail.Plugin) != params.ExpectedDraftRevision {
+		return nil, ErrConflict
 	}
 	// An embedded child is published by its container, never on its own — matching
 	// SubmitReview, Update and Delete.
@@ -134,7 +138,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		if version == "" {
 			version = defaultCurrentVersion
 		}
-		review, err := s.submitReview(ctx, caller, ReviewSubmitParams{
+		review, err := s.submitReview(ctx, caller, ReviewSubmitParams{ExpectedDraftRevision: params.ExpectedDraftRevision,
 			PluginID:  detail.Plugin.ID,
 			Version:   version,
 			Changelog: params.Changelog,
@@ -176,13 +180,13 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		if e = s.verifyVersionFiles(ctx, detail.Plugin, v); e != nil {
 			return nil, e
 		}
-		published, e := store.PublishManaged(ctx, scope(caller), pluginrepo.PublishParams{PluginID: detail.Plugin.ID, ExpectedVersionID: v.ID, Version: params.Version, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
+		published, e := store.PublishManaged(ctx, scope(caller), pluginrepo.PublishParams{ExpectedDraftRevision: params.ExpectedDraftRevision, PluginID: detail.Plugin.ID, ExpectedVersionID: v.ID, Version: params.Version, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
 		if e != nil {
 			return nil, mapStoreError(e)
 		}
 		return &PublishResult{Plugin: &Detail{Plugin: published, Relations: detail.Relations}}, nil
 	}
-	published, err := s.repo.PublishPlugin(ctx, scope(caller), pluginrepo.PublishParams{
+	published, err := s.repo.PublishPlugin(ctx, scope(caller), pluginrepo.PublishParams{ExpectedDraftRevision: params.ExpectedDraftRevision,
 		PluginID:     detail.Plugin.ID,
 		OperatorID:   caller.UID,
 		OperatorName: caller.Name,

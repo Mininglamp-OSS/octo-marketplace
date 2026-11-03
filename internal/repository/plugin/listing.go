@@ -29,6 +29,7 @@ func mustChangeState(res sql.Result) error {
 
 // PublishParams carries one owner-driven publish of an unlisted plugin.
 type PublishParams struct {
+	ExpectedDraftRevision string
 	// Version is the requested managed release label; empty retains admin/legacy behavior.
 	Version           string
 	ExpectedVersionID string
@@ -182,6 +183,11 @@ func (r *Repo) DelistPlugin(ctx context.Context, scope Scope, p DelistParams) (_
 	current, err := getReviewedPluginForUpdate(ctx, tx, scope.SpaceID, p.PluginID)
 	if err != nil {
 		return nil, err
+	}
+	if r.versionManagement {
+		if err = rejectPendingVisibilityMutation(ctx, tx, current.ID); err != nil {
+			return nil, err
+		}
 	}
 
 	// An embedded child (a bundled skill, a squad member) is listed and un-listed

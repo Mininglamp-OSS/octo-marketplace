@@ -26,6 +26,8 @@ OPENAPI_SCAN_DIRS := internal/api/handler/mcp.go internal/api/handler/plugin/han
 OPENAPI_SCAN_DIRS += internal/api/handler/plugin/version_management.go
 OPENAPI_SCAN_DIRS += internal/api/handler/plugin/installations.go
 OPENAPI_SCAN_DIRS += internal/api/handler/plugin/scene_admin.go
+OPENAPI_SCAN_DIRS += internal/api/handler/plugin/visibility.go
+OPENAPI_SCAN_DIRS += internal/api/handler/plugin/dependency_updates.go
 
 # Consumer JSON Schema contract, included in the aggregated OpenAPI check.
 openapi-contract:

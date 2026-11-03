@@ -61,12 +61,13 @@ type RejectReviewParams struct {
 // means approve can apply the snapshot atomically without depending on the
 // live sidecar still being correct.
 type FrozenSnapshot struct {
-	Manifest       json.RawMessage
-	Package        json.RawMessage
-	AttachmentKeys json.RawMessage
-	Relations      []model.PluginRelation
-	ManifestHash   string
-	PluginHash     string
+	ExpectedDraftRevision string
+	Manifest              json.RawMessage
+	Package               json.RawMessage
+	AttachmentKeys        json.RawMessage
+	Relations             []model.PluginRelation
+	ManifestHash          string
+	PluginHash            string
 	// DeclaredContent reports whether the submission carried its own content
 	// (declared manifest+package, or a materialized zip) rather than being a
 	// copy of the plugin's live row. InsertReviewRequest re-checks the
@@ -141,11 +142,21 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	}
 	defer tx.Rollback()
 
+	if err = r.insertReviewInTx(ctx, tx, scope, req, snap); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *Repo) insertReviewInTx(ctx context.Context, tx *sql.Tx, scope Scope, req *model.PluginReviewRequest, snap FrozenSnapshot) (err error) {
 	// Submit IS owner-only, so the owner-scoped lock is correct here (unlike the
 	// reviewer transactions below, where the actor is by definition not the owner).
 	current, err := getOwnedForUpdate(ctx, tx, scope, req.PluginID)
 	if err != nil {
 		return err
+	}
+	if snap.ExpectedDraftRevision != "" && model.PluginDraftRevision(current) != snap.ExpectedDraftRevision {
+		return ErrConflict
 	}
 	// Review gates ORG exposure. A request is meaningful against either:
 	//   - a `space`-intent row (the normal first-listing / upgrade flow), OR
@@ -324,7 +335,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 		}
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // publishedVersionLabels reconstructs the set of version labels this plugin has
@@ -560,7 +571,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		return nil, err
 	}
 	if kind == string(model.ReviewKindVisibility) {
-		if !r.versionManagement || !versioned(current) {
+		if !r.versionManagement {
 			return nil, ErrConflict
 		}
 		return r.approveVisibilityReview(ctx, tx, scope, p, current)
@@ -1106,6 +1117,9 @@ func (r *Repo) RejectReview(ctx context.Context, scope Scope, p RejectReviewPara
 	if err := insertAudit(ctx, tx, r.id(), now, *current, "review_reject", m, current.PluginHash, current.PluginHash); err != nil {
 		return nil, nil, err
 	}
+	if err := finishVisibilityGroup(ctx, tx, p.ReviewID, scope.SpaceID, "rejected", p.ReviewerUID, p.ReviewerName, p.Reason, now); err != nil {
+		return nil, nil, err
+	}
 	retained, err := retainedAttachmentKeys(ctx, tx, current.ID, current.AttachmentKeys)
 	if err != nil {
 		return nil, nil, err
@@ -1215,6 +1229,9 @@ func (r *Repo) CancelReview(ctx context.Context, scope Scope, reviewID, callerUI
 	}
 	if err := mustAffect(res); err != nil {
 		return nil, nil, ErrConflict
+	}
+	if err := finishVisibilityGroup(ctx, tx, reviewID, scope.SpaceID, "canceled", callerUID, "", "", now); err != nil {
+		return nil, nil, err
 	}
 	retained, err := retainedAttachmentKeys(ctx, tx, current.ID, current.AttachmentKeys)
 	if err != nil {

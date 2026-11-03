@@ -62,10 +62,20 @@ components:
         data:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.EmptyResp'
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_model_DependencyUpdates
+    : properties:
+        data:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdates'
+      type: object
     ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_model_Detail
     : properties:
         data:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Detail'
+      type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_model_VisibilityPlan
+    : properties:
+        data:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.VisibilityPlan'
       type: object
     ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_service_IconResult
     : properties:
@@ -172,6 +182,11 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/internal_api_handler_plugin.delistResponse'
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_dependencySkipResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/internal_api_handler_plugin.dependencySkipResponse'
       type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_detailGraphResponse:
       properties:
@@ -526,6 +541,49 @@ components:
         via:
           items:
             type: string
+          type: array
+          uniqueItems: false
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdate:
+      properties:
+        from_version:
+          type: string
+        from_version_id:
+          type: string
+        is_skipped:
+          type: boolean
+        name:
+          type: string
+        plugin_id:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        target_version:
+          type: string
+        target_version_id:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdateTarget:
+      properties:
+        plugin_id:
+          type: string
+        target_version_id:
+          type: string
+      required:
+      - plugin_id
+      - target_version_id
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdates:
+      properties:
+        draft_revision:
+          type: string
+        plugin_id:
+          type: string
+        published_version_id:
+          type: string
+        updates:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdate'
           type: array
           uniqueItems: false
       type: object
@@ -1206,6 +1264,54 @@ components:
       - VisibilityPrivate
       - VisibilitySystem
       - VisibilitySpace
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.VisibilityPlan:
+      properties:
+        affected:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.VisibilityPlanItem'
+          type: array
+          uniqueItems: false
+        blockers:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.VisibilityPlanBlocker'
+          type: array
+          uniqueItems: false
+        changes:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.VisibilityPlanItem'
+          type: array
+          uniqueItems: false
+        plan_revision:
+          type: string
+        plugin_id:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.VisibilityPlanBlocker:
+      properties:
+        name:
+          type: string
+        plugin_id:
+          type: string
+        reason:
+          type: string
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_model.VisibilityPlanItem:
+      properties:
+        baseline:
+          type: string
+        from:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
+        name:
+          type: string
+        plugin_id:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        published_version_id:
+          type: string
+        to:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginVisibility'
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.ReferenceCandidate:
       properties:
         already_bound:
@@ -1788,6 +1894,47 @@ components:
         plugin_id:
           type: string
       type: object
+    internal_api_handler_plugin.dependencySkipRequest:
+      properties:
+        targets:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdateTarget'
+          maxItems: 200
+          minItems: 1
+          type: array
+          uniqueItems: false
+      required:
+      - targets
+      type: object
+    internal_api_handler_plugin.dependencySkipResponse:
+      type: object
+    internal_api_handler_plugin.dependencySubmitRequest:
+      properties:
+        changelog:
+          type: string
+        draft:
+          $ref: '#/components/schemas/internal_api_handler_plugin.upsertRequest'
+        expected_draft_revision:
+          type: string
+        expected_published_version_id:
+          type: string
+        targets:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdateTarget'
+          maxItems: 200
+          minItems: 1
+          type: array
+          uniqueItems: false
+        version:
+          type: string
+      required:
+      - changelog
+      - draft
+      - expected_draft_revision
+      - expected_published_version_id
+      - targets
+      - version
+      type: object
     internal_api_handler_plugin.detailGraphResponse:
       properties:
         dependency_issues:
@@ -1912,6 +2059,13 @@ components:
         dependency_issues:
           items:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyIssue'
+          type: array
+          uniqueItems: false
+        dependency_suspended:
+          type: boolean
+        dependency_updates:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdate'
           type: array
           uniqueItems: false
         display_status:
@@ -2118,6 +2272,10 @@ components:
           type: string
         plugin_type:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        published_version:
+          type: string
+        published_version_id:
+          type: string
         publisher:
           type: string
         rating:
@@ -2228,6 +2386,8 @@ components:
         changelog:
           description: Changelog is used for organization review and ignored for private
             publish.
+          type: string
+        expected_draft_revision:
           type: string
         plugin_id:
           type: string
@@ -2572,6 +2732,8 @@ components:
       type: object
     internal_api_handler_plugin.visibilityRequest:
       properties:
+        expected_plan_revision:
+          type: string
         expected_published_version_id:
           type: string
         visibility:
@@ -2580,7 +2742,6 @@ components:
           - space
           type: string
       required:
-      - expected_published_version_id
       - visibility
       type: object
     internal_api_handler_plugin.visibilityResponse:
@@ -6912,6 +7073,215 @@ paths:
       summary: List plugins
       tags:
       - plugin
+  /plugins/{plugin_id}/dependency_updates:
+    get:
+      description: Returns exact source and target released versions. Drafts and connectors
+        never produce update reminders. Skipped entries remain available for manual
+        adoption.
+      operationId: plugin.dependency_update.list
+      parameters:
+      - description: Plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_model_DependencyUpdates'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Get direct dependency updates for an owned expert or team
+      tags:
+      - plugin
+    post:
+      description: Saves the complete draft and publishes or opens organization review
+        in one conditional database transaction. Stale source or draft revisions and
+        unavailable targets fail without partial changes.
+      operationId: plugin.dependency_update.create
+      parameters:
+      - description: Plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.dependencySubmitRequest'
+                description: Conditional draft and target versions
+                summary: body
+        description: Conditional draft and target versions
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_publishResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: PAYLOAD_TOO_LARGE
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Adopt dependency releases and submit a new resource version
+      tags:
+      - plugin
+  /plugins/{plugin_id}/dependency_updates/_skip:
+    post:
+      description: Stores authenticated per-user and per-resource skip records atomically
+        without changing drafts, reviews, content or references.
+      operationId: plugin.dependency_update.skip
+      parameters:
+      - description: Plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.dependencySkipRequest'
+                description: Dependency target versions
+                summary: body
+        description: Dependency target versions
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-internal_api_handler_plugin_dependencySkipResponse'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Skip selected dependency release reminders
+      tags:
+      - plugin
   /plugins/{plugin_id}/dependents:
     get:
       description: Returns authorized direct and indirect consumers from immutable
@@ -7492,6 +7862,75 @@ paths:
       security:
       - Bearer: []
       summary: Change a published plugin audience without a content release
+      tags:
+      - plugin
+  /plugins/{plugin_id}/visibility_plan:
+    get:
+      description: Returns owner-scoped identities and an opaque revision for confirming
+        all scope changes together. Private foreign dependency content is never exposed.
+      operationId: plugin.visibility_plan.get
+      parameters:
+      - description: Plugin ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      - description: Target audience
+        in: query
+        name: visibility
+        required: true
+        schema:
+          enum:
+          - private
+          - space
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_model_VisibilityPlan'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: FORBIDDEN
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: Preview a plugin audience change and dependency impact
       tags:
       - plugin
   /plugins/delete:

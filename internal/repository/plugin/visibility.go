@@ -12,6 +12,7 @@ import (
 type VisibilityParams struct {
 	PluginID                            string
 	ExpectedPublishedVersionID          string
+	ExpectedPlanRevision                string
 	Visibility                          model.PluginVisibility
 	OperatorID, OperatorName, RequestID string
 }
@@ -28,6 +29,9 @@ type VisibilityResult struct {
 // published/current pointers, relationships or release rows. The owner lock
 // serializes this operation with publication, reference writes and reviews.
 func (r *Repo) ChangeVisibility(ctx context.Context, scope Scope, p VisibilityParams) (_ *VisibilityResult, err error) {
+	if p.ExpectedPlanRevision != "" {
+		return r.changeVisibilityPlan(ctx, scope, p)
+	}
 	defer func() { err = classifyDeadlock(err) }()
 	if !r.versionManagement {
 		return nil, ErrVersionBaselineUnavailable
@@ -205,6 +209,24 @@ func settleVisibilityReview(ctx context.Context, tx *sql.Tx, id, uid, name strin
 	return mustAffect(res)
 }
 func (r *Repo) approveVisibilityReview(ctx context.Context, tx *sql.Tx, scope Scope, p ApproveReviewParams, current *model.Plugin) (*model.Plugin, error) {
+	root, _, _, err := visibilityGroup(ctx, tx, p.ReviewID)
+	if err != nil {
+		return nil, err
+	}
+	if root != "" {
+		source := p.DecisionSource
+		if source == "" {
+			source = model.ReviewDecisionSourceWeb
+		}
+		if err = r.applyVisibilityGroup(ctx, tx, scope, p.ReviewID, p.ReviewerUID, p.ReviewerName, p.RequestID, source); err != nil {
+			return nil, err
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		current.Visibility = model.PluginVisibilitySpace
+		return current, nil
+	}
 	var versionID string
 	var from, to model.PluginVisibility
 	if err := tx.QueryRowContext(ctx, `SELECT published_version_id,source_visibility,target_visibility FROM plugin_visibility_reviews WHERE review_id=?`, p.ReviewID).Scan(&versionID, &from, &to); err != nil {

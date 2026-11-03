@@ -317,7 +317,7 @@ func equivalentApprovedRelations(source string, a, b []byte) bool {
 	return true
 }
 
-func compatibilityLiveRelations(ctx context.Context, tx *sql.Tx, source string) ([]model.PluginRelation, error) {
+func compatibilityLiveRelations(ctx context.Context, tx visibilityQuery, source string) ([]model.PluginRelation, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT target_plugin_id,relation_type,target_version_id FROM plugin_relations WHERE source_plugin_id=? AND status=1 AND deleted_at IS NULL`, source)
 	if err != nil {
 		return nil, err
