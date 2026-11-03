@@ -12,3 +12,10 @@ commits = [
   "024e237ba5d18d863b65feb9ece8a5fea139f9af",
   "27b5681b6ce75a2d51f7f5fed096db2609b30620",
 ]
+
+[[allowlists]]
+description = "Deterministic SHA-256 idempotency digest of the synthetic recruitment fixture"
+condition = "AND"
+paths = ['''^internal/db/plugin_install_frozen_default_recovery_http_test\.go$''']
+regexTarget = "secret"
+regexes = ['''^7b669385e9e89d264129dc6eaa1f73b35d163574fbfe5d1484e39e0c7e6d0a03$''']
