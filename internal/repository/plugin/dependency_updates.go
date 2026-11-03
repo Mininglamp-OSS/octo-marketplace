@@ -195,7 +195,9 @@ func (r *Repo) selectUpdates(ctx context.Context, tx *sql.Tx, sc Scope, p *model
 	return connectors, nil
 }
 
-func refreshConnectorBaselines(ctx context.Context, tx *sql.Tx, source, version string) error {
+// RefreshConnectorBaselines records first-seen Connector revisions for a released
+// Expert and retains acknowledged revisions for references that still exist.
+func RefreshConnectorBaselines(ctx context.Context, tx *sql.Tx, source, version string) error {
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, source, version).Scan(&raw); err != nil {
 		return err

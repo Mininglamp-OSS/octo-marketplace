@@ -167,7 +167,7 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 		}
 	}
 	if p.Type == model.PluginTypeExpert {
-		if err = refreshConnectorBaselines(ctx, tx, p.ID, versionID); err != nil {
+		if err = RefreshConnectorBaselines(ctx, tx, p.ID, versionID); err != nil {
 			return err
 		}
 	}
