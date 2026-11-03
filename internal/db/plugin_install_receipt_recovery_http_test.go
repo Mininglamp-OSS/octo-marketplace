@@ -653,3 +653,26 @@ func TestLegacyPluginRouteKeylessInstallSkipsReceiptProbe(t *testing.T) {
 		t.Fatalf("keyless legacy install did not use connector mode: connectors=%t mcp_config=%t", connectors, mcpConfig)
 	}
 }
+
+func TestNonPinnedDefaultReceiptPermissionErrorDoesNotInstall(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			harness := newPluginReceiptTest(t, receiptPluginWrite())
+			harness.fleet.setGetStatus(status)
+			for _, modern := range []bool{false, true} {
+				body := harness.legacyBody(t)
+				if modern {
+					body = harness.modernBody(t, "", "")
+				}
+				response := harness.send(t, modern, body, "receipt-auth")
+				if response.Code != status {
+					t.Fatalf("receipt permission status=%d want=%d body=%s", response.Code, status, response.Body.String())
+				}
+			}
+			gets, installs, replays, commits := harness.fleet.counts()
+			if gets != 2 || installs != 0 || replays != 0 || commits != 0 {
+				t.Fatalf("receipt permission failure counts: gets=%d installs=%d replays=%d commits=%d", gets, installs, replays, commits)
+			}
+		})
+	}
+}

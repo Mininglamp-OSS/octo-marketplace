@@ -175,8 +175,8 @@ func (s *Service) createCurrentInstallation(ctx context.Context, caller Caller, 
 	}
 	hasReceipt, err := s.capabilityInstaller.HasCapabilityInstallationReceipt(ctx, p.Token, caller.SpaceID, p.WorkspaceID, p.IdempotencyKey)
 	if err != nil {
-		// Nothing was mutated, but the earlier operation's result is unknown.
-		return nil, &InstallationAttemptError{Err: err, Unknown: true}
+		// A failed presence read never authorizes an installation.
+		return nil, &InstallationAttemptError{Err: err, Unknown: !definiteInstallationRejection(err)}
 	}
 	if !hasReceipt {
 		return s.installDefaultOperation(ctx, caller, pluginID, p)

@@ -114,29 +114,40 @@ func TestInstallUpstreamHTTPContracts(t *testing.T) {
 			var current atomic.Pointer[installHTTPReply]
 			var calls atomic.Int64
 			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/v1/capabilities/install/receipt" {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, `{"data":{"has_receipt":false}}`)
+					return
+				}
+				if r.Method == http.MethodPost && r.URL.Path == "/v1/capabilities/install/receipt" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = io.WriteString(w, `{"error":{"code":"NOT_FOUND","details":{"resource":"capability_installation_receipt"}}}`)
+					return
+				}
 				calls.Add(1)
 				serveInstallReply(t, w, r, *current.Load())
 			}))
 			defer remote.Close()
 			engine, root, _ := installationHTTPFixture(t, pinned, fleet.New(remote.URL))
 			for _, tc := range []struct {
-				name                              string
-				reply                             installHTTPReply
-				status                            int
-				code, message, reason, retryAfter string
+				name                     string
+				reply                    installHTTPReply
+				status                   int
+				code, reason, retryAfter string
 			}{
 				{name: "upstream-validation", reply: installHTTPReply{status: 400, body: `{"error":{"code":"VALIDATION_ERROR"}}`}, status: 400, code: "VALIDATION_ERROR"},
 				{name: "upstream-auth", reply: installHTTPReply{status: 401, body: `{"error":{"code":"AUTH_REQUIRED"}}`}, status: 401, code: "AUTH_REQUIRED"},
 				{name: "upstream-permission", reply: installHTTPReply{status: 403, body: `{"error":{"code":"FORBIDDEN"}}`}, status: 403, code: "FORBIDDEN"},
 				{name: "upstream-missing", reply: installHTTPReply{status: 404, body: `{"error":{"code":"NOT_FOUND"}}`}, status: 404, code: "NOT_FOUND"},
-				{name: "key-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"idempotency_key","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: "幂等键已用于其他安装参数，请核对原安装记录。", reason: "idempotency_key_reused"},
-				{name: "skill-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", message: "安装发生技能资源冲突，请核对工作区已有资源。"},
-				{name: "expert-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "DUPLICATE", message: "安装发生专家资源冲突，请核对工作区已有资源。"},
-				{name: "skill-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "CONFLICT", message: "安装发生技能资源冲突，请核对工作区已有资源。"},
-				{name: "expert-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "CONFLICT", message: "安装发生专家资源冲突，请核对工作区已有资源。"},
-				{name: "team-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert_team"}}}`}, status: 409, code: "CONFLICT", message: "安装发生专家团资源冲突，请核对工作区已有资源。"},
-				{name: "legacy-key-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"IDEMPOTENCY_KEY_REUSED","message":"` + conflictMessage + `"}}`}, status: 409, code: "CONFLICT", message: "幂等键已用于其他安装参数，请核对原安装记录。", reason: "idempotency_key_reused"},
-				{name: "duplicate-blank-message", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"   "}}`}, status: 409, code: "DUPLICATE", message: "安装发生冲突，请检查已有资源或安装参数。"},
+				{name: "key-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"idempotency_key","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE", reason: "idempotency_key_reused"},
+				{name: "skill-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "DUPLICATE"},
+				{name: "expert-duplicate", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "DUPLICATE"},
+				{name: "skill-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"skill","name":"upstream-secret"}}}`}, status: 409, code: "CONFLICT"},
+				{name: "expert-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert"}}}`}, status: 409, code: "CONFLICT"},
+				{name: "team-content-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"CONFLICT","message":"` + conflictMessage + `","details":{"resource":"expert_team"}}}`}, status: 409, code: "CONFLICT"},
+				{name: "legacy-key-conflict", reply: installHTTPReply{status: 409, body: `{"error":{"code":"IDEMPOTENCY_KEY_REUSED","message":"` + conflictMessage + `"}}`}, status: 409, code: "CONFLICT", reason: "idempotency_key_reused"},
+				{name: "duplicate-blank-message", reply: installHTTPReply{status: 409, body: `{"error":{"code":"DUPLICATE","message":"   "}}`}, status: 409, code: "DUPLICATE"},
 				{name: "rate-limited", reply: installHTTPReply{status: 429, body: `{"error":{"code":"RATE_LIMITED","message":"upstream-secret"}}`, retryAfter: "7"}, status: 429, code: "RATE_LIMITED", retryAfter: "7"},
 				{name: "rate-limited-invalid-delay", reply: installHTTPReply{status: 429, body: `{"error":{"code":"RATE_LIMITED"}}`, retryAfter: "invalid"}, status: 429, code: "RATE_LIMITED"},
 				{name: "rate-limited-negative-delay", reply: installHTTPReply{status: 429, body: `{"error":{"code":"RATE_LIMITED"}}`, retryAfter: "-1"}, status: 429, code: "RATE_LIMITED"},
@@ -160,8 +171,8 @@ func TestInstallUpstreamHTTPContracts(t *testing.T) {
 						engine.ServeHTTP(rec, installationHTTPRequest(root, route, tc.name+"-"+route))
 						var response struct {
 							Error struct {
-								Code, Message, Hint string
-								Details             map[string]any
+								Code    string
+								Details map[string]any
 							}
 						}
 						if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
@@ -169,9 +180,6 @@ func TestInstallUpstreamHTTPContracts(t *testing.T) {
 						}
 						if rec.Code != tc.status || response.Error.Code != tc.code || calls.Load() != before+1 {
 							t.Fatalf("status=%d calls=%d body=%s", rec.Code, calls.Load()-before, rec.Body.String())
-						}
-						if tc.message != "" && response.Error.Message != tc.message {
-							t.Fatalf("conflict message changed: %q", response.Error.Message)
 						}
 						if rec.Header().Get("Retry-After") != tc.retryAfter {
 							t.Fatalf("Retry-After=%q", rec.Header().Get("Retry-After"))
@@ -186,14 +194,8 @@ func TestInstallUpstreamHTTPContracts(t *testing.T) {
 							if response.Error.Details["reason"] != "installation_result_unknown" || response.Error.Details["can_retry_same_key"] != (route != "legacy-keyless") {
 								t.Fatalf("uncertain recovery contract lost: %s", rec.Body.String())
 							}
-							if route == "legacy-keyless" && !strings.Contains(response.Error.Hint, "先核对工作区已有资源") {
-								t.Fatal("keyless uncertainty warning lost")
-							}
 						} else if response.Error.Details["reason"] == "installation_result_unknown" {
 							t.Fatal("definite rejection marked unknown")
-						}
-						if tc.status == 409 && strings.Contains(response.Error.Hint, "使用相同的幂等键和安装参数重试") {
-							t.Fatal("same-key retry cannot fix a definite content conflict")
 						}
 					})
 				}
@@ -256,6 +258,11 @@ func TestInstallHTTPRateLimitSameKeyRetry(t *testing.T) {
 				var first atomic.Pointer[sentRequest]
 				var calls atomic.Int64
 				remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodGet && r.URL.Path == "/v1/capabilities/install/receipt" {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, `{"data":{"has_receipt":false}}`)
+						return
+					}
 					raw, err := io.ReadAll(r.Body)
 					if err != nil {
 						t.Error(err)

@@ -47,6 +47,10 @@ does not retain a historical content snapshot: if current catalog content,
 runtime, environment, or other request input has changed, recovery can conflict.
 Keyless requests use a generated key and skip the presence probe.
 
+Presence-check authentication and permission failures retain Fleet's `401` and
+`403` statuses and dispatch no install. Transport failures and undecodable
+responses remain uncertain outcomes and likewise stop before any mutation.
+
 The adapter follows Fleet's capability Definition contract, including Workspace
 connectors from Fleet commit `489c2ad`. The source contract is recorded in
 `octo-fleet/docs/specs/2026-10-27-workspace-mcp-connectors-design.md`;
