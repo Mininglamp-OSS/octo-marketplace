@@ -314,3 +314,80 @@ func TestDelistIgnoresDraftOnlyMemberEdge(t *testing.T) {
 		t.Fatalf("legacy team: %s %t %v", listing, suspended, err)
 	}
 }
+
+func TestSuspendedExpertRequiresAvailableUnpinnedConnector(t *testing.T) {
+	for _, manual := range []bool{false, true} {
+		t.Run(map[bool]string{true: "manual", false: "automatic"}[manual], func(t *testing.T) {
+			ctx, owner := context.Background(), managedOwner()
+			db := reviewDB(t)
+			repo := pluginrepo.New(db)
+			svc := pluginsvc.New(repo).WithVersionManagement(true)
+			if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), !manual, owner.UID, owner.Name); err != nil {
+				t.Fatal(err)
+			}
+			const connector = "unversioned-connector"
+			seed(t, db, seedPlugin{id: connector, typ: "connector", visibility: "space", listingState: "published"})
+			req := managedWrite("1.0.0", "Expert using connector", model.PluginVisibilitySpace)
+			req.Relations = []pluginsvc.RelationRequest{{Type: "expert_connector", TargetPluginID: connector}}
+			expert, err := svc.Create(ctx, owner, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := expert.Plugin.ID
+			publishManaged(t, svc, owner, id)
+			original, err := repo.GetVersionState(ctx, tenantScope(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = svc.Delist(ctx, managedReviewer(), pluginsvc.DelistParams{PluginID: connector}); err != nil {
+				t.Fatal(err)
+			}
+			publish := func() (string, error) {
+				p, e := svc.Publish(ctx, owner, pluginsvc.PublishParams{PluginID: id, Version: "1.0.1"})
+				if e != nil {
+					return "", e
+				}
+				if p.Review == nil {
+					return "", nil
+				}
+				_, e = svc.ApproveReview(ctx, managedReviewer(), p.Review.ID)
+				return p.Review.ID, e
+			}
+			review, err := publish()
+			if err == nil {
+				t.Fatal("published while the unpinned connector was delisted")
+			}
+			if review != "" {
+				if err := svc.CancelReview(ctx, owner, review); err != nil {
+					t.Fatal(err)
+				}
+			}
+			check := func(want string) {
+				t.Helper()
+				d, e := svc.CurrentDetail(ctx, owner, id)
+				if e != nil {
+					t.Fatal(e)
+				}
+				if d.Plugin.ListingState != model.PluginListingStateDelisted || d.Plugin.DependencyStatus != want {
+					t.Fatalf("listing=%s dependency=%s", d.Plugin.ListingState, d.Plugin.DependencyStatus)
+				}
+				v, e := repo.GetVersionState(ctx, tenantScope(), id)
+				if e != nil || *v.PublishedVersionID != *original.PublishedVersionID {
+					t.Fatal("published pointer changed")
+				}
+			}
+			check("unavailable")
+			if _, err = db.Exec("UPDATE plugins SET listing_state='published' WHERE plugin_id=?", connector); err != nil {
+				t.Fatal(err)
+			}
+			check("restored")
+			if _, err = publish(); err != nil {
+				t.Fatal(err)
+			}
+			d, err := svc.CurrentDetail(ctx, owner, id)
+			if err != nil || d.Plugin.ListingState != model.PluginListingStatePublished || d.Plugin.DependencyStatus != "" {
+				t.Fatalf("republish did not clear suspension: %v", err)
+			}
+		})
+	}
+}

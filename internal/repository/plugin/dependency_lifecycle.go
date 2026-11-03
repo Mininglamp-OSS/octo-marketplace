@@ -74,3 +74,29 @@ func (r *Repo) DependencyStatuses(ctx context.Context, scope Scope, items []mode
 	}
 	return out, nil
 }
+
+// Clear an existing marker only when the candidate snapshot would pass the
+// catalog availability check. The conditional write and publication share a
+// transaction, so a failed recovery cannot advance the release or relist it.
+func clearRecoveredSuspension(ctx context.Context, tx *sql.Tx, id, versionID string) error {
+	var marker string
+	err := tx.QueryRowContext(ctx, `SELECT plugin_id FROM plugin_dependency_suspensions WHERE plugin_id=? FOR UPDATE`, id).Scan(&marker)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE s FROM plugin_dependency_suspensions s JOIN plugins p ON p.plugin_id=s.plugin_id AND p.space_id=s.space_id WHERE s.plugin_id=? AND NOT `+unavailableSnapshotSQL("p.plugin_id", "?"), id, versionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return &ReferenceValidationError{Field: "relations", Reason: "target_not_published"}
+	}
+	return nil
+}
