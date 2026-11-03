@@ -75,6 +75,11 @@ func (r *Repo) PublishPlugin(ctx context.Context, scope Scope, p PublishParams) 
 	if err != nil {
 		return nil, err
 	}
+	// The service checked an unlocked snapshot. A save may have committed since
+	// then; only the locked revision identifies the draft the caller approved.
+	if p.ExpectedDraftRevision != "" && model.PluginDraftRevision(current) != p.ExpectedDraftRevision {
+		return nil, ErrConflict
+	}
 	now := r.now()
 
 	// The service already refused anything but `private`, but it decided that from
