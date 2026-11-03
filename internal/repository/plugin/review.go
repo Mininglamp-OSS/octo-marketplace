@@ -581,7 +581,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		return nil, err
 	}
 	if kind == string(model.ReviewKindVisibility) {
-		if !r.versionManagement || !versioned(current) {
+		if !r.versionManagement {
 			return nil, ErrConflict
 		}
 		return r.approveVisibilityReview(ctx, tx, scope, p, current)

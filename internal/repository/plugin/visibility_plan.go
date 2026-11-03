@@ -98,11 +98,13 @@ func (r *Repo) buildVisibilityPlan(ctx context.Context, tx *sql.Tx, scope Scope,
 			if err := tx.QueryRowContext(ctx, `SELECT published_version_id FROM plugins WHERE plugin_id=?`, p.ID).Scan(&v); err != nil {
 				return err
 			}
-			if !v.Valid {
+			if !v.Valid && (r.references || !p.IsEmbedded) {
 				return ErrVersionBaselineUnavailable
 			}
 			vid = v.String
-			p.PublishedVersionID = &vid
+			if v.Valid {
+				p.PublishedVersionID = &vid
+			}
 		}
 		key := p.ID + ":" + vid
 		if visited[key] {
@@ -110,17 +112,27 @@ func (r *Repo) buildVisibilityPlan(ctx context.Context, tx *sql.Tx, scope Scope,
 		}
 		visited[key] = true
 		fingerprints = append(fingerprints, key)
-		var raw []byte
-		err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=?`, p.ID, vid).Scan(&raw)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrVersionBaselineUnavailable
-		}
-		if err != nil {
-			return err
-		}
-		rels, err := model.DecodeSnapshotRelations(raw)
-		if err != nil {
-			return err
+		var rels []model.PluginRelation
+		if vid == "" {
+			// Legacy bundled resources inherit publication from their container.
+			var err error
+			rels, err = compatibilityLiveRelations(ctx, tx, p.ID)
+			if err != nil {
+				return err
+			}
+		} else {
+			var raw []byte
+			err := tx.QueryRowContext(ctx, `SELECT v.relations_json FROM plugin_versions v JOIN plugin_version_releases rel ON rel.plugin_id=v.plugin_id AND rel.version_id=v.version_id WHERE v.plugin_id=? AND v.version_id=?`, p.ID, vid).Scan(&raw)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrVersionBaselineUnavailable
+			}
+			if err != nil {
+				return err
+			}
+			rels, err = model.DecodeSnapshotRelations(raw)
+			if err != nil {
+				return err
+			}
 		}
 		for _, edge := range rels {
 			if edge.Status != 0 && edge.Status != 1 || edge.DeletedAt != nil {
@@ -228,7 +240,7 @@ func usesTargetLeafSQL(id, version string) string {
 }
 func (r *Repo) incomingPublishedSources(ctx context.Context, tx *sql.Tx, space, id string) ([]string, error) {
 	snapshot := usesTargetSnapshotSQL("p.plugin_id", "p.published_version_id")
-	live := `EXISTS(SELECT 1 FROM plugin_relations l WHERE l.source_plugin_id=p.plugin_id AND l.status=1 AND l.deleted_at IS NULL AND (l.target_plugin_id=? OR (l.relation_type='expert_team_expert' AND (` + usesTargetLeafSQL("l.target_plugin_id", `COALESCE(l.target_version_id,(SELECT published_version_id FROM plugins WHERE plugin_id=l.target_plugin_id))`) + ` OR EXISTS(SELECT 1 FROM plugin_relations ml WHERE ml.source_plugin_id=l.target_plugin_id AND ml.target_plugin_id=? AND ml.status=1 AND ml.deleted_at IS NULL)))))`
+	live := `EXISTS(SELECT 1 FROM plugin_relations l WHERE l.source_plugin_id=p.plugin_id AND l.status=1 AND l.deleted_at IS NULL AND (l.target_plugin_id=? OR (l.relation_type='expert_team_expert' AND (` + usesTargetLeafSQL("l.target_plugin_id", `COALESCE(l.target_version_id,(SELECT published_version_id FROM plugins WHERE plugin_id=l.target_plugin_id))`) + ` OR EXISTS(SELECT 1 FROM plugin_relations ml WHERE l.target_version_id IS NULL AND (SELECT published_version_id FROM plugins WHERE plugin_id=l.target_plugin_id) IS NULL AND ml.source_plugin_id=l.target_plugin_id AND ml.target_plugin_id=? AND ml.status=1 AND ml.deleted_at IS NULL)))))`
 	rows, err := tx.QueryContext(ctx, `SELECT p.plugin_id FROM plugins p WHERE p.space_id=? AND p.status=1 AND p.deleted_at IS NULL AND p.listing_state='published' AND p.plugin_type IN ('expert','expert_team') AND ((p.published_version_id IS NOT NULL AND `+snapshot+`) OR (p.published_version_id IS NULL AND `+live+`)) ORDER BY p.plugin_id LIMIT ?`, space, id, id, id, id, id, maxGraphNodes+1)
 	if err != nil {
 		return nil, err

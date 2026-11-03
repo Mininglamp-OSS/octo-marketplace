@@ -273,6 +273,9 @@ func (r *Repo) approveVisibilityReview(ctx context.Context, tx *sql.Tx, scope Sc
 		}
 		return selected, tx.Commit()
 	}
+	if !versioned(current) {
+		return nil, ErrConflict
+	}
 	var versionID string
 	var from, to model.PluginVisibility
 	if err := tx.QueryRowContext(ctx, `SELECT published_version_id,source_visibility,target_visibility FROM plugin_visibility_reviews WHERE review_id=?`, p.ReviewID).Scan(&versionID, &from, &to); err != nil {

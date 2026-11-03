@@ -30,6 +30,8 @@ func TestAudienceGroupDecisionIsAtomic(t *testing.T) {
 			ss, _ := repo.GetVersionState(ctx, tenantScope(), skill.Plugin.ID)
 			req := managedWrite("1.0.0", "batch expert", model.PluginVisibilityPrivate)
 			req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: skill.Plugin.ID, TargetVersionID: ss.PublishedVersionID, Type: "expert_skill"}}
+			seed(t, db, seedPlugin{id: "batch-connector", typ: "connector", visibility: "private", listingState: "published"})
+			req.Relations = append(req.Relations, pluginsvc.RelationRequest{TargetPluginID: "batch-connector", Type: "expert_connector"})
 			expert, err := svc.Create(ctx, owner, req)
 			if err != nil {
 				t.Fatal(err)
@@ -40,7 +42,7 @@ func TestAudienceGroupDecisionIsAtomic(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(plan.Dependencies) != 1 || plan.Dependencies[0].PluginID != skill.Plugin.ID {
+			if len(plan.Dependencies) != 2 {
 				t.Fatalf("plan: %+v", plan)
 			}
 			if _, err := svc.PreviewVisibility(ctx, pluginsvc.Caller{UID: owner.UID, SpaceID: "other"}, expert.Plugin.ID, model.PluginVisibilitySpace); !errors.Is(err, pluginsvc.ErrNotFound) {
@@ -61,14 +63,14 @@ func TestAudienceGroupDecisionIsAtomic(t *testing.T) {
 			}
 			var childReview string
 			if decision != "auto" {
-				if err := db.QueryRow(`SELECT review_id FROM plugin_review_requests WHERE plugin_id=? AND status='pending'`, skill.Plugin.ID).Scan(&childReview); err != nil {
+				if err := db.QueryRow(`SELECT review_id FROM plugin_review_requests WHERE plugin_id=? AND status='pending'`, "batch-connector").Scan(&childReview); err != nil {
 					t.Fatal(err)
 				}
 				rr, e := svc.GetReview(ctx, managedReviewer(), childReview)
 				if e != nil {
 					t.Fatal(e)
 				}
-				if rr.ReviewGroupID != result.GroupID || len(rr.AudienceMembers) != 2 {
+				if rr.ReviewGroupID != result.GroupID || len(rr.AudienceMembers) != 3 {
 					t.Fatalf("missing batch metadata: %+v", rr)
 				}
 				if _, err := svc.Update(ctx, owner, skill.Plugin.ID, managedSkillWrite("1.1.0", "Batch Skill", model.PluginVisibilityPrivate)); !errors.Is(err, pluginsvc.ErrReviewPending) {
@@ -96,7 +98,7 @@ func TestAudienceGroupDecisionIsAtomic(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, id := range []string{skill.Plugin.ID, expert.Plugin.ID} {
+			for _, id := range []string{skill.Plugin.ID, expert.Plugin.ID, "batch-connector"} {
 				var visibility string
 				if err := db.QueryRow(`SELECT visibility FROM plugins WHERE plugin_id=?`, id).Scan(&visibility); err != nil {
 					t.Fatal(err)
@@ -117,7 +119,7 @@ func TestAudienceGroupDecisionIsAtomic(t *testing.T) {
 			if err := db.QueryRow(`SELECT COUNT(*) FROM plugin_review_requests rr JOIN plugin_visibility_reviews vr ON vr.review_id=rr.review_id WHERE vr.group_id=? AND rr.status='pending'`, result.GroupID).Scan(&pending); err != nil {
 				t.Fatal(err)
 			}
-			if decision == "stale" && pending != 2 || decision != "stale" && pending != 0 {
+			if decision == "stale" && pending != 3 || decision != "stale" && pending != 0 {
 				t.Fatalf("partial review settlement: %d", pending)
 			}
 		})
@@ -213,8 +215,18 @@ func TestConnectorAudienceUsesCurrentConfigRevision(t *testing.T) {
 	if _, err = repo.ChangeVisibility(ctx, tenantScope(), p); !errors.Is(err, pluginrepo.ErrConflict) {
 		t.Fatalf("stale config: %v", err)
 	}
+	if _, err = repo.UpsertReviewPolicy(ctx, tenantScope(), false, "admin", "Admin"); err != nil {
+		t.Fatal(err)
+	}
 	p.ExpectedRevision = plan.Resource.Revision
-	if _, err = repo.ChangeVisibility(ctx, tenantScope(), p); err != nil {
+	out, err := repo.ChangeVisibility(ctx, tenantScope(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Pending {
+		t.Fatal("expected manual review")
+	}
+	if _, err = pluginsvc.New(repo).WithVersionManagement(true).ApproveReview(ctx, managedReviewer(), out.ReviewID); err != nil {
 		t.Fatal(err)
 	}
 	var versions int
@@ -262,5 +274,43 @@ func TestAudienceLegacyDelistSuspendsLiveGraphWithinSpace(t *testing.T) {
 	}
 	if foreign != "published" {
 		t.Fatal("cross-Space write")
+	}
+}
+
+func TestAudienceLegacyEmbeddedWithoutIndependentRelease(t *testing.T) {
+	f := legacyAudienceGraph(t, model.PluginTypeExpertTeam, true, model.PluginVisibilityPrivate, true)
+	for _, id := range f.embedded {
+		if _, err := f.db.Exec("UPDATE plugins SET published_version_id=NULL WHERE plugin_id=?", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := f.svc.PreviewVisibility(context.Background(), managedOwner(), f.root.ID, model.PluginVisibilitySpace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Dependencies) != 0 {
+		t.Fatal("embedded nodes must follow their container")
+	}
+}
+func TestDelistIgnoresDraftOnlyMemberEdge(t *testing.T) {
+	db := reviewDB(t)
+	dependencyFixture(t, db)
+	seed(t, db, seedPlugin{id: "draft-only", typ: "skill", visibility: "space", listingState: "published"})
+	seedRelation(t, db, "draft-edge", "expert", "draft-only", "expert_skill")
+	seedRelation(t, db, "live-team", "team", "expert", "expert_team_expert")
+	if _, err := db.Exec("UPDATE plugin_relations SET target_version_id='expert-v1' WHERE relation_id='live-team'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE plugins SET published_version_id=NULL WHERE plugin_id='team'"); err != nil {
+		t.Fatal(err)
+	}
+	r := pluginrepo.New(db).WithVersionManagement(true)
+	if _, err := r.DelistPlugin(context.Background(), reviewerScope(), pluginrepo.DelistParams{PluginID: "draft-only", OperatorID: "admin-1"}); err != nil {
+		t.Fatal(err)
+	}
+	var listing string
+	var suspended bool
+	if err := db.QueryRow("SELECT listing_state, EXISTS(SELECT 1 FROM plugin_dependency_suspensions WHERE plugin_id='team') FROM plugins WHERE plugin_id='team'").Scan(&listing, &suspended); err != nil || listing != "published" || suspended {
+		t.Fatalf("legacy team: %s %t %v", listing, suspended, err)
 	}
 }
