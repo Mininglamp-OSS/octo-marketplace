@@ -52,6 +52,10 @@ func (h *Handler) DismissUpdates(c *gin.Context) {
 	if !decode(c, &req) {
 		return
 	}
+	if !pluginrepo.ValidDismissChoices(req.Choices) {
+		writeServiceError(c, pluginsvc.ErrInvalidRequest, "plugin.dependency_updates")
+		return
+	}
 	h.readUpdates(c, req.Choices)
 }
 func (h *Handler) readUpdates(c *gin.Context, choices []pluginrepo.DependencyChoice) {

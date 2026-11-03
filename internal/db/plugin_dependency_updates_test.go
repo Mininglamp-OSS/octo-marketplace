@@ -190,6 +190,22 @@ func TestDirectDependencyUpdateLifecycle(t *testing.T) {
 				t.Fatalf("new release must remind again: %+v", newer)
 			}
 
+			if _, e = db.Exec("UPDATE plugins SET listing_state='delisted' WHERE plugin_id=?", id); e != nil {
+				t.Fatal(e)
+			}
+			if _, e = s.DependencyUpdates(ctx, o, id, nil); !errors.Is(e, svc.ErrConflict) {
+				t.Fatalf("delisted preview: %v", e)
+			}
+			mine, _, e = s.List(ctx, o, svc.ListParams{Mine: true})
+			if e != nil {
+				t.Fatal(e)
+			}
+			for _, item := range mine {
+				if item.ID == id && item.HasDependencyUpdates {
+					t.Fatal("delisted source has update indicator")
+				}
+			}
+
 		})
 	}
 }

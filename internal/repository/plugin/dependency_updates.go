@@ -37,6 +37,9 @@ type DependencyPreview struct {
 const connectorFingerprint = "SHA2(CONCAT(t.manifest_hash,':',t.plugin_hash),256)"
 
 func loadUpdatePreview(ctx context.Context, tx *sql.Tx, sc Scope, p *model.Plugin) (*DependencyPreview, error) {
+	if p.ListingState != model.PluginListingStatePublished {
+		return nil, ErrConflict
+	}
 	if p.IsEmbedded || (p.Type != model.PluginTypeExpert && p.Type != model.PluginTypeExpertTeam) {
 		return nil, ErrNotFound
 	}
@@ -82,7 +85,7 @@ func queryDependencyUpdates(ctx context.Context, db reminderQuery, sc Scope, ids
  LEFT JOIN plugin_versions tv ON tv.plugin_id=t.plugin_id AND tv.version_id=newrel.version_id
  LEFT JOIN plugin_connector_baselines b ON b.source_id=v.plugin_id AND b.target_id=t.plugin_id
  LEFT JOIN plugin_update_dismissals d ON d.space_id=? AND d.owner_uid=? AND d.source_id=v.plugin_id AND d.target_id=t.plugin_id AND d.revision=`+candidate+`
- WHERE src.space_id=? AND src.owner_uid=? AND src.plugin_id IN (`+placeholders+`) AND src.is_embedded=0 AND src.plugin_type IN ('expert','expert_team') AND COALESCE(e.status,e.status_legacy,1)=1 AND COALESCE(e.deleted_at,e.deleted_at_legacy) IS NULL
+ WHERE src.space_id=? AND src.owner_uid=? AND src.plugin_id IN (`+placeholders+`) AND src.listing_state='published' AND src.is_embedded=0 AND src.plugin_type IN ('expert','expert_team') AND COALESCE(e.status,e.status_legacy,1)=1 AND COALESCE(e.deleted_at,e.deleted_at_legacy) IS NULL
  AND t.status=1 AND t.deleted_at IS NULL AND t.listing_state='published'
  AND (t.visibility IN ('system','public') OR (t.space_id=src.space_id AND (t.visibility='space' OR (t.visibility='private' AND t.owner_uid=src.owner_uid AND src.visibility='private'))))
  AND (t.plugin_type<>'expert' OR NOT EXISTS(SELECT 1 FROM plugins p WHERE p.plugin_id=t.plugin_id AND `+unavailableDependencySQL(availabilityRoot)+`))
@@ -105,6 +108,9 @@ func queryDependencyUpdates(ctx context.Context, db reminderQuery, sc Scope, ids
 func (r *Repo) DependencyUpdates(ctx context.Context, sc Scope, id string, skip []DependencyChoice) (*DependencyPreview, error) {
 	if !r.references || !r.versionManagement {
 		return nil, ErrNotFound
+	}
+	if skip != nil && !ValidDismissChoices(skip) {
+		return nil, ErrInvalidRelation
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -325,4 +331,19 @@ func (r *Repo) approveDependencySelection(ctx context.Context, tx *sql.Tx, p *mo
 		return false, nil
 	}
 	return true, applySelectedLivePins(ctx, tx, p.ID, &selection, edges)
+}
+
+// ValidDismissChoices bounds work before any source row is locked.
+func ValidDismissChoices(choices []DependencyChoice) bool {
+	if len(choices) == 0 || len(choices) > 100 {
+		return false
+	}
+	seen := make(map[string]bool, len(choices))
+	for _, c := range choices {
+		if strings.TrimSpace(c.TargetID) == "" || strings.TrimSpace(c.Revision) == "" || seen[c.TargetID] {
+			return false
+		}
+		seen[c.TargetID] = true
+	}
+	return true
 }
