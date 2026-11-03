@@ -2226,17 +2226,18 @@ components:
     internal_api_handler_plugin.publishRequest:
       properties:
         changelog:
+          description: Changelog is used for organization review and ignored for private
+            publish.
           type: string
         plugin_id:
           type: string
         version:
-          description: 'Version and Changelog are used only when the publish needs
-            organization
+          description: 'Version is required for managed Skills, Experts and Expert
+            Teams. The requested
 
-            review; both are ignored for a 仅自己可见 Plugin, which lists immediately.
+            label names the release independently of the draft. Connectors and feature-off
 
-            Version is required for managed Experts/Expert Teams. Other types retain
-            their existing default.'
+            publication retain their existing defaults.'
           type: string
       type: object
     internal_api_handler_plugin.publishResponse:
@@ -4786,8 +4787,13 @@ paths:
       - admin_skill
   /bot/skills/publish:
     post:
-      description: Parse an uploaded Skill archive synchronously through the bounded
+      description: 'Parse an uploaded Skill archive synchronously through the bounded
         worker pool, then create a Skill owned by the bot owner.
+
+        With version management enabled, this legacy publish returns 400 versioned_api_required
+        before parsing. Update octo-cli and use /plugins/import or /plugins/upsert,
+        followed by /plugins/publish or /plugins/review_requests with an explicit
+        version.'
       operationId: bot_skill.publish
       requestBody:
         content:
@@ -8005,10 +8011,10 @@ paths:
         Space''s automatic-review policy is enabled (the default), or opens a pending
         review when the policy is disabled.
 
-        With version management enabled, Experts and Expert Teams require an explicit
-        MAJOR.MINOR.PATCH version. Private publication must match the saved draft
-        version. Missing or invalid labels return 400 with details.field=version and
-        an octo-cli upgrade hint.'
+        With version management enabled, Skills, Experts and Expert Teams require
+        an explicit MAJOR.MINOR.PATCH version. The supplied version names the release
+        and may differ from the saved draft label. Missing or invalid labels return
+        400 with details.field=version and an octo-cli upgrade hint.'
       operationId: plugin.publish
       requestBody:
         content:
@@ -8017,11 +8023,11 @@ paths:
               oneOf:
               - type: object
               - $ref: '#/components/schemas/internal_api_handler_plugin.publishRequest'
-                description: Plugin ID, with an optional version label and changelog
-                  for the review branch
+                description: Plugin ID and explicit version for managed Skills/Experts/Expert
+                  Teams; optional review changelog
                 summary: body
-        description: Plugin ID, with an optional version label and changelog for the
-          review branch
+        description: Plugin ID and explicit version for managed Skills/Experts/Expert
+          Teams; optional review changelog
         required: true
       responses:
         '200':
@@ -9171,8 +9177,13 @@ paths:
       tags:
       - skill
     post:
-      description: Publish a parsed Skill archive for the authenticated user and current
-        Space.
+      description: 'Publish a parsed Skill archive for the authenticated user and
+        current Space.
+
+        With version management enabled, this legacy write (including /skill aliases)
+        returns 400 versioned_api_required. Update octo-cli and use /plugins/import
+        or /plugins/upsert, followed by /plugins/publish or /plugins/review_requests
+        with an explicit version.'
       operationId: skill.create
       requestBody:
         content:
@@ -9337,7 +9348,12 @@ paths:
       tags:
       - skill
     patch:
-      description: Partially update a Skill owned by the authenticated user.
+      description: 'Partially update a Skill owned by the authenticated user.
+
+        With version management enabled, this legacy write (including /skill aliases)
+        returns 400 versioned_api_required. Update octo-cli and use /plugins/import
+        or /plugins/upsert, followed by /plugins/publish or /plugins/review_requests
+        with an explicit version.'
       operationId: skill.update
       parameters:
       - description: Skill ID

@@ -194,7 +194,7 @@ func TestListAcceptsAMissingPluginTypeOnlyForModeMine(t *testing.T) {
 }
 
 func TestReleaseVersionValidationHintNamesCLIUpgrade(t *testing.T) {
-	for _, reason := range []string{"required", "invalid", "draft_version_mismatch"} {
+	for _, reason := range []string{"required", "invalid"} {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
 		writeServiceError(c, &pluginsvc.ReviewFieldError{Field: "version", Reason: reason}, "plugin.publish")

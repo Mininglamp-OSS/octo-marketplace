@@ -234,6 +234,7 @@ type CreateRequest struct {
 // Create godoc
 // @Summary Create skill
 // @Description Publish a parsed Skill archive for the authenticated user and current Space.
+// @Description With version management enabled, this legacy write (including /skill aliases) returns 400 versioned_api_required. Update octo-cli and use /plugins/import or /plugins/upsert, followed by /plugins/publish or /plugins/review_requests with an explicit version.
 // @Tags skill
 // @ID skill.create
 // @Accept json
@@ -254,6 +255,11 @@ func (h *Handler) Create(c *gin.Context) {
 		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "unauthorized", nil, "")
 		return
 	}
+	if err := h.svc.CheckLegacyWrite(); err != nil {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "this legacy Skill write API is disabled", map[string]any{"reason": "versioned_api_required"}, "Update octo-cli to a version supporting Plugin APIs. Upload and parse the Skill package, save the draft through /plugins/import (or /plugins/upsert), then submit it through /plugins/publish or /plugins/review_requests with an explicit version.")
+		return
+	}
+
 	spaceID := middleware.SpaceID(c)
 	creatorID := identity.UID
 	creatorName := identity.Name
@@ -343,6 +349,7 @@ type UpdateRequest struct {
 // Update godoc
 // @Summary Update skill
 // @Description Partially update a Skill owned by the authenticated user.
+// @Description With version management enabled, this legacy write (including /skill aliases) returns 400 versioned_api_required. Update octo-cli and use /plugins/import or /plugins/upsert, followed by /plugins/publish or /plugins/review_requests with an explicit version.
 // @Tags skill
 // @ID skill.update
 // @Accept json
@@ -364,6 +371,11 @@ func (h *Handler) Update(c *gin.Context) {
 		apiresponse.Fail(c, http.StatusUnauthorized, errcode.Unauthorized, "unauthorized", nil, "")
 		return
 	}
+	if err := h.svc.CheckLegacyWrite(); err != nil {
+		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "this legacy Skill write API is disabled", map[string]any{"reason": "versioned_api_required"}, "Update octo-cli to a version supporting Plugin APIs. Upload and parse the Skill package, save the draft through /plugins/import (or /plugins/upsert), then submit it through /plugins/publish or /plugins/review_requests with an explicit version.")
+		return
+	}
+
 	spaceID := middleware.SpaceID(c)
 	id := c.Param("skill_id")
 

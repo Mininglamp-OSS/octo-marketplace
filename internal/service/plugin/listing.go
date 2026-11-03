@@ -30,8 +30,8 @@ var (
 // lists something unreviewed or strands a plugin in draft forever.
 type PublishParams struct {
 	PluginID string
-	// Version and Changelog are only consulted on the review branch, where the
-	// request needs a label. Version defaults to the draft's current_version.
+	// Version selects the managed release label at publication time. It is
+	// independent of the draft label. Feature-off/Connector defaults stay intact.
 	Version   string
 	Changelog string
 }
@@ -78,17 +78,14 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		return nil, ErrNotFound
 	}
 	// Old CLI payloads may omit labels when saving drafts, but a managed
-	// Expert/Team release must name the intended version explicitly.
-	if s.versionManagement && (detail.Plugin.Type == model.PluginTypeExpert || detail.Plugin.Type == model.PluginTypeExpertTeam) {
+	// Skill/Expert/Team release must name the intended version explicitly.
+	if s.versionManagement && (detail.Plugin.Type == model.PluginTypeSkill || detail.Plugin.Type == model.PluginTypeExpert || detail.Plugin.Type == model.PluginTypeExpertTeam) {
 		params.Version = strings.TrimSpace(params.Version)
 		if params.Version == "" {
 			return nil, &ReviewFieldError{Field: "version", Reason: "required"}
 		}
 		if !validVersion(params.Version) {
 			return nil, &ReviewFieldError{Field: "version", Reason: "invalid"}
-		}
-		if detail.Plugin.Visibility == model.PluginVisibilityPrivate && detail.Plugin.CurrentVersion != nil && *detail.Plugin.CurrentVersion != params.Version {
-			return nil, &ReviewFieldError{Field: "version", Reason: "draft_version_mismatch"}
 		}
 	}
 	if detail.Plugin.ListingState == model.PluginListingStatePublished && !(s.versionManagement && detail.Plugin.Type != model.PluginTypeConnector) {
@@ -112,7 +109,12 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 			return nil, err
 		}
 		if adopted != nil {
-			return &PublishResult{Plugin: adopted}, nil
+			// Baseline adoption must not silently discard a newly requested label.
+			// With an established release, continue into ordinary publication when
+			// the caller selected a different label.
+			if adopted.Plugin.CurrentVersion != nil && *adopted.Plugin.CurrentVersion == params.Version {
+				return &PublishResult{Plugin: adopted}, nil
+			}
 		}
 	}
 
@@ -174,7 +176,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		if e = s.verifyVersionFiles(ctx, detail.Plugin, v); e != nil {
 			return nil, e
 		}
-		published, e := store.PublishManaged(ctx, scope(caller), pluginrepo.PublishParams{PluginID: detail.Plugin.ID, ExpectedVersionID: v.ID, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
+		published, e := store.PublishManaged(ctx, scope(caller), pluginrepo.PublishParams{PluginID: detail.Plugin.ID, ExpectedVersionID: v.ID, Version: params.Version, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
 		if e != nil {
 			return nil, mapStoreError(e)
 		}

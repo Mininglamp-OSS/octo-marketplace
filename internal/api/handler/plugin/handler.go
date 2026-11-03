@@ -796,7 +796,7 @@ func writeServiceError(c *gin.Context, err error, operation string) {
 		// instead of collapsing every cause into {"field":"body","reason":"invalid"}.
 		hint := "Correct the request and try again."
 		if fieldErr.Field == "version" {
-			hint = "Supply an explicit MAJOR.MINOR.PATCH version when publishing. Update octo-cli if it cannot send version; save the intended draft version before publishing a private resource."
+			hint = "Supply an explicit MAJOR.MINOR.PATCH version when publishing. Update octo-cli if it cannot send version; choose an unused release label newer than the previously published version."
 		}
 		apiresponse.Fail(c, http.StatusBadRequest, errcode.BadRequest, "request validation failed", map[string]any{"field": fieldErr.Field, "reason": fieldErr.Reason}, hint)
 	case errors.Is(err, pluginsvc.ErrInvalidRequest):

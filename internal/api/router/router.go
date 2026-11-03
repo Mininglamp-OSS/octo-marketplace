@@ -207,7 +207,7 @@ func publicWithOptions(database Pinger, authenticator *marketmiddleware.Authenti
 		pluginhandler.NewSceneAdmin(pluginScenes).RegisterAdmin(r, adminAuth)
 
 		catSvc := categorysvc.New(catRepo, skRepo)
-		skSvc := skillsvc.New(skRepo, catRepo, store, generateID)
+		skSvc := skillsvc.New(skRepo, catRepo, store, generateID).WithLegacyWritesDisabled(storageCfg.PluginVersionManagementEnabled)
 		skSvc.SetMaxArchiveBytes(int64(storageCfg.MaxMB) << 20)
 
 		catH := categoryhandler.New(catSvc)
