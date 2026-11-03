@@ -289,6 +289,11 @@ func (r *Repo) DelistPlugin(ctx context.Context, scope Scope, p DelistParams) (_
 		return nil, err
 	}
 
+	if r.versionManagement {
+		if err = r.suspendDelistedDependents(ctx, tx, scope.SpaceID, p.PluginID, now); err != nil {
+			return nil, err
+		}
+	}
 	refreshed, err := getReviewedPluginForUpdate(ctx, tx, scope.SpaceID, p.PluginID)
 	if err != nil {
 		return nil, err

@@ -166,6 +166,11 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 			return err
 		}
 	}
+	if p.Type == model.PluginTypeExpert {
+		if err = RefreshConnectorBaselines(ctx, tx, p.ID, versionID); err != nil {
+			return err
+		}
+	}
 	// The market displays the selected version's manifest name, not the mutable
 	// draft name. Read the name from the version being released; p.Name can be a
 	// later draft (adoption/historical flows) and must not release or misreserve a
@@ -193,7 +198,7 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 	if err != nil {
 		return wrapped("publish release", mapPluginNameTaken(err))
 	}
-	return nil
+	return clearRecoveredSuspension(ctx, tx, p.ID, versionID)
 }
 
 // PublishManaged publishes the explicitly selected draft. ExpectedVersionID
@@ -258,9 +263,6 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET listing_state='published',updated_at=? WHERE plugin_id=?`, r.now(), current.ID); err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM plugin_dependency_suspensions WHERE plugin_id=?`, current.ID); err != nil {
 		return nil, err
 	}
 	if err = ensureVisibleDefaultPlacement(ctx, tx, r.id, r.now(), current.ID, current.CategoryID); err != nil {

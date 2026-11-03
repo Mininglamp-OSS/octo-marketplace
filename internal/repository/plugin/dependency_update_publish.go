@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
 )
@@ -21,7 +22,7 @@ type DependencyUpdatePublishResult struct {
 
 func (r *Repo) SubmitDependencyUpdates(ctx context.Context, sc Scope, p DependencyUpdatePublishParams) (out *DependencyUpdatePublishResult, err error) {
 	defer func() { err = classifyDeadlock(err) }()
-	if p.ExpectedPublishedVersionID == "" || p.ExpectedDraftRevision == "" || len(p.Targets) == 0 {
+	if p.ExpectedPublishedVersionID == "" || p.ExpectedDraftRevision == "" || !ValidUpdateTargets(p.Targets) {
 		return nil, ErrConflict
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -59,12 +60,25 @@ func (r *Repo) SubmitDependencyUpdates(ctx context.Context, sc Scope, p Dependen
 	if published.String != p.ExpectedPublishedVersionID {
 		return nil, ErrConflict
 	}
-	if err = checkUpdateTargets(ctx, tx, sc, p.Targets); err != nil {
+	if root.IsEmbedded || root.ListingState != model.PluginListingStatePublished {
+		return nil, ErrConflict
+	}
+	candidates, err := queryDependencyUpdates(ctx, tx, sc, []string{root.ID})
+	if err != nil {
 		return nil, err
 	}
+	allowed := candidateKeys(candidates[root.ID])
+	acks := map[string]string{}
 	for _, target := range p.Targets {
+		if !allowed[target] {
+			return nil, ErrConflict
+		}
 		matched := false
 		for _, ref := range p.Mutation.Relations {
+			if ref.TargetPluginID == target.PluginID && ref.Type == "expert_connector" && ref.TargetVersionID == nil && target.TargetConfigRevision != "" {
+				matched = true
+				acks[target.PluginID] = target.TargetConfigRevision
+			}
 			if ref.TargetPluginID == target.PluginID && ref.TargetVersionID != nil && *ref.TargetVersionID == target.TargetVersionID && ref.Type != "expert_connector" {
 				matched = true
 			}
@@ -91,6 +105,9 @@ func (r *Repo) SubmitDependencyUpdates(ctx context.Context, sc Scope, p Dependen
 		if current.CurrentVersionID == nil {
 			return nil, ErrConflict
 		}
+		if err = ackConnectors(ctx, tx, root.ID, acks); err != nil {
+			return nil, err
+		}
 		if err = r.recordRelease(ctx, tx, current, *current.CurrentVersionID, p.Version, m.OperatorID, r.now()); err != nil {
 			return nil, err
 		}
@@ -101,9 +118,6 @@ func (r *Repo) SubmitDependencyUpdates(ctx context.Context, sc Scope, p Dependen
 			return nil, err
 		}
 		current.ListingState = model.PluginListingStatePublished
-		if _, err = tx.ExecContext(ctx, `DELETE FROM plugin_dependency_suspensions WHERE plugin_id=?`, root.ID); err != nil {
-			return nil, err
-		}
 		return &DependencyUpdatePublishResult{Plugin: current}, tx.Commit()
 	}
 	if current.Visibility != model.PluginVisibilitySpace {
@@ -114,6 +128,15 @@ func (r *Repo) SubmitDependencyUpdates(ctx context.Context, sc Scope, p Dependen
 	snap := FrozenSnapshot{Manifest: current.Manifest, Package: current.Package, AttachmentKeys: current.AttachmentKeys, Relations: saved.Relations, ManifestHash: current.ManifestHash, PluginHash: current.PluginHash, DeclaredContent: true}
 	if err = r.insertReviewInTx(ctx, tx, sc, review, snap); err != nil {
 		return nil, err
+	}
+	if len(acks) > 0 {
+		raw, e := json.Marshal(acks)
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO plugin_review_config_targets(review_id,selection_json) VALUES(?,?)", review.ID, raw); e != nil {
+			return nil, e
+		}
 	}
 	auto := true
 	err = tx.QueryRowContext(ctx, `SELECT is_auto_approve_enabled FROM plugin_review_policies WHERE space_id=? FOR UPDATE`, sc.SpaceID).Scan(&auto)

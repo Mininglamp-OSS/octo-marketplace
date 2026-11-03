@@ -546,6 +546,8 @@ components:
       type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdate:
       properties:
+        from_config_revision:
+          type: string
         from_version:
           type: string
         from_version_id:
@@ -558,6 +560,8 @@ components:
           type: string
         plugin_type:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        target_config_revision:
+          type: string
         target_version:
           type: string
         target_version_id:
@@ -567,11 +571,12 @@ components:
       properties:
         plugin_id:
           type: string
+        target_config_revision:
+          type: string
         target_version_id:
           type: string
       required:
       - plugin_id
-      - target_version_id
       type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdates:
       properties:
@@ -1899,7 +1904,7 @@ components:
         targets:
           items:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdateTarget'
-          maxItems: 200
+          maxItems: 100
           minItems: 1
           type: array
           uniqueItems: false
@@ -1921,7 +1926,7 @@ components:
         targets:
           items:
             $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.DependencyUpdateTarget'
-          maxItems: 200
+          maxItems: 100
           minItems: 1
           type: array
           uniqueItems: false
@@ -7075,9 +7080,9 @@ paths:
       - plugin
   /plugins/{plugin_id}/dependency_updates:
     get:
-      description: Returns exact source and target released versions. Drafts and connectors
-        never produce update reminders. Skipped entries remain available for manual
-        adoption.
+      description: Returns exact source and target released versions. Connectors report
+        configuration changes using target_config_revision; Skills and member Experts
+        use target_version_id. Skipped entries remain available for manual adoption.
       operationId: plugin.dependency_update.list
       parameters:
       - description: Plugin ID

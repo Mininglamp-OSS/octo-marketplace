@@ -52,7 +52,7 @@ func snapshotTargetUnavailableSQL(edge, target string) string {
 	edgeType := snapshotField(edge, "relation_type")
 	edgeTarget := snapshotField(edge, "target_plugin_id")
 	edgePin := snapshotField(edge, "target_version_id")
-	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edgeType + ` IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edgeTarget + ` AND dep_release.version_id=COALESCE(` + edgePin + `,` + target + `.published_version_id))))`
+	return `(` + target + `.plugin_id IS NULL OR (` + target + `.visibility='private' AND (p.visibility='space' OR p.owner_uid<>` + target + `.owner_uid)) OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edgeType + ` IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edgeTarget + ` AND dep_release.version_id=COALESCE(` + edgePin + `,` + target + `.published_version_id))))`
 }
 
 func snapshotMemberUnavailableSQL(edge, target string) string {
@@ -83,7 +83,7 @@ func unavailableSnapshotSQL(sourceID, sourceVersion string) string {
 }
 
 func liveTargetUnavailableSQL(edge, target string) string {
-	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
+	return `(` + target + `.plugin_id IS NULL OR (` + target + `.visibility='private' AND (p.visibility='space' OR p.owner_uid<>` + target + `.owner_uid)) OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
 }
 
 // A legacy team member is an expert, so its live graph is only skills and

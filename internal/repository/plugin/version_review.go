@@ -53,6 +53,9 @@ func (r *Repo) approveManagedReviewInTx(ctx context.Context, tx *sql.Tx, scope S
 	if changelog.Valid {
 		note = &changelog.String
 	}
+	if err = approveConnectorRevisions(ctx, tx, current.ID, p.ReviewID); err != nil {
+		return nil, err
+	}
 	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, p.ReviewerUID, r.references)
 	if err != nil {
 		return nil, err
@@ -63,9 +66,6 @@ func (r *Repo) approveManagedReviewInTx(ctx context.Context, tx *sql.Tx, scope S
 	// snapshotVersion supplies an immutable row, but its editable-head update is
 	// undone in this transaction: approval never replaces a subsequently saved draft.
 	if _, err = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,listing_state='published',updated_at=? WHERE plugin_id=? AND space_id=? AND deleted_at IS NULL`, current.CurrentVersionID, current.CurrentVersion, now, current.ID, scope.SpaceID); err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM plugin_dependency_suspensions WHERE plugin_id=?`, current.ID); err != nil {
 		return nil, err
 	}
 	if err = ensureVisibleDefaultPlacement(ctx, tx, r.id, now, current.ID, current.CategoryID); err != nil {

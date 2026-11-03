@@ -3,116 +3,78 @@ package plugin
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
-	"sort"
+	"encoding/json"
 	"strings"
-)
 
-func directDependencyUpdates(root *visibilityNode, targets map[string]*visibilityNode, skipped map[string]bool) []model.DependencyUpdate {
-	out := []model.DependencyUpdate{}
-	var refs []model.PluginRelation
-	for _, v := range root.Releases {
-		if v.ID == root.PublishedID {
-			refs = v.Relations
-			break
-		}
-	}
-	seen := map[string]bool{}
-	for _, ref := range refs {
-		if ref.Status != 1 || ref.DeletedAt != nil || ref.TargetVersionID == nil || seen[ref.TargetPluginID] {
-			continue
-		}
-		if root.Plugin.Type == model.PluginTypeExpert && ref.Type != "expert_skill" || root.Plugin.Type == model.PluginTypeExpertTeam && ref.Type != "expert_team_expert" {
-			continue
-		}
-		n := targets[ref.TargetPluginID]
-		if n == nil || n.Plugin.ListingState != model.PluginListingStatePublished {
-			continue
-		}
-		var from, latest visibilityReleaseEdges
-		for _, v := range n.Releases {
-			if v.ID == *ref.TargetVersionID {
-				from = v
-			}
-			if latest.ID == "" || model.VersionAdvanced(latest.Label, v.Label) {
-				latest = v
-			}
-		}
-		if from.ID == "" || !model.VersionAdvanced(from.Label, latest.Label) {
-			continue
-		}
-		seen[ref.TargetPluginID] = true
-		out = append(out, model.DependencyUpdate{PluginID: n.Plugin.ID, Name: latest.Name, Type: n.Plugin.Type, FromVersionID: from.ID, FromVersion: from.Label, TargetVersionID: latest.ID, TargetVersion: latest.Label, IsSkipped: skipped[n.Plugin.ID+"\x00"+latest.ID]})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].PluginID < out[j].PluginID })
-	return out
-}
+	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+)
 
 // DependencyUpdateSummaries enriches an entire owner-list page with one query.
 // Only confirmed formal direct references and readable available targets join.
 func (r *Repo) DependencyUpdateSummaries(ctx context.Context, sc Scope, items []model.Plugin) (map[string][]model.DependencyUpdate, error) {
-	out := map[string][]model.DependencyUpdate{}
-	ids := []any{sc.SpaceID, sc.CallerUID}
-	marks := []string{}
+	ids := []string{}
 	for _, p := range items {
 		if p.Type == model.PluginTypeExpert || p.Type == model.PluginTypeExpertTeam {
-			marks = append(marks, "?")
 			ids = append(ids, p.ID)
 		}
 	}
-	if !r.versionManagement || len(marks) == 0 {
+	if !r.versionManagement {
+		return map[string][]model.DependencyUpdate{}, nil
+	}
+	return queryDependencyUpdates(ctx, r.db, sc, ids)
+}
+
+type reminderQuery interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func queryDependencyUpdates(ctx context.Context, db reminderQuery, sc Scope, ids []string) (map[string][]model.DependencyUpdate, error) {
+	out := map[string][]model.DependencyUpdate{}
+	if len(ids) == 0 {
 		return out, nil
 	}
-	query := `SELECT root.plugin_id,p.plugin_id,COALESCE(JSON_UNQUOTE(JSON_EXTRACT(target_snapshot.manifest_json,'$.plugin_name')),''),p.plugin_type,old.version_id,old.version_label,new.version_id,new.version_label,
- EXISTS(SELECT 1 FROM plugin_dependency_reminder_skips skipped WHERE skipped.space_id=root.space_id AND skipped.uid=root.owner_uid AND skipped.plugin_id=root.plugin_id AND skipped.dependency_plugin_id=p.plugin_id AND skipped.target_version_id=new.version_id)
- FROM plugins root JOIN plugin_versions source ON source.plugin_id=root.plugin_id AND source.version_id=root.published_version_id
- JOIN JSON_TABLE(source.relations_json,'$[*]' COLUMNS (` + snapshotRelationColumns + `)) edge
- JOIN plugins p ON p.plugin_id=` + snapshotField("edge", "target_plugin_id") + `
- JOIN plugin_version_releases old ON old.plugin_id=p.plugin_id AND old.version_id=` + snapshotField("edge", "target_version_id") + `
- JOIN plugin_version_releases new ON new.plugin_id=p.plugin_id
- JOIN plugin_versions target_snapshot ON target_snapshot.plugin_id=p.plugin_id AND target_snapshot.version_id=new.version_id
- WHERE root.space_id=? AND root.owner_uid=? AND root.plugin_id IN (` + strings.Join(marks, ",") + `) AND root.status=1 AND root.deleted_at IS NULL
- AND COALESCE(edge.status,edge.status_legacy,1)=1 AND COALESCE(edge.deleted_at,edge.deleted_at_legacy) IS NULL
- AND ((root.plugin_type='expert' AND ` + snapshotField("edge", "relation_type") + `='expert_skill') OR (root.plugin_type='expert_team' AND ` + snapshotField("edge", "relation_type") + `='expert_team_expert'))
- AND p.status=1 AND p.deleted_at IS NULL AND p.listing_state='published'
- AND (p.visibility IN ('public','system') OR (p.space_id=root.space_id AND (p.visibility='space' OR p.owner_uid=root.owner_uid)))
- AND NOT ` + unavailableDependencySQL(availabilityRoot)
-	rows, err := r.db.QueryContext(ctx, query, ids...)
+	args := []any{sc.SpaceID, sc.CallerUID, sc.SpaceID, sc.CallerUID}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	id, pin, kind := snapshotField("e", "target_plugin_id"), snapshotField("e", "target_version_id"), snapshotField("e", "relation_type")
+	candidate := "IF(t.plugin_type='connector'," + connectorFingerprint + ",t.published_version_id)"
+	rows, err := db.QueryContext(ctx, `SELECT src.plugin_id,t.plugin_id,COALESCE(JSON_UNQUOTE(JSON_EXTRACT(tv.manifest_json,'$.plugin_name')),t.plugin_name),t.plugin_type,
+ IF(t.plugin_type='connector',b.revision,old.version_id),`+candidate+`,COALESCE(old.version_label,''),COALESCE(newrel.version_label,''),d.dependency_plugin_id IS NOT NULL
+ FROM plugins src JOIN plugin_versions v ON v.plugin_id=src.plugin_id AND v.version_id=src.published_version_id JOIN JSON_TABLE(v.relations_json,'$[*]' COLUMNS (`+snapshotRelationColumns+`)) e
+ JOIN plugins t ON t.plugin_id=`+id+`
+ LEFT JOIN plugin_version_releases old ON old.plugin_id=t.plugin_id AND old.version_id=`+pin+`
+ LEFT JOIN plugin_version_releases newrel ON newrel.plugin_id=t.plugin_id AND newrel.version_id=t.published_version_id
+ LEFT JOIN plugin_versions tv ON tv.plugin_id=t.plugin_id AND tv.version_id=newrel.version_id
+ LEFT JOIN plugin_connector_baselines b ON b.source_id=v.plugin_id AND b.target_id=t.plugin_id
+ LEFT JOIN plugin_dependency_reminder_skips d ON d.space_id=? AND d.uid=? AND d.plugin_id=v.plugin_id AND d.dependency_plugin_id=t.plugin_id AND d.target_version_id=`+candidate+`
+ WHERE src.space_id=? AND src.owner_uid=? AND src.plugin_id IN (`+placeholders+`) AND src.listing_state='published' AND src.is_embedded=0 AND src.plugin_type IN ('expert','expert_team') AND COALESCE(e.status,e.status_legacy,1)=1 AND COALESCE(e.deleted_at,e.deleted_at_legacy) IS NULL
+ AND t.status=1 AND t.deleted_at IS NULL AND t.listing_state='published'
+ AND (t.visibility IN ('system','public') OR (t.space_id=src.space_id AND (t.visibility='space' OR (t.visibility='private' AND t.owner_uid=src.owner_uid AND src.visibility='private'))))
+ AND (t.plugin_type<>'expert' OR NOT EXISTS(SELECT 1 FROM plugins p WHERE p.plugin_id=t.plugin_id AND `+unavailableDependencySQL(availabilityRoot)+`))
+ AND ((`+kind+`='expert_connector' AND t.plugin_type='connector' AND b.revision<>`+connectorFingerprint+`)
+ OR (`+kind+` IN ('expert_skill','expert_team_expert') AND old.version_id<>newrel.version_id)) ORDER BY t.plugin_id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	latest := map[string]map[string]model.DependencyUpdate{}
 	for rows.Next() {
-		var root string
+		var source string
 		var u model.DependencyUpdate
-		if err = rows.Scan(&root, &u.PluginID, &u.Name, &u.Type, &u.FromVersionID, &u.FromVersion, &u.TargetVersionID, &u.TargetVersion, &u.IsSkipped); err != nil {
+		if err = rows.Scan(&source, &u.PluginID, &u.Name, &u.Type, &u.FromVersionID, &u.TargetVersionID, &u.FromVersion, &u.TargetVersion, &u.IsSkipped); err != nil {
 			return nil, err
 		}
-		if !model.VersionAdvanced(u.FromVersion, u.TargetVersion) {
+		if u.Type == model.PluginTypeConnector {
+			u.FromConfigRevision, u.TargetConfigRevision = u.FromVersionID, u.TargetVersionID
+			u.FromVersionID, u.TargetVersionID = "", ""
+		} else if !model.VersionAdvanced(u.FromVersion, u.TargetVersion) {
 			continue
 		}
-		if latest[root] == nil {
-			latest[root] = map[string]model.DependencyUpdate{}
-		}
-		old, ok := latest[root][u.PluginID]
-		if !ok || model.VersionAdvanced(old.TargetVersion, u.TargetVersion) {
-			latest[root][u.PluginID] = u
-		}
+		out[source] = append(out[source], u)
 	}
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-	for root, deps := range latest {
-		for _, u := range deps {
-			out[root] = append(out[root], u)
-		}
-		sort.Slice(out[root], func(i, j int) bool { return out[root][i].PluginID < out[root][j].PluginID })
-	}
-	return out, nil
+	return out, rows.Err()
 }
-
 func (r *Repo) DependencyUpdates(ctx context.Context, sc Scope, id string) (*model.DependencyUpdates, error) {
 	if !r.versionManagement {
 		return nil, ErrVersionBaselineUnavailable
@@ -124,120 +86,151 @@ func (r *Repo) DependencyUpdates(ctx context.Context, sc Scope, id string) (*mod
 	if root.Plugin.OwnerUID != sc.CallerUID || root.Plugin.SpaceID == nil || *root.Plugin.SpaceID != sc.SpaceID || root.Plugin.IsEmbedded || (root.Plugin.Type != model.PluginTypeExpert && root.Plugin.Type != model.PluginTypeExpertTeam) {
 		return nil, ErrNotFound
 	}
-	targets := map[string]*visibilityNode{}
-	for _, v := range root.Releases {
-		if v.ID != root.PublishedID {
-			continue
-		}
-		for _, ref := range v.Relations {
-			if ref.Type == "expert_connector" {
-				continue
-			}
-			n, e := readVisibilityNode(ctx, r.db, ref.TargetPluginID)
-			if errors.Is(e, ErrNotFound) {
-				continue
-			}
-			if e != nil {
-				return nil, e
-			}
-			p := n.Plugin
-			if p.Visibility == model.PluginVisibilitySystem || p.Visibility == model.PluginVisibilityPublic || (p.SpaceID != nil && *p.SpaceID == sc.SpaceID && (p.Visibility == model.PluginVisibilitySpace || p.OwnerUID == sc.CallerUID)) {
-				if p.Type == model.PluginTypeExpert {
-					blocked, e := r.HasUnavailableDependencies(ctx, sc, p.ID)
-					if e != nil {
-						return nil, e
-					}
-					if blocked {
-						continue
-					}
-				}
-				targets[p.ID] = n
-			}
-		}
+	if root.Plugin.ListingState != model.PluginListingStatePublished {
+		return nil, ErrConflict
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT dependency_plugin_id,target_version_id FROM plugin_dependency_reminder_skips WHERE space_id=? AND uid=? AND plugin_id=?`, sc.SpaceID, sc.CallerUID, id)
+	found, err := queryDependencyUpdates(ctx, r.db, sc, []string{id})
 	if err != nil {
 		return nil, err
 	}
-	skipped := map[string]bool{}
-	for rows.Next() {
-		var dep, v string
-		if err = rows.Scan(&dep, &v); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		skipped[dep+"\x00"+v] = true
+	updates := found[id]
+	if updates == nil {
+		updates = []model.DependencyUpdate{}
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	return &model.DependencyUpdates{PluginID: id, PublishedVersionID: root.PublishedID, DraftRevision: model.PluginDraftRevision(&root.Plugin), Updates: directDependencyUpdates(root, targets, skipped)}, nil
+	return &model.DependencyUpdates{PluginID: id, PublishedVersionID: root.PublishedID, DraftRevision: model.PluginDraftRevision(&root.Plugin), Updates: updates}, nil
 }
 
 func (r *Repo) SkipDependencyUpdates(ctx context.Context, sc Scope, id string, targets []model.DependencyUpdateTarget) error {
-	if len(targets) == 0 || len(targets) > maxGraphEdges {
-		return ErrConflict
+	if !ValidUpdateTargets(targets) {
+		return ErrInvalidRelation
 	}
-	updates, err := r.DependencyUpdates(ctx, sc, id)
-	if err != nil {
-		return err
-	}
-	allowed := map[string]bool{}
-	for _, u := range updates.Updates {
-		allowed[u.PluginID+"\x00"+u.TargetVersionID] = true
+	if !r.versionManagement {
+		return ErrVersionBaselineUnavailable
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = getOwnedForUpdate(ctx, tx, sc, id); err != nil {
+	root, err := getOwnedForUpdate(ctx, tx, sc, id)
+	if err != nil {
 		return err
 	}
+	if root.IsEmbedded || (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) {
+		return ErrNotFound
+	}
+	if root.ListingState != model.PluginListingStatePublished {
+		return ErrConflict
+	}
+	candidates, err := queryDependencyUpdates(ctx, tx, sc, []string{id})
+	if err != nil {
+		return err
+	}
+	allowed := candidateKeys(candidates[id])
 	for _, target := range targets {
-		if !allowed[target.PluginID+"\x00"+target.TargetVersionID] {
+		if !allowed[target] {
 			return ErrConflict
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT IGNORE INTO plugin_dependency_reminder_skips (space_id,uid,plugin_id,dependency_plugin_id,target_version_id,created_at) VALUES (?,?,?,?,?,?)`, sc.SpaceID, sc.CallerUID, id, target.PluginID, target.TargetVersionID, r.now()); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT IGNORE INTO plugin_dependency_reminder_skips (space_id,uid,plugin_id,dependency_plugin_id,target_version_id,created_at) VALUES (?,?,?,?,?,?)`, sc.SpaceID, sc.CallerUID, id, target.PluginID, targetKey(target), r.now()); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-// Used only under a caller-owned root lock when conditionally adopting pins.
-func checkUpdateTargets(ctx context.Context, tx *sql.Tx, sc Scope, targets []model.DependencyUpdateTarget) error {
-	for _, target := range targets {
-		n, err := readVisibilityNode(ctx, tx, target.PluginID)
-		if err != nil {
+const connectorFingerprint = "SHA2(CONCAT(t.manifest_hash,':',t.plugin_hash),256)"
+
+func targetKey(t model.DependencyUpdateTarget) string {
+	if t.TargetConfigRevision != "" {
+		return t.TargetConfigRevision
+	}
+	return t.TargetVersionID
+}
+
+// ValidUpdateTargets enforces the request bound and mutually exclusive revision forms.
+func ValidUpdateTargets(ts []model.DependencyUpdateTarget) bool {
+	if len(ts) == 0 || len(ts) > 100 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, t := range ts {
+		if strings.TrimSpace(t.PluginID) == "" || seen[t.PluginID] || (t.TargetConfigRevision == "") == (t.TargetVersionID == "") || strings.TrimSpace(targetKey(t)) == "" {
+			return false
+		}
+		seen[t.PluginID] = true
+	}
+	return true
+}
+func candidateKeys(updates []model.DependencyUpdate) map[model.DependencyUpdateTarget]bool {
+	m := map[model.DependencyUpdateTarget]bool{}
+	for _, u := range updates {
+		m[model.DependencyUpdateTarget{PluginID: u.PluginID, TargetVersionID: u.TargetVersionID, TargetConfigRevision: u.TargetConfigRevision}] = true
+	}
+	return m
+}
+
+// RefreshConnectorBaselines records first-seen Connector revisions for a released
+// Expert and retains acknowledged revisions for references that still exist.
+func RefreshConnectorBaselines(ctx context.Context, tx *sql.Tx, source, version string) error {
+	var raw []byte
+	if err := tx.QueryRowContext(ctx, `SELECT relations_json FROM plugin_versions WHERE plugin_id=? AND version_id=?`, source, version).Scan(&raw); err != nil {
+		return err
+	}
+	edges, err := model.DecodeSnapshotRelations(raw)
+	if err != nil {
+		return err
+	}
+	ids := []any{source}
+	for _, edge := range edges {
+		if edge.Type != "expert_connector" || edge.DeletedAt != nil || (edge.Status != 0 && edge.Status != 1) {
+			continue
+		}
+		ids = append(ids, edge.TargetPluginID)
+		if _, err = tx.ExecContext(ctx, `INSERT INTO plugin_connector_baselines(source_id,target_id,revision) SELECT ?,t.plugin_id,`+connectorFingerprint+` FROM plugins t WHERE t.plugin_id=? ON DUPLICATE KEY UPDATE source_id=VALUES(source_id)`, source, edge.TargetPluginID); err != nil {
 			return err
 		}
-		if n.Plugin.Type == model.PluginTypeConnector || n.Plugin.ListingState != model.PluginListingStatePublished {
-			return ErrConflict
-		}
-		if n.Plugin.Visibility != model.PluginVisibilitySystem && n.Plugin.Visibility != model.PluginVisibilityPublic && (n.Plugin.SpaceID == nil || *n.Plugin.SpaceID != sc.SpaceID || (n.Plugin.Visibility == model.PluginVisibilityPrivate && n.Plugin.OwnerUID != sc.CallerUID)) {
-			return ErrNotFound
-		}
-		latest := visibilityReleaseEdges{}
-		for _, v := range n.Releases {
-			if latest.ID == "" || model.VersionAdvanced(latest.Label, v.Label) {
-				latest = v
-			}
-		}
-		if latest.ID != target.TargetVersionID {
-			return ErrConflict
-		}
-		found := false
-		for _, v := range n.Releases {
-			if v.ID == target.TargetVersionID {
-				found = true
-			}
-		}
-		if !found {
-			return ErrConflict
+	}
+	q := "DELETE FROM plugin_connector_baselines WHERE source_id=?"
+	if len(ids) > 1 {
+		q += " AND target_id NOT IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)-1), ",") + ")"
+	}
+	_, err = tx.ExecContext(ctx, q, ids...)
+	return err
+}
+
+func ackConnectors(ctx context.Context, tx *sql.Tx, id string, revisions map[string]string) error {
+	for target, rev := range revisions {
+		if _, err := tx.ExecContext(ctx, "UPDATE plugin_connector_baselines SET revision=? WHERE source_id=? AND target_id=?", rev, id, target); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func approveConnectorRevisions(ctx context.Context, tx *sql.Tx, source, review string) error {
+	var raw []byte
+	err := tx.QueryRowContext(ctx, "SELECT selection_json FROM plugin_review_config_targets WHERE review_id=?", review).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var acks map[string]string
+	if err = json.Unmarshal(raw, &acks); err != nil {
+		return err
+	}
+	for id, want := range acks {
+		var actual string
+		if err = tx.QueryRowContext(ctx, `SELECT `+connectorFingerprint+` FROM plugins t WHERE t.plugin_id=? AND t.plugin_type='connector' AND t.listing_state='published' AND t.status=1 AND t.deleted_at IS NULL FOR UPDATE`, id).Scan(&actual); err == sql.ErrNoRows {
+			return ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		if want != actual {
+			return ErrConflict
+		}
+	}
+	return ackConnectors(ctx, tx, source, acks)
 }

@@ -51,7 +51,7 @@ func visibilityItem(n *visibilityNode, to model.PluginVisibility) model.Visibili
 	}
 	return model.VisibilityPlanItem{PluginID: n.Plugin.ID, Name: visibilityNodeName(n), Type: n.Plugin.Type, From: n.Plugin.Visibility, To: to, PublishedVersionID: version, Baseline: visibilityBaseline(n)}
 }
-func buildVisibilityPlan(ctx context.Context, sc Scope, root *visibilityNode, target model.PluginVisibility, read visibilityReader) (*model.VisibilityPlan, error) {
+func buildVisibilityPlan(ctx context.Context, sc Scope, root *visibilityNode, target model.PluginVisibility, read visibilityReader, strict bool) (*model.VisibilityPlan, error) {
 	plan := &model.VisibilityPlan{PluginID: root.Plugin.ID, Changes: []model.VisibilityPlanItem{}, Affected: []model.VisibilityPlanItem{}, Blockers: []model.VisibilityPlanBlocker{}}
 	visited := map[string]bool{}
 	evidence := map[string]string{}
@@ -83,7 +83,7 @@ func buildVisibilityPlan(ctx context.Context, sc Scope, root *visibilityNode, ta
 			return nil
 		}
 		if n.Plugin.Visibility == model.PluginVisibilityPrivate {
-			if !own || n.Plugin.IsEmbedded {
+			if !own || (n.Plugin.IsEmbedded && strict) {
 				block("dependency_not_owned")
 				return nil
 			}
@@ -91,11 +91,13 @@ func buildVisibilityPlan(ctx context.Context, sc Scope, root *visibilityNode, ta
 				block("review_pending")
 				return nil
 			}
-			if n.Plugin.Type != model.PluginTypeConnector && n.PublishedID == "" {
+			if !n.Plugin.IsEmbedded && n.Plugin.Type != model.PluginTypeConnector && n.PublishedID == "" {
 				block("version_baseline_unavailable")
 				return nil
 			}
-			plan.Changes = append(plan.Changes, visibilityItem(n, target))
+			if !n.Plugin.IsEmbedded {
+				plan.Changes = append(plan.Changes, visibilityItem(n, target))
+			}
 		} else if n.Plugin.ID == root.Plugin.ID {
 			plan.Changes = append(plan.Changes, visibilityItem(n, target))
 		}
@@ -127,7 +129,7 @@ func buildVisibilityPlan(ctx context.Context, sc Scope, root *visibilityNode, ta
 							break
 						}
 					}
-					if !found {
+					if !found && (strict || edge.TargetVersionID != nil || (!child.Plugin.IsEmbedded && child.PublishedID == "")) {
 						plan.Blockers = append(plan.Blockers, model.VisibilityPlanBlocker{PluginID: edge.TargetPluginID, Reason: "released_version_required"})
 						continue
 					}
@@ -206,21 +208,21 @@ func (r *Repo) VisibilityPlan(ctx context.Context, sc Scope, id string, target m
 	if root.Plugin.OwnerUID != sc.CallerUID || root.Plugin.SpaceID == nil || *root.Plugin.SpaceID != sc.SpaceID || root.Plugin.IsEmbedded || root.Plugin.Visibility == model.PluginVisibilitySystem || root.Plugin.Visibility == model.PluginVisibilityPublic {
 		return nil, ErrNotFound
 	}
-	return visibilityPlanWithImpact(ctx, sc, root, target, r.db)
+	return visibilityPlanWithImpact(ctx, sc, root, target, r.db, r.references)
 }
-func visibilityPlanWithImpact(ctx context.Context, sc Scope, root *visibilityNode, target model.PluginVisibility, q visibilityQuery) (*model.VisibilityPlan, error) {
+func visibilityPlanWithImpact(ctx context.Context, sc Scope, root *visibilityNode, target model.PluginVisibility, q visibilityQuery, strict bool) (*model.VisibilityPlan, error) {
 	cache := map[string]*visibilityNode{root.Plugin.ID: root}
 	read := func(ctx context.Context, id string) (*visibilityNode, error) {
 		if n := cache[id]; n != nil {
 			return n, nil
 		}
-		n, e := readVisibilityNode(ctx, q, id)
+		n, e := readPlanNode(ctx, q, id, strict)
 		if e == nil {
 			cache[id] = n
 		}
 		return n, e
 	}
-	plan, err := buildVisibilityPlan(ctx, sc, root, target, read)
+	plan, err := buildVisibilityPlan(ctx, sc, root, target, read, strict)
 	if err != nil || target != model.PluginVisibilityPrivate {
 		return plan, err
 	}
@@ -367,4 +369,20 @@ func visibilityNodeName(n *visibilityNode) string {
 		}
 	}
 	return n.Plugin.Name
+}
+
+func readPlanNode(ctx context.Context, q visibilityQuery, id string, strict bool) (*visibilityNode, error) {
+	n, err := readVisibilityNode(ctx, q, id)
+	if err != nil || strict || !n.Plugin.IsEmbedded || n.PublishedID != "" {
+		return n, err
+	}
+	edges, err := compatibilityLiveRelations(ctx, q, id)
+	if err != nil {
+		return nil, err
+	}
+	for i := range edges {
+		edges[i].Status = 1
+	}
+	n.Releases = append(n.Releases, visibilityReleaseEdges{Relations: edges})
+	return n, nil
 }

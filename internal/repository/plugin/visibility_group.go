@@ -48,7 +48,7 @@ func (r *Repo) changeVisibilityPlan(ctx context.Context, sc Scope, p VisibilityP
 	if root.Plugin.OwnerUID != sc.CallerUID || root.Plugin.SpaceID == nil || *root.Plugin.SpaceID != sc.SpaceID {
 		return nil, ErrNotFound
 	}
-	locked, err := visibilityPlanWithImpact(ctx, sc, root, p.Visibility, tx)
+	locked, err := visibilityPlanWithImpact(ctx, sc, root, p.Visibility, tx, r.references)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +65,9 @@ func (r *Repo) changeVisibilityPlan(ctx context.Context, sc Scope, p VisibilityP
 		}
 		for _, item := range locked.Affected {
 			if err = suspendDependency(ctx, tx, item.PluginID, root.Plugin.ID, r.now()); err != nil {
+				return nil, err
+			}
+			if err = demoteEmbeddedChildren(ctx, tx, item.PluginID, item.Type, sc.SpaceID, r.now()); err != nil {
 				return nil, err
 			}
 		}
@@ -192,9 +195,9 @@ func (r *Repo) applyVisibilityGroup(ctx context.Context, tx *sql.Tx, sc Scope, r
 		if n := nodes[id]; n != nil {
 			return n, nil
 		}
-		return readVisibilityNode(ctx, tx, id)
+		return readPlanNode(ctx, tx, id, r.references)
 	}
-	current, err := buildVisibilityPlan(ctx, owner, root, model.PluginVisibilitySpace, read)
+	current, err := buildVisibilityPlan(ctx, owner, root, model.PluginVisibilitySpace, read, r.references)
 	if err != nil {
 		return err
 	}

@@ -28,7 +28,7 @@ func TestVisibilityPlanIncludesHistoricalOwnedDependencies(t *testing.T) {
 		}
 		return nil, ErrNotFound
 	}
-	plan, err := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: "space"}, root, model.PluginVisibilitySpace, reader)
+	plan, err := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: "space"}, root, model.PluginVisibilitySpace, reader, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,12 +43,12 @@ func TestVisibilityPlanIncludesHistoricalOwnedDependencies(t *testing.T) {
 			t.Fatal("connector received a formal version")
 		}
 	}
-	second, _ := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: "space"}, root, model.PluginVisibilitySpace, reader)
+	second, _ := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: "space"}, root, model.PluginVisibilitySpace, reader, true)
 	if plan.Revision != second.Revision {
 		t.Fatal("unstable plan revision")
 	}
 	a.Plugin.Visibility = model.PluginVisibilitySpace
-	changed, _ := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: "space"}, root, model.PluginVisibilitySpace, reader)
+	changed, _ := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: "space"}, root, model.PluginVisibilitySpace, reader, true)
 	if plan.Revision == changed.Revision {
 		t.Fatal("audience change did not invalidate preview")
 	}
@@ -59,7 +59,7 @@ func TestVisibilityPlanNeverPromotesOtherOwnersPrivateDependency(t *testing.T) {
 	version := "skill-v1"
 	root := &visibilityNode{Plugin: model.Plugin{ID: "expert", OwnerUID: "owner", SpaceID: &space, Visibility: model.PluginVisibilityPrivate, ListingState: model.PluginListingStatePublished}, PublishedID: "v1", Releases: []visibilityReleaseEdges{{ID: "v1", Relations: []model.PluginRelation{{Type: "expert_skill", TargetPluginID: "skill", TargetVersionID: &version, Status: 1}}}}}
 	child := &visibilityNode{Plugin: model.Plugin{ID: "skill", Name: "hidden name", OwnerUID: "someone-else", SpaceID: &space, Visibility: model.PluginVisibilityPrivate, ListingState: model.PluginListingStatePublished}, PublishedID: version, Releases: []visibilityReleaseEdges{{ID: version}}}
-	plan, err := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: space}, root, model.PluginVisibilitySpace, func(context.Context, string) (*visibilityNode, error) { return child, nil })
+	plan, err := buildVisibilityPlan(context.Background(), Scope{CallerUID: "owner", SpaceID: space}, root, model.PluginVisibilitySpace, func(context.Context, string) (*visibilityNode, error) { return child, nil }, true)
 	if err != nil {
 		t.Fatal(err)
 	}

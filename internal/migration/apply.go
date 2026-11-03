@@ -15,6 +15,7 @@ import (
 
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/migration/artifacts"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 )
 
 // ApplyReport describes database conversion only; it never certifies installation.
@@ -509,6 +510,11 @@ func writeMigrationVersion(ctx context.Context, tx *sql.Tx, n Node) error {
 	var pub any
 	if n.Release {
 		pub = n.VersionID
+		if a.Type == model.PluginTypeExpert {
+			if e = pluginrepo.RefreshConnectorBaselines(ctx, tx, a.ID, n.VersionID); e != nil {
+				return e
+			}
+		}
 	}
 	_, e = tx.ExecContext(ctx, `UPDATE plugins SET current_version_id=?,current_version=?,published_version_id=? WHERE plugin_id=?`, n.VersionID, n.VersionLabel, pub, a.ID)
 	return e

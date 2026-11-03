@@ -58,3 +58,92 @@ func (r *Repo) SuspensionDiagnostics(ctx context.Context, sc Scope, items []mode
 	}
 	return flags, issues, rows.Err()
 }
+
+// Clear an existing marker only when the candidate snapshot would pass the
+// catalog availability check. The conditional write and publication share a
+// transaction, so a failed recovery cannot advance the release or relist it.
+func clearRecoveredSuspension(ctx context.Context, tx *sql.Tx, id, versionID string) error {
+	var marker string
+	err := tx.QueryRowContext(ctx, `SELECT plugin_id FROM plugin_dependency_suspensions WHERE plugin_id=? LIMIT 1 FOR UPDATE`, id).Scan(&marker)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE s FROM plugin_dependency_suspensions s JOIN plugins p ON p.plugin_id=s.plugin_id WHERE s.plugin_id=? AND NOT `+unavailableSnapshotSQL("p.plugin_id", "?"), id, versionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return &ReferenceValidationError{Field: "relations", Reason: "target_not_published"}
+	}
+	return nil
+}
+func usesTargetSnapshotSQL(sourceID, version string) string {
+	direct := `EXISTS(SELECT 1 FROM plugin_versions sv JOIN JSON_TABLE(sv.relations_json,'$[*]' COLUMNS (` + snapshotRelationColumns + `)) e WHERE sv.plugin_id=` + sourceID + ` AND sv.version_id=` + version + ` AND ` + snapshotField("e", "target_plugin_id") + `=? AND COALESCE(e.status,e.status_legacy,1)=1 AND COALESCE(e.deleted_at,e.deleted_at_legacy) IS NULL)`
+	nested := `EXISTS(SELECT 1 FROM plugin_versions sv JOIN JSON_TABLE(sv.relations_json,'$[*]' COLUMNS (` + snapshotRelationColumns + `)) e JOIN plugins member ON member.plugin_id=` + snapshotField("e", "target_plugin_id") + ` WHERE sv.plugin_id=` + sourceID + ` AND sv.version_id=` + version + ` AND ` + snapshotField("e", "relation_type") + `='expert_team_expert' AND COALESCE(e.status,e.status_legacy,1)=1 AND COALESCE(e.deleted_at,e.deleted_at_legacy) IS NULL AND ` + usesTargetLeafSQL("member.plugin_id", `COALESCE(`+snapshotField("e", "target_version_id")+`,member.published_version_id)`) + `)`
+	return `(` + direct + ` OR ` + nested + `)`
+}
+func usesTargetLeafSQL(id, version string) string {
+	return `EXISTS(SELECT 1 FROM plugin_versions mv JOIN JSON_TABLE(mv.relations_json,'$[*]' COLUMNS (` + snapshotRelationColumns + `)) me WHERE mv.plugin_id=` + id + ` AND mv.version_id=` + version + ` AND ` + snapshotField("me", "target_plugin_id") + `=? AND COALESCE(me.status,me.status_legacy,1)=1 AND COALESCE(me.deleted_at,me.deleted_at_legacy) IS NULL)`
+}
+func (r *Repo) incomingPublishedSources(ctx context.Context, tx *sql.Tx, space, id string) ([]string, error) {
+	snapshot := usesTargetSnapshotSQL("p.plugin_id", "p.published_version_id")
+	live := `EXISTS(SELECT 1 FROM plugin_relations l WHERE l.source_plugin_id=p.plugin_id AND l.status=1 AND l.deleted_at IS NULL AND (l.target_plugin_id=? OR (l.relation_type='expert_team_expert' AND (` + usesTargetLeafSQL("l.target_plugin_id", `COALESCE(l.target_version_id,(SELECT published_version_id FROM plugins WHERE plugin_id=l.target_plugin_id))`) + ` OR EXISTS(SELECT 1 FROM plugin_relations ml WHERE l.target_version_id IS NULL AND (SELECT published_version_id FROM plugins WHERE plugin_id=l.target_plugin_id) IS NULL AND ml.source_plugin_id=l.target_plugin_id AND ml.target_plugin_id=? AND ml.status=1 AND ml.deleted_at IS NULL)))))`
+	rows, err := tx.QueryContext(ctx, `SELECT p.plugin_id FROM plugins p WHERE p.space_id=? AND p.status=1 AND p.deleted_at IS NULL AND p.listing_state='published' AND p.plugin_type IN ('expert','expert_team') AND ((p.published_version_id IS NOT NULL AND `+snapshot+`) OR (p.published_version_id IS NULL AND `+live+`)) ORDER BY p.plugin_id LIMIT ?`, space, id, id, id, id, id, maxGraphNodes+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) > maxGraphNodes {
+		return nil, ErrGraphTooLarge
+	}
+	return ids, rows.Err()
+}
+
+func (r *Repo) suspendDelistedDependents(ctx context.Context, tx *sql.Tx, space, target string, now any) error {
+	queue := []string{target}
+	seen := map[string]bool{target: true}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		ids, err := r.incomingPublishedSources(ctx, tx, space, id)
+		if err != nil {
+			return err
+		}
+		for _, source := range ids {
+			if seen[source] {
+				continue
+			}
+			if len(seen) > maxGraphNodes {
+				return ErrGraphTooLarge
+			}
+			seen[source] = true
+			p, e := getReviewedPluginForUpdate(ctx, tx, space, source)
+			if e != nil {
+				return e
+			}
+			if e = suspendDependency(ctx, tx, source, id, now); e != nil {
+				return e
+			}
+			if e = demoteEmbeddedChildren(ctx, tx, source, p.Type, space, now); e != nil {
+				return e
+			}
+			queue = append(queue, source)
+		}
+	}
+	return nil
+}

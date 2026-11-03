@@ -110,3 +110,95 @@ func testDependencyAdoption(t *testing.T, visibility model.PluginVisibility, aut
 		t.Fatalf("remaining=%+v err=%v", remaining, err)
 	}
 }
+
+func TestConnectorConfigAdoption(t *testing.T) {
+	for _, mode := range []string{"private", "manual", "auto"} {
+		t.Run(mode, func(t *testing.T) {
+			db := reviewDB(t)
+			ctx := context.Background()
+			owner := managedOwner()
+			repo := pluginrepo.New(db)
+			svc := pluginsvc.New(repo).WithVersionManagement(true).WithReferences(true)
+			vis := model.PluginVisibilitySpace
+			if mode == "private" {
+				vis = model.PluginVisibilityPrivate
+			}
+			if _, err := repo.UpsertReviewPolicy(ctx, tenantScope(), mode != "manual", owner.UID, owner.Name); err != nil {
+				t.Fatal(err)
+			}
+			seed(t, db, seedPlugin{id: "cfg", typ: "connector", visibility: "space", listingState: "published"})
+			draft := managedWrite("1.0.0", "original", vis)
+			draft.Relations = []pluginsvc.RelationRequest{{TargetPluginID: "cfg", Type: "expert_connector"}}
+			expert, err := svc.Create(ctx, owner, draft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := expert.Plugin.ID
+			publishManaged(t, svc, owner, id)
+			updates := func() *model.DependencyUpdates {
+				t.Helper()
+				u, e := svc.DependencyUpdates(ctx, owner, id)
+				if e != nil {
+					t.Fatal(e)
+				}
+				return u
+			}
+			if len(updates().Updates) != 0 {
+				t.Fatal("initial config must be baseline")
+			}
+			change := func(hash string) {
+				if _, e := db.Exec("UPDATE plugins SET plugin_hash=? WHERE plugin_id='cfg'", hash); e != nil {
+					t.Fatal(e)
+				}
+			}
+			change("first")
+			plan := updates()
+			if len(plan.Updates) != 1 || plan.Updates[0].TargetVersionID != "" || plan.Updates[0].TargetConfigRevision == "" {
+				t.Fatalf("wrong connector update: %+v", plan)
+			}
+			selected := []model.DependencyUpdateTarget{{PluginID: "cfg", TargetConfigRevision: plan.Updates[0].TargetConfigRevision}}
+			if err = svc.SkipDependencyUpdates(ctx, owner, id, selected); err != nil {
+				t.Fatal(err)
+			}
+			if !updates().Updates[0].IsSkipped {
+				t.Fatal("skip not persisted")
+			}
+			submit := func() (*pluginrepo.DependencyUpdatePublishResult, error) {
+				p := updates()
+				return svc.SubmitDependencyUpdates(ctx, owner, id, pluginsvc.DependencyUpdateSubmitParams{ExpectedPublishedVersionID: p.PublishedVersionID, ExpectedDraftRevision: p.DraftRevision, Targets: selected, Draft: draft, Version: "1.1.0", Changelog: "Apply config"})
+			}
+			out, err := submit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "manual" {
+				if len(updates().Updates) != 1 {
+					t.Fatal("acknowledged before approval")
+				}
+				change("second")
+				if _, err = svc.ApproveReview(ctx, managedReviewer(), out.Review.ID); err == nil {
+					t.Fatal("accepted stale config")
+				}
+				if err = svc.CancelReview(ctx, owner, out.Review.ID); err != nil {
+					t.Fatal(err)
+				}
+				selected[0].TargetConfigRevision = updates().Updates[0].TargetConfigRevision
+				out, err = submit()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = svc.ApproveReview(ctx, managedReviewer(), out.Review.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(updates().Updates) != 0 {
+				t.Fatal("selected revision was not acknowledged")
+			}
+			change("later")
+			p := updates()
+			if len(p.Updates) != 1 || p.Updates[0].IsSkipped {
+				t.Fatal("new config should remind again")
+			}
+		})
+	}
+}

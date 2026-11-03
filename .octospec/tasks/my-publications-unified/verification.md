@@ -34,3 +34,9 @@ Full snapshot apply, independent verify, repeat apply and complete converted-con
 - OpenAPI regeneration, coverage, consumer contract and lint passed (0 errors, 14 warnings); semantic diff vs github-upstream/main has no breaking changes. Committed-baseline verification is run after creating the reviewed commit, before push.
 - Whole-app TypeScript checking still reports existing React/jsx-runtime/class resolution errors. Root Turbo lint/build fails macOS keychain/TLS setup before task scheduling; no full lint/typecheck success claimed. Direct Web build succeeds.
 - Reverse impact scans same-Space published Expert/Team history; large-Space performance is not load-tested.
+
+## Consolidated backend and Web follow-up
+
+Regression checks cover imported bundled Skills without standalone release pointers, persistent suspension after administrator delist, both review policies for unpinned Connector recovery, direct configuration reminder dismissal/adoption, rejection of stale Connector approvals, and initialization/replay of stock-conversion baselines. Real HTTP integration used the paired Web publication service and API client against a Go handler and isolated MySQL. It exercised preview, dismissal, adoption of unsaved edits and readback with the Connector relation still unpinned.
+
+Deploy the unified migrations (including `20261103-03-plugin-connector-baselines.sql`) before the paired Web change. If a database has previously applied the separate PR #180 schema, inspect `SHOW CREATE TABLE plugin_dependency_suspensions` and the migration receipts first. The unified schema records causes by `(plugin_id, source_plugin_id)`; the alternative single-marker schema requires an explicit reconciliation before deployment.

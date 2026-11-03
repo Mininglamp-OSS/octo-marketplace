@@ -17,12 +17,12 @@ type dependencyUpdateService interface {
 type dependencySkipResponse struct{}
 
 type dependencySkipRequest struct {
-	Targets []model.DependencyUpdateTarget `json:"targets" binding:"required,min=1,max=200"`
+	Targets []model.DependencyUpdateTarget `json:"targets" binding:"required,min=1,max=100,dive"`
 }
 type dependencySubmitRequest struct {
 	ExpectedPublishedVersionID string                         `json:"expected_published_version_id" binding:"required"`
 	ExpectedDraftRevision      string                         `json:"expected_draft_revision" binding:"required"`
-	Targets                    []model.DependencyUpdateTarget `json:"targets" binding:"required,min=1,max=200"`
+	Targets                    []model.DependencyUpdateTarget `json:"targets" binding:"required,min=1,max=100,dive"`
 	Draft                      upsertRequest                  `json:"draft" binding:"required"`
 	Version                    string                         `json:"version" binding:"required"`
 	Changelog                  string                         `json:"changelog" binding:"required"`
@@ -30,7 +30,7 @@ type dependencySubmitRequest struct {
 
 // DependencyUpdates lists adoptable direct formal releases, including skipped ones.
 // @Summary Get direct dependency updates for an owned expert or team
-// @Description Returns exact source and target released versions. Drafts and connectors never produce update reminders. Skipped entries remain available for manual adoption.
+// @Description Returns exact source and target released versions. Connectors report configuration changes using target_config_revision; Skills and member Experts use target_version_id. Skipped entries remain available for manual adoption.
 // @Tags plugin
 // @ID plugin.dependency_update.list
 // @Produce json
@@ -92,6 +92,10 @@ func (h *Handler) SkipDependencyUpdates(c *gin.Context) {
 	if !decode(c, &body) {
 		return
 	}
+	if !pluginrepo.ValidUpdateTargets(body.Targets) {
+		validation(c, "targets")
+		return
+	}
 	svc, ok := h.svc.(dependencyUpdateService)
 	if !ok {
 		writeServiceError(c, pluginsvc.ErrNotFound, "plugin.dependency_update")
@@ -131,6 +135,10 @@ func (h *Handler) SubmitDependencyUpdates(c *gin.Context) {
 	}
 	var body dependencySubmitRequest
 	if !decode(c, &body) {
+		return
+	}
+	if !pluginrepo.ValidUpdateTargets(body.Targets) {
+		validation(c, "targets")
 		return
 	}
 	svc, ok := h.svc.(dependencyUpdateService)

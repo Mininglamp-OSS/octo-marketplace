@@ -1,14 +1,16 @@
 package model
 
 type DependencyUpdate struct {
-	PluginID        string     `json:"plugin_id"`
-	Name            string     `json:"name"`
-	Type            PluginType `json:"plugin_type"`
-	FromVersionID   string     `json:"from_version_id"`
-	FromVersion     string     `json:"from_version"`
-	TargetVersionID string     `json:"target_version_id"`
-	TargetVersion   string     `json:"target_version"`
-	IsSkipped       bool       `json:"is_skipped"`
+	PluginID             string     `json:"plugin_id"`
+	Name                 string     `json:"name"`
+	Type                 PluginType `json:"plugin_type"`
+	FromConfigRevision   string     `json:"from_config_revision,omitempty"`
+	TargetConfigRevision string     `json:"target_config_revision,omitempty"`
+	FromVersionID        string     `json:"from_version_id"`
+	FromVersion          string     `json:"from_version"`
+	TargetVersionID      string     `json:"target_version_id"`
+	TargetVersion        string     `json:"target_version"`
+	IsSkipped            bool       `json:"is_skipped"`
 }
 type DependencyUpdates struct {
 	PluginID           string             `json:"plugin_id"`
@@ -17,6 +19,7 @@ type DependencyUpdates struct {
 	Updates            []DependencyUpdate `json:"updates"`
 }
 type DependencyUpdateTarget struct {
-	PluginID        string `json:"plugin_id" binding:"required"`
-	TargetVersionID string `json:"target_version_id" binding:"required"`
+	PluginID             string `json:"plugin_id" binding:"required"`
+	TargetVersionID      string `json:"target_version_id,omitempty"`
+	TargetConfigRevision string `json:"target_config_revision,omitempty"`
 }
