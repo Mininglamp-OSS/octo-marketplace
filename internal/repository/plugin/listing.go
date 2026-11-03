@@ -29,6 +29,8 @@ func mustChangeState(res sql.Result) error {
 
 // PublishParams carries one owner-driven publish of an unlisted plugin.
 type PublishParams struct {
+	Selection *DependencySelection
+	Changelog string
 	// Version is the requested managed release label; empty retains admin/legacy behavior.
 	Version           string
 	ExpectedVersionID string

@@ -166,6 +166,11 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 			return err
 		}
 	}
+	if p.Type == model.PluginTypeExpert {
+		if err = refreshConnectorBaselines(ctx, tx, p.ID, versionID); err != nil {
+			return err
+		}
+	}
 	// The market displays the selected version's manifest name, not the mutable
 	// draft name. Read the name from the version being released; p.Name can be a
 	// later draft (adoption/historical flows) and must not release or misreserve a
@@ -229,7 +234,7 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 	// A release label belongs to publication, not to the editing session. Never
 	// mutate the selected immutable draft to relabel it: append a copy under the
 	// resource lock so files and pinned relations remain exactly as verified.
-	if label := strings.TrimSpace(p.Version); label != "" && label != *current.CurrentVersion {
+	if label := strings.TrimSpace(p.Version); label != "" && (label != *current.CurrentVersion || p.Selection != nil) {
 		if _, valid := model.ParseVersion(label); !valid {
 			return nil, ErrConflict
 		}
@@ -245,7 +250,21 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 		frozen.Manifest, frozen.Package, frozen.AttachmentKeys = v.Manifest, v.Package, v.AttachmentKeys
 		frozen.ManifestHash, frozen.PluginHash = v.ManifestHash, v.PluginHash
 		frozen.CurrentVersion = &label
-		id, e := snapshotVersion(ctx, tx, r.id, r.now(), frozen, rels, v.Changelog, p.OperatorID, r.references)
+		note := v.Changelog
+		if p.Selection != nil {
+			acks, err := r.selectUpdates(ctx, tx, scope, current, p.Selection, rels)
+			if err != nil {
+				return nil, err
+			}
+			if err = ackConnectors(ctx, tx, current.ID, acks); err != nil {
+				return nil, err
+			}
+			if err = applySelectedLivePins(ctx, tx, current.ID, p.Selection, rels); err != nil {
+				return nil, err
+			}
+			note = &p.Changelog
+		}
+		id, e := snapshotVersion(ctx, tx, r.id, r.now(), frozen, rels, note, p.OperatorID, r.references)
 		if e != nil {
 			return nil, e
 		}

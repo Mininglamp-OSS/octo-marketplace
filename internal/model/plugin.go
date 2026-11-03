@@ -116,16 +116,17 @@ func NormalizeLegacyVisibility(v PluginVisibility) PluginVisibility {
 
 // Plugin is the authoritative mutable current state of a unified Plugin.
 type Plugin struct {
-	ID         string
-	Name       string
-	Type       PluginType
-	IsEmbedded bool
-	CategoryID *string
-	Tags       json.RawMessage
-	Publisher  string
-	OwnerUID   string
-	SpaceID    *string
-	Visibility PluginVisibility
+	HasDependencyUpdates bool
+	ID                   string
+	Name                 string
+	Type                 PluginType
+	IsEmbedded           bool
+	CategoryID           *string
+	Tags                 json.RawMessage
+	Publisher            string
+	OwnerUID             string
+	SpaceID              *string
+	Visibility           PluginVisibility
 	// ListingState is written by exactly seven SQL sites: insertPlugin (every row
 	// creation, including the fresh embedded children a container reupload
 	// inserts — RebuildGraph re-stamps each child's ListingState from the locked

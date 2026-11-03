@@ -356,6 +356,15 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) ([]mode
 		return nil, 0, mapStoreError(err)
 	}
 	if p.Mine {
+		if s.references && s.versionManagement {
+			if store, ok := s.repo.(interface {
+				FillUpdateIndicators(context.Context, pluginrepo.Scope, []model.Plugin) error
+			}); ok {
+				if err := store.FillUpdateIndicators(ctx, scope(caller), items); err != nil {
+					return nil, 0, mapStoreError(err)
+				}
+			}
+		}
 		issues, err := s.repo.DependencyIssues(ctx, scope(caller), items)
 		if err != nil {
 			return nil, 0, mapStoreError(err)

@@ -61,6 +61,7 @@ type RejectReviewParams struct {
 // means approve can apply the snapshot atomically without depending on the
 // live sidecar still being correct.
 type FrozenSnapshot struct {
+	Selection      *DependencySelection
 	Manifest       json.RawMessage
 	Package        json.RawMessage
 	AttachmentKeys json.RawMessage
@@ -262,6 +263,11 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	}
 
 	relations := snap.Relations
+	if snap.Selection != nil {
+		if _, err = r.selectUpdates(ctx, tx, scope, current, snap.Selection, relations); err != nil {
+			return err
+		}
+	}
 	if relations == nil {
 		relations = []model.PluginRelation{}
 	}
@@ -323,6 +329,15 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 			return ErrReviewPending
 		}
 		return err
+	}
+	if snap.Selection != nil {
+		raw, e := json.Marshal(snap.Selection)
+		if e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO plugin_review_dependency_updates(review_id,selection_json) VALUES(?,?)", req.ID, raw); e != nil {
+			return e
+		}
 	}
 	return tx.Commit()
 }

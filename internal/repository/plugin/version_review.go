@@ -42,12 +42,20 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if changelog.Valid {
 		note = &changelog.String
 	}
+	advanceDraft, err := r.approveDependencySelection(ctx, tx, current, p.ReviewID, rels)
+	if err != nil {
+		return nil, err
+	}
 	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, p.ReviewerUID, r.references)
 	if err != nil {
 		return nil, err
 	}
 	if err = r.recordRelease(ctx, tx, &frozen, id, version, p.ReviewerUID, now); err != nil {
 		return nil, err
+	}
+	if advanceDraft {
+		current.CurrentVersionID = &id
+		current.CurrentVersion = &version
 	}
 	// snapshotVersion supplies an immutable row, but its editable-head update is
 	// undone in this transaction: approval never replaces a subsequently saved draft.

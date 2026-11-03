@@ -109,6 +109,7 @@ func (e *ReviewFieldError) Unwrap() error { return e.Err }
 
 // ReviewSubmitParams is the user-supplied input for a submit.
 type ReviewSubmitParams struct {
+	Selection *pluginrepo.DependencySelection
 	PluginID  string
 	Version   string
 	Changelog string
@@ -301,6 +302,7 @@ func (s *Service) submitReview(ctx context.Context, caller Caller, params Review
 	if params.Changelog != "" {
 		req.Changelog = &params.Changelog
 	}
+	snap.Selection = params.Selection
 	if err := s.repo.InsertReviewRequest(ctx, sc, req, snap); err != nil {
 		// Insert failed — roll back uploaded objects and release the parse task so
 		// the submission is retryable.

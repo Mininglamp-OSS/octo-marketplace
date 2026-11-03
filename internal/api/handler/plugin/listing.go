@@ -5,16 +5,18 @@ import (
 
 	apiresponse "github.com/Mininglamp-OSS/octo-marketplace/internal/api/response"
 	"github.com/Mininglamp-OSS/octo-marketplace/internal/model"
+	pluginrepo "github.com/Mininglamp-OSS/octo-marketplace/internal/repository/plugin"
 	pluginsvc "github.com/Mininglamp-OSS/octo-marketplace/internal/service/plugin"
 )
 
 type publishRequest struct {
-	PluginID string `json:"plugin_id"`
+	Selection *pluginrepo.DependencySelection `json:"dependency_updates,omitempty"`
+	PluginID  string                          `json:"plugin_id"`
 	// Version is required for managed Skills, Experts and Expert Teams. The requested
 	// label names the release independently of the draft. Connectors and feature-off
 	// publication retain their existing defaults.
 	Version string `json:"version"`
-	// Changelog is used for organization review and ignored for private publish.
+	// Changelog is retained for organization review and for private dependency updates.
 	Changelog string `json:"changelog"`
 }
 
@@ -42,6 +44,7 @@ type delistResponse struct {
 // @Summary Publish plugin
 // @Description Publish a caller-owned Plugin. A private Plugin is listed immediately. An organization-visible Plugin is approved immediately when the authenticated Space's automatic-review policy is enabled (the default), or opens a pending review when the policy is disabled.
 // @Description With version management enabled, Skills, Experts and Expert Teams require an explicit MAJOR.MINOR.PATCH version. The supplied version names the release and may differ from the saved draft label. Missing or invalid labels return 400 with details.field=version and an octo-cli upgrade hint.
+// @Description For direct dependency updates, send dependency_updates with the displayed draft_revision, published_version_id and selected target revisions. Stale selections fail atomically. Dismissed candidates may still be selected.
 // @Tags plugin
 // @ID plugin.publish
 // @Accept json
@@ -71,7 +74,7 @@ func (h *Handler) Publish(c *gin.Context) {
 		return
 	}
 	result, err := h.svc.Publish(c.Request.Context(), caller, pluginsvc.PublishParams{
-		PluginID:  req.PluginID,
+		Selection: req.Selection, PluginID: req.PluginID,
 		Version:   req.Version,
 		Changelog: req.Changelog,
 	})

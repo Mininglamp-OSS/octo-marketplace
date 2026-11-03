@@ -95,6 +95,8 @@ func (h *Handler) Register(rg *gin.RouterGroup) {
 	plugins.POST("/delist", h.Delist)
 	plugins.GET("/versions", h.ListVersions)
 	plugins.GET("/:plugin_id/draft", h.GetDraft)
+	plugins.GET("/:plugin_id/dependency_updates", h.DependencyUpdates)
+	plugins.POST("/:plugin_id/dependency_updates/dismiss", h.DismissUpdates)
 	plugins.PATCH("/:plugin_id/visibility", h.ChangeVisibility)
 	plugins.GET("/:plugin_id/versions/:version_id", h.GetVersion)
 	plugins.GET("/:plugin_id/versions/:version_id/file", h.DownloadVersionFile)
@@ -213,13 +215,14 @@ type pluginResponse struct {
 // listItemResponse is the list-page projection: it carries the manifest for
 // display but never the full plugin_json package.
 type listItemResponse struct {
-	PluginID   string           `json:"plugin_id"`
-	PluginName string           `json:"plugin_name"`
-	PluginType model.PluginType `json:"plugin_type"`
-	IsEmbedded bool             `json:"is_embedded"`
-	CategoryID *string          `json:"category_id,omitempty"`
-	Tags       []string         `json:"tags"`
-	Publisher  string           `json:"publisher,omitempty"`
+	HasDependencyUpdates bool             `json:"has_dependency_updates,omitempty"`
+	PluginID             string           `json:"plugin_id"`
+	PluginName           string           `json:"plugin_name"`
+	PluginType           model.PluginType `json:"plugin_type"`
+	IsEmbedded           bool             `json:"is_embedded"`
+	CategoryID           *string          `json:"category_id,omitempty"`
+	Tags                 []string         `json:"tags"`
+	Publisher            string           `json:"publisher,omitempty"`
 	// ListingState / Status / ReviewID are populated for mode=mine only. On the
 	// marketplace grid every row is published by construction, so the status would
 	// be a constant and the extra per-row lookups buy nothing.
@@ -905,7 +908,7 @@ func listItemDTO(p *model.Plugin) listItemResponse {
 	if p == nil {
 		return listItemResponse{}
 	}
-	return listItemResponse{PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, PublishedVersionID: p.PublishedVersionID, PublishedVersion: p.PublishedVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	return listItemResponse{HasDependencyUpdates: p.HasDependencyUpdates, PluginID: p.ID, PluginName: p.Name, PluginType: p.Type, IsEmbedded: p.IsEmbedded, CategoryID: p.CategoryID, Tags: stringSlice(p.Tags), Publisher: p.Publisher, OwnerID: p.OwnerUID, SpaceID: p.SpaceID, Visibility: p.Visibility, ListingState: p.ListingState, DisplayStatus: p.DisplayStatus(p.HasPendingReview, p.LatestReviewStatus), ReviewID: optionalID(p.LatestReviewID), CreatorName: p.CreatorName, CreatedByType: p.CreatedByType, CreatedByBotID: p.CreatedByBotUID, CreatedByBotName: p.CreatedByBotName, Icon: p.Icon, IconURL: p.IconURL, ToolCount: connectorCount(p), MemberCount: teamMemberCount(p), Rating: p.Rating, ViewCount: p.ViewCount, InstallCount: p.InstallCount, DownloadCount: p.DownloadCount, SceneCodes: nonNilStrings(p.SceneCodes), DependencyIssues: p.DependencyIssues, ManifestJSON: normalizedObjectRaw(p.Manifest), ManifestHash: p.ManifestHash, PluginHash: p.PluginHash, CurrentVersionID: p.CurrentVersionID, CurrentVersion: p.CurrentVersion, PublishedVersionID: p.PublishedVersionID, PublishedVersion: p.PublishedVersion, Status: p.Status, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 func nonNilStrings(values []string) []string {

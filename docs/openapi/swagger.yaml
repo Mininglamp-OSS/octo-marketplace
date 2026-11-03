@@ -67,6 +67,11 @@ components:
         data:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.Detail'
       type: object
+    ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_DependencyPreview
+    : properties:
+        data:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencyPreview'
+      type: object
     ? github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_service_IconResult
     : properties:
         data:
@@ -1206,6 +1211,70 @@ components:
       - VisibilityPrivate
       - VisibilitySystem
       - VisibilitySpace
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencyChoice:
+      properties:
+        target_plugin_id:
+          type: string
+        target_revision:
+          type: string
+      required:
+      - target_plugin_id
+      - target_revision
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencyPreview:
+      properties:
+        draft_revision:
+          type: string
+        includes_draft_changes:
+          type: boolean
+        published_version_id:
+          type: string
+        updates:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencyUpdate'
+          type: array
+          uniqueItems: false
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencySelection:
+      properties:
+        choices:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencyChoice'
+          maxItems: 100
+          minItems: 1
+          type: array
+          uniqueItems: false
+        draft_revision:
+          type: string
+        published_version_id:
+          type: string
+      required:
+      - choices
+      - draft_revision
+      - published_version_id
+      type: object
+    github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencyUpdate:
+      properties:
+        current_revision:
+          type: string
+        current_version:
+          type: string
+        is_dismissed:
+          type: boolean
+        name:
+          type: string
+        plugin_type:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginType'
+        target_plugin_id:
+          type: string
+        target_revision:
+          type: string
+        target_version:
+          type: string
+      required:
+      - target_plugin_id
+      - target_revision
+      type: object
     github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.ReferenceCandidate:
       properties:
         already_bound:
@@ -1829,6 +1898,18 @@ components:
           type: array
           uniqueItems: false
       type: object
+    internal_api_handler_plugin.dismissChoices:
+      properties:
+        choices:
+          items:
+            $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencyChoice'
+          maxItems: 100
+          minItems: 1
+          type: array
+          uniqueItems: false
+      required:
+      - choices
+      type: object
     internal_api_handler_plugin.historicalVersionResponse:
       properties:
         manifest_json:
@@ -1918,6 +1999,8 @@ components:
           $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_model.PluginDisplayStatus'
         download_count:
           type: integer
+        has_dependency_updates:
+          type: boolean
         icon:
           type: string
         icon_url:
@@ -2226,9 +2309,11 @@ components:
     internal_api_handler_plugin.publishRequest:
       properties:
         changelog:
-          description: Changelog is used for organization review and ignored for private
-            publish.
+          description: Changelog is retained for organization review and for private
+            dependency updates.
           type: string
+        dependency_updates:
+          $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin.DependencySelection'
         plugin_id:
           type: string
         version:
@@ -6912,6 +6997,130 @@ paths:
       summary: List plugins
       tags:
       - plugin
+  /plugins/{plugin_id}/dependency_updates:
+    get:
+      description: Owner-scoped direct dependencies only. Includes dismissed candidates.
+        Use the returned draft revision, published ID and selected choices on publish.
+      operationId: plugin.dependency_updates.list
+      parameters:
+      - description: Resource ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_DependencyPreview'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: DependencyUpdates for a published expert or team
+      tags:
+      - plugin
+  /plugins/{plugin_id}/dependency_updates/dismiss:
+    post:
+      description: Owner-scoped direct dependencies only. Includes dismissed candidates.
+        Use the returned draft revision, published ID and selected choices on publish.
+      operationId: plugin.dependency_updates.dismiss
+      parameters:
+      - description: Resource ID
+        in: path
+        name: plugin_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/internal_api_handler_plugin.dismissChoices'
+                description: Exact reminder candidates to dismiss
+                summary: body
+        description: Exact reminder candidates to dismiss
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Data-github_com_Mininglamp-OSS_octo-marketplace_internal_repository_plugin_DependencyPreview'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: VALIDATION_ERROR
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: AUTH_REQUIRED
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: NOT_FOUND
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: CONFLICT
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_Mininglamp-OSS_octo-marketplace_internal_api_response.Error'
+          description: INTERNAL_ERROR
+      security:
+      - Bearer: []
+      summary: DismissUpdates for a published expert or team
+      tags:
+      - plugin
   /plugins/{plugin_id}/dependents:
     get:
       description: Returns authorized direct and indirect consumers from immutable
@@ -8014,7 +8223,11 @@ paths:
         With version management enabled, Skills, Experts and Expert Teams require
         an explicit MAJOR.MINOR.PATCH version. The supplied version names the release
         and may differ from the saved draft label. Missing or invalid labels return
-        400 with details.field=version and an octo-cli upgrade hint.'
+        400 with details.field=version and an octo-cli upgrade hint.
+
+        For direct dependency updates, send dependency_updates with the displayed
+        draft_revision, published_version_id and selected target revisions. Stale
+        selections fail atomically. Dismissed candidates may still be selected.'
       operationId: plugin.publish
       requestBody:
         content:

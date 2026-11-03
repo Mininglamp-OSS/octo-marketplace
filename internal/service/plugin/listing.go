@@ -29,7 +29,8 @@ var (
 // rather than in the client is the point — a browser that guesses wrong either
 // lists something unreviewed or strands a plugin in draft forever.
 type PublishParams struct {
-	PluginID string
+	Selection *pluginrepo.DependencySelection
+	PluginID  string
 	// Version selects the managed release label at publication time. It is
 	// independent of the draft label. Feature-off/Connector defaults stay intact.
 	Version   string
@@ -72,6 +73,9 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		// Not a 403: a non-owner must not learn that this plugin exists.
 		return nil, ErrNotFound
 	}
+	if params.Selection != nil && (!s.references || !s.versionManagement || detail.Plugin.ListingState != model.PluginListingStatePublished || (detail.Plugin.Type != model.PluginTypeExpert && detail.Plugin.Type != model.PluginTypeExpertTeam)) {
+		return nil, ErrInvalidRequest
+	}
 	// An embedded child is published by its container, never on its own — matching
 	// SubmitReview, Update and Delete.
 	if detail.Plugin.IsEmbedded {
@@ -103,7 +107,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 	// the baseline; submitting a review would only collide with the label that
 	// approval evidence already occupies. (nil, nil) means a release exists and the
 	// ordinary flow below applies.
-	if s.versionManagement && detail.Plugin.ListingState == model.PluginListingStatePublished {
+	if params.Selection == nil && s.versionManagement && detail.Plugin.ListingState == model.PluginListingStatePublished {
 		adopted, err := s.adoptPublishedBaseline(ctx, caller, detail)
 		if err != nil {
 			return nil, err
@@ -135,7 +139,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 			version = defaultCurrentVersion
 		}
 		review, err := s.submitReview(ctx, caller, ReviewSubmitParams{
-			PluginID:  detail.Plugin.ID,
+			Selection: params.Selection, PluginID: detail.Plugin.ID,
 			Version:   version,
 			Changelog: params.Changelog,
 		}, !policy.IsAutoApproveEnabled)
@@ -176,7 +180,7 @@ func (s *Service) Publish(ctx context.Context, caller Caller, params PublishPara
 		if e = s.verifyVersionFiles(ctx, detail.Plugin, v); e != nil {
 			return nil, e
 		}
-		published, e := store.PublishManaged(ctx, scope(caller), pluginrepo.PublishParams{PluginID: detail.Plugin.ID, ExpectedVersionID: v.ID, Version: params.Version, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
+		published, e := store.PublishManaged(ctx, scope(caller), pluginrepo.PublishParams{Selection: params.Selection, Changelog: params.Changelog, PluginID: detail.Plugin.ID, ExpectedVersionID: v.ID, Version: params.Version, OperatorID: caller.UID, OperatorName: caller.Name, RequestID: caller.RequestID})
 		if e != nil {
 			return nil, mapStoreError(e)
 		}
