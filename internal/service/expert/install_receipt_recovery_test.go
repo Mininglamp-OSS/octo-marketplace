@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -599,5 +600,149 @@ func TestInstallSquadRecoversEveryMemberLegacyMCPWire(t *testing.T) {
 	}
 	if body := upstream.replayBody(t, 1); !bytes.Equal(body, legacy) {
 		t.Fatalf("recovery omitted or changed a member's legacy MCP wire: %s", body)
+	}
+}
+
+// Freeze a legal historical wire independently of the production assemblers.
+// ASCII content makes the last Skill's padding an exact wire-byte delta.
+func nearLimitLegacyReceipt(t *testing.T, base []byte, response string) ([]model.SkillRef, []byte, []byte) {
+	t.Helper()
+	var request fleet.CapabilityInstallRequest
+	var result fleet.CapabilityInstallResult
+	if err := json.Unmarshal(base, &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(response), &result); err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]model.SkillRef, 20)
+	sharedContent := strings.Repeat("a", 1_000_000)
+	for i := range refs {
+		content := sharedContent
+		if i == len(refs)-1 {
+			content = "a"
+		}
+		name, id := fmt.Sprintf("Skill %02d", i), fmt.Sprintf("skill-%02d", i)
+		refs[i] = model.SkillRef{Name: name, Markdown: content}
+		request.Definition.Skills = append(request.Definition.Skills, fleet.CapabilitySkill{
+			Name: name, Description: request.Definition.Experts[0].Description, Content: content, Config: map[string]any{},
+		})
+		request.Definition.Experts[0].SkillNames = append(request.Definition.Experts[0].SkillNames, name)
+		result.Skills = append(result.Skills, fleet.CapabilitySkillResult{SkillID: id, Name: name, Created: true})
+		result.Experts[0].SkillIDs = append(result.Experts[0].SkillIDs, id)
+	}
+	probe, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := len(refs) - 1
+	refs[last].Markdown += strings.Repeat("a", fleet.MaxCapabilityRequestBytes-1-len(probe))
+	if len(refs[last].Markdown) > model.MaxSkillContentBytes {
+		t.Fatal("boundary fixture exceeds a single Skill's content limit")
+	}
+	request.Definition.Skills[last].Content = refs[last].Markdown
+	legacy, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy) != fleet.MaxCapabilityRequestBytes-1 {
+		t.Fatalf("historical request bytes=%d, want limit minus one", len(legacy))
+	}
+	current := request
+	current.Definition.Experts = append([]fleet.CapabilityExpert(nil), request.Definition.Experts...)
+	current.Definition.Experts[0].MCPConfig = nil
+	current.Definition.Experts[0].ConnectorNames = []string{current.Definition.Experts[0].Name}
+	current.Definition.Connectors = []fleet.CapabilityConnector{{Name: current.Definition.Experts[0].Name, Config: json.RawMessage(expertLegacyMCPConfig)}}
+	currentWire, err := json.Marshal(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(currentWire) <= fleet.MaxCapabilityRequestBytes {
+		t.Fatal("connector fixture must exceed the current request limit")
+	}
+	t.Logf("historical wire=%d bytes; connector wire=%d bytes", len(legacy), len(currentWire))
+	rawResult, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return refs, legacy, rawResult
+}
+
+func TestInstallExpertRecoversLegacyReceiptWhenConnectorWireExceedsBudget(t *testing.T) {
+	upstream := newExpertReceiptFleet(t)
+	server := httptest.NewServer(upstream)
+	t.Cleanup(server.Close)
+	refs, legacy, result := nearLimitLegacyReceipt(t, legacyExpertReceiptWire(t, expertLegacyMCPConfig), expertLegacyReceiptResult)
+	svc, caller, id := installFixture(t, fleet.New(server.URL), refs)
+	svc.repo.(*fakeStore).experts[id].MCPConfig = expertLegacyMCPConfig
+	const key = "receipt-size"
+	upstream.seed(key, legacy, result)
+	input := baseInput()
+	input.IdempotencyKey = key
+	for range 2 {
+		recovered, err := svc.InstallExpert(context.Background(), caller, id, input)
+		if err != nil || recovered.AgentID != "agent-legacy" {
+			t.Fatalf("near-limit expert recovery=%+v error=%v", recovered, err)
+		}
+	}
+	gets, installs, replays, commits := upstream.counts()
+	if gets != 2 || installs != 0 || replays != 2 || commits != 0 {
+		t.Fatalf("recovery counts: gets=%d installs=%d replays=%d commits=%d", gets, installs, replays, commits)
+	}
+	if !bytes.Equal(upstream.replayBody(t, 0), legacy) {
+		t.Fatal("historical expert candidate changed its request bytes")
+	}
+	input.IdempotencyKey = "new-size"
+	if _, err := svc.InstallExpert(context.Background(), caller, id, input); !errors.Is(err, ErrInstallTooLarge) {
+		t.Fatalf("oversized new expert error=%v, want capacity rejection", err)
+	}
+	input.IdempotencyKey = key
+	svc.repo.(*fakeStore).experts[id].Skills[len(refs)-1].Markdown += "aa"
+	if _, err := svc.InstallExpert(context.Background(), caller, id, input); !errors.Is(err, ErrInstallTooLarge) {
+		t.Fatalf("oversized historical expert error=%v, want capacity rejection", err)
+	}
+	_, installs, replays, commits = upstream.counts()
+	if installs != 0 || replays != 2 || commits != 0 {
+		t.Fatalf("capacity rejection dispatched requests: installs=%d replays=%d commits=%d", installs, replays, commits)
+	}
+}
+
+func TestInstallSquadRecoversLegacyReceiptWhenConnectorWireExceedsBudget(t *testing.T) {
+	members := []model.SquadMember{{MemberKey: "member_01", Name: "Solo", Instruction: "do work", MCPConfig: expertLegacyMCPConfig}}
+	refs, legacy, result := nearLimitLegacyReceipt(t, legacySquadInstallRequest(t, members), squadLegacyReceiptResult)
+	members[0].Skills = refs
+	upstream := newExpertReceiptFleet(t)
+	server := httptest.NewServer(upstream)
+	t.Cleanup(server.Close)
+	svc, caller, id := installSquadFixture(t, fleet.New(server.URL), members)
+	const key = "receipt-size"
+	upstream.seed(key, legacy, result)
+	input := baseInput()
+	input.IdempotencyKey = key
+	for range 2 {
+		recovered, err := svc.InstallSquad(context.Background(), caller, id, input)
+		if err != nil || recovered.SquadID != "team-legacy" || recovered.LeaderAgentID != "leader-legacy" {
+			t.Fatalf("near-limit squad recovery=%+v error=%v", recovered, err)
+		}
+	}
+	gets, installs, replays, commits := upstream.counts()
+	if gets != 2 || installs != 0 || replays != 2 || commits != 0 {
+		t.Fatalf("recovery counts: gets=%d installs=%d replays=%d commits=%d", gets, installs, replays, commits)
+	}
+	if !bytes.Equal(upstream.replayBody(t, 0), legacy) {
+		t.Fatal("historical squad candidate changed its request bytes")
+	}
+	input.IdempotencyKey = "new-size"
+	if _, err := svc.InstallSquad(context.Background(), caller, id, input); !errors.Is(err, ErrInstallTooLarge) {
+		t.Fatalf("oversized new squad error=%v, want capacity rejection", err)
+	}
+	input.IdempotencyKey = key
+	svc.repo.(*fakeStore).squads[id].Members[0].Skills[len(refs)-1].Markdown += "aa"
+	if _, err := svc.InstallSquad(context.Background(), caller, id, input); !errors.Is(err, ErrInstallTooLarge) {
+		t.Fatalf("oversized historical squad error=%v, want capacity rejection", err)
+	}
+	_, installs, replays, commits = upstream.counts()
+	if installs != 0 || replays != 2 || commits != 0 {
+		t.Fatalf("capacity rejection dispatched requests: installs=%d replays=%d commits=%d", installs, replays, commits)
 	}
 }

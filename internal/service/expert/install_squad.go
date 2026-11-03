@@ -37,6 +37,24 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		return InstallSquadResult{}, ErrInvalidRequest
 	}
 
+	result, err := s.installCapability(ctx, in,
+		func() (*fleet.CapabilityInstallRequest, error) {
+			return s.buildSquadInstallation(ctx, m, in, true)
+		},
+		func(current *fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallRequest, error) {
+			if current != nil {
+				return legacySquadReceiptCandidate(*current, m.Members), nil
+			}
+			return s.buildSquadInstallation(ctx, m, in, false)
+		})
+	if err != nil {
+		return InstallSquadResult{}, err
+	}
+	s.trackInstall(ctx, "squad", squadID)
+	return InstallSquadResult{SquadID: result.ExpertTeamID, LeaderAgentID: result.LeaderExpertID}, nil
+}
+
+func (s *Service) buildSquadInstallation(ctx context.Context, m *model.Squad, in InstallInput, workspaceConnectors bool) (*fleet.CapabilityInstallRequest, error) {
 	requestBudget := newCapabilityBudget("marketplace:" + m.ID)
 	seenSkillNames := make(map[string]struct{})
 	experts := make([]fleet.CapabilityExpert, len(m.Members))
@@ -45,45 +63,54 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 	}
 	teamMembers := make([]fleet.CapabilityTeamMember, len(m.Members))
 	leaderIdx := squadLeaderIndex(m)
-	// Charge every member's non-Skill metadata, MCP connectors, and the team
-	// wiring before any object-storage read: oversized metadata must never be
-	// amplified by Skill content reads.
-	connectors := make([]fleet.CapabilityConnector, 0, len(m.Members))
+	// Bound every member's metadata and team wiring before reading Skills.
+	var connectors []fleet.CapabilityConnector
+	if workspaceConnectors {
+		connectors = make([]fleet.CapabilityConnector, 0, len(m.Members))
+	}
 	for i := range m.Members {
 		member := m.Members[i]
 		expert := fleet.CapabilityExpert{
 			Name: member.Name, Version: nil, Description: m.Summary, Instructions: member.Instruction,
 			CustomEnv: in.CustomEnv,
 		}
-		connector, hasConnector, err := capabilityMCPConnector(member.MCPConfig, member.Name)
-		if err != nil {
-			return InstallSquadResult{}, err
-		}
-		if hasConnector {
-			expert.ConnectorNames = []string{connector.Name}
-			if err := requestBudget.beginConnector(); err != nil {
-				return InstallSquadResult{}, err
+		if workspaceConnectors {
+			connector, hasConnector, err := capabilityMCPConnector(member.MCPConfig, member.Name)
+			if err != nil {
+				return nil, err
 			}
-			if err := requestBudget.addJSON(connector); err != nil {
-				return InstallSquadResult{}, err
+			if hasConnector {
+				expert.ConnectorNames = []string{connector.Name}
+				if err := requestBudget.beginConnector(); err != nil {
+					return nil, err
+				}
+				if err := requestBudget.addJSON(connector); err != nil {
+					return nil, err
+				}
+				connectors = append(connectors, connector)
 			}
-			connectors = append(connectors, connector)
+		} else {
+			config, err := capabilityMCPConfig(member.MCPConfig)
+			if err != nil {
+				return nil, err
+			}
+			expert.MCPConfig = config
 		}
 		if err := requestBudget.beginExpert(); err != nil {
-			return InstallSquadResult{}, err
+			return nil, err
 		}
 		if err := requestBudget.addJSON(expert); err != nil {
-			return InstallSquadResult{}, err
+			return nil, err
 		}
 		experts[i] = expert
 		binding := fleet.CapabilityExpertBinding{
 			ExpertName: member.Name, RuntimeID: in.RuntimeID,
 		}
 		if err := requestBudget.beginBinding(); err != nil {
-			return InstallSquadResult{}, err
+			return nil, err
 		}
 		if err := requestBudget.addJSON(binding); err != nil {
-			return InstallSquadResult{}, err
+			return nil, err
 		}
 		bindings.Experts = append(bindings.Experts, binding)
 		role := strings.TrimSpace(member.Role)
@@ -101,7 +128,7 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		Instructions: squadDispatchInstructions(m),
 	}
 	if err := requestBudget.addTeam(team); err != nil {
-		return InstallSquadResult{}, err
+		return nil, err
 	}
 	definition := fleet.CapabilityDefinition{
 		SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Experts: experts, Connectors: connectors, ExpertTeam: team,
@@ -110,22 +137,12 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		member := m.Members[i]
 		skillNames, skills, err := s.capabilitySkills(ctx, member.Skills, m.Summary, requestBudget, seenSkillNames)
 		if err != nil {
-			return InstallSquadResult{}, err
+			return nil, err
 		}
 		experts[i].SkillNames = skillNames
 		definition.Skills = append(definition.Skills, skills...)
 	}
-	request := fleet.CapabilityInstallRequest{
-		Definition: definition, Bindings: bindings,
-	}
-	result, err := s.installCapability(ctx, in, &request, func() *fleet.CapabilityInstallRequest {
-		return legacySquadReceiptCandidate(request, m.Members)
-	})
-	if err != nil {
-		return InstallSquadResult{}, err
-	}
-	s.trackInstall(ctx, "squad", squadID)
-	return InstallSquadResult{SquadID: result.ExpertTeamID, LeaderAgentID: result.LeaderExpertID}, nil
+	return &fleet.CapabilityInstallRequest{Definition: definition, Bindings: bindings}, nil
 }
 
 // squadDispatchInstructions preserves a source dispatch document when present;

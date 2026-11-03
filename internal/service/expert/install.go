@@ -278,56 +278,16 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	if err != nil {
 		return InstallResult{}, err
 	}
-	budget := newCapabilityBudget("marketplace:" + m.ID)
-	expert := fleet.CapabilityExpert{
-		Name: m.Name, Version: nil, MarketExpertID: m.ID, Description: m.Summary, Instructions: m.Instruction,
-		CustomEnv: in.CustomEnv,
-	}
-	connector, hasConnector, err := capabilityMCPConnector(m.MCPConfig, m.Name)
-	if err != nil {
-		return InstallResult{}, err
-	}
-	var connectors []fleet.CapabilityConnector
-	if hasConnector {
-		expert.ConnectorNames = []string{connector.Name}
-		if err := budget.beginConnector(); err != nil {
-			return InstallResult{}, err
-		}
-		if err := budget.addJSON(connector); err != nil {
-			return InstallResult{}, err
-		}
-		connectors = append(connectors, connector)
-	}
-	if err := budget.beginExpert(); err != nil {
-		return InstallResult{}, err
-	}
-	if err := budget.addJSON(expert); err != nil {
-		return InstallResult{}, err
-	}
-	binding := fleet.CapabilityExpertBinding{ExpertName: m.Name, RuntimeID: in.RuntimeID}
-	if err := budget.beginBinding(); err != nil {
-		return InstallResult{}, err
-	}
-	if err := budget.addJSON(binding); err != nil {
-		return InstallResult{}, err
-	}
-	skillNames, skills, err := s.capabilitySkills(ctx, m.Skills, m.Summary, budget, nil)
-	if err != nil {
-		return InstallResult{}, err
-	}
-	expert.SkillNames = skillNames
-	request := fleet.CapabilityInstallRequest{
-		Definition: fleet.CapabilityDefinition{
-			SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Skills: skills, Connectors: connectors,
-			Experts: []fleet.CapabilityExpert{expert},
+	result, err := s.installCapability(ctx, in,
+		func() (*fleet.CapabilityInstallRequest, error) {
+			return s.buildExpertInstallation(ctx, m, in, true)
 		},
-		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{binding}},
-	}
-	// A pre-upgrade receipt may carry the legacy mcp_config wire. Build that
-	// candidate only for read-only receipt matching, from the same loaded model.
-	result, err := s.installCapability(ctx, in, &request, func() *fleet.CapabilityInstallRequest {
-		return legacyExpertInstallRequest(request, m.MCPConfig)
-	})
+		func(current *fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallRequest, error) {
+			if current != nil {
+				return legacyExpertInstallRequest(*current, m.MCPConfig), nil
+			}
+			return s.buildExpertInstallation(ctx, m, in, false)
+		})
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -335,18 +295,92 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	return InstallResult{AgentID: result.ExpertID}, nil
 }
 
+// buildExpertInstallation bounds each wire independently before dispatch.
+// Legacy MCP is assembled only for read-only receipt recovery.
+func (s *Service) buildExpertInstallation(ctx context.Context, m *model.Expert, in InstallInput, workspaceConnectors bool) (*fleet.CapabilityInstallRequest, error) {
+	budget := newCapabilityBudget("marketplace:" + m.ID)
+	expert := fleet.CapabilityExpert{
+		Name: m.Name, Version: nil, MarketExpertID: m.ID, Description: m.Summary, Instructions: m.Instruction,
+		CustomEnv: in.CustomEnv,
+	}
+	var connectors []fleet.CapabilityConnector
+	if workspaceConnectors {
+		connector, hasConnector, err := capabilityMCPConnector(m.MCPConfig, m.Name)
+		if err != nil {
+			return nil, err
+		}
+		if hasConnector {
+			expert.ConnectorNames = []string{connector.Name}
+			if err := budget.beginConnector(); err != nil {
+				return nil, err
+			}
+			if err := budget.addJSON(connector); err != nil {
+				return nil, err
+			}
+			connectors = append(connectors, connector)
+		}
+	} else {
+		config, err := capabilityMCPConfig(m.MCPConfig)
+		if err != nil {
+			return nil, err
+		}
+		expert.MCPConfig = config
+	}
+	if err := budget.beginExpert(); err != nil {
+		return nil, err
+	}
+	if err := budget.addJSON(expert); err != nil {
+		return nil, err
+	}
+	binding := fleet.CapabilityExpertBinding{ExpertName: m.Name, RuntimeID: in.RuntimeID}
+	if err := budget.beginBinding(); err != nil {
+		return nil, err
+	}
+	if err := budget.addJSON(binding); err != nil {
+		return nil, err
+	}
+	skillNames, skills, err := s.capabilitySkills(ctx, m.Skills, m.Summary, budget, nil)
+	if err != nil {
+		return nil, err
+	}
+	expert.SkillNames = skillNames
+	return &fleet.CapabilityInstallRequest{
+		Definition: fleet.CapabilityDefinition{
+			SchemaVersion: "1.0", Name: "marketplace:" + m.ID, Skills: skills, Connectors: connectors,
+			Experts: []fleet.CapabilityExpert{expert},
+		},
+		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{binding}},
+	}, nil
+}
+
 // installCapability resolves an existing caller-keyed receipt before writing.
 // The current connector wire is the only candidate eligible for a new install;
 // the legacy candidate is used only by ReplayCapability.
-func (s *Service) installCapability(ctx context.Context, in InstallInput, current *fleet.CapabilityInstallRequest, legacy func() *fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+func (s *Service) installCapability(ctx context.Context, in InstallInput, buildCurrent func() (*fleet.CapabilityInstallRequest, error), buildLegacy func(*fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallRequest, error)) (*fleet.CapabilityInstallResult, error) {
 	key := in.IdempotencyKey
+	hasReceipt := false
+	if key != "" {
+		var err error
+		hasReceipt, err = s.fleet.HasCapabilityInstallationReceipt(ctx, in.Token, in.SpaceID, in.WorkspaceID, key)
+		if err != nil {
+			return nil, s.capabilityDispatchError(key, err)
+		}
+	}
+	current, err := buildCurrent()
+	if err != nil {
+		if !hasReceipt || !errors.Is(err, ErrInstallTooLarge) {
+			return nil, err
+		}
+		// Current-wire capacity is not a constraint on a retained legacy wire.
+		legacy, err := buildLegacy(nil)
+		if err != nil {
+			return nil, err
+		}
+		return s.replayCapability(ctx, in, key, legacy)
+	}
 	if key == "" {
 		key = s.idGen()
 		return s.installCapabilityOnce(ctx, in, key, *current)
-	}
-	hasReceipt, err := s.fleet.HasCapabilityInstallationReceipt(ctx, in.Token, in.SpaceID, in.WorkspaceID, key)
-	if err != nil {
-		return nil, s.capabilityDispatchError(key, err)
 	}
 	if !hasReceipt {
 		result, err := s.installCapabilityOnce(ctx, in, key, *current)
@@ -358,7 +392,11 @@ func (s *Service) installCapability(ctx context.Context, in InstallInput, curren
 		}
 		// A concurrent same-key operation committed between the presence read
 		// and this send. Only its stored wire may recover the operation.
-		recovered, replayErr := s.replayCapability(ctx, in, key, legacy())
+		legacy, buildErr := buildLegacy(current)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		recovered, replayErr := s.replayCapability(ctx, in, key, legacy)
 		if replayErr == nil {
 			return recovered, nil
 		}
@@ -373,7 +411,10 @@ func (s *Service) installCapability(ctx context.Context, in InstallInput, curren
 	if err == nil || !capabilityReceiptMismatch(err) {
 		return result, err
 	}
-	candidate := legacy()
+	candidate, buildErr := buildLegacy(current)
+	if buildErr != nil {
+		return nil, buildErr
+	}
 	if candidate == nil {
 		return nil, err
 	}

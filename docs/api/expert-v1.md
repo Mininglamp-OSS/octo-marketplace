@@ -523,12 +523,16 @@ recover an operation after an uncertain response. Fleet's
 `POST /v1/capabilities/install/receipt` endpoints must be deployed before this
 Market behavior; there is no fallback when Fleet does not support them. The
 presence read is scoped by the forwarded Token, Space, Workspace, and
-Idempotency-Key. When a receipt exists, Market rebuilds the candidate from the
-currently visible expert/squad content and attempts read-only replay using the
-current connector wire first. It tries the pre-upgrade MCP wire only after an
-explicit Fleet fingerprint mismatch. Only an exact matching Fleet fingerprint
-returns the stored result with `Idempotency-Replayed: true`;
-changed catalog content or inputs can conflict. Market does not retain
+Idempotency-Key and runs after current catalog visibility checks, before request
+assembly. When a receipt exists, Market rebuilds candidates from the currently
+visible expert/squad content. It prefers a bounded current connector wire and
+tries the pre-upgrade MCP wire after an explicit fingerprint mismatch or when
+the current wire exceeds capacity. Each candidate is bounded independently;
+only an exact matching Fleet fingerprint returns the stored result with
+`Idempotency-Replayed: true`. Thus a retained legacy request can replay within
+its original limit even when connector framing would exceed the new wire's
+budget. This never authorizes a legacy-mode installation.
+Changed catalog content or inputs can conflict. Market does not retain
 historical content snapshots.
 If a receipt disappears after a positive presence check, the endpoint returns
 `409 CONFLICT` with `error.details.reason = "receipt_unavailable"` and the
@@ -555,9 +559,11 @@ supporting files, expert/team metadata, MCP/environment configuration,
 references, bindings, and JSON escaping/framing. Supporting-file counts and
 individual text bodies have no separate installation limits. Existing
 structure, safe-path, permission, and text-integrity checks remain.
-Assembly charges metadata and then each Skill/file; over-budget preparation
-returns `413 PAYLOAD_TOO_LARGE` without sending a Fleet request or counting an
-install. Error details contain `field`, `limit_bytes`, `actual_bytes` and
+Assembly charges metadata and then each Skill/file. Over-budget new installs
+return `413 PAYLOAD_TOO_LARGE` without dispatching an installation or counting
+an install; caller-keyed requests may first perform read-only receipt queries.
+An oversized legacy replay candidate is also rejected before replay dispatch.
+Error details contain `field`, `limit_bytes`, `actual_bytes` and
 available Skill/file identifiers. `actual_bytes_lower_bound: true` marks
 an incremental or bounded-read measurement rather than the full request size.
 
