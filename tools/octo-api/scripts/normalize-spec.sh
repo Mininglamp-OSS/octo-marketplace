@@ -93,10 +93,9 @@ if os.path.exists(yaml_path):
     if installation_schema is not None:
         installation_schema['additionalProperties'] = False
         installation_schema['if'] = {
-            'properties': {'workspace_connectors': {'const': False}},
-            'required': ['workspace_connectors'],
+            'properties': {'workspace_connectors': {'const': True}},
         }
-        installation_schema['then'] = {'required': ['runtime_id']}
+        installation_schema['else'] = {'required': ['runtime_id']}
 
     # OpenAPI 3.1 uses JSON Schema nullability. swag emits the legacy vendor
     # extension for pointer scalars, which strict clients ignore. Convert every

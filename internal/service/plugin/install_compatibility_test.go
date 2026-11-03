@@ -54,6 +54,40 @@ func TestInstallAdaptersSendIdenticalContent(t *testing.T) {
 	}
 }
 
+func TestLegacyInstallRejectsConnectorRootBeforeDispatch(t *testing.T) {
+	for _, pinned := range []bool{false, true} {
+		t.Run(map[bool]string{false: "current", true: "pinned"}[pinned], func(t *testing.T) {
+			var svc *Service
+			var remote *fakeCapabilityInstaller
+			const root = "connector"
+			var store *pinnedFixtureStore
+			if pinned {
+				svc, store, remote = fixturePinned()
+			} else {
+				var current *fakeStore
+				svc, current, remote = capabilityFixture()
+				addConnectorRegressionPlugin(current, root, "Standalone Connector",
+					`{"mcpServers":{"search":{"command":"search"}}}`, nil)
+			}
+			p := installationParams()
+			_, err := svc.Install(context.Background(), testCaller, root, InstallParams{
+				WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID,
+				IdempotencyKey: p.IdempotencyKey, Token: p.Token,
+			})
+			var invalid *InstallationValidationError
+			if !errors.As(err, &invalid) || invalid.Field != "plugin_id" || invalid.Reason != "expert_or_expert_team_required" {
+				t.Fatalf("connector-root recruitment error = %#v, want expert/team target validation", err)
+			}
+			if remote.calls != 0 {
+				t.Fatalf("rejected connector root dispatched %d Fleet installs", remote.calls)
+			}
+			if pinned && len(store.attempts) != 0 {
+				t.Fatal("rejected connector root persisted an installation attempt")
+			}
+		})
+	}
+}
+
 func TestLegacyInstallAcceptsOldOpaqueIDsWithoutNewHeaders(t *testing.T) {
 	for _, pinned := range []bool{false, true} {
 		var svc *Service

@@ -85,7 +85,10 @@ Content-Type: application/json
   naming behavior and `custom_env` remains the expert execution environment.
 
 Because `/plugins/install` has no selector, its adapter explicitly enables
-connector mode. The request and response fields remain unchanged.
+connector mode for expert/team dependencies. It accepts only expert and
+expert-team roots; independent connectors must use
+`/plugins/{plugin_id}/installations`, which returns their resource identities.
+The original route's request and response fields remain unchanged.
 
 Connector mode includes explicit market connector dependencies where present
 and the Expert package's own non-empty `mcp.json`. Shared dependencies are sent
@@ -376,6 +379,15 @@ retry does not prove that an earlier uncertain attempt failed; keep the same
 key/input and reconcile that earlier outcome before starting a new operation.
 
 ## Retry / coexistence rules
+
+The connector default applies to newly initiated operations. Requests initiated
+before this default change with an omitted selector used legacy MCP storage.
+Replaying those requests after deployment can return an intent/fingerprint
+conflict because their installation mode or assembled request changed; this
+rollout does not infer or restore the previous mode. Existing experts and
+receipts are not rewritten. Reconcile any uncertain pre-deployment operation
+against its original Workspace resources; never automatically replace its
+idempotency key and resubmit it.
 
 - Select **one** installation route for an operation; parallel availability
   does not mean dual-writing to both routes.

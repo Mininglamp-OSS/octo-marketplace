@@ -379,6 +379,9 @@ func validatePinnedInstallMode(plan *pinnedInstallationPlan, p InstallationParam
 		return ErrIntegrity
 	}
 	if plan.ConnectorOnly {
+		if p.expertRootsOnly {
+			return installationInvalid("plugin_id", "expert_or_expert_team_required")
+		}
 		if !p.WorkspaceConnectors {
 			return ErrIntegrity
 		}

@@ -185,7 +185,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 		sort.Slice(team.Members, func(i, j int) bool { return team.Members[i].ExpertName < team.Members[j].ExpertName })
 		def.ExpertTeam = team
 	case model.PluginTypeConnector:
-		if !p.WorkspaceConnectors {
+		if !p.WorkspaceConnectors || p.expertRootsOnly {
 			return nil, installationInvalid("plugin_id", "expert_or_expert_team_required")
 		}
 		if len(p.CustomEnv) > 0 {

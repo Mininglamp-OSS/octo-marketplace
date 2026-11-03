@@ -44,6 +44,7 @@ func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p
 	if err != nil {
 		return nil, err
 	}
+	normalized.expertRootsOnly = true
 	out, err := s.createInstallation(ctx, caller, pluginID, normalized)
 	if err != nil {
 		return nil, err

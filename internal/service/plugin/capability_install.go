@@ -31,6 +31,8 @@ type InstallationParams struct {
 	IdempotencyKey      string
 	Token               string
 	WorkspaceConnectors bool
+	// The original installation route accepts expert and expert-team roots only.
+	expertRootsOnly bool
 }
 
 type InstallationOutcome struct {

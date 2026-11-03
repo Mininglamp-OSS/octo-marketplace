@@ -1757,10 +1757,8 @@ components:
       if:
         properties:
           workspace_connectors:
-            const: false
-        required:
-        - workspace_connectors
-      then:
+            const: true
+      else:
         required:
         - runtime_id
     internal_api_handler_plugin.deleteRequest:

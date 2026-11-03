@@ -138,6 +138,20 @@ func TestMarketplaceInstallationRoutesDefaultToWorkspaceConnectorsMySQL(t *testi
 	connectorPath := "/api/v1/plugins/" + teamRequest.Definition.Connectors[0].MarketMCPID + "/installations"
 	assertMCPStorage(send(regular, connectorPath, `{}`, "market-http-connector"), true)
 	assertMCPStorage(send(pinned, connectorPath, `{}`, "market-http-pinned-connector"), true)
+	for _, engine := range []*gin.Engine{regular, pinned} {
+		before := len(captured)
+		body := `{"plugin_id":"` + teamRequest.Definition.Connectors[0].MarketMCPID + `","workspace_id":"fixture-workspace","runtime_id":"7f63db70-6b66-4d2c-a52f-fb6de1d78ad9"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/install", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Token", "fixture-token")
+		req.Header.Set("Idempotency-Key", "connector-root-recruitment")
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || len(captured) != before {
+			t.Fatalf("legacy connector-root request returned %d and dispatched %d installs: %s",
+				rec.Code, len(captured)-before, rec.Body.String())
+		}
+	}
 }
 
 func TestMigratedSameExpertMCPAliasesFeedBothInstallationModesMySQL(t *testing.T) {
