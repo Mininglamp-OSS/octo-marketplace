@@ -86,6 +86,43 @@ func TestPreparePinnedSkillsKeepsVersionIdentity(t *testing.T) {
 	}
 }
 
+func TestPreparePinnedSkillsPreservesDescriptionAt2048Runes(t *testing.T) {
+	description := strings.Repeat("名", 2048)
+	input := samplePinnedSkill("a", "v1")
+	input.Description = description
+
+	got, err := PreparePinnedSkills([]PinnedSkillFiles{input})
+	if err != nil {
+		t.Fatalf("prepare 2048-rune description: %v", err)
+	}
+	if len(got) != 1 || got[0].Skill.Description != description {
+		t.Fatalf("prepared description was not preserved in full: count=%d description runes=%d",
+			len(got), len(got[0].Skill.Description))
+	}
+}
+
+func TestPreparePinnedSkillsRejectsDescriptionOver2048Runes(t *testing.T) {
+	input := samplePinnedSkill("a", "v1")
+	input.Description = strings.Repeat("名", 2049)
+
+	_, err := PreparePinnedSkills([]PinnedSkillFiles{input})
+	var invalid *InstallationValidationError
+	if !errors.As(err, &invalid) || invalid.Field != "definition.skills.description" || invalid.Reason != "too_long" {
+		t.Fatalf("err=%v, want definition.skills.description too_long", err)
+	}
+}
+
+func TestPreparePinnedSkillsRejectsNULDescription(t *testing.T) {
+	input := samplePinnedSkill("a", "v1")
+	input.Description = "search\x00skill"
+
+	_, err := PreparePinnedSkills([]PinnedSkillFiles{input})
+	var invalid *InstallationValidationError
+	if !errors.As(err, &invalid) || invalid.Field != "definition.skills.description" || invalid.Reason != "text_only" {
+		t.Fatalf("err=%v, want definition.skills.description text_only", err)
+	}
+}
+
 func TestPreparePinnedSkillsInvalid(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

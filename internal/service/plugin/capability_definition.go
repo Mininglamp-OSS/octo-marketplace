@@ -370,7 +370,7 @@ func (b *capabilityBuilder) skill(ctx context.Context, id string, versionID *str
 		return "", installationInvalid("definition.skills.content", "required")
 	}
 	skill := fleet.CapabilitySkill{Name: name, Version: p.CurrentVersion, MarketSkillID: p.ID, Description: manifestDescription(p.Manifest), Content: content, Config: map[string]any{}}
-	if err := b.boundedText("definition.skills.description", skill.Description, 512); err != nil {
+	if err := b.boundedText("definition.skills.description", skill.Description, 2048); err != nil {
 		return "", err
 	}
 	for filePath, content := range files {

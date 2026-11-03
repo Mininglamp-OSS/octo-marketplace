@@ -125,7 +125,7 @@ func PreparePinnedSkills(inputs []PinnedSkillFiles) ([]PreparedSkill, error) {
 			continue
 		}
 		skill := fleet.CapabilitySkill{Name: name, Version: input.DeclaredVersion, MarketSkillID: input.PluginID, Description: input.Description, Config: map[string]any{}}
-		if err := b.boundedText("definition.skills.description", input.Description, 512); err != nil {
+		if err := b.boundedText("definition.skills.description", input.Description, 2048); err != nil {
 			return nil, err
 		}
 		for _, p := range paths {

@@ -243,8 +243,9 @@ limited; files are accepted in full while the complete request stays within that
 wire-byte limit. The archive transport limit never reduces this content budget.
 Structural limits remain: 30 experts, 20 Skill relations per expert, and 600
 unique source Skills. Names are at most 128 characters; Expert/Team descriptions
-255, Skill descriptions 512, and member roles 500. Overlong values are rejected,
-not truncated. Supporting files cannot alias SKILL.md by case.
+255, Skill descriptions 2048 Unicode code points (not UTF-8 bytes), and member
+roles 500. Overlong values are rejected, not truncated. Supporting files cannot
+alias SKILL.md by case.
 
 ## Success and errors
 

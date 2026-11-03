@@ -31,7 +31,7 @@ func TestCapabilityFleetTextLimitsBeforeMutation(t *testing.T) {
 		{"member_description", "team-1", 255, func(s *fakeStore, _ *InstallationParams, v string) {
 			s.plugins["expert-1"].Manifest, _ = json.Marshal(map[string]string{"description": v})
 		}},
-		{"skill_description", "expert-1", 512, func(s *fakeStore, _ *InstallationParams, v string) {
+		{"skill_description", "expert-1", 2048, func(s *fakeStore, _ *InstallationParams, v string) {
 			s.plugins["skill-1"].Manifest, _ = json.Marshal(map[string]string{"description": v})
 		}},
 		{"member_role", "team-1", 500, func(s *fakeStore, _ *InstallationParams, v string) {
