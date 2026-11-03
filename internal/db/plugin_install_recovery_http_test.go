@@ -30,6 +30,13 @@ func (f *recoveryHTTPInstaller) InstallCapability(context.Context, string, strin
 	}
 	return &fleet.CapabilityInstallResult{ExpertID: "created"}, nil
 }
+func (*recoveryHTTPInstaller) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*recoveryHTTPInstaller) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 
 // Real HTTP handler → real Service.Install → real MySQL store → Fleet seam.
 // Do not inject an already-classified InstallationAttemptError into the handler.

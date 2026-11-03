@@ -115,8 +115,11 @@ func (s *Service) InstallSquad(ctx context.Context, caller Caller, squadID strin
 		experts[i].SkillNames = skillNames
 		definition.Skills = append(definition.Skills, skills...)
 	}
-	result, err := s.installCapability(ctx, in, fleet.CapabilityInstallRequest{
+	request := fleet.CapabilityInstallRequest{
 		Definition: definition, Bindings: bindings,
+	}
+	result, err := s.installCapability(ctx, in, &request, func() *fleet.CapabilityInstallRequest {
+		return legacySquadReceiptCandidate(request, m.Members)
 	})
 	if err != nil {
 		return InstallSquadResult{}, err

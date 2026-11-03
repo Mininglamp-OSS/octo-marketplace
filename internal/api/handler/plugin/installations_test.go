@@ -28,6 +28,13 @@ func (f *noRootInstaller) InstallCapability(context.Context, string, string, str
 	f.calls++
 	return nil, errors.New("unexpected Fleet call")
 }
+func (*noRootInstaller) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*noRootInstaller) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 
 func TestPinnedInvisibleRootReturns404ThroughRealService(t *testing.T) {
 	database, mock, err := sqlmock.New()

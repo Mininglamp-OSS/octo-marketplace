@@ -36,6 +36,40 @@ func (f *fakeFleet) InstallCapability(_ context.Context, token, spaceID, workspa
 	}
 	return &fleet.CapabilityInstallResult{}, nil
 }
+func (*fakeFleet) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*fakeFleet) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
+
+func (f *statefulCapabilityFleet) HasCapabilityInstallationReceipt(_ context.Context, _, _, _, key string) (bool, error) {
+	_, exists := f.receipts[key]
+	return exists, nil
+}
+
+func (f *statefulCapabilityFleet) ReplayCapability(_ context.Context, _, spaceID, workspaceID, key string, in fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	previous, exists := f.receipts[key]
+	if !exists {
+		return nil, nil
+	}
+	fingerprint, err := json.Marshal(struct {
+		SpaceID     string
+		WorkspaceID string
+		Request     fleet.CapabilityInstallRequest
+	}{SpaceID: spaceID, WorkspaceID: workspaceID, Request: in})
+	if err != nil {
+		return nil, err
+	}
+	if previous.fingerprint != string(fingerprint) {
+		return nil, &fleet.CapabilityAPIError{
+			Status: http.StatusConflict, Code: "DUPLICATE", IdempotencyKeyReused: true,
+		}
+	}
+	result := previous.result
+	return &result, nil
+}
 
 type capabilityReceipt struct {
 	fingerprint string
@@ -330,7 +364,7 @@ func TestInstallExpertReplaysUncertainCapabilityInstallByIdempotencyKey(t *testi
 	if different.AgentID != "agent-2" || ff.createdResources != 2 {
 		t.Fatalf("different-key result/resources = %+v/%d, want new agent-2 and two remote resources", different, ff.createdResources)
 	}
-	assertCapabilityKeys(t, ff, firstKey, firstKey, input.IdempotencyKey)
+	assertCapabilityKeys(t, ff, firstKey, input.IdempotencyKey)
 }
 
 func TestInstallExpertGeneratesFreshKeysWhenIdempotencyKeyIsAbsent(t *testing.T) {

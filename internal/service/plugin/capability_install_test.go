@@ -36,6 +36,13 @@ func (f *fakeCapabilityInstaller) InstallCapability(_ context.Context, token, sp
 	}
 	return out, nil
 }
+func (*fakeCapabilityInstaller) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*fakeCapabilityInstaller) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 
 func installationParams() InstallationParams {
 	return InstallationParams{WorkspaceID: "workspace-1", RuntimeID: "7f63db70-6b66-4c2d-a52f-fb6de1d78ad9", ResourceName: "Custom name", CustomEnv: map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-current"}, IdempotencyKey: "operation-key", Token: "user-token"}

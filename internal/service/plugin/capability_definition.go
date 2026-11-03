@@ -46,15 +46,37 @@ type capabilityBuilder struct {
 	connectorOwnerByName  map[string]string
 }
 
+// capabilityBuildCache shares Skill package content between the current and
+// historical-mode candidate wires assembled from the same source in one
+// operation. It never outlives the request that created it.
+type capabilityBuildCache struct {
+	skillsByVersion map[pluginrepo.InstallVersionKey]string
+	skillsByName    map[string]fleet.CapabilitySkill
+}
+
+func newCapabilityBuildCache() *capabilityBuildCache {
+	return &capabilityBuildCache{
+		skillsByVersion: map[pluginrepo.InstallVersionKey]string{},
+		skillsByName:    map[string]fleet.CapabilitySkill{},
+	}
+}
+
 func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, pluginID string, p InstallationParams) (*fleet.CapabilityInstallRequest, error) {
 	root, err := s.resolveInstallDetail(ctx, caller, pluginID)
 	if err != nil {
 		return nil, err
 	}
+	return s.buildCapabilityInstallFrom(ctx, caller, root, p, newCapabilityBuildCache())
+}
+
+// buildCapabilityInstallFrom assembles the wire from an already-loaded root.
+// Callers that may need both connector and historical legacy candidates share
+// one cache so Skill package bytes are read from storage once.
+func (s *Service) buildCapabilityInstallFrom(ctx context.Context, caller Caller, root *Detail, p InstallationParams, cache *capabilityBuildCache) (*fleet.CapabilityInstallRequest, error) {
 	if root.Plugin.IsEmbedded {
 		return nil, ErrNotFound
 	}
-	b := capabilityBuilder{service: s, caller: caller, remaining: fleet.MaxCapabilityRequestBytes, skillsByVersion: map[pluginrepo.InstallVersionKey]string{}, skillsByName: map[string]fleet.CapabilitySkill{}, expertNames: map[string]bool{}}
+	b := capabilityBuilder{service: s, caller: caller, remaining: fleet.MaxCapabilityRequestBytes, skillsByVersion: cache.skillsByVersion, skillsByName: cache.skillsByName, expertNames: map[string]bool{}}
 	if p.WorkspaceConnectors {
 		b.connectorsByID = map[string]fleet.CapabilityConnector{}
 		b.connectorOwnerByName = map[string]string{}
@@ -131,6 +153,7 @@ func (s *Service) buildCapabilityInstall(ctx context.Context, caller Caller, plu
 					return nil, err
 				}
 			} else {
+				var err error
 				detail, err = s.resolveInstallDetail(ctx, caller, rel.TargetPluginID)
 				if err != nil {
 					return nil, err

@@ -33,6 +33,11 @@ func TestMarketplaceInstallationRoutesDefaultToWorkspaceConnectorsMySQL(t *testi
 
 	var captured [][]byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/capabilities/install/receipt" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":{"has_receipt":false}}`)
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/capabilities/install" {
 			t.Errorf("unexpected Fleet request: %s %s", r.Method, r.URL.Path)
 		}
@@ -282,6 +287,13 @@ func (r *migratedGraphInstaller) InstallCapability(_ context.Context, _, _, _, _
 	r.request = request
 	r.calls++
 	return &fleet.CapabilityInstallResult{ExpertTeamID: "fixture-fleet-team"}, nil
+}
+func (*migratedGraphInstaller) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*migratedGraphInstaller) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
 }
 
 // Test the seam between the current single-database converter and version resolver.

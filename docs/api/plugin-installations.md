@@ -22,6 +22,31 @@ retain direct-service behavior; the hostname is not used to infer routing.
 Legacy `/api/agents`, `/api/skills` and `/api/squads` paths are unchanged. There
 is no extra configuration, route probing, retry or fallback between paths.
 
+## Fleet receipt API and deployment order
+
+Market uses Fleet's read-only receipt API before caller-keyed, selector-omitted
+non-pinned plugin requests, including first attempts, and before caller-keyed
+direct expert/team requests. Deploy Fleet with both receipt endpoints before
+deploying the Market version that calls them; Market does not fall back to a
+legacy installer or suppress an unsupported-endpoint error.
+
+The presence request is `GET /v1/capabilities/install/receipt`, with the same
+`Token`, `X-Space-Id`, `X-Workspace-Id`, and `Idempotency-Key` scope as an
+installation. It returns `200 {"data":{"has_receipt":true|false}}`. A matching
+retry uses `POST /v1/capabilities/install/receipt` with the original capability
+request body. Fleet returns the original result with `Idempotency-Replayed:
+true`; it performs no install, claim, or resource mutation. A mismatched body
+returns `409 DUPLICATE` for `idempotency_key`; an absent or expired receipt
+returns `404 NOT_FOUND` for `capability_installation_receipt`.
+
+For a selector-omitted non-pinned plugin request with a caller key, Market checks
+for a receipt and compares the currently assembled published content against
+the pre-upgrade MCP wire first, then the current connector wire. A hit is
+recovered only by read-only replay of a matching Fleet fingerprint. Market
+does not retain a historical content snapshot: if current catalog content,
+runtime, environment, or other request input has changed, recovery can conflict.
+Keyless requests use a generated key and skip the presence probe.
+
 The adapter follows Fleet's capability Definition contract, including Workspace
 connectors from Fleet commit `489c2ad`. The source contract is recorded in
 `octo-fleet/docs/specs/2026-10-27-workspace-mcp-connectors-design.md`;
@@ -29,7 +54,7 @@ the wire implementation lives in Fleet's `pkg/capability` and installation handl
 
 | Marketplace behavior | Fleet wire field |
 | --- | --- |
-| New operations on the new route or legacy `/plugins/install` adapter | `definition.connectors[]` plus each Expert's `connector_names`; selector-omitted retries of eligible pinned plans may resume their frozen mode |
+| New operations on the new route or legacy `/plugins/install` adapter | `definition.connectors[]` plus each Expert's `connector_names`; selector-omitted pinned retries may resume their frozen mode, while eligible caller-keyed non-pinned retries use read-only receipt matching |
 | New operation with explicit `workspace_connectors: false` | Existing `definition.experts[].mcp_config` behavior |
 | Team summary and collaboration instructions | `definition.expert_team.description` / `instructions` |
 | Runtime-specific environment values, including provider selection | `definition.experts[].custom_env` (string map) |
@@ -48,7 +73,7 @@ disposition:
 
 | Schema change | Consumer impact |
 | --- | --- |
-| New `/plugins/{plugin_id}/installations` body: `workspace_connectors` default | New operations default to `true` and use Workspace connectors. An eligible selector-omitted retry of an existing pinned frozen plan resumes its original mode; see the retry boundary below. Explicit `false` on a new operation preserves the legacy MCP storage path and requires a Runtime. Expert/team installs require Runtime in both modes; connector roots are available only in connector mode and may omit Runtime. |
+| New `/plugins/{plugin_id}/installations` body: `workspace_connectors` default | New operations default to `true` and use Workspace connectors. An eligible selector-omitted pinned retry resumes its frozen mode; an eligible caller-keyed non-pinned retry may read-only recover a receipt matching current content. Explicit `false` on a new operation preserves the legacy MCP storage path and requires a Runtime. Expert/team installs require Runtime in both modes; connector roots are available only in connector mode and may omit Runtime. |
 
 Existing legacy callers keep their current request bodies. For a new operation,
 the new endpoint's optional `workspace_connectors` field defaults to `true`;
@@ -208,15 +233,17 @@ that attempt's original retry window. The frozen plan, request/input
 fingerprints, Fleet idempotency key and retry deadline remain unchanged.
 Eligibility and HMAC checks, current authorization, and lease/window checks
 still apply. Explicit `true` or `false` remains a mode selection; if it differs
-from the frozen mode, the same-key request conflicts. This compatibility applies
-only to existing pinned frozen plans; non-pinned operations have no such
-recovery guarantee. New operations continue to default to connector mode.
+from the frozen mode, the same-key request conflicts. This mode compatibility
+applies only to existing pinned frozen plans; non-pinned receipt recovery is the
+separate read-only, exact-fingerprint behavior described above. New operations
+continue to default to connector mode.
 
 Each expert uses its own manifest description, including team members; the
 team itself uses the team manifest description. The legacy route keeps its
-public request/response shape; new operations use the connector-default
-service adapter, while retries of existing pinned frozen plans follow the
-original mode described above.
+public request/response shape; new operations use the connector-default service
+adapter. Pinned retries of frozen plans follow their original mode, while
+eligible caller-keyed non-pinned retries can only recover a matching receipt
+read-only, as described above.
 
 The adapter preserves expert AGENTS.md/MCP and team AGENTS.md. Instructions
 must be inline (`content_type: raw`). Explicit-false legacy MCP must also be
@@ -229,11 +256,12 @@ Skill manifest rather than the installing expert/team, so shared content has a
 stable fingerprint. Conflicting content is rejected, not overwritten.
 
 For new operations, an explicit `workspace_connectors: false` selects the legacy
-MCP path. A selector-omitted retry may use that path only to resume an existing
-pinned operation whose frozen plan selected legacy mode, with the same key and
-within its original retry window. Explicit `true` or `false` does not switch a
-frozen operation to another mode; a mismatch conflicts. See the pinned
-frozen-plan retry rule above.
+MCP path. A selector-omitted retry may write that mode only when resuming an
+existing pinned operation whose frozen plan selected legacy mode, with the same
+key and within its original retry window. A non-pinned retry may use the legacy
+wire only to perform the read-only receipt match described above; it never
+switches a new operation into a legacy-mode write. Explicit `true` or `false`
+does not switch a pinned frozen operation to another mode; a mismatch conflicts.
 
 Known empty MCP defaults (`{}` or `{"mcpServers":{}}`) are omitted. Non-empty legacy
 `mcp_config` uses Fleet's closed stdio/remote structure: command or HTTP(S) URL,
@@ -247,12 +275,14 @@ reinterpret them as environment variables.
 
 For new operations, omitting `workspace_connectors` or setting it to `true`
 uses Workspace connector snapshots for MCP dependencies instead of legacy
-`mcp_config`. On retry, omission may resume the original mode only under the
-pinned frozen-plan rule above; explicit `true` does not recover a legacy-mode
-operation. Connector snapshots' complete `mcp.json` configuration is retained,
-including actual server keys, headers, environment, arguments, and service
-extension fields; it is not narrowed through the legacy MCP normalizer. No MCP
-process is started and no MCP URL is fetched by Marketplace.
+`mcp_config`. A pinned retry may resume its original mode only under the pinned
+frozen-plan rule above. A non-pinned selector-omitted retry with a caller key may
+read-only match a Fleet receipt against current content, including the
+pre-upgrade MCP wire; it does not recover a historical catalog snapshot.
+Connector snapshots' complete `mcp.json` configuration is retained, including
+actual server keys, headers, environment, arguments, and service extension
+fields; it is not narrowed through the legacy MCP normalizer. No MCP process is
+started and no MCP URL is fetched by Marketplace.
 
 Team leadership uses the first explicitly flagged leader, otherwise the first
 member, matching the legacy selection rule. Tied display orders are resolved by
@@ -411,10 +441,11 @@ match the frozen operation; changing other installation parameters still
 conflicts. Recovery does not extend Fleet receipt retention or rewrite existing
 experts and receipts.
 
-Operations without a frozen plan have no mode-recovery guarantee and may still
-conflict after a default change. Reconcile any uncertain operation against its
-original Workspace resources; never automatically replace its idempotency key
-and resubmit it.
+For non-pinned operations there is no frozen plan or historical content
+snapshot. A caller-keyed selector-omitted retry may recover only a Fleet receipt
+whose fingerprint matches the content and inputs currently assembled by Market;
+otherwise it conflicts. Reconcile uncertain outcomes against the original
+Workspace resources before starting a new operation.
 
 - Select **one** installation route for an operation; parallel availability
   does not mean dual-writing to both routes.

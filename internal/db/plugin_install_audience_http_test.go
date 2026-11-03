@@ -27,6 +27,13 @@ func (f *audienceHTTPInstaller) InstallCapability(_ context.Context, _, _, _, _ 
 	}
 	return &fleet.CapabilityInstallResult{ExpertID: "created-expert"}, nil
 }
+func (*audienceHTTPInstaller) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*audienceHTTPInstaller) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 
 // Existing legacy records can predate the source-audience write checks. Test
 // installation through real scoped SQL and both HTTP adapters, including managed

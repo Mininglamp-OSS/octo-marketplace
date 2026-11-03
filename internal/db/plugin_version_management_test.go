@@ -718,6 +718,13 @@ func (p *installStubProvisioner) InstallCapability(context.Context, string, stri
 	p.agents++
 	return &fleet.CapabilityInstallResult{ExpertID: "agent-1"}, nil
 }
+func (*installStubProvisioner) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*installStubProvisioner) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 
 func managedSkillWrite(label, name string, visibility model.PluginVisibility) pluginsvc.WriteRequest {
 	manifest, _ := json.Marshal(map[string]any{"$schema": "cowork-plugin-manifest-2.0.json", "plugin_name": name, "plugin_type": "skill", "name": strings.ToLower(name), "description": "fixture", "labels": []string{}, "examples": []string{}})

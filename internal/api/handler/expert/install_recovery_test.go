@@ -31,25 +31,99 @@ const (
 )
 
 type recoveryFleetStub struct {
-	t        *testing.T
-	mu       sync.Mutex
-	outcome  recoveryFleetOutcome
-	status   int
-	served   bool
-	receipts map[string]string
-	calls    []string
+	t                   *testing.T
+	mu                  sync.Mutex
+	outcome             recoveryFleetOutcome
+	status              int
+	served              bool
+	receipts            map[string]string
+	requests            map[string]string
+	calls               []string
+	presenceReads       []string
+	replays             []string
+	expireAfterPresence bool
 }
 
 func newRecoveryFleetStub(outcome recoveryFleetOutcome, status int) *recoveryFleetStub {
-	return &recoveryFleetStub{outcome: outcome, status: status, receipts: map[string]string{}}
+	return &recoveryFleetStub{
+		outcome: outcome, status: status,
+		receipts: map[string]string{}, requests: map[string]string{},
+	}
 }
 
 func newRecoveryFleetServer(t *testing.T, stub *recoveryFleetStub) *httptest.Server {
 	t.Helper()
 	stub.t = t
-	server := httptest.NewServer(http.HandlerFunc(stub.install))
+	server := httptest.NewServer(http.HandlerFunc(stub.serveHTTP))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func (s *recoveryFleetStub) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/capabilities/install/receipt":
+		s.readPresence(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/capabilities/install/receipt":
+		s.replay(w, r)
+	default:
+		s.install(w, r)
+	}
+}
+
+func (s *recoveryFleetStub) readPresence(w http.ResponseWriter, r *http.Request) {
+	key := r.Header.Get("Idempotency-Key")
+	s.mu.Lock()
+	s.presenceReads = append(s.presenceReads, key)
+	_, exists := s.receipts[key]
+	if exists && s.expireAfterPresence {
+		delete(s.receipts, key)
+		delete(s.requests, key)
+	}
+	s.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]bool{"has_receipt": exists}})
+}
+
+func (s *recoveryFleetStub) replay(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.t.Errorf("Fleet stub: read receipt replay request: %v", err)
+		writeRecoveryReceiptError(w, http.StatusBadRequest, "VALIDATION_ERROR", "")
+		return
+	}
+	var request struct {
+		Definition fleet.CapabilityDefinition `json:"definition"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil || len(request.Definition.Experts) == 0 {
+		writeRecoveryReceiptError(w, http.StatusBadRequest, "VALIDATION_ERROR", "")
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	s.mu.Lock()
+	s.replays = append(s.replays, key)
+	root, exists := s.receipts[key]
+	storedRequest := s.requests[key]
+	s.mu.Unlock()
+	if !exists {
+		writeRecoveryReceiptError(w, http.StatusNotFound, "NOT_FOUND", "capability_installation_receipt")
+		return
+	}
+	if storedRequest != string(body) {
+		writeRecoveryReceiptError(w, http.StatusConflict, "DUPLICATE", "idempotency_key")
+		return
+	}
+	w.Header().Set("Idempotency-Replayed", "true")
+	writeRecoveryFleetResult(w, request.Definition, root)
+}
+
+func writeRecoveryReceiptError(w http.ResponseWriter, status int, code, resource string) {
+	errBody := map[string]any{"code": code}
+	if resource != "" {
+		errBody["details"] = map[string]string{"resource": resource}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": errBody})
 }
 
 func (s *recoveryFleetStub) install(w http.ResponseWriter, r *http.Request) {
@@ -57,10 +131,16 @@ func (s *recoveryFleetStub) install(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.t.Errorf("Fleet stub: read install request: %v", err)
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
 	var request struct {
 		Definition fleet.CapabilityDefinition `json:"definition"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := json.Unmarshal(body, &request); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -83,6 +163,7 @@ func (s *recoveryFleetStub) install(w http.ResponseWriter, r *http.Request) {
 	if !known {
 		root = fmt.Sprintf("5f0c1e88-0000-4000-8000-%012d", len(s.receipts)+1)
 		s.receipts[key] = root
+		s.requests[key] = string(body)
 		if !s.served {
 			s.served = true
 			unknown = true
@@ -119,6 +200,18 @@ func (s *recoveryFleetStub) receivedKeys() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.calls...)
+}
+
+func (s *recoveryFleetStub) presenceKeys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.presenceReads...)
+}
+
+func (s *recoveryFleetStub) replayedKeys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.replays...)
 }
 
 func (s *recoveryFleetStub) createdCount() int {
@@ -331,11 +424,14 @@ func TestLegacyExpertInstallKeylessUnknownOutcomeReturnsRecoverableIdempotencyKe
 		t.Fatalf("fresh keyless agent_id = %q, want a new install distinct from %q", data["agent_id"], root)
 	}
 	calls := stub.receivedKeys()
-	if len(calls) != 3 {
-		t.Fatalf("Fleet calls = %v, want one dispatch, one retry, one fresh install", calls)
+	if len(calls) != 2 || calls[0] != recoveryKey || calls[1] != "generated-install-2" {
+		t.Fatalf("Fleet mutations = %v, want the original dispatch and one fresh keyless install", calls)
 	}
-	if calls[2] != "generated-install-2" {
-		t.Fatalf("fresh keyless Fleet key = %q, want a newly generated key", calls[2])
+	if keys := stub.presenceKeys(); len(keys) != 1 || keys[0] != recoveryKey {
+		t.Fatalf("Fleet receipt presence reads = %v, want only the explicit retry key", keys)
+	}
+	if keys := stub.replayedKeys(); len(keys) != 1 || keys[0] != recoveryKey {
+		t.Fatalf("Fleet receipt replays = %v, want only the explicit retry key", keys)
 	}
 	if stub.createdCount() != 2 {
 		t.Fatalf("Fleet installs = %d, want the fresh install committed separately", stub.createdCount())
@@ -378,11 +474,14 @@ func TestLegacySquadInstallKeylessUnknownOutcomeReturnsRecoverableIdempotencyKey
 		t.Fatalf("fresh keyless squad_id = %q, want a new install distinct from %q", data["squad_id"], root)
 	}
 	calls := stub.receivedKeys()
-	if len(calls) != 3 {
-		t.Fatalf("Fleet calls = %v, want one dispatch, one retry, one fresh install", calls)
+	if len(calls) != 2 || calls[0] != recoveryKey || calls[1] != "generated-install-2" {
+		t.Fatalf("Fleet mutations = %v, want the original dispatch and one fresh keyless install", calls)
 	}
-	if calls[2] != "generated-install-2" {
-		t.Fatalf("fresh keyless Fleet key = %q, want a newly generated key", calls[2])
+	if keys := stub.presenceKeys(); len(keys) != 1 || keys[0] != recoveryKey {
+		t.Fatalf("Fleet receipt presence reads = %v, want only the explicit retry key", keys)
+	}
+	if keys := stub.replayedKeys(); len(keys) != 1 || keys[0] != recoveryKey {
+		t.Fatalf("Fleet receipt replays = %v, want only the explicit retry key", keys)
 	}
 	if stub.createdCount() != 2 {
 		t.Fatalf("Fleet installs = %d, want the fresh install committed separately", stub.createdCount())
@@ -448,7 +547,13 @@ func TestLegacyInstallExplicitIdempotencyKeyEchoedOnDispatched5xx(t *testing.T) 
 				t.Fatalf("error.details.idempotency_key = %q, want the caller key %q", recoveryKey, tc.key)
 			}
 			if calls := stub.receivedKeys(); len(calls) != 1 || calls[0] != tc.key {
-				t.Fatalf("Fleet calls = %v, want the caller key %q", calls, tc.key)
+				t.Fatalf("Fleet mutations = %v, want one install under the caller key", calls)
+			}
+			if keys := stub.presenceKeys(); len(keys) != 1 || keys[0] != tc.key {
+				t.Fatalf("Fleet receipt presence reads = %v, want the caller key %q", keys, tc.key)
+			}
+			if keys := stub.replayedKeys(); len(keys) != 0 {
+				t.Fatalf("Fleet receipt replays = %v, want none after a negative presence read", keys)
 			}
 		})
 	}
@@ -512,4 +617,50 @@ func TestLegacyInstallCapability4xxKeepsStatusWithoutRecoveryKey(t *testing.T) {
 		t.Fatalf("error.code = %q, want CONFLICT", code)
 	}
 	requireNoRecoveryIdempotencyKey(t, response)
+	if calls := stub.receivedKeys(); len(calls) != 1 || calls[0] != explicitKey {
+		t.Fatalf("Fleet mutations = %v, want one install under the caller key", calls)
+	}
+	if keys := stub.presenceKeys(); len(keys) != 1 || keys[0] != explicitKey {
+		t.Fatalf("Fleet receipt presence reads = %v, want the caller key", keys)
+	}
+	if keys := stub.replayedKeys(); len(keys) != 0 {
+		t.Fatalf("Fleet receipt replays = %v, want none after a negative presence read", keys)
+	}
+}
+
+func TestLegacyInstallExpiredReceiptReturnsConflictWithoutAnotherInstall(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		store      *legacyInstallStore
+	}{
+		{name: "expert", path: "/v1/experts/exp-1/install", store: &legacyInstallStore{expert: recoveryExpertFixture()}},
+		{name: "squad", path: "/v1/squads/squad-1/install", store: &legacyInstallStore{squad: recoverySquadFixture()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newRecoveryFleetStub(recoveryTruncatedSuccess, 0)
+			router := recoveryInstallRouter(t, tc.store, stub, sequentialInstallKeys())
+			const key = "receipt-expired"
+			first := postLegacyInstall(router, tc.path, key)
+			if actual := requireRecoveryIdempotencyKey(t, first); actual != key {
+				t.Fatalf("initial dispatch key=%q want %q", actual, key)
+			}
+			stub.mu.Lock()
+			stub.expireAfterPresence = true
+			stub.mu.Unlock()
+			retry := postLegacyInstall(router, tc.path, key)
+			if retry.Code != http.StatusConflict {
+				t.Fatalf("expired receipt status=%d body=%s", retry.Code, retry.Body.String())
+			}
+			code, details := decodeLegacyInstallError(t, retry)
+			if code != "CONFLICT" || details["reason"] != "receipt_unavailable" || details["idempotency_key"] != key {
+				t.Fatalf("expired receipt error=%q details=%#v", code, details)
+			}
+			if calls := stub.receivedKeys(); len(calls) != 1 || calls[0] != key {
+				t.Fatalf("expired receipt triggered replacement install: %v", calls)
+			}
+			if replays := stub.replayedKeys(); len(replays) != 1 || replays[0] != key {
+				t.Fatalf("receipt replay keys=%v want original key %q", replays, key)
+			}
+		})
+	}
 }

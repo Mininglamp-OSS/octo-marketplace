@@ -22,6 +22,13 @@ func (f *connectorRegressionInstaller) InstallCapability(_ context.Context, _, _
 	f.in = in
 	return f.result, nil
 }
+func (*connectorRegressionInstaller) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*connectorRegressionInstaller) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 
 func connectorRegressionFixture() (*Service, *fakeStore, *connectorRegressionInstaller) {
 	store := installFixture()

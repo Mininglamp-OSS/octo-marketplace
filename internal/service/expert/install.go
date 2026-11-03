@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -34,6 +35,11 @@ var ErrInstallTooLarge = errors.New("install exceeds resource limits")
 // ErrFleetInstallUnavailable marks a capability request whose result could not
 // be determined from Fleet (for example, a transport failure).
 var ErrFleetInstallUnavailable = errors.New("fleet capability install unavailable")
+
+// ErrInstallReceiptUnavailable marks a same-key retry whose Fleet receipt
+// disappeared after the read-only presence check. The original operation's
+// result is no longer recoverable; start no new mutation from that read.
+var ErrInstallReceiptUnavailable = errors.New("fleet installation receipt unavailable")
 
 // InstallDispatchError wraps a capability install failure that was already
 // dispatched to Fleet and carries the idempotency key actually sent, so a
@@ -186,6 +192,12 @@ func (b *capabilityBudget) addSkillFile(first bool, file fleet.CapabilitySkillFi
 // legacy expert and squad endpoints. *fleet.Client satisfies it.
 type FleetProvisioner interface {
 	InstallCapability(ctx context.Context, token, spaceID, workspaceID, key string, in fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error)
+	// HasCapabilityInstallationReceipt reads whether a receipt for this
+	// Workspace, caller and key still exists. It never creates one.
+	HasCapabilityInstallationReceipt(ctx context.Context, token, spaceID, workspaceID, key string) (bool, error)
+	// ReplayCapability rereads a matching stored result without installing;
+	// (nil, nil) means no valid receipt remains for the key.
+	ReplayCapability(ctx context.Context, token, spaceID, workspaceID, key string, in fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error)
 }
 
 // WithFleet wires the provisioner at construction (router).
@@ -311,7 +323,11 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 		},
 		Bindings: fleet.CapabilityBindings{Experts: []fleet.CapabilityExpertBinding{binding}},
 	}
-	result, err := s.installCapability(ctx, in, request)
+	// A pre-upgrade receipt may carry the legacy mcp_config wire. Build that
+	// candidate only for read-only receipt matching, from the same loaded model.
+	result, err := s.installCapability(ctx, in, &request, func() *fleet.CapabilityInstallRequest {
+		return legacyExpertInstallRequest(request, m.MCPConfig)
+	})
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -319,20 +335,207 @@ func (s *Service) InstallExpert(ctx context.Context, caller Caller, expertID str
 	return InstallResult{AgentID: result.ExpertID}, nil
 }
 
-func (s *Service) installCapability(ctx context.Context, in InstallInput, request fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+// installCapability resolves an existing caller-keyed receipt before writing.
+// The current connector wire is the only candidate eligible for a new install;
+// the legacy candidate is used only by ReplayCapability.
+func (s *Service) installCapability(ctx context.Context, in InstallInput, current *fleet.CapabilityInstallRequest, legacy func() *fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
 	key := in.IdempotencyKey
 	if key == "" {
 		key = s.idGen()
+		return s.installCapabilityOnce(ctx, in, key, *current)
 	}
+	hasReceipt, err := s.fleet.HasCapabilityInstallationReceipt(ctx, in.Token, in.SpaceID, in.WorkspaceID, key)
+	if err != nil {
+		return nil, s.capabilityDispatchError(key, err)
+	}
+	if !hasReceipt {
+		result, err := s.installCapabilityOnce(ctx, in, key, *current)
+		if err == nil {
+			return result, nil
+		}
+		if !capabilityReceiptMismatch(err) {
+			return nil, err
+		}
+		// A concurrent same-key operation committed between the presence read
+		// and this send. Only its stored wire may recover the operation.
+		recovered, replayErr := s.replayCapability(ctx, in, key, legacy())
+		if replayErr == nil {
+			return recovered, nil
+		}
+		if capabilityReceiptMismatch(replayErr) || errors.Is(replayErr, ErrInstallReceiptUnavailable) {
+			return nil, err
+		}
+		return nil, replayErr
+	}
+	// Prefer the current connector wire; the legacy candidate is tried only if
+	// Fleet explicitly reports a fingerprint mismatch.
+	result, err := s.replayCapability(ctx, in, key, current)
+	if err == nil || !capabilityReceiptMismatch(err) {
+		return result, err
+	}
+	candidate := legacy()
+	if candidate == nil {
+		return nil, err
+	}
+	return s.replayCapability(ctx, in, key, candidate)
+}
+
+func (s *Service) installCapabilityOnce(ctx context.Context, in InstallInput, key string, request fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
 	result, err := s.fleet.InstallCapability(ctx, in.Token, in.SpaceID, in.WorkspaceID, key, request)
 	if err == nil {
 		return result, nil
 	}
+	return nil, s.capabilityDispatchError(key, err)
+}
+
+// replayCapability verifies one wire against Fleet's existing receipt without installing.
+func (s *Service) replayCapability(ctx context.Context, in InstallInput, key string, candidate *fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	if candidate == nil {
+		return nil, &InstallDispatchError{IdempotencyKey: key, Err: ErrInstallReceiptUnavailable}
+	}
+	result, err := s.fleet.ReplayCapability(ctx, in.Token, in.SpaceID, in.WorkspaceID, key, *candidate)
+	if err != nil {
+		return nil, s.capabilityDispatchError(key, err)
+	}
+	if result == nil {
+		return nil, &InstallDispatchError{IdempotencyKey: key, Err: ErrInstallReceiptUnavailable}
+	}
+	return result, nil
+}
+
+func (s *Service) capabilityDispatchError(key string, err error) error {
 	var apiErr *fleet.CapabilityAPIError
 	if errors.As(err, &apiErr) {
-		return nil, &InstallDispatchError{IdempotencyKey: key, Err: err}
+		return &InstallDispatchError{IdempotencyKey: key, Err: err}
 	}
-	return nil, &InstallDispatchError{IdempotencyKey: key, Err: fmt.Errorf("%w: %w", ErrFleetInstallUnavailable, err)}
+	return &InstallDispatchError{IdempotencyKey: key, Err: fmt.Errorf("%w: %w", ErrFleetInstallUnavailable, err)}
+}
+
+// capabilityReceiptMismatch recognizes only Fleet's explicit same-key
+// fingerprint conflict; generic/in-progress conflicts stay uncertain.
+func capabilityReceiptMismatch(err error) bool {
+	var apiErr *fleet.CapabilityAPIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+		return false
+	}
+	return apiErr.IdempotencyKeyReused || apiErr.Code == "IDEMPOTENCY_KEY_REUSED"
+}
+
+// legacyExpertInstallRequest derives the pre-connector-default wire from the
+// current one. The returned candidate is only ever sent to ReplayCapability.
+func legacyExpertInstallRequest(current fleet.CapabilityInstallRequest, raw string) *fleet.CapabilityInstallRequest {
+	config, err := capabilityMCPConfig(raw)
+	if err != nil {
+		return nil
+	}
+	legacy := current
+	legacy.Definition.Connectors = nil
+	legacy.Definition.Experts = []fleet.CapabilityExpert{current.Definition.Experts[0]}
+	legacy.Definition.Experts[0].ConnectorNames = nil
+	legacy.Definition.Experts[0].MCPConfig = config
+	return &legacy
+}
+
+// legacySquadReceiptCandidate derives the pre-connector-default squad wire using
+// each member's own MCP config. It is only used for read-only receipt matching.
+func legacySquadReceiptCandidate(current fleet.CapabilityInstallRequest, members []model.SquadMember) *fleet.CapabilityInstallRequest {
+	legacy := current
+	legacy.Definition.Connectors = nil
+	legacy.Definition.Experts = append([]fleet.CapabilityExpert(nil), current.Definition.Experts...)
+	for i := range legacy.Definition.Experts {
+		config, err := capabilityMCPConfig(members[i].MCPConfig)
+		if err != nil {
+			return nil
+		}
+		legacy.Definition.Experts[i].ConnectorNames = nil
+		legacy.Definition.Experts[i].MCPConfig = config
+	}
+	return &legacy
+}
+
+// capabilityMCPConfig is the historical pre-connector-default normalizer kept
+// solely to reconstruct a read-only receipt candidate. It must not be used to
+// start an installation.
+func capabilityMCPConfig(raw string) (json.RawMessage, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	config := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return json.RawMessage(raw), nil
+		}
+		return nil, err
+	}
+	serversRaw, ok := config["mcpServers"]
+	if !ok {
+		return json.RawMessage(raw), nil
+	}
+	servers := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(serversRaw, &servers); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return json.RawMessage(raw), nil
+		}
+		return nil, err
+	}
+
+	changed := false
+	for name, serverRaw := range servers {
+		var server map[string]json.RawMessage
+		if err := json.Unmarshal(serverRaw, &server); err != nil {
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				return json.RawMessage(raw), nil
+			}
+			return nil, err
+		}
+		typeRaw, hasType := server["type"]
+		if hasType {
+			var serverType string
+			if err := json.Unmarshal(typeRaw, &serverType); err != nil {
+				var typeErr *json.UnmarshalTypeError
+				if errors.As(err, &typeErr) {
+					return json.RawMessage(raw), nil
+				}
+				return nil, err
+			}
+			if serverType == "stdio" {
+				commandRaw, hasCommand := server["command"]
+				if hasCommand {
+					var command string
+					if err := json.Unmarshal(commandRaw, &command); err != nil {
+						var typeErr *json.UnmarshalTypeError
+						if errors.As(err, &typeErr) {
+							return json.RawMessage(raw), nil
+						}
+						return nil, err
+					}
+					if command != "" {
+						delete(server, "type")
+						normalizedServer, err := json.Marshal(server)
+						if err != nil {
+							return nil, err
+						}
+						servers[name] = normalizedServer
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	if !changed {
+		return json.RawMessage(raw), nil
+	}
+	normalizedServers, err := json.Marshal(servers)
+	if err != nil {
+		return nil, err
+	}
+	config["mcpServers"] = normalizedServers
+	return json.Marshal(config)
 }
 
 // capabilityMCPConnector validates the stored config at the Fleet boundary and

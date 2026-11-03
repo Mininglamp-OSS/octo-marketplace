@@ -1012,6 +1012,12 @@ func writeInstallError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is not configured", nil, "")
 		return
 	}
+	if errors.Is(err, expertsvc.ErrInstallReceiptUnavailable) {
+		details := installRecoveryDetails(err)
+		details["reason"] = "receipt_unavailable"
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "installation receipt is no longer available", details, "Reconcile the original Workspace resources before starting another installation.")
+		return
+	}
 	if errors.Is(err, expertsvc.ErrFleetInstallUnavailable) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", installRecoveryDetails(err), "")
 		return
@@ -1046,9 +1052,7 @@ func writeInstallError(c *gin.Context, err error) {
 }
 
 // installRecoveryDetails exposes the idempotency key actually sent to Fleet on
-// upstream-unavailable responses, so a caller that supplied no key can retry
-// the same install instead of creating another one. Other error shapes stay
-// unchanged.
+// install-recovery errors, so a caller can identify the original operation.
 func installRecoveryDetails(err error) map[string]any {
 	var dispatchErr *expertsvc.InstallDispatchError
 	if !errors.As(err, &dispatchErr) {

@@ -419,7 +419,7 @@ func TestInstallSquadReplaysUncertainCapabilityInstallByIdempotencyKey(t *testin
 	if different.SquadID != "team-2" || different.LeaderAgentID != "agent-2" || ff.createdResources != 8 {
 		t.Fatalf("different-key result/resources = %+v/%d, want new team/leader IDs and a second graph", different, ff.createdResources)
 	}
-	assertCapabilityKeys(t, ff, firstKey, firstKey, input.IdempotencyKey)
+	assertCapabilityKeys(t, ff, firstKey, input.IdempotencyKey)
 }
 
 func TestInstallSquadGeneratesFreshKeysWhenIdempotencyKeyIsAbsent(t *testing.T) {

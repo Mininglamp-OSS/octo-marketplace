@@ -27,6 +27,9 @@ type CapabilityAPIError struct {
 	IdempotencyKeyReused bool
 	ConflictResource     string // Only a recognized conflicting Skill/Expert/Team resource kind.
 	capacity             *capabilityCapacityDetails
+	// missingReceipt marks the read-only receipt 404 sentinel; never derived
+	// from generic NOT_FOUND responses.
+	missingReceipt bool
 }
 
 type capabilityCapacityDetails struct {
@@ -110,21 +113,109 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	if err != nil {
 		return nil, errors.New("cannot encode capability installation")
 	}
-	path := "/v1/capabilities/install"
+	status, header, raw, err := c.doCapabilityRequest(ctx, http.MethodPost, capabilityInstallPath, token, spaceID, workspaceID, key, body)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, capabilityAPIError(status, header, raw)
+	}
+	resp := http.Response{StatusCode: status, Header: header}
+	return capabilityInstallResult(in, &resp, raw)
+}
+
+// HasCapabilityInstallationReceipt reads whether Fleet still retains a receipt
+// for this Workspace, caller and key. It never creates, claims or mutates one.
+func (c *Client) HasCapabilityInstallationReceipt(ctx context.Context, token, spaceID, workspaceID, key string) (bool, error) {
+	status, header, raw, err := c.doCapabilityRequest(ctx, http.MethodGet, capabilityReceiptPath, token, spaceID, workspaceID, key, nil)
+	if err != nil {
+		return false, err
+	}
+	if status != http.StatusOK {
+		return false, capabilityAPIError(status, header, raw)
+	}
+	var envelope struct {
+		Data *struct {
+			HasReceipt *bool `json:"has_receipt"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil || envelope.Data.HasReceipt == nil {
+		return false, errCapabilityResponseInvalid
+	}
+	return *envelope.Data.HasReceipt, nil
+}
+
+// ReplayCapability rereads the receipt for an existing operation without
+// creating resources. Dissimilar request bytes return Fleet's conflict; only an
+// explicit NOT_FOUND capability_installation_receipt answer returns nil, nil.
+func (c *Client) ReplayCapability(ctx context.Context, token, spaceID, workspaceID, key string, in CapabilityInstallRequest) (*CapabilityInstallResult, error) {
+	body, err := MarshalCapabilityInstallRequest(in)
+	if err != nil {
+		return nil, errors.New("cannot encode capability installation")
+	}
+	status, header, raw, err := c.doCapabilityRequest(ctx, http.MethodPost, capabilityReceiptPath, token, spaceID, workspaceID, key, body)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		apiErr := capabilityAPIError(status, header, raw)
+		if apiErr.missingReceipt {
+			return nil, nil
+		}
+		return nil, apiErr
+	}
+	if status != http.StatusOK {
+		return nil, capabilityAPIError(status, header, raw)
+	}
+	resp := http.Response{StatusCode: status, Header: header}
+	out, err := capabilityInstallResult(in, &resp, raw)
+	if err != nil {
+		return nil, err
+	}
+	// The receipt endpoint can only return a stored result; a missing header
+	// cannot make this a new installation.
+	out.ReplayKnown, out.Replayed = true, true
+	return out, nil
+}
+
+const (
+	capabilityInstallPath = "/v1/capabilities/install"
+	capabilityReceiptPath = "/v1/capabilities/install/receipt"
+)
+
+var (
+	errCapabilityOutcomeUnknown  = errors.New("capability installation outcome is unknown; retry with the same idempotency key")
+	errCapabilityResponseInvalid = errors.New("invalid capability installation response; retry with the same idempotency key")
+)
+
+func (c *Client) capabilityURL(path string) string {
 	// Reuse the legacy Fleet base URL. OCTO's /fleet gateway mount exposes
 	// public v1 routes under /api/v1; a direct Fleet service exposes /v1.
-	// Select before sending: never probe or retry a mutation at another path.
+	// Select before sending: never probe or retry a request at another path.
 	if base, err := url.Parse(c.baseURL); err == nil && strings.HasSuffix(base.Path, "/fleet") {
-		path = "/api" + path
+		return c.baseURL + "/api" + path
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	return c.baseURL + path
+}
+
+// doCapabilityRequest applies the shared install transport policy: one bounded
+// send, no redirects, no transport-level POST retry, and the installation
+// deadline. It returns the status/headers/body for the caller's protocol parse.
+func (c *Client) doCapabilityRequest(ctx context.Context, method, path, token, spaceID, workspaceID, key string, body []byte) (int, http.Header, []byte, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.capabilityURL(path), reader)
 	if err != nil {
-		return nil, errors.New("cannot create capability installation request")
+		return 0, nil, nil, errors.New("cannot create capability installation request")
 	}
 	// Go's transport treats Idempotency-Key + GetBody as permission to retry
 	// POST on a reused connection. Keep retry ownership with the caller.
 	req.GetBody = nil
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Token", token)
 	req.Header.Set("X-Space-Id", spaceID)
 	req.Header.Set("X-Workspace-Id", workspaceID)
@@ -136,52 +227,56 @@ func (c *Client) InstallCapability(ctx context.Context, token, spaceID, workspac
 	httpClient.Timeout = CapabilityInstallTimeout
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, errors.New("capability installation outcome is unknown; retry with the same idempotency key")
+		return 0, nil, nil, errCapabilityOutcomeUnknown
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes+1))
 	if err != nil || len(raw) > maxRespBytes {
-		return nil, errors.New("invalid capability installation response; retry with the same idempotency key")
+		return 0, nil, nil, errCapabilityResponseInvalid
 	}
-	if resp.StatusCode != http.StatusOK {
-		var envelope struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
-		}
-		_ = json.Unmarshal(raw, &envelope)
-		apiErr := &CapabilityAPIError{Status: resp.StatusCode, Code: envelope.Error.Code, RetryAfter: resp.Header.Get("Retry-After")}
-		if resp.StatusCode == http.StatusRequestEntityTooLarge {
-			apiErr.capacity = parseCapabilityCapacityDetails(raw)
-		}
-		if resp.StatusCode == http.StatusConflict {
-			var conflict struct {
-				Error struct {
-					Details json.RawMessage `json:"details"`
-				} `json:"error"`
-			}
-			if json.Unmarshal(raw, &conflict) == nil {
-				var details struct {
-					Resource string `json:"resource"`
-				}
-				if json.Unmarshal(conflict.Error.Details, &details) == nil {
-					apiErr.IdempotencyKeyReused = apiErr.Code == "DUPLICATE" && details.Resource == "idempotency_key"
-					switch details.Resource {
-					case "skill", "expert", "expert_team":
-						apiErr.ConflictResource = details.Resource
-					}
-				}
-			}
-		}
-		return nil, apiErr
+	return resp.StatusCode, resp.Header, raw, nil
+}
+
+func capabilityAPIError(status int, header http.Header, raw []byte) *CapabilityAPIError {
+	var envelope struct {
+		Error struct {
+			Code    string          `json:"code"`
+			Details json.RawMessage `json:"details"`
+		} `json:"error"`
 	}
+	_ = json.Unmarshal(raw, &envelope)
+	apiErr := &CapabilityAPIError{Status: status, Code: envelope.Error.Code, RetryAfter: header.Get("Retry-After")}
+	if status == http.StatusRequestEntityTooLarge {
+		apiErr.capacity = parseCapabilityCapacityDetails(raw)
+	}
+	if len(envelope.Error.Details) > 0 {
+		var details struct {
+			Resource string `json:"resource"`
+		}
+		if json.Unmarshal(envelope.Error.Details, &details) == nil {
+			switch status {
+			case http.StatusConflict:
+				apiErr.IdempotencyKeyReused = apiErr.Code == "DUPLICATE" && details.Resource == "idempotency_key"
+				switch details.Resource {
+				case "skill", "expert", "expert_team":
+					apiErr.ConflictResource = details.Resource
+				}
+			case http.StatusNotFound:
+				apiErr.missingReceipt = apiErr.Code == "NOT_FOUND" && details.Resource == "capability_installation_receipt"
+			}
+		}
+	}
+	return apiErr
+}
+
+func capabilityInstallResult(in CapabilityInstallRequest, resp *http.Response, raw []byte) (*CapabilityInstallResult, error) {
 	var envelope struct {
 		Data *CapabilityInstallResult `json:"data"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil || envelope.Data == nil ||
 		(len(in.Definition.Connectors) > 0 && !capabilityConnectorNullableFieldsPresent(raw)) ||
 		!validCapabilityResult(in.Definition, *envelope.Data, in.LegacySkillWire, in.LegacyExpertWire) {
-		return nil, errors.New("invalid capability installation result; retry with the same idempotency key")
+		return nil, errCapabilityResponseInvalid
 	}
 	out := envelope.Data
 	// Fleet test currently omits this header even for receipt replays. Missing

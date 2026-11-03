@@ -234,8 +234,15 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var paths []string
+			var presenceKeys []string
 			var forwardedToken, forwardedSpace, forwardedWorkspace, forwardedKey string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/v1/capabilities/install/receipt" {
+					presenceKeys = append(presenceKeys, r.Header.Get("Idempotency-Key"))
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]bool{"has_receipt": false}})
+					return
+				}
 				paths = append(paths, r.Method+" "+r.URL.Path)
 				if r.Method != http.MethodPost || r.URL.Path != "/v1/capabilities/install" {
 					http.NotFound(w, r)
@@ -294,7 +301,17 @@ func TestLegacyInstallEndpointsKeepTheirHTTPResponsesThroughCapabilityInstall(t 
 				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 			}
 			if len(paths) != 1 || paths[0] != "POST /v1/capabilities/install" {
-				t.Fatalf("Fleet calls = %v, want one capability transaction", paths)
+				t.Fatalf("Fleet mutations = %v, want one capability transaction", paths)
+			}
+			wantPresenceReads := 0
+			if tc.idempotencyKey != "" {
+				wantPresenceReads = 1
+			}
+			if len(presenceKeys) != wantPresenceReads {
+				t.Fatalf("Fleet receipt presence reads = %v, want %d", presenceKeys, wantPresenceReads)
+			}
+			if wantPresenceReads == 1 && presenceKeys[0] != tc.wantKey {
+				t.Fatalf("Fleet receipt Idempotency-Key = %q, want %q", presenceKeys[0], tc.wantKey)
 			}
 			if forwardedToken != "legacy-caller-token" || forwardedSpace != "space-1" || forwardedWorkspace != "workspace-1" {
 				t.Fatalf("Fleet authorization/target = token:%q space:%q workspace:%q", forwardedToken, forwardedSpace, forwardedWorkspace)
