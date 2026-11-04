@@ -11,6 +11,17 @@ import (
 // and resource locked. The frozen release is append-only; live draft rows and
 // draft relations are preserved even when the author saved again after submit.
 func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope, p ApproveReviewParams, current *model.Plugin, version string, changelog sql.NullString, manifest, pkg, keys, relationBytes []byte, manifestHash, pluginHash string) (*model.Plugin, error) {
+	out, err := r.approveManagedReviewInTx(ctx, tx, scope, p, current, version, changelog, manifest, pkg, keys, relationBytes, manifestHash, pluginHash)
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *Repo) approveManagedReviewInTx(ctx context.Context, tx *sql.Tx, scope Scope, p ApproveReviewParams, current *model.Plugin, version string, changelog sql.NullString, manifest, pkg, keys, relationBytes []byte, manifestHash, pluginHash string) (*model.Plugin, error) {
 	if current.Visibility != model.PluginVisibilitySpace {
 		return nil, ErrConflict
 	}
@@ -42,6 +53,9 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	if changelog.Valid {
 		note = &changelog.String
 	}
+	if err = approveConnectorRevisions(ctx, tx, current.ID, p.ReviewID); err != nil {
+		return nil, err
+	}
 	id, err := snapshotVersion(ctx, tx, r.id, now, frozen, rels, note, p.ReviewerUID, r.references)
 	if err != nil {
 		return nil, err
@@ -65,7 +79,7 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	// row already carries the frozen topology the market and install read, so only
 	// the embedded children of the frozen targets need to be listed alongside it.
 	if current.ListingState != model.PluginListingStatePublished {
-		if err = promoteFrozenEmbeddedChildren(ctx, tx, current.ID, current.Type, rels, scope.SpaceID, now); err != nil {
+		if err = promoteFrozenEmbeddedChildren(ctx, tx, current.ID, current.Type, rels, scope.SpaceID, current.Visibility, now); err != nil {
 			return nil, err
 		}
 	}
@@ -82,9 +96,6 @@ func (r *Repo) approveManagedReview(ctx context.Context, tx *sql.Tx, scope Scope
 	}
 	m := Mutation{OperatorID: p.ReviewerUID, OperatorName: p.ReviewerName, RequestID: p.RequestID}
 	if err = insertAudit(ctx, tx, r.id(), now, frozen, "review_approve", m, current.PluginHash, pluginHash); err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	frozen.CurrentVersionID = &id

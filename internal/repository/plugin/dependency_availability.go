@@ -48,11 +48,20 @@ func snapshotField(alias, name string) string {
 // snapshotTargetUnavailableSQL is shared by the root and the pinned member
 // snapshot. An unpinned edge (supported when references are disabled) is
 // checked against the target's published release, matching diagnostics.
-func snapshotTargetUnavailableSQL(edge, target string) string {
+//
+// A bundled (is_embedded) row follows the container that declares the edge: it
+// is listed and demoted with that container and never receives an independent
+// formal release of its own. container names the alias of the row whose snapshot
+// declares the edge (p for the root release, target for a pinned member
+// release), so the exemption is narrow: only an unpinned edge whose target is
+// embedded and owned by that container (same owner and Space) skips the release
+// requirement. Standalone targets and explicit pins keep it.
+func snapshotTargetUnavailableSQL(edge, target, container string) string {
 	edgeType := snapshotField(edge, "relation_type")
 	edgeTarget := snapshotField(edge, "target_plugin_id")
 	edgePin := snapshotField(edge, "target_version_id")
-	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edgeType + ` IN ('expert_skill','expert_team_expert') AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edgeTarget + ` AND dep_release.version_id=COALESCE(` + edgePin + `,` + target + `.published_version_id))))`
+	bundled := `(` + edgePin + ` IS NULL AND ` + target + `.is_embedded=1 AND ` + target + `.owner_uid=` + container + `.owner_uid AND ` + target + `.space_id <=> ` + container + `.space_id)`
+	return `(` + target + `.plugin_id IS NULL OR (` + target + `.visibility='private' AND (p.visibility='space' OR p.owner_uid<>` + target + `.owner_uid)) OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edgeType + ` IN ('expert_skill','expert_team_expert') AND NOT ` + bundled + ` AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edgeTarget + ` AND dep_release.version_id=COALESCE(` + edgePin + `,` + target + `.published_version_id))))`
 }
 
 func snapshotMemberUnavailableSQL(edge, target string) string {
@@ -67,10 +76,10 @@ func snapshotMemberUnavailableSQL(edge, target string) string {
    AND ` + memberType + ` IN ('expert_skill','expert_connector')
    AND COALESCE(member_edge.status,member_edge.status_legacy,1)=1
    AND COALESCE(member_edge.deleted_at,member_edge.deleted_at_legacy) IS NULL
-   AND ` + snapshotTargetUnavailableSQL("member_edge", "member_target") + `)`
+   AND ` + snapshotTargetUnavailableSQL("member_edge", "member_target", "target") + `)`
 }
 
-func unavailableSnapshotSQL(sourceID, sourceVersion string) string {
+func unavailableSnapshotSQL(sourceID, sourceVersion, container string) string {
 	edgeType := snapshotField("edge", "relation_type")
 	return `EXISTS (SELECT 1 FROM plugin_versions source_version
  JOIN JSON_TABLE(source_version.relations_json, '$[*]' COLUMNS (` + snapshotRelationColumns + `)) edge
@@ -79,11 +88,11 @@ func unavailableSnapshotSQL(sourceID, sourceVersion string) string {
    AND ` + edgeType + ` IN ('expert_skill','expert_connector','expert_team_expert')
    AND COALESCE(edge.status,edge.status_legacy,1)=1
    AND COALESCE(edge.deleted_at,edge.deleted_at_legacy) IS NULL
-   AND (` + snapshotTargetUnavailableSQL("edge", "target") + ` OR (` + edgeType + `='expert_team_expert' AND ` + snapshotMemberUnavailableSQL("edge", "target") + `)))`
+   AND (` + snapshotTargetUnavailableSQL("edge", "target", container) + ` OR (` + edgeType + `='expert_team_expert' AND ` + snapshotMemberUnavailableSQL("edge", "target") + `)))`
 }
 
 func liveTargetUnavailableSQL(edge, target string) string {
-	return `(` + target + `.plugin_id IS NULL OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
+	return `(` + target + `.plugin_id IS NULL OR (` + target + `.visibility='private' AND (p.visibility='space' OR p.owner_uid<>` + target + `.owner_uid)) OR ` + target + `.status<>1 OR ` + target + `.deleted_at IS NOT NULL OR ` + target + `.listing_state<>'published' OR (` + edge + `.relation_type IN ('expert_skill','expert_team_expert') AND ` + edge + `.target_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_version_releases dep_release WHERE dep_release.plugin_id=` + edge + `.target_plugin_id AND dep_release.version_id=` + edge + `.target_version_id)))`
 }
 
 // A legacy team member is an expert, so its live graph is only skills and
@@ -101,9 +110,9 @@ func unavailableMemberLiveSQL(source availabilityAlias) string {
 func unavailableLiveSQL(source availabilityAlias) string {
 	s := source.sql()
 	member := `EXISTS (SELECT 1 FROM plugins member WHERE member.plugin_id=live.target_plugin_id AND (
- (live.target_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "live.target_version_id") + `)
+ (live.target_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "live.target_version_id", "member") + `)
  OR (live.target_version_id IS NULL AND (
-   (member.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "member.published_version_id") + `)
+   (member.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL("member.plugin_id", "member.published_version_id", "member") + `)
    OR (member.published_version_id IS NULL AND ` + unavailableMemberLiveSQL(availabilityMember) + `)
  ))
 ))`
@@ -121,7 +130,7 @@ func unavailableLiveSQL(source availabilityAlias) string {
 // published dependency path.
 func unavailableDependencySQL(source availabilityAlias) string {
 	s := source.sql()
-	return `(` + s + `.plugin_type IN ('expert','expert_team') AND ((` + s + `.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL(s+".plugin_id", s+".published_version_id") + `) OR (` + s + `.published_version_id IS NULL AND ` + unavailableLiveSQL(source) + `)))`
+	return `(` + s + `.plugin_type IN ('expert','expert_team') AND ((` + s + `.published_version_id IS NOT NULL AND ` + unavailableSnapshotSQL(s+".plugin_id", s+".published_version_id", s) + `) OR (` + s + `.published_version_id IS NULL AND ` + unavailableLiveSQL(source) + `)))`
 }
 
 func dependencyAvailabilitySQL() string {
@@ -146,9 +155,12 @@ type dependencyEdge struct {
 	TargetVersionID                     *string
 	TargetExists, TargetActive          bool
 	TargetListed, ReleaseExists, Formal bool
-	TargetPublished                     string
-	RootID                              string
-	Via                                 []string
+	// TargetEmbedded marks a bundled row that follows its container. It never
+	// gets an independent release, so a missing one is not a dependency defect.
+	TargetEmbedded  bool
+	TargetPublished string
+	RootID          string
+	Via             []string
 }
 
 func (e dependencyEdge) reason() string {
@@ -157,7 +169,7 @@ func (e dependencyEdge) reason() string {
 		return "deleted"
 	case !e.TargetListed:
 		return "delisted"
-	case e.RelationType != "expert_connector" && (e.TargetVersionID != nil || e.Formal) && !e.ReleaseExists:
+	case e.RelationType != "expert_connector" && (e.TargetVersionID != nil || e.Formal) && !e.ReleaseExists && !(e.TargetEmbedded && e.TargetVersionID == nil):
 		return "release_missing"
 	default:
 		return ""
@@ -239,8 +251,8 @@ func (r *Repo) batchDependencyTargetInfo(ctx context.Context, edges []*dependenc
 		ids = append(ids, id)
 	}
 	type targetMeta struct {
-		exists, active, listed bool
-		published, name        string
+		exists, active, listed, embedded bool
+		published, name                  string
 	}
 	meta := make(map[string]targetMeta, len(ids))
 	args := make([]any, 0, len(ids))
@@ -250,6 +262,7 @@ func (r *Repo) batchDependencyTargetInfo(ctx context.Context, edges []*dependenc
 	rows, err := r.db.QueryContext(ctx, `SELECT p.plugin_id,
  COALESCE(p.status=1 AND p.deleted_at IS NULL,0),
  COALESCE(p.listing_state='published',0),
+ COALESCE(p.is_embedded,0),
  p.published_version_id,
  CASE WHEN p.plugin_type='connector' THEN COALESCE(p.plugin_name,'') ELSE COALESCE(JSON_UNQUOTE(JSON_EXTRACT(snapshot.manifest_json,'$.plugin_name')),'') END
  FROM plugins p
@@ -260,14 +273,14 @@ func (r *Repo) batchDependencyTargetInfo(ctx context.Context, edges []*dependenc
 	}
 	for rows.Next() {
 		var id string
-		var active, listed int
+		var active, listed, embedded int
 		var published sql.NullString
 		var name string
-		if err := rows.Scan(&id, &active, &listed, &published, &name); err != nil {
+		if err := rows.Scan(&id, &active, &listed, &embedded, &published, &name); err != nil {
 			rows.Close()
 			return err
 		}
-		meta[id] = targetMeta{exists: true, active: active != 0, listed: listed != 0, published: published.String, name: name}
+		meta[id] = targetMeta{exists: true, active: active != 0, listed: listed != 0, embedded: embedded != 0, published: published.String, name: name}
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -282,7 +295,7 @@ func (r *Repo) batchDependencyTargetInfo(ctx context.Context, edges []*dependenc
 		if !ok {
 			continue
 		}
-		e.TargetExists, e.TargetActive, e.TargetListed, e.TargetName = m.exists, m.active, m.listed, m.name
+		e.TargetExists, e.TargetActive, e.TargetListed, e.TargetName, e.TargetEmbedded = m.exists, m.active, m.listed, m.name, m.embedded
 		e.TargetPublished = m.published
 		version := m.published
 		if e.TargetVersionID != nil {
@@ -435,7 +448,7 @@ func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.
 	result := make(map[string][]model.DependencyIssue, len(roots))
 	ids := make([]string, 0, len(roots))
 	for _, p := range roots {
-		if p.ListingState != model.PluginListingStatePublished || (p.Type != model.PluginTypeExpert && p.Type != model.PluginTypeExpertTeam) {
+		if p.ListingState == model.PluginListingStateDraft || (p.Type != model.PluginTypeExpert && p.Type != model.PluginTypeExpertTeam) {
 			continue
 		}
 		ids = append(ids, p.ID)
@@ -459,7 +472,7 @@ func (r *Repo) DependencyIssues(ctx context.Context, scope Scope, roots []model.
 	}
 	var edges []*dependencyEdge
 	for _, root := range roots {
-		if root.ListingState != model.PluginListingStatePublished || (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) {
+		if root.ListingState == model.PluginListingStateDraft || (root.Type != model.PluginTypeExpert && root.Type != model.PluginTypeExpertTeam) {
 			continue
 		}
 		rootEdges, err := r.loadDependencyEdges(ctx, root.ID)

@@ -198,3 +198,41 @@ func TestManagedTeamApprovalPromotesOwnEmbeddedMembers(t *testing.T) {
 		}
 	}
 }
+
+func TestAudienceImportedExpertWithBundledSkill(t *testing.T) {
+	db := reviewDB(t)
+	svc := pluginsvc.New(pluginrepo.New(db), storage.NewLocal(t.TempDir(), "http://localhost")).WithVersionManagement(true)
+	owner := managedOwner()
+	ctx := context.Background()
+	admin := owner
+	admin.IsSystemAdmin = true
+	archive := promotionArchive(t, map[string][]byte{
+		"expert.json":       []byte(`{"name":"Imported expert","summary":"Fixture","instruction":"Test","skills":[{"name":"Bundled skill","file":"skills/bundle.zip"}]}`),
+		"skills/bundle.zip": promotionArchive(t, map[string][]byte{"SKILL.md": []byte("---\nname: bundled-skill\ndescription: Fixture\n---\nTest")}),
+	})
+	expert, err := svc.ImportContainer(ctx, admin, pluginsvc.ContainerImportParams{Archive: archive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := managedWrite("1.0.0", "Team", model.PluginVisibilityPrivate)
+	req.Type = model.PluginTypeExpertTeam
+	var manifest map[string]any
+	if err = json.Unmarshal(req.Manifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["plugin_type"] = "expert_team"
+	req.Manifest, _ = json.Marshal(manifest)
+	req.Relations = []pluginsvc.RelationRequest{{TargetPluginID: expert.Plugin.ID, Type: "expert_team_expert", Data: json.RawMessage(`{"member_key":"lead","role":"leader","is_leader":true}`)}}
+	team, err := svc.Create(ctx, owner, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishManaged(t, svc, owner, team.Plugin.ID)
+	plan, err := svc.VisibilityPlan(ctx, owner, team.Plugin.ID, model.PluginVisibilitySpace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ChangeVisibility(ctx, owner, pluginsvc.VisibilityParams{PluginID: team.Plugin.ID, Visibility: model.PluginVisibilitySpace, ExpectedPlanRevision: plan.Revision}); err != nil {
+		t.Fatal(err)
+	}
+}

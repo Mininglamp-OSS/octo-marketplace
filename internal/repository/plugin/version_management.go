@@ -166,6 +166,11 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 			return err
 		}
 	}
+	if p.Type == model.PluginTypeExpert {
+		if err = RefreshConnectorBaselines(ctx, tx, p.ID, versionID); err != nil {
+			return err
+		}
+	}
 	// The market displays the selected version's manifest name, not the mutable
 	// draft name. Read the name from the version being released; p.Name can be a
 	// later draft (adoption/historical flows) and must not release or misreserve a
@@ -193,7 +198,7 @@ func (r *Repo) recordRelease(ctx context.Context, tx *sql.Tx, p *model.Plugin, v
 	if err != nil {
 		return wrapped("publish release", mapPluginNameTaken(err))
 	}
-	return nil
+	return clearRecoveredSuspension(ctx, tx, p, versionID, now)
 }
 
 // PublishManaged publishes the explicitly selected draft. ExpectedVersionID
@@ -208,6 +213,9 @@ func (r *Repo) PublishManaged(ctx context.Context, scope Scope, p PublishParams)
 	current, err := getOwnedForUpdate(ctx, tx, scope, p.PluginID)
 	if err != nil {
 		return nil, err
+	}
+	if p.ExpectedDraftRevision != "" && model.PluginDraftRevision(current) != p.ExpectedDraftRevision {
+		return nil, ErrConflict
 	}
 	if !versioned(current) || current.IsEmbedded {
 		return nil, ErrNotFound

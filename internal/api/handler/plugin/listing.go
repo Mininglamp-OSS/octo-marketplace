@@ -9,7 +9,8 @@ import (
 )
 
 type publishRequest struct {
-	PluginID string `json:"plugin_id"`
+	ExpectedDraftRevision string `json:"expected_draft_revision,omitempty"`
+	PluginID              string `json:"plugin_id"`
 	// Version is required for managed Skills, Experts and Expert Teams. The requested
 	// label names the release independently of the draft. Connectors and feature-off
 	// publication retain their existing defaults.
@@ -70,7 +71,7 @@ func (h *Handler) Publish(c *gin.Context) {
 	if !decode(c, &req) {
 		return
 	}
-	result, err := h.svc.Publish(c.Request.Context(), caller, pluginsvc.PublishParams{
+	result, err := h.svc.Publish(c.Request.Context(), caller, pluginsvc.PublishParams{ExpectedDraftRevision: req.ExpectedDraftRevision,
 		PluginID:  req.PluginID,
 		Version:   req.Version,
 		Changelog: req.Changelog,

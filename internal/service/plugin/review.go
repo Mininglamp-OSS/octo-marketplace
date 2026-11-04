@@ -71,10 +71,9 @@ var (
 	// being silently ack'd as conflict/pending on a still-pending request.
 	ErrLabelTaken = errors.New("version label is already published")
 	// ErrReviewPending is returned when a change cannot be applied while a review
-	// request is open on the plugin. Content edits during a pending review are
-	// deliberately fine — the reviewer acts on a frozen snapshot — so this covers
-	// only changes that would contradict the pending request's own outcome, namely
-	// switching visibility out from under an approval that is about to stamp it.
+	// request is open on the plugin. With version management enabled, tenant
+	// content saves are also blocked until the current review finishes. Reviewer
+	// decisions continue to act on their immutable submitted snapshot.
 	ErrReviewPending = errors.New("a review request is pending on this plugin")
 	// ErrReviewFieldConflict is returned when mutually exclusive submit fields are
 	// sent together (e.g. both parse_task_id and manifest_json). It maps to
@@ -109,9 +108,10 @@ func (e *ReviewFieldError) Unwrap() error { return e.Err }
 
 // ReviewSubmitParams is the user-supplied input for a submit.
 type ReviewSubmitParams struct {
-	PluginID  string
-	Version   string
-	Changelog string
+	ExpectedDraftRevision string
+	PluginID              string
+	Version               string
+	Changelog             string
 	// ParseTaskID, when set, materializes the reviewed package server-side from
 	// a completed skill parse task (zip upload). It is mutually exclusive with
 	// Manifest/Package.
@@ -301,6 +301,7 @@ func (s *Service) submitReview(ctx context.Context, caller Caller, params Review
 	if params.Changelog != "" {
 		req.Changelog = &params.Changelog
 	}
+	snap.ExpectedDraftRevision = params.ExpectedDraftRevision
 	if err := s.repo.InsertReviewRequest(ctx, sc, req, snap); err != nil {
 		// Insert failed — roll back uploaded objects and release the parse task so
 		// the submission is retryable.

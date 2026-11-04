@@ -61,12 +61,13 @@ type RejectReviewParams struct {
 // means approve can apply the snapshot atomically without depending on the
 // live sidecar still being correct.
 type FrozenSnapshot struct {
-	Manifest       json.RawMessage
-	Package        json.RawMessage
-	AttachmentKeys json.RawMessage
-	Relations      []model.PluginRelation
-	ManifestHash   string
-	PluginHash     string
+	ExpectedDraftRevision string
+	Manifest              json.RawMessage
+	Package               json.RawMessage
+	AttachmentKeys        json.RawMessage
+	Relations             []model.PluginRelation
+	ManifestHash          string
+	PluginHash            string
 	// DeclaredContent reports whether the submission carried its own content
 	// (declared manifest+package, or a materialized zip) rather than being a
 	// copy of the plugin's live row. InsertReviewRequest re-checks the
@@ -141,11 +142,21 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 	}
 	defer tx.Rollback()
 
+	if err = r.insertReviewInTx(ctx, tx, scope, req, snap); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *Repo) insertReviewInTx(ctx context.Context, tx *sql.Tx, scope Scope, req *model.PluginReviewRequest, snap FrozenSnapshot) (err error) {
 	// Submit IS owner-only, so the owner-scoped lock is correct here (unlike the
 	// reviewer transactions below, where the actor is by definition not the owner).
 	current, err := getOwnedForUpdate(ctx, tx, scope, req.PluginID)
 	if err != nil {
 		return err
+	}
+	if snap.ExpectedDraftRevision != "" && model.PluginDraftRevision(current) != snap.ExpectedDraftRevision {
+		return ErrConflict
 	}
 	// Review gates ORG exposure. A request is meaningful against either:
 	//   - a `space`-intent row (the normal first-listing / upgrade flow), OR
@@ -324,7 +335,7 @@ func (r *Repo) InsertReviewRequest(ctx context.Context, scope Scope, req *model.
 		}
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // publishedVersionLabels reconstructs the set of version labels this plugin has
@@ -560,7 +571,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		return nil, err
 	}
 	if kind == string(model.ReviewKindVisibility) {
-		if !r.versionManagement || !versioned(current) {
+		if !r.versionManagement {
 			return nil, ErrConflict
 		}
 		return r.approveVisibilityReview(ctx, tx, scope, p, current)
@@ -747,7 +758,7 @@ func (r *Repo) ApproveReview(ctx context.Context, scope Scope, p ApproveReviewPa
 		// declared relation count exceeds the targets the caller can see. The child
 		// set is derived AFTER the relations are synced so it reflects the frozen
 		// topology, and under the same transaction's locks.
-		if err := promoteEmbeddedChildren(ctx, tx, pluginID, current.Type, scope.SpaceID, now); err != nil {
+		if err := promoteEmbeddedChildren(ctx, tx, pluginID, current.Type, scope.SpaceID, current.Visibility, now); err != nil {
 			return nil, err
 		}
 	}
@@ -896,12 +907,15 @@ func manifestNameAndTags(manifest json.RawMessage) (string, json.RawMessage) {
 // resolves fewer visible relation targets than CountDeclaredRelations and every
 // non-owner install of the container fails with ErrDependencyHidden — silent until
 // somebody other than the author tries to install it.
-func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, spaceID string, now interface{}) error {
+// audience carries the container's effective visibility into the promotion: a
+// private container's bundled rows must stay private, or restoring them would
+// widen the audience its owner deliberately withdrew.
+func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, spaceID string, audience model.PluginVisibility, now interface{}) error {
 	childIDs, err := collectEmbeddedChildren(ctx, tx, topID, topType)
 	if err != nil {
 		return err
 	}
-	return promoteEmbeddedIDs(ctx, tx, childIDs, spaceID, now)
+	return promoteEmbeddedIDs(ctx, tx, childIDs, spaceID, audience, now)
 }
 
 // promoteFrozenEmbeddedChildren lists the embedded targets declared by an
@@ -910,7 +924,7 @@ func promoteEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topT
 // not the draft's. A team may also reference standalone experts; their private
 // children remain inside their own publication boundary and must not be traversed.
 // Only a live embedded member in the container's owner/Space can contribute skills.
-func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, frozen []model.PluginRelation, spaceID string, now interface{}) error {
+func promoteFrozenEmbeddedChildren(ctx context.Context, tx *sql.Tx, topID string, topType model.PluginType, frozen []model.PluginRelation, spaceID string, audience model.PluginVisibility, now interface{}) error {
 	var ids []string
 	switch topType {
 	case model.PluginTypeExpert:
@@ -949,15 +963,15 @@ AND p.status=1 AND p.deleted_at IS NULL FOR UPDATE`, rel.TargetPluginID, spaceID
 			ids = append(ids, skills...)
 		}
 	}
-	return promoteEmbeddedIDs(ctx, tx, ids, spaceID, now)
+	return promoteEmbeddedIDs(ctx, tx, ids, spaceID, audience, now)
 }
 
-func promoteEmbeddedIDs(ctx context.Context, tx *sql.Tx, childIDs []string, spaceID string, now interface{}) error {
+func promoteEmbeddedIDs(ctx context.Context, tx *sql.Tx, childIDs []string, spaceID string, audience model.PluginVisibility, now interface{}) error {
 	for _, id := range childIDs {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE plugins SET visibility=?,listing_state=?,updated_at=?
 			  WHERE plugin_id=? AND space_id=? AND is_embedded=1 AND listing_state<>? AND deleted_at IS NULL`,
-			string(model.PluginVisibilitySpace), string(model.PluginListingStatePublished), now,
+			string(audience), string(model.PluginListingStatePublished), now,
 			id, spaceID, string(model.PluginListingStatePublished)); err != nil {
 			return wrapped("promote embedded child", err)
 		}
@@ -1106,6 +1120,9 @@ func (r *Repo) RejectReview(ctx context.Context, scope Scope, p RejectReviewPara
 	if err := insertAudit(ctx, tx, r.id(), now, *current, "review_reject", m, current.PluginHash, current.PluginHash); err != nil {
 		return nil, nil, err
 	}
+	if err := finishVisibilityGroup(ctx, tx, p.ReviewID, scope.SpaceID, "rejected", p.ReviewerUID, p.ReviewerName, p.Reason, now); err != nil {
+		return nil, nil, err
+	}
 	retained, err := retainedAttachmentKeys(ctx, tx, current.ID, current.AttachmentKeys)
 	if err != nil {
 		return nil, nil, err
@@ -1215,6 +1232,9 @@ func (r *Repo) CancelReview(ctx context.Context, scope Scope, reviewID, callerUI
 	}
 	if err := mustAffect(res); err != nil {
 		return nil, nil, ErrConflict
+	}
+	if err := finishVisibilityGroup(ctx, tx, reviewID, scope.SpaceID, "canceled", callerUID, "", "", now); err != nil {
+		return nil, nil, err
 	}
 	retained, err := retainedAttachmentKeys(ctx, tx, current.ID, current.AttachmentKeys)
 	if err != nil {

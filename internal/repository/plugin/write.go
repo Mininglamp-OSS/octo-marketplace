@@ -16,6 +16,8 @@ import (
 // Mutation contains current state, replacement relations, and append-only audit metadata.
 type Mutation struct {
 	ExpectedDraftRevision *string
+	// RetainExistingReferences permits unchanged opaque pins on draft saves only.
+	RetainExistingReferences bool
 	// ExpectedCurrentVersionID opts internal callers into a saved-head CAS.
 	// Empty preserves existing write semantics; it is not a public DTO field.
 	ExpectedCurrentVersionID string
@@ -664,9 +666,25 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 		return nil, err
 	}
 	defer tx.Rollback()
+	out, err := r.updateInTx(ctx, tx, scope, m)
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *Repo) updateInTx(ctx context.Context, tx *sql.Tx, scope Scope, m Mutation) (_ *RelationSync, err error) {
 	before, err := getOwnedForUpdate(ctx, tx, scope, m.Plugin.ID)
 	if err != nil {
 		return nil, err
+	}
+	if r.versionManagement {
+		if err = rejectPendingVisibilityMutation(ctx, tx, before.ID); err != nil {
+			return nil, err
+		}
 	}
 	if m.ExpectedDraftRevision != nil && *m.ExpectedDraftRevision != model.PluginDraftRevision(before) {
 		return nil, ErrConflict
@@ -769,7 +787,20 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 	if err != nil {
 		return nil, err
 	}
-	if err = r.lockReferences(ctx, tx, scope, p, m.Relations, owned); err != nil {
+	if m.RetainExistingReferences && r.versionManagement && before.Visibility == p.Visibility {
+		var changed []model.PluginRelation
+		changed, err = retainedDraftReferences(ctx, tx, p, m.Relations, r.references)
+		if err == nil {
+			if r.references {
+				err = validateChangedDraftReferences(ctx, tx, p, changed)
+			} else {
+				err = lockRelationTargets(ctx, tx, scope, p, changed, owned)
+			}
+		}
+	} else {
+		err = r.lockReferences(ctx, tx, scope, p, m.Relations, owned)
+	}
+	if err != nil {
 		return nil, err
 	}
 	// getOwnedForUpdate already proved existence under lock; RowsAffected reports
@@ -889,9 +920,6 @@ func (r *Repo) Update(ctx context.Context, scope Scope, m Mutation) (_ *Relation
 		return nil, err
 	}
 	sync.DraftRevision = savedDraftRevision(*before, p, sync.NewVersionID, resetListing, m.SnapshotVersion)
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
 	return sync, nil
 }
 
@@ -956,6 +984,11 @@ func (r *Repo) Delete(ctx context.Context, scope Scope, pluginID, operatorID, op
 	before, err := getOwnedForUpdate(ctx, tx, scope, pluginID)
 	if err != nil {
 		return err
+	}
+	if r.versionManagement {
+		if err = rejectPendingVisibilityMutation(ctx, tx, before.ID); err != nil {
+			return err
+		}
 	}
 	if err = r.rejectPublishedIncomingRelations(ctx, tx, before.ID); err != nil {
 		return err
@@ -1057,6 +1090,11 @@ func (r *Repo) DeleteGraph(ctx context.Context, scope Scope, topID string, opera
 	before, err := getOwnedForUpdate(ctx, tx, scope, topID)
 	if err != nil {
 		return err
+	}
+	if r.versionManagement {
+		if err = rejectPendingVisibilityMutation(ctx, tx, before.ID); err != nil {
+			return err
+		}
 	}
 	if err = r.rejectPublishedIncomingRelations(ctx, tx, before.ID); err != nil {
 		return err

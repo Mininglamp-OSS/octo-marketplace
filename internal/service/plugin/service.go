@@ -277,6 +277,7 @@ type WriteRequest struct {
 	// make those rows permanently unsavable. Unexported on purpose: a request body
 	// must never be able to claim its own value is grandfathered.
 	grandfatheredVersion string
+	retainedRelations    []model.PluginRelation
 
 	Name       string
 	Type       model.PluginType
@@ -362,6 +363,29 @@ func (s *Service) List(ctx context.Context, caller Caller, p ListParams) ([]mode
 		}
 		for i := range items {
 			items[i].DependencyIssues = issues[items[i].ID]
+		}
+		if store, ok := s.repo.(interface {
+			SuspensionDiagnostics(context.Context, pluginrepo.Scope, []model.Plugin) (map[string]bool, map[string][]model.DependencyIssue, error)
+		}); ok && s.versionManagement {
+			flags, diagnostics, e := store.SuspensionDiagnostics(ctx, scope(caller), items)
+			if e != nil {
+				return nil, 0, mapStoreError(e)
+			}
+			for i := range items {
+				items[i].DependencySuspended = flags[items[i].ID]
+				items[i].DependencyIssues = append(items[i].DependencyIssues, diagnostics[items[i].ID]...)
+			}
+		}
+		if store, ok := s.repo.(interface {
+			DependencyUpdateSummaries(context.Context, pluginrepo.Scope, []model.Plugin) (map[string][]model.DependencyUpdate, error)
+		}); ok && s.versionManagement {
+			updates, e := store.DependencyUpdateSummaries(ctx, scope(caller), items)
+			if e != nil {
+				return nil, 0, mapStoreError(e)
+			}
+			for i := range items {
+				items[i].DependencyUpdates = updates[items[i].ID]
+			}
 		}
 	}
 	for i := range items {
@@ -698,7 +722,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	if err != nil {
 		return nil, err
 	}
-	old, _, err := s.repo.GetWithRelations(ctx, scope(caller), storageID)
+	old, oldRelations, err := s.repo.GetWithRelations(ctx, scope(caller), storageID)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -776,7 +800,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 		// it). Changing VISIBILITY is different: ApproveReview stamps
 		// visibility=space, so approving a request whose author has since switched to
 		// 仅自己可见 would publish a row against the author's last stated intent.
-		if req.Visibility != old.Visibility {
+		if s.versionManagement || req.Visibility != old.Visibility {
 			pending, err := s.repo.HasPendingReview(ctx, scope(caller), old.ID)
 			if err != nil {
 				return nil, mapStoreError(err)
@@ -792,6 +816,23 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	// Re-inject the stored key for unchanged storage content so the round-trip is
 	// not rejected by splitStorageKeys.
 	req.Package = reinjectUpdateStorageKeys(req.Package, old.Package, old.AttachmentKeys)
+	if s.versionManagement && req.Visibility == old.Visibility {
+		req.retainedRelations = oldRelations
+		if old.CurrentVersionID != nil && old.Type != model.PluginTypeConnector {
+			store, e := s.versionStore()
+			if e != nil {
+				return nil, e
+			}
+			v, e := store.GetManagedVersion(ctx, scope(caller), old.ID, *old.CurrentVersionID)
+			if e != nil {
+				return nil, mapStoreError(e)
+			}
+			req.retainedRelations, e = model.DecodeSnapshotRelations(v.Relations)
+			if e != nil {
+				return nil, ErrIntegrity
+			}
+		}
+	}
 	p, rels, err := s.buildWrite(ctx, caller, storageID, req, now, false, old)
 	if err != nil {
 		return nil, err
@@ -824,6 +865,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	m.Changelog = req.Changelog
 	m.ExpectedCurrentVersionID = req.expectedCurrentVersionID
 	m.ExpectedDraftRevision = req.ExpectedDraftRevision
+	m.RetainExistingReferences = s.versionManagement && req.Visibility == old.Visibility
 	// Forward-only was compared against the UNLOCKED `old` read above. Let the repo
 	// restate it against the row it locks, for the same reason the two listing
 	// decisions below are re-derived: an approval that publishes a frozen label can
@@ -834,7 +876,7 @@ func (s *Service) update(ctx context.Context, caller Caller, pluginID string, re
 	// pre-check; make it authoritative by re-checking under the plugin row lock in
 	// the write transaction. Same condition as that guard so a content-only save
 	// and the exempt system admin skip the extra read.
-	if !caller.IsSystemAdmin && req.Visibility != old.Visibility {
+	if !caller.IsSystemAdmin && (s.versionManagement || req.Visibility != old.Visibility) {
 		m.RefusePendingReview = true
 	}
 	// The listed_requires_review gate and the un-list-on-widen decision above were
@@ -1014,7 +1056,7 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	if resource != nil {
 		p.SpaceID = resource.SpaceID
 	}
-	rels, err := s.buildRelations(ctx, c, admin, p, req.Relations, now)
+	rels, err := s.buildRelations(ctx, c, admin, p, req.Relations, now, req.retainedRelations)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1029,7 +1071,7 @@ func (s *Service) buildWrite(ctx context.Context, c Caller, pluginID string, req
 	return p, rels, nil
 }
 
-func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, source *model.Plugin, in []RelationRequest, now time.Time) ([]model.PluginRelation, error) {
+func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, source *model.Plugin, in []RelationRequest, now time.Time, retained ...[]model.PluginRelation) ([]model.PluginRelation, error) {
 	if len(in) > maxRelations {
 		return nil, ErrInvalidRequest
 	}
@@ -1075,6 +1117,15 @@ func (s *Service) buildRelations(ctx context.Context, c Caller, admin bool, sour
 		// the repo layer's admin-aware lockRelationTargets; the tenant scope would
 		// hide a space-scoped target and either 404 the edit or drop every edge.
 		target, _, err := s.repo.GetWithRelations(ctx, writeScope(c, admin), targetID)
+		if errors.Is(err, pluginrepo.ErrNotFound) && len(retained) > 0 {
+			for _, old := range retained[0] {
+				if old.TargetPluginID == targetID && old.Type == typ && sameReferencePin(old.TargetVersionID, r.TargetVersionID) {
+					target = &model.Plugin{Type: old.TargetPluginType}
+					err = nil
+					break
+				}
+			}
+		}
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
@@ -1192,4 +1243,11 @@ func trimOptional(v *string) *string {
 		return nil
 	}
 	return &x
+}
+
+func sameReferencePin(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }

@@ -15,7 +15,7 @@ func TestAvailabilityAliasRejectsUnknown(t *testing.T) {
 }
 
 func TestSnapshotAvailabilityUsesPinnedMemberVersion(t *testing.T) {
-	snapshot := unavailableSnapshotSQL("p.plugin_id", "p.published_version_id")
+	snapshot := unavailableSnapshotSQL("p.plugin_id", "p.published_version_id", "p")
 	if !strings.Contains(snapshot, "JSON_TABLE(source_version.relations_json") {
 		t.Fatalf("root snapshot not read: %s", snapshot)
 	}

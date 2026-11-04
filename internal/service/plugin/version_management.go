@@ -71,9 +71,35 @@ func (s *Service) CurrentDetail(ctx context.Context, caller Caller, pluginID str
 		if v.Release == nil && v.Changelog != nil {
 			note = *v.Changelog
 		}
+		// The author edits its complete saved topology, including opaque pins
+		// whose target has since become private or unavailable. Do not silently
+		// drop those edges through the catalog's target-visibility filter.
+		d.Relations, err = model.DecodeSnapshotRelations(v.Relations)
+		if err != nil {
+			return nil, ErrIntegrity
+		}
 	}
 	d.DraftChangelog = &note
 	d.DraftRevision = model.PluginDraftRevision(d.Plugin)
+	store, e := s.versionStore()
+	if e != nil {
+		return nil, e
+	}
+	state, e := store.GetVersionState(ctx, scope(caller), d.Plugin.ID)
+	if e != nil {
+		return nil, mapStoreError(e)
+	}
+	d.Plugin.PublishedVersionID = state.PublishedVersionID
+	if state.PublishedVersionID != nil {
+		v, e := store.GetManagedVersion(ctx, scope(caller), d.Plugin.ID, *state.PublishedVersionID)
+		if e != nil {
+			return nil, mapStoreError(e)
+		}
+		if v.Release != nil {
+			label := v.Release.VersionLabel
+			d.Plugin.PublishedVersion = &label
+		}
+	}
 	return d, nil
 }
 

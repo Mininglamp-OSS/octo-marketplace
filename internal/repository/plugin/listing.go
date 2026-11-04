@@ -29,6 +29,7 @@ func mustChangeState(res sql.Result) error {
 
 // PublishParams carries one owner-driven publish of an unlisted plugin.
 type PublishParams struct {
+	ExpectedDraftRevision string
 	// Version is the requested managed release label; empty retains admin/legacy behavior.
 	Version           string
 	ExpectedVersionID string
@@ -73,6 +74,11 @@ func (r *Repo) PublishPlugin(ctx context.Context, scope Scope, p PublishParams) 
 	current, err := getOwnedForUpdate(ctx, tx, scope, p.PluginID)
 	if err != nil {
 		return nil, err
+	}
+	// The service checked an unlocked snapshot. A save may have committed since
+	// then; only the locked revision identifies the draft the caller approved.
+	if p.ExpectedDraftRevision != "" && model.PluginDraftRevision(current) != p.ExpectedDraftRevision {
+		return nil, ErrConflict
 	}
 	now := r.now()
 
@@ -183,6 +189,11 @@ func (r *Repo) DelistPlugin(ctx context.Context, scope Scope, p DelistParams) (_
 	if err != nil {
 		return nil, err
 	}
+	if r.versionManagement {
+		if err = rejectPendingVisibilityMutation(ctx, tx, current.ID); err != nil {
+			return nil, err
+		}
+	}
 
 	// An embedded child (a bundled skill, a squad member) is listed and un-listed
 	// by its container, never on its own: ApproveReview promotes the whole graph in
@@ -283,6 +294,11 @@ func (r *Repo) DelistPlugin(ctx context.Context, scope Scope, p DelistParams) (_
 		return nil, err
 	}
 
+	if r.versionManagement {
+		if err = r.suspendDelistedDependents(ctx, tx, scope.SpaceID, p.PluginID, now); err != nil {
+			return nil, err
+		}
+	}
 	refreshed, err := getReviewedPluginForUpdate(ctx, tx, scope.SpaceID, p.PluginID)
 	if err != nil {
 		return nil, err
