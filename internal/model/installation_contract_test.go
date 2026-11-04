@@ -40,14 +40,15 @@ func TestInstallationConsumerContract(t *testing.T) {
 	legacyRequest := contract.compileAt(t, "paths", legacyInstallationRoute, "post", "requestBody", "content", "application/json", "schema")
 	legacyResponse := contract.compileAt(t, "paths", legacyInstallationRoute, "post", "responses", "200", "content", "application/json", "schema")
 
-	t.Run("runtime requirement follows workspace connector mode", func(t *testing.T) {
-		assertInvalidJSON(t, newRequest, `{}`)
-		assertInvalidJSON(t, newRequest, `{"workspace_connectors":false}`)
+	t.Run("omitted selector defaults to connectors; false retains legacy runtime requirement", func(t *testing.T) {
+		assertValidJSON(t, newRequest, `{}`)
 		assertValidJSON(t, newRequest, `{"workspace_connectors":true}`)
+		assertInvalidJSON(t, newRequest, `{"workspace_connectors":false}`)
 		assertValidJSON(t, newRequest, `{"workspace_connectors":false,"runtime_id":"550e8400-e29b-41d4-a716-446655440000"}`)
 	})
 
-	t.Run("runtime id uses UUID format", func(t *testing.T) {
+	t.Run("runtime id uses UUID format when supplied", func(t *testing.T) {
+		assertInvalidJSON(t, newRequest, `{"runtime_id":"runtime-one"}`)
 		assertInvalidJSON(t, newRequest, `{"workspace_connectors":false,"runtime_id":"runtime-one"}`)
 		assertInvalidJSON(t, newRequest, `{"workspace_connectors":true,"runtime_id":""}`)
 		assertInvalidJSON(t, newRequest, `{"workspace_connectors":true,"runtime_id":"   "}`)

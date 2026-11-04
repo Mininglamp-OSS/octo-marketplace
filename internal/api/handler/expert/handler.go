@@ -272,7 +272,7 @@ func (h *Handler) GetExpert(c *gin.Context) {
 
 // InstallExpert godoc
 // @Summary Install expert to a Loop workspace/runtime
-// @Description Installs the expert and its packaged Skills in one atomic Fleet capability operation.
+// @Description Installs the expert, any MCP Workspace connector and its binding, and packaged Skills in one atomic Fleet capability operation.
 // @Description The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8 bytes), with no supporting-file count or per-text installation cap.
 // @Tags expert
 // @ID expert.install
@@ -319,7 +319,7 @@ func (h *Handler) InstallExpert(c *gin.Context) {
 
 // InstallSquad godoc
 // @Summary Install squad to a Loop workspace/runtime
-// @Description Installs the squad, member experts, Skills, runtime bindings, and dispatch instructions in one atomic Fleet capability operation.
+// @Description Installs the squad, member experts, any MCP Workspace connectors and bindings, Skills, runtime bindings, and dispatch instructions in one atomic Fleet capability operation.
 // @Description The complete Fleet installation JSON is limited to 20 MB (20,000,000 UTF-8 bytes), with no supporting-file count or per-text installation cap.
 // @Tags expert
 // @ID squad.install
@@ -1012,6 +1012,12 @@ func writeInstallError(c *gin.Context, err error) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is not configured", nil, "")
 		return
 	}
+	if errors.Is(err, expertsvc.ErrInstallReceiptUnavailable) {
+		details := installRecoveryDetails(err)
+		details["reason"] = "receipt_unavailable"
+		apiresponse.Fail(c, http.StatusConflict, errcode.Conflict, "installation receipt is no longer available", details, "Reconcile the original Workspace resources before starting another installation.")
+		return
+	}
 	if errors.Is(err, expertsvc.ErrFleetInstallUnavailable) {
 		apiresponse.Fail(c, http.StatusServiceUnavailable, errcode.UpstreamUnavailable, "loop service is unavailable", installRecoveryDetails(err), "")
 		return
@@ -1046,9 +1052,7 @@ func writeInstallError(c *gin.Context, err error) {
 }
 
 // installRecoveryDetails exposes the idempotency key actually sent to Fleet on
-// upstream-unavailable responses, so a caller that supplied no key can retry
-// the same install instead of creating another one. Other error shapes stay
-// unchanged.
+// install-recovery errors, so a caller can identify the original operation.
 func installRecoveryDetails(err error) map[string]any {
 	var dispatchErr *expertsvc.InstallDispatchError
 	if !errors.As(err, &dispatchErr) {

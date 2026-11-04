@@ -35,6 +35,33 @@ func digestInstallBytes(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
+
+// The omitempty tag preserves the false-mode intent digest used by existing attempts.
+func installIntentDigest(id string, caller Caller, p InstallationParams) string {
+	return digestInstall(struct {
+		Root, Space, Workspace, Runtime, Name string
+		WorkspaceConnectors                   bool `json:"workspace_connectors,omitempty"`
+	}{id, caller.SpaceID, p.WorkspaceID, p.RuntimeID, p.ResourceName, p.WorkspaceConnectors})
+}
+
+// restoreFrozenConnectorMode only considers the opposite mode when a pinned
+// retry came from an adapter that explicitly marked its selector as defaulted.
+// The authenticated full intent, not the frozen plan's contents, identifies the
+// mode originally selected by the caller.
+func restoreFrozenConnectorMode(id string, caller Caller, p *InstallationParams, attempt *pluginrepo.InstallAttempt, intent string) string {
+	if attempt == nil || !p.WorkspaceConnectorsDefaulted || attempt.IntentDigest == intent {
+		return intent
+	}
+	alternate := *p
+	alternate.WorkspaceConnectors = !p.WorkspaceConnectors
+	alternateIntent := installIntentDigest(id, caller, alternate)
+	if attempt.IntentDigest == alternateIntent {
+		p.WorkspaceConnectors = alternate.WorkspaceConnectors
+		return alternateIntent
+	}
+	return intent
+}
+
 func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, id string, p InstallationParams) (*InstallationOutcome, error) {
 	store, ok := s.repo.(InstallationAttemptStore)
 	if !ok {
@@ -49,11 +76,8 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 	if attempt != nil {
 		keyID = attempt.HMACKeyID
 	}
-	// Omitting false keeps default-mode intent HMACs compatible with existing attempts.
-	intent := digestInstall(struct {
-		Root, Space, Workspace, Runtime, Name string
-		WorkspaceConnectors                   bool `json:"workspace_connectors,omitempty"`
-	}{id, caller.SpaceID, p.WorkspaceID, p.RuntimeID, p.ResourceName, p.WorkspaceConnectors})
+	intent := installIntentDigest(id, caller, p)
+	intent = restoreFrozenConnectorMode(id, caller, &p, attempt, intent)
 	if attempt != nil && (attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion) {
 		return nil, ErrConflict
 	}
@@ -107,6 +131,7 @@ func (s *Service) createPinnedInstallation(ctx context.Context, caller Caller, i
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
+		intent = restoreFrozenConnectorMode(id, caller, &p, attempt, intent)
 	}
 	if attempt == nil || attempt.PluginID != id || attempt.IntentDigest != intent || attempt.AdapterVersion != SkillInstallAdapterVersion {
 		return nil, ErrConflict
@@ -379,6 +404,9 @@ func validatePinnedInstallMode(plan *pinnedInstallationPlan, p InstallationParam
 		return ErrIntegrity
 	}
 	if plan.ConnectorOnly {
+		if p.expertRootsOnly {
+			return installationInvalid("plugin_id", "expert_or_expert_team_required")
+		}
 		if !p.WorkspaceConnectors {
 			return ErrIntegrity
 		}

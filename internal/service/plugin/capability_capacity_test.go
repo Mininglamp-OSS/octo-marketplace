@@ -346,6 +346,10 @@ func TestCapabilityInstallReportsSkillFileLocationWhenBudgetExhausted(t *testing
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("budget exhaustion err=%v", err)
 	}
+	var attempt *InstallationAttemptError
+	if errors.As(err, &attempt) {
+		t.Fatal("pre-dispatch capacity rejection was classified as an attempted installation")
+	}
 	if installer.calls != 0 {
 		t.Fatal("over-budget assets reached Fleet")
 	}

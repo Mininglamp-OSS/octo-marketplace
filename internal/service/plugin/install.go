@@ -36,14 +36,16 @@ type InstallOutcome struct {
 // endpoint's UUID or required-header contract on clients that have not upgraded.
 func (s *Service) Install(ctx context.Context, caller Caller, pluginID string, p InstallParams) (*InstallOutcome, error) {
 	key := p.IdempotencyKey
+	generated := key == ""
 	if key == "" {
 		key = s.id()
 	}
-	in := InstallationParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv, IdempotencyKey: key, Token: p.Token}
+	in := InstallationParams{WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv, IdempotencyKey: key, Token: p.Token, WorkspaceConnectors: true, WorkspaceConnectorsDefaulted: true, IdempotencyKeyGenerated: generated}
 	normalized, err := normalizeInstallationParams(in, false)
 	if err != nil {
 		return nil, err
 	}
+	normalized.expertRootsOnly = true
 	out, err := s.createInstallation(ctx, caller, pluginID, normalized)
 	if err != nil {
 		return nil, err

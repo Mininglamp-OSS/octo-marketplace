@@ -27,6 +27,13 @@ func (f *pinnedConnectorModeInstaller) InstallCapability(_ context.Context, _, _
 	f.wires = append(f.wires, wire)
 	return f.result, nil
 }
+func (*pinnedConnectorModeInstaller) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*pinnedConnectorModeInstaller) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 
 func setPinnedMarketConnector(f *pinnedFixtureStore, name, rawConfig string) {
 	connector := f.plugins["connector"]

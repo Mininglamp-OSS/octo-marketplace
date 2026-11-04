@@ -269,6 +269,270 @@ func TestPinnedWorkspaceConnectorModeConflictsWithHistoricalDefaultModeKey(t *te
 	}
 }
 
+func TestLegacyInstallRecoversUnknownDefaultedAttemptInFrozenMode(t *testing.T) {
+	for _, noMCP := range []bool{false, true} {
+		name := "with_mcp"
+		if noMCP {
+			name = "without_mcp"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, _, capture, p, attempt := unknownDefaultModeAttempt(t, noMCP)
+			beforePlan := append([]byte(nil), attempt.FrozenPlan...)
+			beforeIntent, beforeInput, beforeRequest := attempt.IntentDigest, attempt.InputFingerprint, attempt.RequestFingerprint
+			beforeRetry := *attempt.RetryUntil
+
+			out, err := s.Install(context.Background(), testCaller, "team", legacyInstallParams(p))
+			if err != nil || out == nil || out.AgentID != "" || out.SquadID != "historical-team" {
+				t.Fatalf("legacy same-key retry failed: out=%#v err=%v", out, err)
+			}
+			bodies, keys := capture.snapshot()
+			wantAttemptID := digestInstall([]string{testCaller.SpaceID, testCaller.UID, p.WorkspaceID, attempt.KeyDigest})
+			if len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) || !reflect.DeepEqual(keys, []string{wantAttemptID, wantAttemptID}) {
+				t.Fatalf("recovery changed frozen wire or key: calls=%d keys=%v", len(bodies), keys)
+			}
+			if !bytes.Equal(attempt.FrozenPlan, beforePlan) || attempt.IntentDigest != beforeIntent ||
+				attempt.InputFingerprint != beforeInput || attempt.RequestFingerprint != beforeRequest ||
+				attempt.RetryUntil == nil || !attempt.RetryUntil.Equal(beforeRetry) {
+				t.Fatal("retry rewrote the frozen attempt, fingerprints, or original deadline")
+			}
+			if !attempt.Completed || attempt.State != "SUCCEEDED" {
+				t.Fatalf("unknown attempt did not complete: state=%q completed=%t", attempt.State, attempt.Completed)
+			}
+			if noMCP {
+				var plan pinnedInstallationPlan
+				if err = json.Unmarshal(beforePlan, &plan); err != nil {
+					t.Fatal(err)
+				}
+				if len(plan.Definition.Connectors) != 0 {
+					t.Fatal("no-MCP fixture unexpectedly froze Workspace connectors")
+				}
+				for _, expert := range plan.Definition.Experts {
+					if len(expert.ConnectorNames) != 0 || len(expert.MCPConfig) != 0 {
+						t.Fatal("no-MCP fixture unexpectedly froze expert connectors")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyInstallRecoveryRequiresExactDefaultedIntent(t *testing.T) {
+	s, _, capture, p, _ := unknownDefaultModeAttempt(t, true)
+	explicit := p
+	explicit.WorkspaceConnectors = true
+	if _, err := s.CreateInstallation(context.Background(), testCaller, "team", explicit); !errors.Is(err, ErrConflict) {
+		t.Fatalf("explicit Workspace connectors selection recovered a default-mode attempt: %v", err)
+	}
+
+	changedRuntime := legacyInstallParams(p)
+	changedRuntime.RuntimeID = "runtime:changed"
+	if _, err := s.Install(context.Background(), testCaller, "team", changedRuntime); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed runtime recovered a frozen attempt: %v", err)
+	}
+	changedEnv := legacyInstallParams(p)
+	changedEnv.CustomEnv = map[string]string{"OCTOBUDDY_PROVIDER_ID": "provider-changed"}
+	if _, err := s.Install(context.Background(), testCaller, "team", changedEnv); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed custom environment recovered a frozen attempt: %v", err)
+	}
+	otherSpace := testCaller
+	otherSpace.SpaceID = "other-space"
+	if _, err := s.Install(context.Background(), otherSpace, "team", legacyInstallParams(p)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed caller scope recovered a frozen attempt: %v", err)
+	}
+	bodies, _ := capture.snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("conflicting retries reached Fleet: calls=%d", len(bodies))
+	}
+
+	if _, err := s.Install(context.Background(), testCaller, "team", legacyInstallParams(p)); err != nil {
+		t.Fatalf("matching defaulted retry was rejected after conflicts: %v", err)
+	}
+	bodies, keys := capture.snapshot()
+	if len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) || keys[0] != keys[1] {
+		t.Fatalf("matching retry changed the original request: calls=%d keys=%v", len(bodies), keys)
+	}
+}
+
+func TestLegacyInstallModeRecoveryRechecksFrozenAttemptGuards(t *testing.T) {
+	for _, scenario := range []string{"tampered_eligibility", "revoked_dependency", "expired_deadline"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, f, capture, p, attempt := unknownDefaultModeAttempt(t, false)
+			switch scenario {
+			case "tampered_eligibility":
+				var plan pinnedInstallationPlan
+				if err := json.Unmarshal(attempt.FrozenPlan, &plan); err != nil {
+					t.Fatal(err)
+				}
+				plan.EligibilityHMAC = "tampered"
+				attempt.FrozenPlan, _ = json.Marshal(plan)
+			case "revoked_dependency":
+				f.plugins["connector"].ListingState = model.PluginListingStateDelisted
+			case "expired_deadline":
+				expired := time.Now().Add(-time.Second)
+				attempt.RetryUntil = &expired
+			}
+
+			_, err := s.Install(context.Background(), testCaller, "team", legacyInstallParams(p))
+			want := ErrIntegrity
+			if scenario == "revoked_dependency" {
+				want = ErrDependencyHidden
+			} else if scenario == "expired_deadline" {
+				want = ErrAttemptExpired
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("guard %s was bypassed: got %v, want %v", scenario, err, want)
+			}
+			bodies, _ := capture.snapshot()
+			if len(bodies) != 1 {
+				t.Fatalf("guarded recovery reached Fleet: calls=%d", len(bodies))
+			}
+			if scenario == "expired_deadline" && attempt.State != "EXPIRED" {
+				t.Fatalf("expired attempt state=%q, want EXPIRED", attempt.State)
+			}
+		})
+	}
+}
+
+func TestLegacyInstallModeRecoveryUsesConcurrentClaimWinner(t *testing.T) {
+	s, f, capture, p, winner := unknownDefaultModeAttempt(t, false)
+	key := p.WorkspaceID + winner.KeyDigest
+	delete(f.attempts, key)
+	raceStore := &installAttemptClaimRaceStore{
+		pinnedFixtureStore: f,
+		winner:             winner,
+		hideFirstGet:       true,
+	}
+	s.repo = raceStore
+
+	out, err := s.Install(context.Background(), testCaller, "team", legacyInstallParams(p))
+	if err != nil || out == nil || out.SquadID != "historical-team" {
+		t.Fatalf("retry against concurrent old-mode winner failed: out=%#v err=%v", out, err)
+	}
+	bodies, keys := capture.snapshot()
+	wantAttemptID := digestInstall([]string{testCaller.SpaceID, testCaller.UID, p.WorkspaceID, winner.KeyDigest})
+	if raceStore.claimCalls != 1 || len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) ||
+		!reflect.DeepEqual(keys, []string{wantAttemptID, wantAttemptID}) {
+		t.Fatalf("claim winner was not reused under the original wire/key: claims=%d calls=%d keys=%v", raceStore.claimCalls, len(bodies), keys)
+	}
+	if f.attempts[key] != winner || !winner.Completed {
+		t.Fatal("concurrent winner was replaced instead of completed")
+	}
+}
+
+type installAttemptWireCapture struct {
+	mu     sync.Mutex
+	bodies [][]byte
+	keys   []string
+}
+
+func (c *installAttemptWireCapture) snapshot() ([][]byte, []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	bodies := make([][]byte, len(c.bodies))
+	for i := range c.bodies {
+		bodies[i] = append([]byte(nil), c.bodies[i]...)
+	}
+	return bodies, append([]string(nil), c.keys...)
+}
+
+type installAttemptClaimRaceStore struct {
+	*pinnedFixtureStore
+	winner       *pluginrepo.InstallAttempt
+	hideFirstGet bool
+	claimCalls   int
+}
+
+func (f *installAttemptClaimRaceStore) GetInstallAttempt(ctx context.Context, sc pluginrepo.Scope, workspace, key string) (*pluginrepo.InstallAttempt, error) {
+	if f.hideFirstGet {
+		f.hideFirstGet = false
+		return nil, nil
+	}
+	return f.pinnedFixtureStore.GetInstallAttempt(ctx, sc, workspace, key)
+}
+
+func (f *installAttemptClaimRaceStore) ClaimInstallAttempt(ctx context.Context, sc pluginrepo.Scope, candidate pluginrepo.InstallAttempt) (*pluginrepo.InstallAttempt, error) {
+	f.claimCalls++
+	if f.winner != nil {
+		winner := f.winner
+		f.pinnedFixtureStore.attempts[candidate.WorkspaceID+candidate.KeyDigest] = winner
+		f.winner = nil
+		return winner, nil
+	}
+	return f.pinnedFixtureStore.ClaimInstallAttempt(ctx, sc, candidate)
+}
+
+func unknownDefaultModeAttempt(t *testing.T, noMCP bool) (*Service, *pinnedFixtureStore, *installAttemptWireCapture, InstallationParams, *pluginrepo.InstallAttempt) {
+	t.Helper()
+	s, f, _ := fixturePinned()
+	p := installationParams()
+	p.ResourceName = ""
+	if noMCP {
+		for _, id := range []string{"expert-a", "expert-b"} {
+			key := pluginrepo.InstallVersionKey{PluginID: id, VersionID: "expert-v1"}
+			version := f.versions[key]
+			relations, err := model.DecodeSnapshotRelations(version.Relations)
+			if err != nil {
+				t.Fatal(err)
+			}
+			version.Relations, err = model.EncodeSnapshotRelations(relationsOfType(relations, "expert_skill"))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	capture := &installAttemptWireCapture{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read install body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		capture.mu.Lock()
+		capture.bodies = append(capture.bodies, append([]byte(nil), body...))
+		capture.keys = append(capture.keys, r.Header.Get("Idempotency-Key"))
+		call := len(capture.bodies)
+		capture.mu.Unlock()
+		if call == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		var in fleet.CapabilityInstallRequest
+		if err = json.Unmarshal(body, &in); err != nil {
+			t.Errorf("decode install body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Idempotency-Replayed", "true")
+		_, _ = w.Write(baselineHistoricalInstallResponse(t, in))
+	}))
+	t.Cleanup(server.Close)
+	s.WithCapabilityInstaller(fleet.New(server.URL))
+
+	_, err := s.CreateInstallation(context.Background(), testCaller, "team", p)
+	var attemptErr *InstallationAttemptError
+	if !errors.As(err, &attemptErr) || !attemptErr.Unknown {
+		t.Fatalf("initial Fleet result was not unknown: %v", err)
+	}
+	attempt := f.attempts[p.WorkspaceID+digestInstall(p.IdempotencyKey)]
+	if attempt == nil || attempt.RetryUntil == nil || !attempt.HadUnknown {
+		t.Fatalf("unknown pinned attempt was not persisted: %#v", attempt)
+	}
+	bodies, keys := capture.snapshot()
+	if len(bodies) != 1 || len(keys) != 1 {
+		t.Fatalf("initial dispatch count=%d keys=%v", len(bodies), keys)
+	}
+	return s, f, capture, p, attempt
+}
+
+func legacyInstallParams(p InstallationParams) InstallParams {
+	return InstallParams{
+		WorkspaceID: p.WorkspaceID, RuntimeID: p.RuntimeID, CustomEnv: p.CustomEnv,
+		IdempotencyKey: p.IdempotencyKey, Token: p.Token,
+	}
+}
+
 func makeHistoricalPinnedAttempt(t *testing.T, s *Service, p InstallationParams, pluginID, rootVersionID string) (*pluginrepo.InstallAttempt, []byte) {
 	t.Helper()
 	plan, err := s.resolvePinnedInstallation(context.Background(), testCaller, pluginID, rootVersionID, false)

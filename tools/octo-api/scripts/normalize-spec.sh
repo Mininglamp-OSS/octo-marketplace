@@ -86,13 +86,14 @@ if os.path.exists(yaml_path):
             }
 
     # Only the new installation schema: the handler rejects unknown fields.
+    # Omission defaults to connector mode; explicit false retains the legacy
+    # MCP path and therefore still requires a runtime.
     installation_schema = spec.get('components', {}).get('schemas', {}).get(
         'internal_api_handler_plugin.createInstallationRequest')
     if installation_schema is not None:
         installation_schema['additionalProperties'] = False
         installation_schema['if'] = {
             'properties': {'workspace_connectors': {'const': True}},
-            'required': ['workspace_connectors'],
         }
         installation_schema['else'] = {'required': ['runtime_id']}
 

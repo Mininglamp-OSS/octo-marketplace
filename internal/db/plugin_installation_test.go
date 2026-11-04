@@ -114,6 +114,13 @@ func (f *dbCapabilityInstall) InstallCapability(_ context.Context, _, _, _, _ st
 	f.in = in
 	return &fleet.CapabilityInstallResult{ExpertID: "fleet-expert"}, nil
 }
+func (*dbCapabilityInstall) HasCapabilityInstallationReceipt(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (*dbCapabilityInstall) ReplayCapability(context.Context, string, string, string, string, fleet.CapabilityInstallRequest) (*fleet.CapabilityInstallResult, error) {
+	return nil, nil
+}
 func TestPinnedInstallationRealRepositoryFreezesRootAcrossRetryMySQL(t *testing.T) {
 	database := reviewDB(t)
 	ctx := context.Background()

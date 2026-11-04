@@ -339,8 +339,9 @@ func TestInstallSquadUsesSingleCapabilityTransaction(t *testing.T) {
 			t.Fatalf("member expert %q lost its content or environment: %+v", name, expert)
 		}
 	}
-	if string(experts["Lead"].MCPConfig) != `{"mcpServers":{}}` || len(experts["Planner"].SkillNames) != 1 || experts["Planner"].SkillNames[0] != "Research" {
-		t.Fatalf("member MCP/skill relationships changed: %+v", experts)
+	if len(experts["Lead"].ConnectorNames) != 0 || len(definition.Connectors) != 0 ||
+		len(experts["Planner"].SkillNames) != 1 || experts["Planner"].SkillNames[0] != "Research" {
+		t.Fatalf("empty member MCP or skill relationships changed: %+v", experts)
 	}
 	if len(definition.Skills) != 1 || definition.Skills[0].Name != "Research" ||
 		definition.Skills[0].Content != "# Research" || len(definition.Skills[0].Files) != 1 ||
@@ -418,7 +419,7 @@ func TestInstallSquadReplaysUncertainCapabilityInstallByIdempotencyKey(t *testin
 	if different.SquadID != "team-2" || different.LeaderAgentID != "agent-2" || ff.createdResources != 8 {
 		t.Fatalf("different-key result/resources = %+v/%d, want new team/leader IDs and a second graph", different, ff.createdResources)
 	}
-	assertCapabilityKeys(t, ff, firstKey, firstKey, input.IdempotencyKey)
+	assertCapabilityKeys(t, ff, firstKey, input.IdempotencyKey)
 }
 
 func TestInstallSquadGeneratesFreshKeysWhenIdempotencyKeyIsAbsent(t *testing.T) {
@@ -445,73 +446,52 @@ func TestInstallSquadGeneratesFreshKeysWhenIdempotencyKeyIsAbsent(t *testing.T) 
 	assertCapabilityKeys(t, ff, "generated-1", "generated-2")
 }
 
-func TestInstallSquadNormalizesLegacyStdioMCPConfig(t *testing.T) {
+func TestInstallSquadUsesWorkspaceConnectorsForMemberMCPConfigs(t *testing.T) {
+	const config = `{"mcpServers":{"remote":{"type":"http","url":"https://mcp.example.test/mcp","headers":{"X-Fixture":"header"},"x-server":{"pool":"priority"}}},"x-vendor":{"enabled":true,"limits":{"calls":3}}}`
 	ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{
 		Type: "expert_team", ExpertTeamID: "team-1", LeaderExpertID: "agent-1",
 	}}
 	members := threeMembers()
-	members[1].MCPConfig = `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}}}}`
+	members[1].MCPConfig = config
 	svc, caller, id := installSquadFixture(t, ff, members)
 
 	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
 		t.Fatalf("InstallSquad: %v", err)
 	}
-	requireLegacyStdioMCPServer(t, capabilityMCPConfigForExpert(t, ff.capabilityInput, "Lead"))
+	definition := capabilityWireDefinition(t, ff.capabilityInput)
+	team := capabilityWireObject(t, definition["expert_team"])
+	requireNullVersion(t, team)
+	expert := capabilityWireExpert(t, ff.capabilityInput, "Lead")
+	requireNullVersion(t, expert)
+	if _, ok := expert["mcp_config"]; ok {
+		t.Fatalf("squad member still carries legacy mcp_config: %s", expert["mcp_config"])
+	}
+	connector := capabilityConnectorForExpert(t, ff.capabilityInput, "Lead")
+	requireNullVersion(t, connector)
+	if _, ok := connector["market_mcp_id"]; ok {
+		t.Fatalf("member config without marketplace source identity gained market_mcp_id: %s", connector["market_mcp_id"])
+	}
+	requireJSONValue(t, connector["config"], json.RawMessage(config))
+
+	withoutMCP := capabilityWireExpert(t, ff.capabilityInput, "Coder")
+	if _, ok := withoutMCP["mcp_config"]; ok {
+		t.Fatalf("member without MCP emitted mcp_config: %s", withoutMCP["mcp_config"])
+	}
+	if _, ok := withoutMCP["connector_names"]; ok {
+		t.Fatalf("member without MCP emitted connector_names: %s", withoutMCP["connector_names"])
+	}
 }
 
-func TestInstallSquadPreservesEmptyAndRemoteMCPConfigs(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		raw  string
-	}{
-		{name: "explicit empty", raw: `{}`},
-		{name: "wrapped empty", raw: `{"mcpServers":{}}`},
-		{name: "remote URL", raw: `{"mcpServers":{"local":{"type":"stdio","command":"npx","args":["tool"],"env":{"X":"fixture"}},"remote":{"type":"http","url":"https://mcp.example.test/mcp","headers":{"X-Fixture":"header"}}}}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ff := &fakeFleet{capabilityResult: &fleet.CapabilityInstallResult{
-				Type: "expert_team", ExpertTeamID: "team-1", LeaderExpertID: "agent-1",
-			}}
-			members := threeMembers()
-			members[1].MCPConfig = tc.raw
-			svc, caller, id := installSquadFixture(t, ff, members)
+func TestInstallSquadRejectsMalformedMemberMCPBeforeFleet(t *testing.T) {
+	ff := &fakeFleet{}
+	members := threeMembers()
+	members[1].MCPConfig = `{"mcpServers":{"local":false}}`
+	svc, caller, id := installSquadFixture(t, ff, members)
 
-			if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err != nil {
-				t.Fatalf("InstallSquad: %v", err)
-			}
-			got := capabilityMCPConfigForExpert(t, ff.capabilityInput, "Lead")
-			if len(got) == 0 {
-				t.Fatal("explicit member MCP config was omitted from capability definition")
-			}
-			switch tc.name {
-			case "explicit empty":
-				var object map[string]json.RawMessage
-				if err := json.Unmarshal(got, &object); err != nil || len(object) != 0 {
-					t.Fatalf("explicit empty member config = %s, want {}", got)
-				}
-			case "wrapped empty":
-				if servers := capabilityMCPServers(t, got); servers == nil || len(servers) != 0 {
-					t.Fatalf("wrapped empty member config = %s, want an explicit empty mcpServers object", got)
-				}
-			case "remote URL":
-				requireLegacyStdioMCPServer(t, got)
-				servers := capabilityMCPServers(t, got)
-				var server map[string]json.RawMessage
-				if err := json.Unmarshal(servers["remote"], &server); err != nil {
-					t.Fatalf("decode remote MCP server: %v", err)
-				}
-				var gotType, gotURL string
-				if err := json.Unmarshal(server["type"], &gotType); err != nil || gotType != "http" {
-					t.Fatalf("remote MCP server type = %q, want http", gotType)
-				}
-				if err := json.Unmarshal(server["url"], &gotURL); err != nil || gotURL != "https://mcp.example.test/mcp" {
-					t.Fatalf("remote MCP server URL = %q, want original URL", gotURL)
-				}
-				var headers map[string]string
-				if err := json.Unmarshal(server["headers"], &headers); err != nil || headers["X-Fixture"] != "header" {
-					t.Fatalf("remote MCP server headers = %s, want X-Fixture=header", server["headers"])
-				}
-			}
-		})
+	if _, err := svc.InstallSquad(context.Background(), caller, id, baseInput()); err == nil {
+		t.Fatal("InstallSquad accepted malformed member MCP server configuration")
+	}
+	if ff.capabilityCalls != 0 {
+		t.Fatalf("Fleet capability calls = %d, want no remote install for malformed member MCP", ff.capabilityCalls)
 	}
 }
